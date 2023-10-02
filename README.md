@@ -27,10 +27,45 @@ Additionally, Nebula offers a  hacking command search engine. Ethical hackers ca
 Currently, Nebula is integrated with and supports the following renowned ethical hacking tools:
 
 - NMAP: A versatile tool for network discovery and security auditing.
-- OWASP ZAP: A highly regarded web application security scanner.
+- OWASP ZAP (Full Scan Only): A popular web application security scanner.
 - Crackmap: A robust network information gathering tool.
 
 Our roadmap envisions Nebula's continuous expansion to incorporate the majority of the leading tools leveraged by ethical hackers globally. This commitment ensures that our users remain at the cutting edge of cybersecurity endeavors.
+
+
+## Installation
+
+The easiest way to get started is to use the docker image. Please note that the ZAP model is NOT supported in the docker image. If you would like to use ZAP please install the package using Pip or install the standalone package in the releases section.
+
+Docker Usage:
+
+Without GPU:
+
+```bash
+docker run -it berylliumsec/nebula:latest
+```
+
+To avoid downloading the models each time you run the docker container, mount a directory to store the models like so:
+
+```bash
+docker run -v "$(pwd)":/app/unified_models -it berylliumsec/nebula:latest
+```
+
+With all GPUs
+
+```bash
+docker run --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
+
+```
+
+```bash
+docker run --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
+```
+PIP installation:
+
+```
+pip install nebula
+```
 
 ## Usage
 
@@ -58,6 +93,7 @@ Upon initial access to Nebula, users are greeted with several options:
 - Process previous results (currently limited to NMAP) (PR)
 - Select a model (m)
 - Search by keywords (s)
+- Escape prompt screen without entering a prompt
 - Exit the application (q)
 
 Enter a New Command: This prompt allows users to input commands using natural language. Subsequently, the system predicts and suggests a command for execution. Users have the discretion to either execute the generated command as is or modify it. After initiating the command, they can choose to await its completion or proceed with other tasks.
@@ -83,6 +119,9 @@ Select a Model: Users can choose from one of the three available natural languag
 Search by keywords: By leveraging this feature, users can input keywords—such as port numbers or protocol names—and obtain command suggestions to identify vulnerabilities related to that specific protocol.
 
 ![Search](/images/search.png)
+
+
+Escape prompt screen without entering a prompt: To escape the prompt screen without entering a prompt, simply hit the enter key.
 
 ## Contributing
 
