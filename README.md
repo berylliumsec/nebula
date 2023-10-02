@@ -16,7 +16,7 @@ Welcome to Nebula.
 
 ## Acknowledgement
 
-First i would like to thank God who is the source of all knowledge, without Him, this would not be possible.
+First i would like to thank the AllMighty God who is the source of all knowledge, without Him, this would not be possible.
 
 ## Overview
 ![nebula](/images/overview.png)
