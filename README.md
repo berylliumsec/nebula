@@ -80,6 +80,10 @@ Select a Model: Users can choose from one of the three available natural languag
 
 ![Model Selection](/images/model_selection.png)
 
-Search by keywords: By leveraging this feature, users can input keywords—such as port numbers or protocol names—and obtain command suggestions to identify vulnerabilities related to that specific protocol
+Search by keywords: By leveraging this feature, users can input keywords—such as port numbers or protocol names—and obtain command suggestions to identify vulnerabilities related to that specific protocol.
 
 ![Search](/images/search.png)
+
+## Contributing
+
+Should you encounter inaccuracies in the model's responses to your natural language prompts, or face any other challenges, we kindly request that you create an issue to document the specifics. Your feedback is invaluable to our continuous improvement efforts.
