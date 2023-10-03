@@ -35,9 +35,9 @@ First i would like to thank the All-Mighty God who is the source of all knowledg
 
 ## Overview
 ![nebula](/images/overview.png)
-Nebula represents the forefront of technological innovation, serving as an AI-powered assistant specifically designed for the field of ethical hacking. It provides a unique capability for users to input commands using natural language processing, facilitating a seamless transition from intent to execution.
+Nebula is an AI-powered assistant specifically designed for the field of ethical hacking. It provides a unique capability for users to input commands using natural language processing, facilitating a seamless transition from intent to execution.
 
-Additionally, Nebula offers a  hacking command search engine. Ethical hackers can effortlessly search for protocols, ports, or specific terms. In response, Nebula provides curated suggestions on commands that can aid in identifying potential vulnerabilities.
+Additionally, Nebula offers a command search engine. Ethical hackers can effortlessly search for protocols, ports, or specific terms. In response, Nebula provides curated suggestions on commands that can aid in identifying potential vulnerabilities.
 
 Currently, Nebula is integrated with and supports the following renowned ethical hacking tools:
 
