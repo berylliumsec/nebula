@@ -82,7 +82,9 @@ brew install readline
 
 The easiest way to get started is to use the docker image. Please note that the ZAP model is NOT supported in the docker image. If you would like to use ZAP please install the package using `pip`.
 
-**Docker Usage**:
+**PRO TIP**: Regardless of if you are using the docker or pip version, always run nebula in the same folder so that it doesn't have to download the models each time you run it.
+
+**Docker**:
 
 Pulling the image:
 
@@ -112,13 +114,14 @@ docker run --gpus all -v "$(pwd)":/app/unified_models_no_zap -it nebula:latest
 docker run --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
 ```
 
-**PIP installation**:
+**PIP**:
 
 ```
 pip install nebula
 ```
 
 To run nebula simply enter `nebula` in your command line interface.
+
 
 ## Usage
 
