@@ -125,10 +125,11 @@ To run nebula simply enter `nebula` in your command line interface.
 
 ## Usage
 
-There are two primary applications for Nebula:
+In this beta release, there are three primary applications for Nebula:
 
-- Functioning as a dedicated search engine.
-- Serving as an AI-driven assistant (currently in beta).
+- As a dedicated search engine.
+- As an AI-driven assistant (currently in beta).
+- A command suggestion engine.
 
 ### As a search engine:
 
@@ -147,6 +148,9 @@ In the current beta release, it is essential for the ethical hacker to have prio
 
 **Pro Tip**: In the beta version, for optimal performance, limit your queries to a combination of up to two switches.
 
+### As a command suggestion engine.
+
+Nebula can process results from NMAP scans and suggest commands to run to detect vulnerabilities on services running on open ports.
 
 
 ## DocuNebula
