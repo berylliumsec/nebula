@@ -409,7 +409,7 @@ class InteractiveGenerator:
 
             # Check if there are no previous results
             if not self.command_history:
-                return self._input_command()
+                return
 
             action = input(colored("\nDo you want to (c) enter a new command, (v) view previous results, (pr) process previous nmap results,\n(m) select a model, (s) to search by keywords or (q) quit? [c/v/m/q]: ", "cyan")).strip().lower()
 
