@@ -124,7 +124,7 @@ pip install nebula
 To run nebula simply enter `nebula` in your command line interface.
 
 
-## Usage
+## Usage.
 
 In this beta release, there are three primary applications for Nebula:
 
@@ -138,10 +138,10 @@ Within the search engine capability, ethical hackers can input port numbers or s
 
 **Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
 
-![nebula](/images/search.gif)
 
 
-### As an AI-driven assistant
+
+### As an AI-driven assistant.
 **DISCLAIMER**: The results provided by this tool may contain inaccuracies or may not be suitable for all scenarios. We highly recommend users to review and, if necessary, modify the suggested commands before executing them. Proceed with caution and always ensure you are acting within legal and ethical boundaries
 Queries can be presented naturally to the AI-driven assistant, which then translates them into specific commands. 
 
@@ -154,8 +154,11 @@ In the current beta release, it is essential for the ethical hacker to have prio
 Nebula can process results from NMAP scans and suggest commands to run to detect vulnerabilities on services running on open ports.
 
 
-## DocuNebula
+## DocuNebula.
 
+[![NMAP Usage](https://youtu.be/nQwrsCbY-6I)](https://youtu.be/nQwrsCbY-6I)
+
+[![Search Usage](https://youtu.be/lDauvKMJ_3k)](https://youtu.be/lDauvKMJ_3k)
 Upon initial access to Nebula, users are greeted with several options:
 
 - Enter a new command (c).
