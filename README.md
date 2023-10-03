@@ -17,7 +17,7 @@ Welcome to Nebula.
 
 ## Acknowledgement
 
-First i would like to thank the AllMighty God who is the source of all knowledge, without Him, this would not be possible.
+First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.
 
 ## Why nebula?
 
@@ -64,7 +64,7 @@ To avoid downloading the models each time you run the docker container, mount a 
 docker run -v "$(pwd)":/app/unified_models_no_zap -it berylliumsec/nebula:latest
 ```
 
-With all GPUs
+With all GPU(s)
 
 ```bash
 docker run --gpus all -v "$(pwd)":/app/unified_models_no_zap -it nebula:latest
@@ -108,41 +108,43 @@ Queries can be presented naturally to the AI-driven assistant, which then transl
 
 Upon initial access to Nebula, users are greeted with several options:
 
-- Enter a new command (c)
-- View previous results (v)
-- Process previous results (currently limited to NMAP) (PR)
-- Select a model (m)
-- Search by keywords (s)
-- Escape prompt screen without entering a prompt
-- Exit the application (q)
+- Enter a new command (c).
+- View previous results (v).
+- Process previous results (currently limited to NMAP) (PR).
+- Select a model (m).
+- Search by keywords (s).
+- Escape prompt screen without entering a prompt.
+- Results storage.
+- Exit the application (q).
 
-Enter a New Command: This prompt allows users to input commands using natural language. Subsequently, the system predicts and suggests a command for execution. Users have the discretion to either execute the generated command as is or modify it. After initiating the command, they can choose to await its completion or proceed with other tasks.
+**Enter a New Command**: This prompt allows users to input commands using natural language. Subsequently, the system predicts and suggests a command for execution. Users have the discretion to either execute the generated command as is or modify it. After initiating the command, they can choose to await its completion or proceed with other tasks.
 
 **Pro Tip**: In the beta version, for optimal performance, limit your queries to a combination of up to two switches.
 ![Enter a New Command](/images/command.png)
 
 
 
-View Previous Results: After a command's execution, users can review the output via this option.
+**View Previous Results**: After a command's execution, users can review the output via this option.
 
 ![View Previous Results](/images/view_results.png)
 
-Process Previous Results: Currently optimized for NMAP results, Nebula enables users to select previous scan findings and obtain command suggestions to assess potential vulnerabilities of uncovered ports. Users have the flexibility to select a suggested command, modify it if needed, and execute. Support for results from other tools is planned for future releases.
+**Process Previous Results**: Currently optimized for NMAP results, Nebula enables users to select previous scan findings and obtain command suggestions to assess potential vulnerabilities of uncovered ports. Users have the flexibility to select a suggested command, modify it if needed, and execute. Support for results from other tools is planned for future releases.
 
 ![Process Previous Results](/images/process_results.png)
 
 ![Run Suggested Command](/images/run_processed_results.png)
 
-Select a Model: Users can choose from one of the three available natural language processing models.
+**Select a Model**: Users can choose from one of the three available natural language processing models.
 
 ![Model Selection](/images/model_selection.png)
 
-Search by keywords: By leveraging this feature, users can input keywords—such as port numbers or protocol names—and obtain command suggestions to identify vulnerabilities related to that specific protocol.
+**Search by keywords**: By leveraging this feature, users can input keywords—such as port numbers or protocol names—and obtain command suggestions to identify vulnerabilities related to that specific protocol.
 **Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
 ![Search](/images/search.png)
 
+**Results Storage**: A folder name results (if it does not already exist) is created in the working directory where nebula is invoked.
 
-Escape prompt screen without entering a prompt: To escape the prompt screen without entering a prompt, simply hit the enter key.
+**Escape prompt screen without entering a prompt**: To escape the prompt screen without entering a prompt, simply hit the enter key.
 
 ## Contributing
 
