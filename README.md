@@ -23,9 +23,11 @@ First i would like to thank the AllMighty God who is the source of all knowledge
 
 - Effortless Tool Usage with Natural Language: No need to remember intricate commands or switches for various tools. With Nebula, you can seamlessly communicate your intent, whether it's initiating an Nmap scan or any other task. Let Nebula translate your natural language into precise tool commands.
 
-- Direct Command Line Access: Execute suggested commands without having to copy and paste
+- Direct Command Line Access: Execute suggested commands without having to copy and paste.
 
 - Smart Analysis of Tool Outputs: Whether it's the open ports from an Nmap scan or results from other tools, Nebula provides tailored suggestions to further investigate and identify potential vulnerabilities.
+
+**Disclaimer**: Only NMAP is currently supported for smart analysis of tool output.
 
 - Command Search for Vulnerabilities: Easily search and retrieve commands that aid in detecting vulnerabilities across a range of protocols. Whether you're dealing with HTTP, FTP, or SMB, Nebula guides you through.
 
