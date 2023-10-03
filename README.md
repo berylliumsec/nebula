@@ -7,6 +7,7 @@ Welcome to Nebula.
 ## Galaxy
 
 - [Acknowledgement](#Acknowledgement)
+- [Why?](#Why-nebula?)
 - [Overview](#overview)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -17,6 +18,16 @@ Welcome to Nebula.
 ## Acknowledgement
 
 First i would like to thank the AllMighty God who is the source of all knowledge, without Him, this would not be possible.
+
+## Why nebula?
+
+- Effortless Tool Usage with Natural Language: No need to remember intricate commands or switches for various tools. With Nebula, you can seamlessly communicate your intent, whether it's initiating an Nmap scan or any other task. Let Nebula translate your natural language into precise tool commands.
+
+- Direct Command Line Access: Execute suggested commands without having to copy and paste
+
+- Smart Analysis of Tool Outputs: Whether it's the open ports from an Nmap scan or results from other tools, Nebula provides tailored suggestions to further investigate and identify potential vulnerabilities.
+
+- Command Search for Vulnerabilities: Easily search and retrieve commands that aid in detecting vulnerabilities across a range of protocols. Whether you're dealing with HTTP, FTP, or SMB, Nebula guides you through.
 
 ## Overview
 ![nebula](/images/overview.png)
@@ -35,7 +46,7 @@ Our roadmap envisions Nebula's continuous expansion to incorporate the majority 
 
 ## Installation
 
-The easiest way to get started is to use the docker image. Please note that the ZAP model is NOT supported in the docker image. If you would like to use ZAP please install the package using Pip or install the standalone package in the releases section.
+The easiest way to get started is to use the docker image. Please note that the ZAP model is NOT supported in the docker image. If you would like to use ZAP please install the package using `pip`.
 
 Docker Usage:
 
@@ -48,13 +59,13 @@ docker run -it berylliumsec/nebula:latest
 To avoid downloading the models each time you run the docker container, mount a directory to store the models like so:
 
 ```bash
-docker run -v "$(pwd)":/app/unified_models -it berylliumsec/nebula:latest
+docker run -v "$(pwd)":/app/unified_models_no_zap -it berylliumsec/nebula:latest
 ```
 
 With all GPUs
 
 ```bash
-docker run --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
+docker run --gpus all -v "$(pwd)":/app/unified_models_no_zap -it nebula:latest
 
 ```
 
@@ -74,14 +85,21 @@ There are two primary applications for Nebulla:
 - Functioning as a dedicated search engine.
 - Serving as an AI-driven assistant (currently in beta).
 
+### As a search engine:
+
 Within the search engine capability, ethical hackers can input port numbers or specific protocol names. In return, they will receive recommended commands to assist in the identification of potential vulnerabilities. Please refer to the GIF provided below for an illustrative example.
+
+**Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
 
 ![nebula](/images/search.gif)
 
 
+### As an AI-driven assistant
+**DISCLAIMER**: The results provided by this tool may contain inaccuracies or may not be suitable for all scenarios. We highly recommend users to review and, if necessary, modify the suggested commands before executing them. Proceed with caution and always ensure you are acting within legal and ethical boundaries
 Queries can be presented naturally to the AI-driven assistant, which then translates them into specific commands. In the current beta release, it is essential for the ethical hacker to have prior familiarity with this tool to formulate valid inquiries effectively. Refer to the example provided below for a demonstration.
 
-![nebula](/images/nmap.gif)
+**Pro Tip**: In the beta version, for optimal performance, limit your queries to a combination of up to two switches.
+
 
 
 ## DocuNebula
@@ -98,6 +116,7 @@ Upon initial access to Nebula, users are greeted with several options:
 
 Enter a New Command: This prompt allows users to input commands using natural language. Subsequently, the system predicts and suggests a command for execution. Users have the discretion to either execute the generated command as is or modify it. After initiating the command, they can choose to await its completion or proceed with other tasks.
 
+**Pro Tip**: In the beta version, for optimal performance, limit your queries to a combination of up to two switches.
 ![Enter a New Command](/images/command.png)
 
 
@@ -106,7 +125,7 @@ View Previous Results: After a command's execution, users can review the output 
 
 ![View Previous Results](/images/view_results.png)
 
-Process Previous Results: Exclusively available for NMAP results, this feature empowers users to select prior results and receive command recommendations to evaluate the vulnerability of exposed ports. Users can chose a command to run, modify it and execute it. 
+Process Previous Results: Currently optimized for NMAP results, Nebula enables users to select previous scan findings and obtain command suggestions to assess potential vulnerabilities of uncovered ports. Users have the flexibility to select a suggested command, modify it if needed, and execute. Support for results from other tools is planned for future releases.
 
 ![Process Previous Results](/images/process_results.png)
 
@@ -117,7 +136,7 @@ Select a Model: Users can choose from one of the three available natural languag
 ![Model Selection](/images/model_selection.png)
 
 Search by keywords: By leveraging this feature, users can input keywords—such as port numbers or protocol names—and obtain command suggestions to identify vulnerabilities related to that specific protocol.
-
+**Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
 ![Search](/images/search.png)
 
 
