@@ -50,6 +50,22 @@ Our roadmap envisions Nebula's continuous expansion to incorporate the majority 
 
 Nebula has been extensively tested and optimized for Linux and MacOS platforms. As of now, its functionality on Windows is not guaranteed, and it may not operate as expected.
 
+## System dependencies
+
+- [Docker](https://docs.docker.com/engine/install/)
+- [Python3] >=3.10(https://www.python.org/downloads/), older versions may work but it is not guaranteed
+- libreadline-dev:
+
+Linux (debian based):
+```bash
+sudo apt install -y libreadline-dev
+```
+MacOS:
+```bash
+brew install readline
+```
+
+
 ## Installation
 
 The easiest way to get started is to use the docker image. Please note that the ZAP model is NOT supported in the docker image. If you would like to use ZAP please install the package using `pip`.
