@@ -119,7 +119,7 @@ docker run --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
 **PIP**:
 
 ```
-pip install nebula
+pip install nebula-ai
 ```
 
 To run nebula simply enter:
