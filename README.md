@@ -9,6 +9,7 @@ Welcome to Nebula.
 - [Acknowledgement](#Acknowledgement)
 - [Why?](#Why-nebula?)
 - [Overview](#overview)
+- [Compatibility](#compatibility)
 - [Installation](#installation)
 - [Usage](#usage)
 - [DocuNebula](#DocuNebula)
@@ -43,8 +44,11 @@ Currently, Nebula is integrated with and supports the following renowned ethical
 - OWASP ZAP (Full Scan Only): A popular web application security scanner.
 - Crackmap: A robust network information gathering tool.
 
-Our roadmap envisions Nebula's continuous expansion to incorporate the majority of the leading tools leveraged by ethical hackers globally. This commitment ensures that our users remain at the cutting edge of cybersecurity endeavors.
+Our roadmap envisions Nebula's continuous expansion to incorporate the majority of the tools leveraged by ethical hackers globally. This commitment ensures that our users remain at the cutting edge of cybersecurity endeavors.
 
+## Compatibility
+
+Nebula has been extensively tested and optimized for Linux and MacOS platforms. As of now, its functionality on Windows is not guaranteed, and it may not operate as expected.
 
 ## Installation
 
@@ -79,6 +83,8 @@ PIP installation:
 ```
 pip install nebula
 ```
+
+To run nebula simpy enter `nebula` in your command line interface.
 
 ## Usage
 
@@ -142,7 +148,7 @@ Upon initial access to Nebula, users are greeted with several options:
 **Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
 ![Search](/images/search.png)
 
-**Results Storage**: A folder name results (if it does not already exist) is created in the working directory where nebula is invoked.
+**Results Storage**: A folder named `results` is created (if it does not already exist) in the working directory where nebula is invoked.
 
 **Escape prompt screen without entering a prompt**: To escape the prompt screen without entering a prompt, simply hit the enter key.
 
