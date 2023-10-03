@@ -225,8 +225,9 @@ The ZAP model currently only supports full scan.
 
 ## Links to videos:
 
-![Model Usage Video](https://youtu.be/nQwrsCbY-6I?feature=shared)
-![Search Usage Video](https://youtu.be/lDauvKMJ_3k?feature=shared)
+[Model Usage Video](https://youtu.be/nQwrsCbY-6I?feature=shared)
+[Search Usage Video](https://youtu.be/lDauvKMJ_3k?feature=shared)
+
 ## Contributing
 
 Should you encounter inaccuracies in the model's responses to your natural language prompts, or face any other challenges, we kindly request that you create an issue to document the specifics. Your feedback is invaluable to our continuous improvement efforts.
