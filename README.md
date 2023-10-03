@@ -15,6 +15,7 @@ Welcome to Nebula.
 - [Usage](#usage)
 - [DocuNebula](#DocuNebula)
 - [Examples of natural language queries](#examples-of-natural-language-queries)
+- [Links to videos]
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -225,6 +226,10 @@ The ZAP model currently only supports full scan.
 - do a full scan on https://192.168.1.1 and spider for 5 minutes
 - do a full scan on https://192.168.1.1 and spider for 5 minutes and write the report to html file nebula.html
 
+## Links to videos:
+
+![Model Usage Video](https://youtu.be/nQwrsCbY-6I?feature=shared)
+![Search Usage Video](https://youtu.be/lDauvKMJ_3k?feature=shared)
 ## Contributing
 
 Should you encounter inaccuracies in the model's responses to your natural language prompts, or face any other challenges, we kindly request that you create an issue to document the specifics. Your feedback is invaluable to our continuous improvement efforts.
