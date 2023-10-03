@@ -23,11 +23,11 @@ First i would like to thank the All-Mighty God who is the source of all knowledg
 
 ## Why nebula?
 
-- Effortless Tool Usage with Natural Language: No need to remember intricate commands or switches for various tools. With Nebula, you can seamlessly communicate your intent, whether it's initiating an Nmap scan or any other task. Let Nebula translate your natural language into precise tool commands.
+- Effortless Tool Usage with Natural Language: No need to remember intricate commands or switches for various tools. With Nebula, you can seamlessly communicate your intent, whether it's initiating an NMAP scan or any other task. Let Nebula translate your natural language into precise tool commands.
 
 - Direct Command Line Access: Execute suggested commands without having to copy and paste.
 
-- Smart Analysis of Tool Outputs: Whether it's the open ports from an Nmap scan or results from other tools, Nebula provides tailored suggestions to further investigate and identify potential vulnerabilities.
+- Smart Analysis of Tool Outputs: Whether it's the open ports from an NMAP scan or results from other tools, Nebula provides tailored suggestions to further investigate and identify potential vulnerabilities.
 
 **Disclaimer**: Only NMAP is currently supported for smart analysis of tool output.
 
@@ -43,7 +43,7 @@ Currently, Nebula is integrated with and supports the following renowned ethical
 
 - NMAP: A versatile tool for network discovery and security auditing.
 - OWASP ZAP (Full Scan Only): A popular web application security scanner.
-- Crackmap: A robust network information gathering tool.
+- Crackmapexec: A robust network information gathering tool.
 
 Our roadmap envisions Nebula's continuous expansion to incorporate the majority of the tools leveraged by ethical hackers globally. This commitment ensures that our users remain at the cutting edge of cybersecurity endeavors.
 
@@ -78,7 +78,7 @@ brew install readline
 
 The easiest way to get started is to use the docker image. Please note that the ZAP model is NOT supported in the docker image. If you would like to use ZAP please install the package using `pip`.
 
-Docker Usage:
+**Docker Usage**:
 
 Without GPU:
 
@@ -102,17 +102,18 @@ docker run --gpus all -v "$(pwd)":/app/unified_models_no_zap -it nebula:latest
 ```bash
 docker run --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
 ```
-PIP installation:
+
+**PIP installation**:
 
 ```
 pip install nebula
 ```
 
-To run nebula simpy enter `nebula` in your command line interface.
+To run nebula simply enter `nebula` in your command line interface.
 
 ## Usage
 
-There are two primary applications for Nebulla:
+There are two primary applications for Nebula:
 
 - Functioning as a dedicated search engine.
 - Serving as an AI-driven assistant (currently in beta).
