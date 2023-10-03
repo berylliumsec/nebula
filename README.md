@@ -39,7 +39,7 @@ Nebula is an AI-powered assistant specifically designed for the field of ethical
 
 Additionally, Nebula offers a command search engine. Ethical hackers can effortlessly search for protocols, ports, or specific terms. In response, Nebula provides curated suggestions on commands that can aid in identifying potential vulnerabilities.
 
-Currently, Nebula is integrated with and supports the following renowned ethical hacking tools:
+Currently, Nebula is integrated with and supports the following ethical hacking tools:
 
 - NMAP: A versatile tool for network discovery and security auditing.
 - OWASP ZAP (Full Scan Only): A popular web application security scanner.
@@ -53,18 +53,15 @@ Nebula has been extensively tested and optimized for Linux and MacOS platforms. 
 
 ## System dependencies
 
-- Storage:
-A minimum of 50GB is required.
+- Storage: A minimum of 50GB is required.
 
-- Graphics Processing Unit (GPU):
+- Graphics Processing Unit (GPU): While not mandatory, having at least 8GB of GPU memory is recommended for optimal performance.
 
-While not mandatory, having at least 8GB of GPU memory is recommended for optimal performance.
-
-**Docker based distribution**
+**Docker based distribution requirement(s)**
 
 - [Docker](https://docs.docker.com/engine/install/)
 
-**PYPI based distribution**
+**PYPI based distribution requirement(s)**
 
 - [Python3](https://www.python.org/downloads/)
 - libreadline-dev:
@@ -87,7 +84,12 @@ The easiest way to get started is to use the docker image. Please note that the 
 
 **Docker Usage**:
 
-Without GPU:
+Pulling the image:
+
+``` bash
+docker pull berylliumsec/nebula:latest
+```
+Running the image without GPU:
 
 ```bash
 docker run -it berylliumsec/nebula:latest
@@ -99,7 +101,7 @@ To avoid downloading the models each time you run the docker container, mount a 
 docker run -v "$(pwd)":/app/unified_models_no_zap -it berylliumsec/nebula:latest
 ```
 
-With all GPU(s)
+Running the model with all GPU(s)
 
 ```bash
 docker run --gpus all -v "$(pwd)":/app/unified_models_no_zap -it nebula:latest
