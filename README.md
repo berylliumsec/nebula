@@ -53,6 +53,13 @@ Nebula has been extensively tested and optimized for Linux and MacOS platforms. 
 
 ## System dependencies
 
+- Storage:
+A minimum of 50GB is required.
+
+- Graphics Processing Unit (GPU):
+
+While not mandatory, having at least 8GB of GPU memory is recommended for optimal performance.
+
 **Docker based distribution**
 
 - [Docker](https://docs.docker.com/engine/install/)
