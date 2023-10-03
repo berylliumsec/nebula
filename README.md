@@ -158,8 +158,6 @@ Upon initial access to Nebula, users are greeted with several options:
 - Process previous results (currently limited to NMAP) (PR).
 - Select a model (m).
 - Search by keywords (s).
-- Escape prompt screen without entering a prompt.
-- Results storage.
 - Exit the application (q).
 
 **Enter a New Command**: This prompt allows users to input commands using natural language. Subsequently, the system predicts and suggests a command for execution. Users have the discretion to either execute the generated command as is or modify it. After initiating the command, they can choose to await its completion or proceed with other tasks.
