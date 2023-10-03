@@ -27,9 +27,9 @@ First i would like to thank the All-Mighty God who is the source of all knowledg
 
 - Direct Command Line Access: Execute suggested commands without having to copy and paste.
 
-- Smart Analysis of Tool Outputs: Whether it's the open ports from an NMAP scan or results from other tools, Nebula provides tailored suggestions to further investigate and identify potential vulnerabilities.
-
 **Disclaimer**: Only NMAP is currently supported for smart analysis of tool output.
+
+- Smart Analysis of Tool Outputs: Whether it's the open ports from an NMAP scan or results from other tools, Nebula provides tailored suggestions to further investigate and identify potential vulnerabilities.
 
 - Command Search for Vulnerabilities: Easily search and retrieve commands that aid in detecting vulnerabilities across a range of protocols. Whether you're dealing with HTTP, FTP, or SMB, Nebula guides you through.
 
