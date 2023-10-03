@@ -10,12 +10,12 @@ Welcome to Nebula.
 - [Why?](#Why-nebula?)
 - [Overview](#overview)
 - [Compatibility](#compatibility)
+- [System dependencies](#system-dependencies)
 - [Installation](#installation)
 - [Usage](#usage)
 - [DocuNebula](#DocuNebula)
 - [Contributing](#contributing)
 - [License](#license)
-- [System dependencies](#system-dependencies)
 
 ## Acknowledgement
 
@@ -53,7 +53,12 @@ Nebula has been extensively tested and optimized for Linux and MacOS platforms. 
 
 ## System dependencies
 
+**Docker based distribution**
+
 - [Docker](https://docs.docker.com/engine/install/)
+
+**PYPI based distribution**
+
 - [Python3] >=3.10(https://www.python.org/downloads/), older versions may work but it is not guaranteed
 - libreadline-dev:
 
@@ -65,6 +70,8 @@ MacOS:
 ```bash
 brew install readline
 ```
+- [NMAP](https://nmap.org/download)
+- [crackmapexec](https://github.com/byt3bl33d3r/CrackMapExec/wiki/Installation)
 
 
 ## Installation
