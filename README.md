@@ -14,6 +14,7 @@ Welcome to Nebula.
 - [Installation](#installation)
 - [Usage](#usage)
 - [DocuNebula](#DocuNebula)
+- [Examples of natural language queries](#examples-of-natural-language-queries)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -201,20 +202,20 @@ In the above screenshot, the user views the results of running the suggested com
 
 **Escape prompt screen without entering a prompt**: To escape the prompt screen without entering a prompt, simply hit the enter key.
 
-**Examples of Sample natural language queries:**
+## Examples of natural language queries
 
-NMAP:
+**NMAP**:
 - do OS detection of list of hosts in file.txt
 - do a Maimon scan and OS detection on 192.168.1.1
 - do a ping scan on random targets in 192.168.1.0/24 and exclude host 192.168.1.9
 
-CRACKMAPEXEC:
+**CRACKMAPEXEC**:
 
 - enumerate users on  192.168.1.1 using a null session
 - show disks on 192.168.1.0/24 using a username nebula and password joey
 - check 192.168.1.1 for unconstrained delegation using a null username and password
 
-ZAP:
+**ZAP**:
 
 The ZAP model currently only supports full scan. 
 - do a full scan on https://192.168.1.1
