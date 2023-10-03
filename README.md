@@ -139,7 +139,7 @@ In this beta release, there are three primary applications for Nebula:
 
 ### As a search engine:
 
-Within the search engine capability, ethical hackers can input port numbers or specific protocol names. In return, they will receive recommended commands to assist in the identification of potential vulnerabilities. Please refer to the GIF provided below for an illustrative example.
+Within the search engine capability, ethical hackers can input port numbers or specific protocol names. In return, they will receive recommended commands to assist in the identification of potential vulnerabilities.
 
 **Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
 
