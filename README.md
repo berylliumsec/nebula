@@ -152,7 +152,7 @@ Queries can be presented naturally to the AI-driven assistant, which then transl
 
 In the current beta release, it is essential for the ethical hacker to have prior familiarity with this tool to formulate valid inquiries effectively. Refer to the example provided below for a demonstration.
 
-**Pro Tip**: In the beta version, for optimal performance, limit your queries to a combination of up to two switches.
+**Pro Tip**: **In the beta version, for optimal performance, limit your queries to a combination of up to two switches. Also, queries should be formulated as commands rather than questions, see the [natural language examples](#examples-of-natural-language-queries) section for more information**
 
 ### As a command suggestion engine.
 
@@ -170,7 +170,7 @@ Upon initial access to Nebula, users are greeted with several options:
 - Search by keywords (s).
 - Exit the application (q).
 
-**Enter a New Command**: This prompt allows users to input commands using natural language. Subsequently, the system predicts and suggests a command for execution. Users have the discretion to either execute the generated command as is or modify it. After initiating the command, they can choose to await its completion or proceed with other tasks.
+**Enter a New Command**: This prompt allows users to input commands using natural language. Subsequently, the system predicts and suggests a command for execution. Users have the discretion to either execute the generated command as is or modify it. After initiating the command, they can choose to await its completion or proceed with other tasks. Queries should be formulated as commands rather than questions, see the [natural language examples](#examples-of-natural-language-queries) section for more information.
 
 **Pro Tip**: In the beta version, for optimal performance, limit your queries to a combination of up to two switches.
 ![Enter a New Command](/images/command.png)
