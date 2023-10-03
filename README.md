@@ -177,18 +177,19 @@ In the above screenshot, the user reviews the output of the top 10 port-scan.
 
 ![Process Previous Results](/images/process_results.png)
 
-In the above screenshot, the user processes the results of the top 10 port scan, receives suggestions on what commands to run, and runs command number #8 after editing it.
+In the above screenshot, the user asks Nebula to process the results of the top 10 port scan,. Nebula provides suggestions on what commands to run, and the user chooses suggestion number #8 and runs the corresponding command after editing it.
 
 
 ![Run Suggested Command](/images/run_processed_results.png)
 
-In the above screenshot, the user views the results of running the suggested command. In this case the user result is a list of HTTP methods supported by 192.168.1.1.
+In the above screenshot, the user views the results of running the suggested command. In this case, the result is a list of HTTP methods supported by 192.168.1.1.
 
 **Select a Model**: Users can choose from one of the three available natural language processing models (note that the actual name of the models/version may vary from what is seen in this screenshot).
 
 ![Model Selection](/images/model_selection.png)
 
 **Search by keywords**: By leveraging this feature, users can input keywords—such as port numbers or protocol names—and obtain command suggestions to identify vulnerabilities related to that specific protocol.
+
 **Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
 ![Search](/images/search.png)
 
