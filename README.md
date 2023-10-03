@@ -15,6 +15,7 @@ Welcome to Nebula.
 - [DocuNebula](#DocuNebula)
 - [Contributing](#contributing)
 - [License](#license)
+- [System dependencies](#system-dependencies)
 
 ## Acknowledgement
 
