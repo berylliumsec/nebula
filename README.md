@@ -201,6 +201,26 @@ In the above screenshot, the user views the results of running the suggested com
 
 **Escape prompt screen without entering a prompt**: To escape the prompt screen without entering a prompt, simply hit the enter key.
 
+**Examples of Sample natural language queries:**
+
+NMAP:
+- do OS detection of list of hosts in file.txt
+- do a Maimon scan and OS detection on 192.168.1.1
+- do a ping scan on random targets in 192.168.1.0/24 and exclude host 192.168.1.9
+
+CRACKMAPEXEC:
+
+- enumerate users on  192.168.1.1 using a null session
+- show disks on 192.168.1.0/24 using a username nebula and password joey
+- check 192.168.1.1 for unconstrained delegation using a null username and password
+
+ZAP:
+
+The ZAP model currently only supports full scan. 
+- do a full scan on https://192.168.1.1
+- do a full scan on https://192.168.1.1 and spider for 5 minutes
+- do a full scan on https://192.168.1.1 and spider for 5 minutes and write the report to html file nebula.html
+
 ## Contributing
 
 Should you encounter inaccuracies in the model's responses to your natural language prompts, or face any other challenges, we kindly request that you create an issue to document the specifics. Your feedback is invaluable to our continuous improvement efforts.
