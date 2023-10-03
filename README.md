@@ -51,7 +51,7 @@ Our roadmap envisions Nebula's continuous expansion to incorporate the majority 
 
 ## Compatibility
 
-Nebula has been extensively tested and optimized for Linux and MacOS platforms. As of now, its functionality on Windows is not guaranteed, and it may not operate as expected.
+Non-Docker versions of Nebula have been extensively tested and optimized for Linux platforms. As of now, its functionality on Windows or macOS is not guaranteed, and it may not operate as expected.
 
 ## System dependencies
 
