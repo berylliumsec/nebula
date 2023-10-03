@@ -59,7 +59,7 @@ Nebula has been extensively tested and optimized for Linux and MacOS platforms. 
 
 **PYPI based distribution**
 
-- [Python3] >=3.10(https://www.python.org/downloads/), older versions may work but it is not guaranteed
+- [Python3](https://www.python.org/downloads/)
 - libreadline-dev:
 
 Linux (debian based):
@@ -129,7 +129,9 @@ Within the search engine capability, ethical hackers can input port numbers or s
 
 ### As an AI-driven assistant
 **DISCLAIMER**: The results provided by this tool may contain inaccuracies or may not be suitable for all scenarios. We highly recommend users to review and, if necessary, modify the suggested commands before executing them. Proceed with caution and always ensure you are acting within legal and ethical boundaries
-Queries can be presented naturally to the AI-driven assistant, which then translates them into specific commands. In the current beta release, it is essential for the ethical hacker to have prior familiarity with this tool to formulate valid inquiries effectively. Refer to the example provided below for a demonstration.
+Queries can be presented naturally to the AI-driven assistant, which then translates them into specific commands. 
+
+In the current beta release, it is essential for the ethical hacker to have prior familiarity with this tool to formulate valid inquiries effectively. Refer to the example provided below for a demonstration.
 
 **Pro Tip**: In the beta version, for optimal performance, limit your queries to a combination of up to two switches.
 
@@ -163,9 +165,10 @@ Upon initial access to Nebula, users are greeted with several options:
 
 ![Process Previous Results](/images/process_results.png)
 
+The result of running a suggested command from the above:
 ![Run Suggested Command](/images/run_processed_results.png)
 
-**Select a Model**: Users can choose from one of the three available natural language processing models.
+**Select a Model**: Users can choose from one of the three available natural language processing models (note that the actual name of the models/version may vary from what is seen in this screenshot).
 
 ![Model Selection](/images/model_selection.png)
 
