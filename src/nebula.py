@@ -407,6 +407,9 @@ class InteractiveGenerator:
                     print("Command completed!")
                     return
 
+            # Check if there are no previous results
+            if not self.command_history:
+                return
 
             action = input(colored("\nDo you want to (c) enter a new command, (v) view previous results, (pr) process previous nmap results,\n(m) select a model, (s) to search by keywords or (q) quit? [c/v/m/q]: ", "cyan")).strip().lower()
 
@@ -700,12 +703,6 @@ class InteractiveGenerator:
 
     def _view_previous_results(self) -> bool:
         """Internal method to display previous results and loop back to the main prompt."""
-        
-        # Check if there are no previous results
-        if not self.command_history:
-            cprint("No previous results available.", "red")
-            return True  # Return to the main loop
-        
         self.display_command_list()
         
         try:
@@ -728,7 +725,6 @@ class InteractiveGenerator:
         except ValueError:
             cprint("Please enter a valid number or type 'back'.", "red")
         return True  # Indicate the user is still in the results view mode
-
 
 
 
