@@ -212,7 +212,7 @@ In the above screenshot, the user views the results of running the suggested com
 **CRACKMAPEXEC**:
 
 - enumerate users on  192.168.1.1 using a null session
-- show disks on 192.168.1.0/24 using a username nebula and password joey
+- show disks on 192.168.1.0/24 using username nebula and password joey
 - check 192.168.1.1 for unconstrained delegation using a null username and password
 
 **ZAP**:
