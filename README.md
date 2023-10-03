@@ -211,12 +211,12 @@ In the above screenshot, the user views the results of running the suggested com
 
 **NMAP**:
 - do OS detection of list of hosts in file.txt
-- do a Maimon scan and OS detection on 192.168.1.1
+- discover vulnerabilities on port 80 on 192.168.1.1
 - do a ping scan on random targets in 192.168.1.0/24 and exclude host 192.168.1.9
 
 **CRACKMAPEXEC**:
 
-- enumerate users on  192.168.1.1 using a null session
+- enumerate users on 192.168.1.1 using a null session
 - show disks on 192.168.1.0/24 using username nebula and password joey
 - check 192.168.1.1 for unconstrained delegation using a null username and password
 
