@@ -158,7 +158,7 @@ Nebula can process results from NMAP scans and suggest commands to run to detect
 Upon initial access to Nebula, users are greeted with several options:
 
 - Enter a new command (c).
-- View previous results (v).
+- View previous results (v) (if there are files in the results directory).
 - Process previous results (currently limited to NMAP) (PR).
 - Select a model (m).
 - Search by keywords (s).
