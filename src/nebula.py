@@ -370,7 +370,7 @@ class InteractiveGenerator:
                 self.handle_generated_text(generated_text)
 
             except (EOFError, KeyboardInterrupt):  # Combined the two exception types
-                print("\nGoodbye!")
+                print("\nUntil our stars align again!!")
                 break
             except Exception as e:  # Handle unexpected errors
                 if isinstance(prompt, bool):
@@ -415,7 +415,7 @@ class InteractiveGenerator:
 
             # Handle the user's action
             if action == 'q':
-                print("Goodbye!")
+                print("Until our stars align again!!")
                 exit(0)
             elif action == 'v':
                 return self._view_previous_results()
@@ -473,7 +473,7 @@ class InteractiveGenerator:
         choice = input(colored("\nDo you want to (p) proceed with the current model, (m) select a different model, or (q) quit? [p/m/q]: ", "cyan")).strip().lower()
 
         if choice == 'q':
-            print("Goodbye!")
+            print("Until our stars align again!!")
             exit(0)
         elif choice == 'm':
             self._select_model()  # Assuming you have a method _select_model to handle model selection
@@ -484,7 +484,7 @@ class InteractiveGenerator:
         # Get the actual user input for the model to generate
         user_input = input(colored("\nEnter a prompt: ", "cyan")).strip()
         if user_input.lower() in ['quit', 'exit']:
-            print("Goodbye!")
+            print("Until our stars align again!!")
             exit(0)
         return user_input
 
@@ -494,7 +494,7 @@ class InteractiveGenerator:
         # Get the actual user input for the model to generate
         user_input = input(colored("\nEnter a prompt: ", "cyan")).strip()
         if user_input.lower() in ['quit', 'exit']:
-            print("Goodbye!")
+            print("Until our stars align again!!")
             exit(0)
         return user_input
 
