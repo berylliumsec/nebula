@@ -122,7 +122,11 @@ docker run --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
 pip install nebula
 ```
 
-To run nebula simply enter ```bash nebula``` in your command line interface.
+To run nebula simply enter:
+```bash 
+nebula
+``` 
+in your command line interface.
 
 
 ## Usage.
