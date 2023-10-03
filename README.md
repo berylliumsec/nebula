@@ -155,18 +155,24 @@ Upon initial access to Nebula, users are greeted with several options:
 **Pro Tip**: In the beta version, for optimal performance, limit your queries to a combination of up to two switches.
 ![Enter a New Command](/images/command.png)
 
-
+In the above screenshot, the user asks the NMAP model to perform a top 10 port-scan on 192.168.1.1.
 
 **View Previous Results**: After a command's execution, users can review the output via this option.
 
 ![View Previous Results](/images/view_results.png)
 
+In the above screenshot, the user reviews the output of the top 10 port-scan.
+
 **Process Previous Results**: Currently optimized for NMAP results, Nebula enables users to select previous scan findings and obtain command suggestions to assess potential vulnerabilities of uncovered ports. Users have the flexibility to select a suggested command, modify it if needed, and execute. Support for results from other tools is planned for future releases.
 
 ![Process Previous Results](/images/process_results.png)
 
-The result of running a suggested command from the above:
+In the above screenshot, the user processes the results of the top 10 port scan, receives suggestions on what commands to run, and runs command number #8 after editing it.
+
+
 ![Run Suggested Command](/images/run_processed_results.png)
+
+In the above screenshot, the user views the results of running the suggested command. In this case the user result is a list of HTTP methods supported by 192.168.1.1.
 
 **Select a Model**: Users can choose from one of the three available natural language processing models (note that the actual name of the models/version may vary from what is seen in this screenshot).
 
