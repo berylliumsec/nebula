@@ -15,7 +15,7 @@ Welcome to Nebula.
 - [Usage](#usage)
 - [DocuNebula](#DocuNebula)
 - [Examples of natural language queries](#examples-of-natural-language-queries)
-- [Links to videos]
+- [Links to videos](#links-to-videos)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -157,9 +157,6 @@ Nebula can process results from NMAP scans and suggest commands to run to detect
 
 ## DocuNebula.
 
-[![NMAP Usage](https://nebula-models.s3.amazonaws.com/nmap.gif)](https://youtu.be/nQwrsCbY-6I)
-
-[![Search Usage](https://nebula-models.s3.amazonaws.com/search.gif)](https://youtu.be/lDauvKMJ_3k)
 Upon initial access to Nebula, users are greeted with several options:
 
 - Enter a new command (c).
