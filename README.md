@@ -36,6 +36,7 @@ First i would like to thank the All-Mighty God who is the source of all knowledg
 - Search for commands that help identify Vulnerabilities: Easily search and retrieve commands that aid in detecting vulnerabilities across a range of services. Whether you're dealing with HTTP, FTP, or SMB, Nebula guides you through.
 
 ## Overview
+
 ![nebula](/images/overview.png)
 Nebula is an AI-powered assistant specifically designed for the field of ethical hacking. It provides a unique capability for users to input commands using natural language processing, facilitating a seamless transition from intent to execution.
 
@@ -125,7 +126,6 @@ nebula
 ``` 
 in your command line interface.
 
-
 ## Usage.
 
 In this beta release, there are three primary applications for Nebula:
@@ -139,9 +139,6 @@ In this beta release, there are three primary applications for Nebula:
 Within the search engine capability, ethical hackers can input port numbers or specific protocol names. In return, they will receive recommended commands to assist in the identification of potential vulnerabilities.
 
 **Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
-
-
-
 
 ### As an AI-driven assistant.
 **DISCLAIMER**: The results provided by this tool may contain inaccuracies or may not be suitable for all scenarios. We highly recommend users to review and, if necessary, modify the suggested commands before executing them. Proceed with caution and always ensure you are acting within legal and ethical boundaries
@@ -170,6 +167,7 @@ Upon initial access to Nebula, users are greeted with several options:
 **Enter a New Command**: This prompt allows users to input commands using natural language. Subsequently, the system predicts and suggests a command for execution. Users have the discretion to either execute the generated command as is or modify it. After initiating the command, they can choose to await its completion or proceed with other tasks. Queries should be formulated as commands rather than questions, see the [natural language examples](#examples-of-natural-language-queries) section for more information.
 
 **Pro Tip**: In the beta version, for optimal performance, limit your queries to a combination of up to two switches.
+
 ![Enter a New Command](/images/command.png)
 
 In the above screenshot, the user asks the NMAP model to perform a top 10 port-scan on 192.168.1.1.
@@ -198,6 +196,7 @@ In the above screenshot, the user views the results of running the suggested com
 **Search by keywords**: By leveraging this feature, users can input keywords—such as port numbers or protocol names—and obtain command suggestions to identify vulnerabilities related to that specific protocol.
 
 **Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
+
 ![Search](/images/search.png)
 
 **Results Storage**: A folder named `results` is created (if it does not already exist) in the working directory where nebula is invoked.
