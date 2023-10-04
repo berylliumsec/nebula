@@ -33,13 +33,13 @@ First i would like to thank the All-Mighty God who is the source of all knowledg
 
 - Smart Analysis of Tool Outputs: Whether it's the open ports from an NMAP scan or results from other tools, Nebula provides tailored suggestions to further investigate and identify potential vulnerabilities.
 
-- Search for commands that help identify Vulnerabilities: Easily search and retrieve commands that aid in detecting vulnerabilities across a range of protocols. Whether you're dealing with HTTP, FTP, or SMB, Nebula guides you through.
+- Search for commands that help identify Vulnerabilities: Easily search and retrieve commands that aid in detecting vulnerabilities across a range of services. Whether you're dealing with HTTP, FTP, or SMB, Nebula guides you through.
 
 ## Overview
 ![nebula](/images/overview.png)
 Nebula is an AI-powered assistant specifically designed for the field of ethical hacking. It provides a unique capability for users to input commands using natural language processing, facilitating a seamless transition from intent to execution.
 
-Additionally, Nebula offers a command search engine. Ethical hackers can effortlessly search for protocols, ports, or specific terms. In response, Nebula provides curated suggestions on commands that can aid in identifying potential vulnerabilities.
+Additionally, Nebula offers a command search engine. Ethical hackers can effortlessly search for services, ports, or specific terms. In response, Nebula provides curated suggestions on commands that can aid in identifying potential vulnerabilities.
 
 Currently, Nebula is integrated with and supports the following ethical hacking tools:
 
@@ -72,10 +72,7 @@ Linux (debian based):
 ```bash
 sudo apt install -y libreadline-dev
 ```
-MacOS:
-```bash
-brew install readline
-```
+
 - [NMAP](https://nmap.org/download)
 - [crackmapexec](https://github.com/byt3bl33d3r/CrackMapExec/wiki/Installation)
 
@@ -156,7 +153,7 @@ In the current beta release, it is essential for the ethical hacker to have prio
 
 ### As a command suggestion engine.
 
-Nebula can process results from NMAP scans and suggest commands to run to detect vulnerabilities on services running on open ports.
+Nebula can process results from NMAP scans (plain text format) and suggest commands to run to detect vulnerabilities on services running on open ports.
 
 
 ## DocuNebula.
@@ -183,11 +180,11 @@ In the above screenshot, the user asks the NMAP model to perform a top 10 port-s
 
 In the above screenshot, the user reviews the output of the top 10 port-scan.
 
-**Process Previous Results**: Currently optimized for NMAP results, Nebula enables users to select previous scan findings and obtain command suggestions to assess potential vulnerabilities of uncovered ports. Users have the flexibility to select a suggested command, modify it if needed, and execute. Support for results from other tools is planned for future releases.
+**Process Previous Results**: Currently optimized for NMAP results (in plain text format), Nebula enables users to select previous scan findings and obtain command suggestions to assess potential vulnerabilities of uncovered ports. Users have the flexibility to select a suggested command, modify it if needed, and execute. Support for results from other tools is planned for future releases.
 
 ![Process Previous Results](/images/process_results.png)
 
-In the above screenshot, the user asks Nebula to process the results of the top 10 port scan,. Nebula provides suggestions on what commands to run, and the user chooses suggestion number #8 and runs the corresponding command after editing it.
+In the above screenshot, the user asks Nebula to process the results of the top 10 port scan, Nebula provides suggestions on what commands to run, and the user chooses suggestion number #8 and runs the corresponding command after editing it.
 
 
 ![Run Suggested Command](/images/run_processed_results.png)
