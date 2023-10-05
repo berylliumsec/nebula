@@ -121,6 +121,7 @@ pip install nebula-ai
 ```
 
 To run nebula simply enter:
+
 ```bash 
 nebula
 ``` 
@@ -208,8 +209,8 @@ In the above screenshot, the user views the results of running the suggested com
 **Although the models are trained to be able to construct commands from natural languages, there are some nuances to get the right results**:
 **General rules**
 
-- Use numbers instead of the word equivalent, for example use `10`` instead of ten.
-- Use all caps for abbreviations, for example use `SMB`` instead of smb.
+- Use numbers instead of the word equivalent, for example use `10` instead of ten.
+- Use all caps for abbreviations, for example use `SMB` instead of smb.
 - Keep your commands as short as possible.
 
 **NMAP**:
