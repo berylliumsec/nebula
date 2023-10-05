@@ -205,20 +205,47 @@ In the above screenshot, the user views the results of running the suggested com
 
 ## Examples of natural language queries
 
+**Although the models are trained to be able to construct commands from natural languages, there are some nuances to get the right results**:
+**General rules**
+
+- Use numbers instead of the word equivalent, for example use `10`` instead of ten.
+- Use all caps for abbreviations, for example use `SMB`` instead of smb.
+- Keep your commands as short as possible.
+
 **NMAP**:
+
+- Always end the command with the IP addresses and always refer to IP addresses as hosts regardless of whether its a subnet or not. For example:
+
+`do a top 10 scan on host 192.168.1.1`
+
+
+- If you want to do a vulnerability scan using a script, be sure to mention the "script" keyword as there are many ways NMAP can detect vulnerabilities that do not involve the scripting engine. For example:
+
+`discover vulnerabilities using a script on host 192.168.1.1`
+
+- Always place ports before the host, so if you want to discover vulnerabilities on port 80 on host 192.168.1.1 do:
+
+`discover vulnerabilities on port 80 on host 192.168.1.1`
+
+More examples:
+
 - do OS detection of list of hosts in file.txt
-- discover vulnerabilities on port 80 on 192.168.1.1
-- do a ping scan on random targets in 192.168.1.0/24 and exclude host 192.168.1.9
+- discover vulnerabilities on port 80 on host 192.168.1.1
+- do a ping scan on random targets in host 192.168.1.0/24 and exclude host 192.168.1.9
+- do service detection on host 192.168.1.1
 
 **CRACKMAPEXEC**:
 
-- enumerate users on 192.168.1.1 using a null session
-- show disks on 192.168.1.0/24 using username nebula and password joey
+For crackmap, always include a username and a password in your prompt or indicate that you would like to use a null session:
+
+- enumerate users on host 192.168.1.1 using a null session
+- show disks on host 192.168.1.0/24 using username nebula and password joey
 - check 192.168.1.1 for unconstrained delegation using a null username and password
 
 **ZAP**:
 
-The ZAP model currently only supports full scan. 
+The ZAP model currently only supports full scan.
+
 - do a full scan on https://192.168.1.1
 - do a full scan on https://192.168.1.1 and spider for 5 minutes
 - do a full scan on https://192.168.1.1 and spider for 5 minutes and write the report to html file nebula.html
