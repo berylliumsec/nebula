@@ -230,7 +230,7 @@ In the above screenshot, the user views the results of running the suggested com
 
 More examples:
 
-- do OS detection of list of hosts in file.txt
+- do OS detection on list of hosts in file.txt
 - discover vulnerabilities on port 80 on host 192.168.1.1
 - do a ping scan on random targets in host 192.168.1.0/24 and exclude host 192.168.1.9
 - do service detection on host 192.168.1.1
