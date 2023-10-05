@@ -35,13 +35,11 @@ class InteractiveGenerator:
         self.index_dir = self._get_index_directory()
         self.s3_url = self._determine_s3_url()
         self.command_history = self._get_command_history()
-        self.unified_models_folder = "unified_models"
         self._ensure_model_folder_exists()
         self._validate_model_dirs()
         self.command_running = False
         self._ensure_results_directory_exists()
         self.max_truncate_length: int = 500
-        self.model_dir: str = self.args.model_dir
         self._load_tokenizer_and_model()
         self.always_apply_action: bool = False
         self.print_lock = threading.Lock()
@@ -115,11 +113,11 @@ class InteractiveGenerator:
         return []
 
     def _ensure_model_folder_exists(self):
-        if not self.folder_exists_and_not_empty(self.unified_models_folder):
-            print(f"{self.unified_models_folder} not found or is empty. Downloading and unzipping...")
-            self.download_and_unzip(self.s3_url, f"{self.unified_models_folder}.zip")
+        if not self.folder_exists_and_not_empty(self.args.model_dir):
+            print(f"{self.args.model_dir} not found or is empty. Downloading and unzipping...")
+            self.download_and_unzip(self.s3_url, f"{self.args.model_dir}.zip")
         else:
-            print(f"{self.unified_models_folder} already exists and is not empty.")
+            print(f"{self.args.model_dir} already exists and is not empty.")
 
     def _validate_model_dirs(self):
         model_dirs = [d for d in os.listdir(self.args.model_dir) if os.path.isdir(os.path.join(self.args.model_dir, d))]
@@ -168,8 +166,8 @@ class InteractiveGenerator:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Set the device once
 
         # Iterating over each model directory
-        for model_folder in os.listdir(self.model_dir):
-            full_path = os.path.join(self.model_dir, model_folder)
+        for model_folder in os.listdir(self.args.model_dir):
+            full_path = os.path.join(self.args.model_dir, model_folder)
             
             # Check if it's a directory to avoid loading from non-directory paths
             if os.path.isdir(full_path):
