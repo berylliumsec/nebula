@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple, Union
 import torch
 from termcolor import cprint, colored
 from tqdm import tqdm
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from transformers import GPT2LMHeadModel, GPT2Tokenizer, logging as trans_log
 import logging
 from whoosh.index import open_dir
 from whoosh.fields import Schema, TEXT, ID
@@ -18,6 +18,8 @@ import random
 import time
 import importlib.resources as resources
 
+
+trans_log.set_verbosity_error()
 analyzer = StandardAnalyzer(stoplist=None)
 schema = Schema(title=TEXT(stored=True, analyzer=analyzer),
                 path=ID(stored=True),
@@ -44,6 +46,50 @@ class InteractiveGenerator:
         self.always_apply_action: bool = False
         self.print_lock = threading.Lock()
         self.services = []
+        self.print_star_sky()
+
+    def print_farewell_message(self, width=30, height=10, density=0.5):
+        # Calculate the position to print the farewell message
+        farewell_msg = "Until our stars align again!!"
+        start_x = (width - len(farewell_msg)) // 2
+        start_y = height // 2
+        
+        star_colors = ["cyan", "magenta", "yellow", "blue"]  # Nebula-themed colors for stars
+
+        for y in range(height):
+            for x in range(width):
+                # Check if we are at the position to print the farewell message
+                if y == start_y and start_x <= x < start_x + len(farewell_msg):
+                    print(colored(farewell_msg[x - start_x], 'green', attrs=['bold']), end='')
+                    continue
+
+                if random.random() < density:
+                    chosen_star = '*' if random.random() < 0.5 else '.'
+                    print(colored(chosen_star, random.choice(star_colors)), end='')
+                else:
+                    print(' ', end='')
+            print()  # Move to the next line after each row
+    def print_star_sky(self, width=30, height=10, density=0.5):
+        # Calculate the position to print the welcome message
+        welcome_msg = "Welcome to Nebula"
+        start_x = (width - len(welcome_msg)) // 2
+        start_y = height // 2
+        
+        star_colors = ["cyan", "magenta", "yellow", "blue"]  # Nebula-themed colors for stars
+
+        for y in range(height):
+            for x in range(width):
+                # Check if we are at the position to print the welcome message
+                if y == start_y and start_x <= x < start_x + len(welcome_msg):
+                    print(colored(welcome_msg[x - start_x], 'green', attrs=['bold']), end='')
+                    continue
+
+                if random.random() < density:
+                    chosen_star = '*' if random.random() < 0.5 else '.'
+                    print(colored(chosen_star, random.choice(star_colors)), end='')
+                else:
+                    print(' ', end='')
+            print()  # Move to the next line after each row
 
     @staticmethod
     def _parse_arguments():
@@ -363,14 +409,13 @@ class InteractiveGenerator:
                     continue
 
                 if prompt.lower() == 'exit':
-                    print("See you soon!")
                     break
 
                 generated_text = self.generate_and_display_text(prompt)
                 self.handle_generated_text(generated_text)
 
             except (EOFError, KeyboardInterrupt):  # Combined the two exception types
-                print("\nUntil our stars align again!!")
+                self.print_farewell_message()
                 break
             except Exception as e:  # Handle unexpected errors
                 if isinstance(prompt, bool):
@@ -412,7 +457,7 @@ class InteractiveGenerator:
 
             # Handle the user's action
             if action == 'q':
-                print("Until our stars align again!!")
+                self.print_farewell_message()
                 exit(0)
             elif action == 'v':
                 return self._view_previous_results()
@@ -470,7 +515,7 @@ class InteractiveGenerator:
         choice = input(colored("\nDo you want to (p) proceed with the current model, (m) select a different model, or (q) quit? [p/m/q]: ", "cyan")).strip().lower()
 
         if choice == 'q':
-            print("Until our stars align again!!")
+            self.print_farewell_message()
             exit(0)
         elif choice == 'm':
             self._select_model()  # Assuming you have a method _select_model to handle model selection
@@ -481,7 +526,7 @@ class InteractiveGenerator:
         # Get the actual user input for the model to generate
         user_input = input(colored("\nEnter a prompt: ", "cyan")).strip()
         if user_input.lower() in ['quit', 'exit']:
-            print("Until our stars align again!!")
+            self.print_farewell_message()
             exit(0)
         return user_input
 
@@ -491,68 +536,94 @@ class InteractiveGenerator:
         # Get the actual user input for the model to generate
         user_input = input(colored("\nEnter a prompt: ", "cyan")).strip()
         if user_input.lower() in ['quit', 'exit']:
-            print("Until our stars align again!!")
+            self.print_farewell_message()
             exit(0)
         return user_input
 
     def search_index(self, query_list: Union[list, str], indexdir: str, max_results: int = 10) -> list:
         """
         Search the index using the provided query list or a single query string and returns a list of matching lines.
-
-        Parameters:
-        - query_list: List of dictionaries with keys "services" and "hostname" or a single query string.
-        - indexdir: Path to the directory containing the index.
-        - max_results: Maximum number of results to return.
-
-        Returns:
-        - List of matching lines from the files in the index.
         """
         try:
             ix = open_dir(indexdir)
         except Exception as e:
-            print(f"Error occurred while opening index directory: {e}")
+            logging.error(f"Error occurred while opening index directory: {e}")
             return []
 
-        matching_lines = []
-        searched_services = set()  # Keep track of services that have been searched for
+        results_dict = {}
+        searched_items = set()
 
-        # Convert single string query to list format
         if isinstance(query_list, str):
             query_list = [{"services": [query_list]}]
 
         with ix.searcher() as searcher:
             for query in query_list:
+                cves = query.get("cves", [])
                 service_names = query.get("services", [])
 
-                for s in service_names:
-                    # If we have already searched for this service, skip it
-                    if s.lower() in searched_services:
+                # Search for CVEs first if they exist
+                for cve in cves:
+                    if cve.lower() in searched_items:
                         continue
 
-                    searched_services.add(s.lower())
+                    searched_items.add(cve.lower())
+                    parsed_query = QueryParser("content", ix.schema).parse(cve.lower())
+                    cve_results = []
+
+                    try:
+                        results = searcher.search(parsed_query, limit=max_results)
+                        for res in results:
+                            content = res['content']
+                            lines = content.splitlines()
+                            for line in lines:
+                                prefix = line.split(":")[0].lower()
+                                if cve.lower() in prefix:
+                                    cve_results.append(line.strip())
+                                    if len(cve_results) >= max_results:
+                                        break
+
+                        if cve_results:
+                            results_dict[cve] = cve_results
+
+                    except Exception as e:
+                        logging.error(f"Error occurred while searching for CVE {cve}: {e}")
+
+                # If services are specified, search for them
+                for s in service_names:
+                    if s.lower() in searched_items:
+                        continue
+
+                    searched_items.add(s.lower())
                     parsed_query = QueryParser("content", ix.schema).parse(s.lower())
-                    results = searcher.search(parsed_query)
-                    for res in results:
-                        try:
-                                content = res['content']
-                                lines = content.splitlines()
-                                for line in lines:
-                                    if s.lower() in line.lower():
-                                        matching_lines.append(line.strip())
-                                        # Break if max_results is reached
-                                        if len(matching_lines) >= max_results:
-                                            break
-                                if len(matching_lines) >= max_results:
-                                    break
-                        except Exception as e:
-                            print(f"Error occurred while reading file {res['path']}: {e}")
+                    service_results = []
 
-                        if len(matching_lines) >= max_results:
-                            break
-                    if len(matching_lines) >= max_results:
-                        break
+                    try:
+                        results = searcher.search(parsed_query, limit=max_results)
+                        for res in results:
+                            content = res['content']
+                            lines = content.splitlines()
+                            for line in lines:
+                                prefix = line.split(":")[0].lower()
+                                if s.lower() in prefix:
+                                    service_results.append(line.strip())
+                                    if len(service_results) >= max_results:
+                                        break
 
-        return matching_lines
+                        if service_results:
+                            results_dict[f"Service {s}"] = service_results
+
+                    except Exception as e:
+                        logging.error(f"Error occurred while searching for service {s}: {e}")
+
+        formatted_results = []
+        for key, values in results_dict.items():
+            formatted_results.append(key + ":")
+            formatted_results.extend(values)
+
+        return formatted_results
+
+        
+
 
 
     def parse_nmap(self, data):
@@ -567,12 +638,12 @@ class InteractiveGenerator:
             parsed_results = []
 
             for host in hosts[1:]:  # Skip the first empty split
-                match = re.search(r'([a-zA-Z0-9.-]+)?\s?\(([\d\.]+)\)', host)
+                match = re.search(r'([a-zA-Z0-9.-]+)?\s?(\([\d\.]+\))?', host)
                 if not match:
                     continue
 
-                device_name = match.group(1) if match.group(1) else match.group(2)
-                ip_address = match.group(2)
+                device_name = match.group(1) or "Unknown"
+                ip_address = match.group(2).replace("(", "").replace(")", "") if match.group(2) else "Unknown"
 
                 ports = set()
                 services = set()
@@ -583,20 +654,29 @@ class InteractiveGenerator:
                     port, _, state, service = match
                     if state == "open":
                         ports.add(port)
-                        services.add(service)
+                        if service == "domain":  # Replace "domain" service with "dns"
+                            services.add("dns")
+                        else:
+                            services.add(service)
 
+                # Extract CVEs from host data
+                cve_matches = re.findall(r'cve-\d{4}-\d+', host, re.IGNORECASE)  # Updated regex for CVE
                 parsed_results.append({
                     "hostname": device_name,
                     "ip": ip_address,
                     "ports": list(ports),
-                    "services": list(services)
+                    "services": list(services),
+                    "cves": cve_matches  # Add CVEs to the result
                 })
+
             print("DONE")
             return parsed_results
 
         except Exception as e:
             print(f"Error occurred while parsing: {e}")
             return []
+
+
 
 
     def colored_output(self, text):
@@ -630,6 +710,8 @@ class InteractiveGenerator:
     def is_valid_results_choice(self, choice: str) -> bool:
         return choice.isdigit() and int(choice) > 0
 
+
+
     def _process_previous_nmap_results(self) -> bool:
         """Internal method to process previous results and loop back to the main prompt."""
         self.display_command_list()
@@ -656,29 +738,32 @@ class InteractiveGenerator:
             with open(file_path, 'r') as f:
                 result = f.read()
                 services = self.parse_nmap(result)
-                
-                # If the user chose "all", set a very large number for max_results
+
                 max_results_value = int(number_of_results) if number_of_results not in ['all', 'a'] else 1e6
                 results = self.search_index(services, self.index_dir, max_results_value)
-                
+
                 if results:
-                    for idx, line in enumerate(results, 1):
-                        colored_line = self.colored_output(line)
-                        print(f"{idx}. {colored_line}")
+                    idx = 1
+                    for line in results:
+                        if line.endswith(':'):
+                            print(colored(line, 'yellow'))  # Service names will be displayed in yellow
+                        else:
+                            # Splitting based on the ':' and coloring the prefix in red
+                            prefix, suffix = line.split(':', 1) if ':' in line else (line, '')
+                            print(colored(f"{idx}. {prefix}:", 'red') + colored(f" {suffix}", 'blue'))
+                            idx += 1
 
                     try:
                         selection = int(input(colored("\nSelect a result number to modify or any other key to continue: ", 'blue')))
-                        if 1 <= selection <= len(results):
+                        if 1 <= selection < idx:  # Since idx has been incremented in the loop
                             content_after_colon = results[selection - 1].split(':', 1)[1].strip() if ':' in results[selection - 1] else results[selection - 1]
-                            
-                            # Using readline to set the default value for input
+
                             readline.set_startup_hook(lambda: readline.insert_text(content_after_colon))
                             try:
                                 modified_content = input(colored("\nEnter the modified content (or press enter to keep it unchanged): ", 'blue'))
                             finally:
-                                readline.set_startup_hook()  # Unset the hook after the input is done
+                                readline.set_startup_hook()
 
-                            # If user entered some modification, use it, otherwise stick with the original content
                             if modified_content:
                                 content_after_colon = modified_content
 
@@ -696,6 +781,8 @@ class InteractiveGenerator:
         except Exception as e:
             cprint(f"An unexpected error occurred: {e}", "red")
         return True
+
+
 
 
     def _view_previous_results(self) -> bool:
