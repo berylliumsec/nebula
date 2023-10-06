@@ -246,11 +246,16 @@ For crackmap, always include a username and a password in your prompt or indicat
 
 **ZAP**:
 
-The ZAP model currently only supports full scan.
+The ZAP model currently only supports "full scan". Be sure to use the terms full scan in your commands.
 
 - do a full scan on https://192.168.1.1
 - do a full scan on https://192.168.1.1 and spider for 5 minutes
 - do a full scan on https://192.168.1.1 and spider for 5 minutes and write the report to html file nebula.html
+
+**Nuclei**
+
+- do an automatic scan using only new templates on https://yourtarget.com
+- use only templates from author "joe" on https://yourtarget.com
 
 ## Links to videos:
 
