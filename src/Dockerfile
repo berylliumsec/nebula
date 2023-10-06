@@ -28,7 +28,7 @@ RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 
-COPY nebula.py  /app/
+COPY nebula.py nmap_flags nuclei_flags zap_flags crackmap_flags /app/
 COPY ./indexdir /app/indexdir
 
 
