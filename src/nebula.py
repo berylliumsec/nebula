@@ -17,6 +17,7 @@ from whoosh.analysis import StandardAnalyzer
 import random
 import time
 import importlib.resources as resources
+from spellchecker import SpellChecker
 
 
 trans_log.set_verbosity_error()
@@ -574,15 +575,57 @@ class InteractiveGenerator:
             exit(0)
         return user_input
 
+
     def _input_command_without_model_selection(self) -> str:
         """Internal method to get a command input from the user without model selection."""
         
+        # Initialize the spell checker
+        spell = SpellChecker()
+        
         # Get the actual user input for the model to generate
         user_input = input(colored("\nEnter a prompt: ", "cyan")).strip()
+        
+        # Split the user input into words
+        words = user_input.split()
+        
+        # Correct words that are not in the dictionary
+        corrections_made = False  # Flag to check if any corrections were accepted
+        for index, word in enumerate(words):
+            # Check if the word is a number or contains digits; if yes, then continue to the next iteration
+            if word.isdigit() or any(char.isdigit() for char in word):
+                continue
+            
+            # If the word is not in the dictionary
+            if word not in spell:
+                # Get the most likely correct spelling for the word
+                suggestion = spell.correction(word)
+                
+                # Display the suggestion to the user and ask for their choice
+                choice = input(f"Did you mean '{suggestion}' instead of '{word}'? (Y/n): ").lower()
+                
+                # If the user accepts the suggestion, replace the word in the list
+                if choice == 'y' or choice == '':
+                    words[index] = suggestion
+                    corrections_made = True  # Update the flag
+        
+        if corrections_made:  # Display the corrected input only if corrections were accepted
+            corrected_input = ' '.join(words)
+            print(f"\nYour corrected input is: {corrected_input}")
+        else:
+            corrected_input = user_input
+        
         if user_input.lower() in ['quit', 'exit']:
             self.print_farewell_message()
             exit(0)
-        return user_input
+        
+        return corrected_input
+
+
+
+
+
+
+
 
     def search_index(self, query_list: Union[list, str], indexdir: str, max_results: int = 10) -> list:
         """
