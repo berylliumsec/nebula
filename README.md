@@ -47,6 +47,7 @@ Currently, Nebula is integrated with and supports the following ethical hacking 
 - NMAP: A versatile tool for network discovery and security auditing.
 - OWASP ZAP (Full Scan Only): A popular web application security scanner.
 - Crackmapexec: A robust network information gathering tool.
+- Nuclei: A tool is used to send requests across targets based on a template, leading to zero false positives and providing fast scanning on a large number of hosts. 
 
 Our roadmap envisions Nebula's continuous expansion to incorporate the majority of the tools leveraged by ethical hackers globally. This commitment ensures that our users remain at the cutting edge of cybersecurity endeavors.
 
@@ -137,9 +138,9 @@ In this beta release, there are three primary applications for Nebula:
 
 ### As a search engine:
 
-Within the search engine capability, ethical hackers can input port numbers or specific protocol names. In return, they will receive recommended commands to assist in the identification of potential vulnerabilities.
+Within the search engine capability, ethical hackers can input port numbers or specific service names. In return, they will receive recommended commands to assist in the identification of potential vulnerabilities.
 
-**Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
+**Pro Tip**: For optimal results, search using service names or port numbers. This approach is more effective than entering a full sentence or broad query.
 
 ### As an AI-driven assistant.
 **DISCLAIMER**: The results provided by this tool may contain inaccuracies or may not be suitable for all scenarios. We highly recommend users to review and, if necessary, modify the suggested commands before executing them. Proceed with caution and always ensure you are acting within legal and ethical boundaries
@@ -194,9 +195,9 @@ In the above screenshot, the user views the results of running the suggested com
 
 ![Model Selection](/images/model_selection.png)
 
-**Search by keywords**: By leveraging this feature, users can input keywords—such as port numbers or protocol names—and obtain command suggestions to identify vulnerabilities related to that specific protocol.
+**Search by keywords**: By leveraging this feature, users can input keywords—such as port numbers or service names—and obtain command suggestions to identify vulnerabilities related to that specific service.
 
-**Pro Tip**: For optimal results, search using protocol names or port numbers. This approach is more effective than entering a full sentence or broad query.
+**Pro Tip**: For optimal results, search using service names or port numbers. This approach is more effective than entering a full sentence or broad query.
 
 ![Search](/images/search.png)
 

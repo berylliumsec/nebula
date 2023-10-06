@@ -1,0 +1,242 @@
+-u: target URLs/hosts to scan
+-target: target URLs/hosts to scan
+-l: path to file containing a list of target URLs/hosts to scan (one per line)
+-list: path to file containing a list of target URLs/hosts to scan (one per line)
+-resume: resume scan using resume.cfg (clustering will be disabled)
+-sa: scan all the IP's associated with dns record
+-scan-all-ips: scan all the IP's associated with dns record
+-iv: IP version to scan of hostname (4,6) - (default 4)
+-ip-version: IP version to scan of hostname (4,6) - (default 4)
+-nt: run only new templates added in latest nuclei-templates release
+-new-templates: run only new templates added in latest nuclei-templates release
+-ntv: run new templates added in specific version
+-new-templates-version: run new templates added in specific version
+-as: automatic web scan using wappalyzer technology detection to tags mapping
+-automatic-scan: automatic web scan using wappalyzer technology detection to tags mapping
+-t: list of template or template directory to run (comma-separated, file)
+-templates: list of template or template directory to run (comma-separated, file)
+-turl: template url or list containing template urls to run (comma-separated, file)
+-template-url: template url or list containing template urls to run (comma-separated, file)
+-w: list of workflow or workflow directory to run (comma-separated, file)
+-workflows: list of workflow or workflow directory to run (comma-separated, file)
+-wurl: workflow url or list containing workflow urls to run (comma-separated, file)
+-workflow-url: workflow url or list containing workflow urls to run (comma-separated, file)
+-validate: validate the passed templates to nuclei
+-nss: disable strict syntax check on templates
+-no-strict-syntax: disable strict syntax check on templates
+-td: displays the templates content
+-template-display: displays the templates content
+-tl: list all available templates
+-a: templates to run based on authors (comma-separated, file)
+-author: templates to run based on authors (comma-separated, file)
+-tags: templates to run based on tags (comma-separated, file)
+-etags: templates to exclude based on tags (comma-separated, file)
+-exclude-tags: templates to exclude based on tags (comma-separated, file)
+-itags: tags to be executed even if they are excluded either by default or configuration
+-include-tags: tags to be executed even if they are excluded either by default or configuration
+-id: templates to run based on template ids (comma-separated, file, allow-wildcard)
+-template-id: templates to run based on template ids (comma-separated, file, allow-wildcard)
+-eid: templates to exclude based on template ids (comma-separated, file)
+-exclude-id: templates to exclude based on template ids (comma-separated, file)
+-it: templates to be executed even if they are excluded either by default or configuration
+-include-templates: templates to be executed even if they are excluded either by default or configuration
+-et: template or template directory to exclude (comma-separated, file)
+-exclude-templates: template or template directory to exclude (comma-separated, file)
+-em: template matchers to exclude in result
+-exclude-matchers: template matchers to exclude in result
+-s: templates to run based on severity. Possible values are info, low, medium, high, critical, unknown
+-severity: templates to run based on severity. Possible values are info, low, medium, high, critical, unknown
+-es: templates to exclude based on severity. Possible values are info, low, medium, high, critical, unknown
+-exclude-severity: templates to exclude based on severity. Possible values are info, low, medium, high, critical, unknown
+-pt: templates to run based on protocol type. Possible values are dns, file, http, headless, tcp, workflow, ssl, websocket, whois
+-type: templates to run based on protocol type. Possible values are dns, file, http, headless, tcp, workflow, ssl, websocket, whois
+-ept: templates to exclude based on protocol type. Possible values are dns, file, http, headless, tcp, workflow, ssl, websocket, whois
+-exclude-type: templates to exclude based on protocol type. Possible values are dns, file, http, headless, tcp, workflow, ssl, websocket, whois
+-tc: templates to run based on expression condition
+-template-condition: templates to run based on expression condition
+-o: output file to write found issues/vulnerabilities
+-output: output file to write found issues/vulnerabilities
+-sresp: store all request/response passed through nuclei to output directory
+-store-resp: store all request/response passed through nuclei to output directory
+-srd: store all request/response passed through nuclei to custom directory (default "output")
+-store-resp-dir: store all request/response passed through nuclei to custom directory (default "output")
+-silent: display findings only
+-nc: disable output content coloring (ANSI escape codes)
+-no-color: disable output content coloring (ANSI escape codes)
+-j: write output in JSONL(ines) format
+-jsonl: write output in JSONL(ines) format
+-irr: include request/response pairs in the JSON, JSONL, and Markdown outputs (for findings only) [DEPRECATED use -omit-raw] (default true)
+-include-rr: include request/response pairs in the JSON, JSONL, and Markdown outputs (for findings only) [DEPRECATED use -omit-raw] (default true)
+-or: omit request/response pairs in the JSON, JSONL, and Markdown outputs (for findings only)
+-omit-raw: omit request/response pairs in the JSON, JSONL, and Markdown outputs (for findings only)
+-nm: disable printing result metadata in cli output
+-no-meta: disable printing result metadata in cli output
+-ts: enables printing timestamp in cli output
+-timestamp: enables printing timestamp in cli output
+-rdb: nuclei reporting database (always use this to persist report data)
+-report-db: nuclei reporting database (always use this to persist report data)
+-ms: display match failure status
+-matcher-status: display match failure status
+-me: directory to export results in markdown format
+-markdown-export: directory to export results in markdown format
+-se: file to export results in SARIF format
+-sarif-export: file to export results in SARIF format
+-je: file to export results in JSON format
+-json-export: file to export results in JSON format
+-jle: file to export results in JSONL(ine) format
+-jsonl-export: file to export results in JSONL(ine) format
+-config: path to the nuclei configuration file
+-fr: enable following redirects for http templates
+-follow-redirects: enable following redirects for http templates
+-fhr: follow redirects on the same host
+-follow-host-redirects: follow redirects on the same host
+-mr: max number of redirects to follow for http templates (default 10)
+-max-redirects: max number of redirects to follow for http templates (default 10)
+-dr: disable redirects for http templates
+-disable-redirects: disable redirects for http templates
+-rc: nuclei reporting module configuration file
+-report-config: nuclei reporting module configuration file
+-H: custom header/cookie to include in all http request in header-value format (cli, file)
+-header: custom header/cookie to include in all http request in header-value format (cli, file)
+-V: custom vars in key=value format
+-var: custom vars in key=value format
+-r: file containing resolver list for nuclei
+-resolvers: file containing resolver list for nuclei
+-sr: use system DNS resolving as error fallback
+-system-resolvers: use system DNS resolving as error fallback
+-dc: disable clustering of requests
+-disable-clustering: disable clustering of requests
+-passive: enable passive HTTP response processing mode
+-fh2: force http2 connection on requests
+-force-http2: force http2 connection on requests
+-ev: enable environment variables to be used in template
+-env-vars: enable environment variables to be used in template
+-cc: client certificate file (PEM-encoded) used for authenticating against scanned hosts
+-client-cert: client certificate file (PEM-encoded) used for authenticating against scanned hosts
+-ck: client key file (PEM-encoded) used for authenticating against scanned hosts
+-client-key: client key file (PEM-encoded) used for authenticating against scanned hosts
+-ca: client certificate authority file (PEM-encoded) used for authenticating against scanned hosts
+-client-ca: client certificate authority file (PEM-encoded) used for authenticating against scanned hosts
+-sml: show match lines for file templates, works with extractors only
+-show-match-line: show match lines for file templates, works with extractors only
+-ztls: use ztls library with autofallback to standard one for tls13 [Deprecated] autofallback to ztls is enabled by default
+-sni: tls sni hostname to use (default -input domain name)
+-lfa: allows file (payload) access anywhere on the system
+-allow-local-file-access: allows file (payload) access anywhere on the system
+-lna: blocks connections to the local / private network
+-restrict-local-network-access: blocks connections to the local / private network
+-i: network interface to use for network scan
+-interface: network interface to use for network scan
+-at: type of payload combinations to perform (batteringram,pitchfork,clusterbomb)
+-attack-type: type of payload combinations to perform (batteringram,pitchfork,clusterbomb)
+-sip: source ip address to use for network scan
+-source-ip: source ip address to use for network scan
+-config-directory: override the default config path ($home/.config)
+-rsr: max response size to read in bytes (default 10485760)
+-response-size-read: max response size to read in bytes (default 10485760)
+-rss: max response size to read in bytes (default 1048576)
+-response-size-save: max response size to read in bytes (default 1048576)
+-reset: reset removes all nuclei configuration and data files (including nuclei-templates)
+-tlsi: enable experimental client hello (ja3) tls randomization
+-tls-impersonate: enable experimental client hello (ja3) tls randomization
+-config: path to the nuclei configuration file
+-fr: enable following redirects for http templates
+-follow-redirects: enable following redirects for http templates
+-fhr: follow redirects on the same host
+-follow-host-redirects: follow redirects on the same host
+-mr: max number of redirects to follow for http templates (default 10)
+-max-redirects: max number of redirects to follow for http templates (default 10)
+-dr: disable redirects for http templates
+-disable-redirects: disable redirects for http templates
+-rc: nuclei reporting module configuration file
+-report-config: nuclei reporting module configuration file
+-H: custom header/cookie to include in all http request in header-value format (cli, file)
+-header: custom header/cookie to include in all http request in header-value format (cli, file)
+-V: custom vars in key=value format
+-var: custom vars in key=value format
+-r: file containing resolver list for nuclei
+-resolvers: file containing resolver list for nuclei
+-sr: use system DNS resolving as error fallback
+-system-resolvers: use system DNS resolving as error fallback
+-dc: disable clustering of requests
+-disable-clustering: disable clustering of requests
+-passive: enable passive HTTP response processing mode
+-fh2: force http2 connection on requests
+-force-http2: force http2 connection on requests
+-ev: enable environment variables to be used in template
+-env-vars: enable environment variables to be used in template
+-cc: client certificate file (PEM-encoded) used for authenticating against scanned hosts
+-client-cert: client certificate file (PEM-encoded) used for authenticating against scanned hosts
+-ck: client key file (PEM-encoded) used for authenticating against scanned hosts
+-client-key: client key file (PEM-encoded) used for authenticating against scanned hosts
+-ca: client certificate authority file (PEM-encoded) used for authenticating against scanned hosts
+-client-ca: client certificate authority file (PEM-encoded) used for authenticating against scanned hosts
+-sml: show match lines for file templates, works with extractors only
+-show-match-line: show match lines for file templates, works with extractors only
+-ztls: use ztls library with autofallback to standard one for tls13 [Deprecated] autofallback to ztls is enabled by default
+-sni: tls sni hostname to use
+-lfa: allows file (payload) access anywhere on the system
+-allow-local-file-access: allows file (payload) access anywhere on the system
+-lna: blocks connections to the local / private network
+-restrict-local-network-access: blocks connections to the local / private network
+-i: network interface to use for network scan
+-interface: network interface to use for network scan
+-at: type of payload combinations to perform (batteringram,pitchfork,clusterbomb)
+-attack-type: type of payload combinations to perform (batteringram,pitchfork,clusterbomb)
+-sip: source ip address to use for network scan
+-source-ip: source ip address to use for network scan
+-config-directory: override the default config path ($home/.config)
+-rsr: max response size to read in bytes (default 10485760)
+-response-size-read: max response size to read in bytes (default 10485760)
+-rss: max response size to read in bytes (default 1048576)
+-response-size-save: max response size to read in bytes (default 1048576)
+-reset: reset removes all nuclei configuration and data files (including nuclei-templates)
+-tlsi: enable experimental client hello (ja3) tls randomization
+-tls-impersonate: enable experimental client hello (ja3) tls randomization
+-debug: show all requests and responses
+-dreq: show all sent requests
+-debug-req: show all sent requests
+-dresp: show all received responses
+-debug-resp: show all received responses
+-p: list of http/socks5 proxy to use (comma separated or file input)
+-proxy: list of http/socks5 proxy to use (comma separated or file input)
+-pi: proxy all internal requests
+-proxy-internal: proxy all internal requests
+-ldf: list all supported DSL function signatures
+-list-dsl-function: list all supported DSL function signatures
+-tlog: file to write sent requests trace log
+-trace-log: file to write sent requests trace log
+-elog: file to write sent requests error log
+-error-log: file to write sent requests error log
+-version: show nuclei version
+-hm: enable nuclei hang monitoring
+-hang-monitor: enable nuclei hang monitoring
+-v: show verbose output
+-verbose: show verbose output
+-profile-mem: optional nuclei memory profile dump file
+-vv: display templates loaded for scan
+-svd: show variables dump for debugging
+-show-var-dump: show variables dump for debugging
+-ep: enable pprof debugging server
+-enable-pprof: enable pprof debugging server
+-tv: shows the version of the installed nuclei-templates
+-templates-version: shows the version of the installed nuclei-templates
+-hc: run diagnostic check up
+-health-check: run diagnostic check up
+-up: update nuclei engine to the latest released version
+-update: update nuclei engine to the latest released version
+-ut: update nuclei-templates to latest released version
+-update-templates: update nuclei-templates to latest released version
+-ud: custom directory to install / update nuclei-templates
+-update-template-dir: custom directory to install / update nuclei-templates
+-duc: disable automatic nuclei/templates update check
+-disable-update-check: disable automatic nuclei/templates update check
+-stats: display statistics about the running scan
+-sj: display statistics in JSONL(ines) format
+-stats-json: display statistics in JSONL(ines) format
+-si: number of seconds to wait between showing a statistics update (default 5)
+-stats-interval: number of seconds to wait between showing a statistics update (default 5)
+-m: expose nuclei metrics on a port
+-metrics: expose nuclei metrics on a port
+-mp: port to expose nuclei metrics on (default 9092)
+-metrics-port: port to expose nuclei metrics on (default 9092)

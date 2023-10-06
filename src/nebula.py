@@ -29,10 +29,16 @@ logging.basicConfig(filename='command_errors.log', level=logging.ERROR)
 
 class InteractiveGenerator:
     IP_PATTERN = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
+    FLAG_PATTERN = re.compile(r'(-\w+|--[\w-]+)')  # Updated Regular expression
+
+
+
+
+
 
     def __init__(self):
         self.args = self._parse_arguments()
-        self.index_dir = self._get_index_directory()
+        self.index_dir = self.return_path("indexdir")
         self.s3_url = self._determine_s3_url()
         self.command_history = self._get_command_history()
         self._ensure_model_folder_exists()
@@ -40,11 +46,15 @@ class InteractiveGenerator:
         self.command_running = False
         self._ensure_results_directory_exists()
         self.max_truncate_length: int = 500
-        self._load_tokenizer_and_model()
+        self.current_model_name= self._load_tokenizer_and_model()
         self.always_apply_action: bool = False
         self.print_lock = threading.Lock()
         self.services = []
         self.print_star_sky()
+        self.flag_file = self.return_path(self.current_model_name+"_flags")
+        self.flag_descriptions = self._load_flag_descriptions(self.flag_file)
+        self.extracted_flags = []
+        
 
     def print_farewell_message(self, width=30, height=10, density=0.5):
         # Calculate the position to print the farewell message
@@ -96,12 +106,31 @@ class InteractiveGenerator:
         parser.add_argument('--model_dir', type=str, default='./unified_models', help='Path to the model directory')
         return parser.parse_args()
 
-    def _get_index_directory(self):
+    def _load_flag_descriptions(self, file_path):
+        """Load flag descriptions from a file and return them as a dictionary."""
+        with open(file_path, 'r') as f:
+            lines = f.readlines()
+            # Store the entire line as the value in the dictionary using flag as key
+            return {line.split(":")[0].strip(): line.strip() for line in lines if ":" in line}
+
+    def extract_and_match_flags(self, command):
+        """Extract flags from the command and match them with descriptions."""
+        flags = self.FLAG_PATTERN.findall(command)
+        
+        # Using set comprehension to ensure uniqueness
+        matched_descriptions = list({self.flag_descriptions[flag] for flag in flags if flag in self.flag_descriptions})
+        
+        self.extracted_flags.extend(matched_descriptions)
+        return matched_descriptions
+
+    
+    def return_path(self, path):
         if self.is_run_as_package():
             print("Running as PYPI package, setting appropriate paths")
-            with resources.path('nebula_pkg', 'indexdir') as index_dir_path:
-                return str(index_dir_path)
-        return "indexdir"
+            with resources.path('nebula_pkg', path) as correct_path:
+                return str(correct_path)
+        return path
+
 
     @staticmethod
     def _determine_s3_url():
@@ -149,9 +178,13 @@ class InteractiveGenerator:
             print("Downloading...")
             subprocess.run(['wget', '--progress=bar:force:noscroll', url, '-O', output_name])
 
-            # Unzip the downloaded file with basic printout progress
+            # Create the target directory if it doesn't exist
+            target_dir = os.path.splitext(output_name)[0]
+            os.makedirs(target_dir, exist_ok=True)
+
+            # Unzip the downloaded file to the target directory
             print("\nUnzipping...")
-            subprocess.run(['unzip', output_name])
+            subprocess.run(['unzip', output_name, '-d', target_dir])
 
             # Remove the zip file (optional)
             os.remove(output_name)
@@ -159,6 +192,7 @@ class InteractiveGenerator:
             print(f"Error occurred: {e}")
         except Exception as e:
             print(f"Unexpected error: {e}")
+
 
     def _load_tokenizer_and_model(self) -> None:
         self.tokenizers = {}  # Dictionary to store all tokenizers
@@ -206,7 +240,7 @@ class InteractiveGenerator:
             # Inform the user about the current model in use
             cprint(f"\nThe current model in use is: {first_loaded}\n", "blue")
 
-
+        return first_loaded
 
     def run_command_and_alert(self, text: str) -> None:
         """
@@ -495,6 +529,18 @@ class InteractiveGenerator:
                     index_of_choice = list(self.tokenizers.keys())[int(choice) - 1]
                     self.current_model = self.models[index_of_choice]
                     self.current_tokenizer = self.tokenizers[selected_model_name]
+                    if selected_model_name == "nmap":
+                        self.flag_file=self.return_path("nmap_flags")
+                    
+                    elif selected_model_name == "crackmap":
+                        self.flag_file=self.return_path("crackmap_flags")
+
+                    elif selected_model_name == "nuclei":
+                        self.flag_file=self.return_path("nuclei_flags")
+
+                    elif selected_model_name == "zap":
+                        self.flag_file=self.return_path("zap_flags")
+                    self.flag_descriptions = self._load_flag_descriptions(self.flag_file)
                     cprint(f"You've selected the {selected_model_name} model!", "green")
                     break
                 else:
@@ -816,33 +862,6 @@ class InteractiveGenerator:
 
 
 
-
-    def process_prompt(self, prompt: str) -> str:
-        """
-        Process the provided prompt, check for suggested modifications, 
-        and proceed to generate text based on user's final decision.
-        
-        Args:
-            prompt (str): The original user-provided prompt.
-        
-        Returns:
-            str: Generated text.
-        """
-        try:
-            suggested_prompt = self.suggest_prompt(prompt)
-            self.display_suggested_prompt(suggested_prompt)
-
-            if (suggested_prompt).strip().lower() != "no suggestions":
-                prompt = self.handle_suggested_prompt_choices(suggested_prompt, prompt)
-
-            return self.generate_and_display_text(prompt)
-        except Exception as e:
-            logging.error(f"Error processing prompt: {e}")
-            cprint("An unexpected error occurred during prompt processing. Please try again.", "red")
-            return ""
-
-
-
     def generate_and_display_text(self, prompt: str) -> str:
         """Generate and display text based on a given prompt.
 
@@ -857,8 +876,17 @@ class InteractiveGenerator:
             prompt_ip = self._extract_ip(prompt)
             first_clean_up = self.ensure_space_between_letter_and_number(generated_text)
             second_clean_up = self.process_string(first_clean_up, prompt_ip)
+            try:
+                help = self.extract_and_match_flags(second_clean_up)
+                if help:
+                    cprint("Verify that the flags used in the command matches your intent:", "magenta")
+                    for h in help:
+                        cprint("\n" + h, "red")
+            except:
+                logging.error("unable to extract")
 
-            cprint("\nGenerated Text:", "cyan")
+            
+            cprint("\nGenerated Command:", "cyan")
             cprint(second_clean_up, "magenta")
             cprint("-" * 50, "blue")
             
