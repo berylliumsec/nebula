@@ -59,7 +59,9 @@ Non-Docker versions of Nebula have been extensively tested and optimized for Lin
 
 - Storage: A minimum of 50GB is required.
 
-- Graphics Processing Unit (GPU): While not mandatory, having at least 4GB of GPU memory is recommended for optimal performance.
+- RAM: A minimum of 16GB RAM memory is required
+
+- Graphics Processing Unit (GPU): While not mandatory, having at least 8GB of GPU memory is recommended for optimal performance.
 
 **Docker based distribution requirement(s)**
 
