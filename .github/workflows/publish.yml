@@ -13,6 +13,7 @@ jobs:
     environment: nebula
 
     steps:
+      
     - name: Check out the repo
       uses: actions/checkout@v4
 
@@ -61,9 +62,7 @@ jobs:
       - name: Publish release distributions to PyPI
         if: github.event.pull_request.merged == true
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          user: __token__
-          password: ${{ env.PYPI_API_TOKEN }}
+
       
       # I added the Docker steps below to not remove them
       - name: Login to Docker Hub
