@@ -1,0 +1,89 @@
+name: Build, Test, and Release
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    environment: nebula
+
+    steps:
+    - name: Check out the repo
+      uses: actions/checkout@v2
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v1 
+      with:
+        username: ${{ env.DOCKERHUB_USERNAME }}
+        password: ${{ env.DOCKERHUB_PASSWORD }}
+
+    - name: Build Docker image
+      run: |
+        docker build src -f src/nebula/Dockerfile -t berylliumsec/nebula:latest
+
+    # Only push the Docker image on a push to main, not on PRs
+    - name: Push Docker image
+      if: github.event_name == 'push'
+      run: |
+        docker push berylliumsec/nebula:latest
+
+  publish-pypi:
+    runs-on: ubuntu-latest
+    environment: nebula
+
+    steps:
+    - name: Check out the repo
+      uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.10
+
+    - name: Bump version in setup.py
+      run: |
+        python bump_version.py
+
+    - name: Commit and push version bump
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add setup.py
+        git commit -m "Bump version"
+        git push
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install setuptools wheel twine
+
+    - name: Build package
+      run: |
+        python setup.py sdist bdist_wheel
+
+    # Only publish to PyPI on a push to main, not on PRs
+    - name: Publish to PyPI
+      if: github.event_name == 'push'
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        user: __token__
+        password: ${{ env.PYPI_API_TOKEN }}
+
+    # Create a GitHub release
+    - name: Create GitHub Release
+      if: github.event_name == 'push'
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.bump_version.outputs.new_version }}  # Assuming bump_version step sets new_version output
+        release_name: Release ${{ steps.bump_version.outputs.new_version }}
+        draft: false
+        prerelease: false
