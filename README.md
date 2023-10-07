@@ -281,9 +281,9 @@ The ZAP model currently only supports "full scan". Be sure to use the terms full
 
 ## Links to videos:
 
-[Model Usage Video](https://youtu.be/nQwrsCbY-6I?feature=shared)
+[Model Usage Video](https://youtu.be/Rz3DzuvX6bI)
 
-[Search Usage Video](https://youtu.be/lDauvKMJ_3k?feature=shared)
+[Search Usage Video](https://youtu.be/j-Ot3UxEwSY)
 
 ## Contributing
 
