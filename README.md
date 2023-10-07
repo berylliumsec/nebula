@@ -23,6 +23,10 @@ Welcome to Nebula.
 
 First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.
 
+**DISCLAIMER**
+
+To utilize the tools provided in this repository effectively, users are expected to possess a proficient understanding of nmap, nuclei, zap, and crackmap. The models within operate on nuanced natural language patterns. For optimal interactions, users are advised to consult the guidance provided in this README, which offers insights into crafting effective prompts. Please be advised that this repository is currently in its beta phase; as such, occasional discrepancies or bugs might be encountered. We are diligently working towards refining and resolving all known issues.
+
 ## Why nebula?
 
 - Effortless Tool Usage with Natural Language: No need to remember intricate commands or switches for various tools. With Nebula, you can seamlessly communicate your intent, whether it's initiating an NMAP scan or any other task. Let Nebula translate your natural language into precise tool commands.
@@ -130,6 +134,22 @@ nebula
 ``` 
 in your command line interface.
 
+## Upgrading
+
+To maintain optimal performance and benefit from the latest improvements, we regularly release updates and enhanced versions of our models. Prior to upgrading, please delete the unified_models directory to ensure the latest models are downloaded seamlessly.
+
+PIP:
+
+```bash
+pip install nebula-ai --upgrade
+```
+
+Docker:
+
+``` bash
+docker pull berylliumsec/nebula:latest
+```
+```
 ## Usage.
 
 In this beta release, there are three primary applications for Nebula:
@@ -261,9 +281,9 @@ The ZAP model currently only supports "full scan". Be sure to use the terms full
 
 ## Links to videos:
 
-[Model Usage Video](https://youtu.be/nQwrsCbY-6I?feature=shared)
+[Model Usage Video](https://youtu.be/Rz3DzuvX6bI)
 
-[Search Usage Video](https://youtu.be/lDauvKMJ_3k?feature=shared)
+[Search Usage Video](https://youtu.be/j-Ot3UxEwSY)
 
 ## Contributing
 
