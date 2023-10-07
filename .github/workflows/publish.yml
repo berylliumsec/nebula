@@ -34,7 +34,7 @@ jobs:
         && sudo apt install gh -y
 
     - name: Bump version in setup.py
-      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+      if: github.event.pull_request.merged == true
       id: bump_version
       run: |
         python bump_version.py
@@ -52,7 +52,7 @@ jobs:
 
     # Only publish to PyPI on a push to main, not on PRs
     - name: Publish to PyPI
-      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+      if: github.event.pull_request.merged == true
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         user: __token__
@@ -60,7 +60,7 @@ jobs:
 
     # Create a GitHub release
     - name: Create GitHub Release
-      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+      if: github.event.pull_request.merged == true
       id: create_release
       uses: actions/create-release@v1
       env:
@@ -73,7 +73,7 @@ jobs:
 
     # After the release, we upload assets
     - name: Upload Release Assets
-      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+      if: github.event.pull_request.merged == true
       run: |
         for asset in dist/*; do
           gh release upload ${{ steps.create_release.outputs.tag_name }} $asset
@@ -87,6 +87,6 @@ jobs:
 
     # Only push the Docker image on a push to main, not on PRs
     - name: Push Docker image
-      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+      if: github.event.pull_request.merged == true
       run: |
         docker push berylliumsec/nebula:latest
