@@ -40,10 +40,14 @@ jobs:
         python bump_version.py
       
 
+    - name: Install build tool
+      run: |
+        python -m pip install --upgrade pip build
+  
     - name: Build Python package
       run: |
-        python -m pip install --upgrade setuptools wheel
-        python setup.py sdist bdist_wheel
+        python -m build --sdist --wheel .
+  
 
 
     # Only publish to PyPI on a push to main, not on PRs
