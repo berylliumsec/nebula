@@ -128,7 +128,7 @@ class InteractiveGenerator:
     def return_path(self, path):
         if self.is_run_as_package():
             print("Running as PYPI package, setting appropriate paths")
-            with resources.path('nebula_pkg', path) as correct_path:
+            with resources.path('nebula', path) as correct_path:
                 return str(correct_path)
         return path
 
