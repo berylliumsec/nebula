@@ -31,7 +31,7 @@ logging.basicConfig(filename='command_errors.log', level=logging.ERROR)
 class InteractiveGenerator:
     IP_PATTERN = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
     FLAG_PATTERN = re.compile(r'(-\w+|--[\w-]+)')  # Updated Regular expression
-
+    URL_PATTERN_VALIDATION = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
 
 
 
@@ -328,38 +328,63 @@ class InteractiveGenerator:
             logging.error(f"Error while extracting IP from string '{s[:30]}...': {e}")
             return None
 
-    def process_string(self, s: str, replacement_ip: str) -> str:
-        """Replace the IP address in the given string with the replacement IP.
+    def process_string(self, s: str, replacement_ips: list, replacement_urls: list) -> str:
+        """Replace the IP addresses and URLs in the given string with the respective replacements."""
 
-        Args:
-            s (str): The input string that may contain an IP address.
-            replacement_ip (str): The IP address to use as a replacement.
+        
 
-        Returns:
-            str: The modified string with the replaced IP address or the original string in case of an error.
-        """
         try:
-            # Validate inputs
             if not isinstance(s, str):
                 raise ValueError("The input string must be a string.")
-            if not isinstance(replacement_ip, str):
-                raise ValueError("The replacement IP must be a string.")
-            if not re.match(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', replacement_ip):
-                raise ValueError("The replacement IP is not valid.")
-
+        except Exception as e:
+            logging.error(f"Error in input string validation: {e}")
+            
+        try:
+            for ip in replacement_ips:
+                if not re.match(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', ip):
+                    raise ValueError(f"One of the replacement IPs ({ip}) is not valid.")
             ip_pattern = r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'
             ip_addresses = re.findall(ip_pattern, s)
-            
-            # Replace the IP if only one IP address is found in the string
-            if len(ip_addresses) == 1:
-                s = re.sub(ip_pattern, replacement_ip, s)
-
-            return s
-        
+            if ip_addresses:
+                for i, ip in enumerate(ip_addresses):
+                    if i < len(replacement_ips):
+                        s = s.replace(ip, replacement_ips[i])
         except Exception as e:
-            logging.error(f"Error in process_string: {e}")
-            return s
+            logging.error(f"Error in IP processing: {e}")
 
+        # Validate URLs in replacement_urls list
+        try:
+            for url in replacement_urls:
+                if not re.match(self.URL_PATTERN_VALIDATION, url):
+                    raise ValueError(f"One of the replacement URLs ({url}) is not valid.")
+        except Exception as e:
+            logging.error(f"Error in URL validation: {e}")
+
+        # Extract and replace URLs
+        try:
+            if replacement_urls:
+                urls = self.extract_urls(s)
+                for i, url in enumerate(urls):
+                    if i < len(replacement_urls):
+                        s = s.replace(url, replacement_urls[i])
+        except Exception as e:
+            logging.error(f"Error in URL processing: {e}")
+
+        return s
+
+        
+    def extract_urls(self, s: str) -> list:
+        """Extract URLs from the given string.
+
+        Args:
+            s (str): The input string.
+
+        Returns:
+            list: List of URLs found in the string.
+        """
+        url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+        return re.findall(url_pattern, s)
+    
     def generate_text(self, prompt_text: str, max_length: int = 300000) -> str:
         """
         Generate text using the current model based on the provided prompt.
@@ -577,49 +602,56 @@ class InteractiveGenerator:
 
 
     def _input_command_without_model_selection(self) -> str:
-        """Internal method to get a command input from the user without model selection."""
-        
-        # Initialize the spell checker
-        spell = SpellChecker()
-        
-        # Get the actual user input for the model to generate
-        user_input = input(colored("\nEnter a prompt: ", "cyan")).strip()
-        
-        # Split the user input into words
-        words = user_input.split()
-        
-        # Correct words that are not in the dictionary
-        corrections_made = False  # Flag to check if any corrections were accepted
-        for index, word in enumerate(words):
-            # Check if the word is a number or contains digits; if yes, then continue to the next iteration
-            if word.isdigit() or any(char.isdigit() for char in word):
-                continue
+            """Internal method to get a command input from the user without model selection."""
             
-            # If the word is not in the dictionary
-            if word not in spell:
-                # Get the most likely correct spelling for the word
-                suggestion = spell.correction(word)
+            # Initialize the spell checker
+            spell = SpellChecker()
+            
+            # Get the actual user input for the model to generate
+            user_input = input(colored("\nEnter a prompt: ", "cyan")).strip()
+            
+            # Split the user input into words
+            words = user_input.split()
+            
+            # Correct words that are not in the dictionary
+            corrections_made = False  # Flag to check if any corrections were accepted
+            for index, word in enumerate(words):
+                # Check if the word is a number or contains digits; if yes, then continue to the next iteration
+                if word.isdigit() or any(char.isdigit() for char in word):
+                    continue
                 
-                # Display the suggestion to the user and ask for their choice
-                choice = input(f"Did you mean '{suggestion}' instead of '{word}'? (Y/n): ").lower()
-                
-                # If the user accepts the suggestion, replace the word in the list
-                if choice == 'y' or choice == '':
-                    words[index] = suggestion
-                    corrections_made = True  # Update the flag
-        
-        if corrections_made:  # Display the corrected input only if corrections were accepted
-            corrected_input = ' '.join(words)
-            print(f"\nYour corrected input is: {corrected_input}")
-        else:
-            corrected_input = user_input
-        
-        if user_input.lower() in ['quit', 'exit']:
-            self.print_farewell_message()
-            exit(0)
-        
-        return corrected_input
+                # Check if word is a URL; if yes, continue to the next iteration
+                if re.match(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', word):
+                    continue
 
+                # If the word is not in the dictionary
+                if word not in spell:
+                    # Get the most likely correct spelling for the word
+                    suggestion = spell.correction(word)
+                    
+                    # If no suggestions are found, continue to the next iteration
+                    if not suggestion:
+                        continue
+                    
+                    # Display the suggestion to the user and ask for their choice
+                    choice = input(f"Did you mean '{suggestion}' instead of '{word}'? (Y/n): ").lower()
+                    
+                    # If the user accepts the suggestion, replace the word in the list
+                    if choice == 'y' or choice == '':
+                        words[index] = suggestion
+                        corrections_made = True  # Update the flag
+            
+            if corrections_made:  # Display the corrected input only if corrections were accepted
+                corrected_input = ' '.join(words)
+                print(f"\nYour corrected input is: {corrected_input}")
+            else:
+                corrected_input = user_input
+            
+            if user_input.lower() in ['quit', 'exit']:
+                self.print_farewell_message()
+                exit(0)
+            
+            return corrected_input
 
 
 
@@ -917,8 +949,9 @@ class InteractiveGenerator:
         try:
             generated_text = self.generate_text(prompt)
             prompt_ip = self._extract_ip(prompt)
+            urls = self.extract_urls(prompt)
             first_clean_up = self.ensure_space_between_letter_and_number(generated_text)
-            second_clean_up = self.process_string(first_clean_up, prompt_ip)
+            second_clean_up = self.process_string(first_clean_up, prompt_ip, urls)
             try:
                 help = self.extract_and_match_flags(second_clean_up)
                 if help:

@@ -1,2 +1,3 @@
 [tool.ruff]
 ignore = ["E501","E722"]
+fixable = ["ALL"]
