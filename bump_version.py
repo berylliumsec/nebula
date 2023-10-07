@@ -8,7 +8,7 @@ with open("setup.py", "r") as f:
 match = re.search(r'version="([\d.]+-beta\.\d+)"', content)
 if match:
     version = match.group(1)
-    main_version, beta, beta_number = re.match(r"([\d.]+)-beta\.(\d+)", version).groups()
+    main_version, beta_number = re.match(r"([\d.]+)-beta\.(\d+)", version).groups()
     new_beta_number = str(int(beta_number) + 1)
     new_version = f"{main_version}-beta.{new_beta_number}"
 
