@@ -8,7 +8,7 @@ on:
       - closed
 
 jobs:
-  build-and-push:
+  release-build:
     runs-on: ubuntu-latest
     environment: nebula
 
@@ -16,76 +16,88 @@ jobs:
     - name: Check out the repo
       uses: actions/checkout@v4
 
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-
     - name: Install GitHub CLI
       run: |
         type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
-        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-        && sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
-        && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-        && sudo apt update \
-        && sudo apt install gh -y
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        sudo apt update
+        sudo apt install gh -y
 
     - name: Bump version in setup.py
       if: github.event.pull_request.merged == true
       id: bump_version
       run: |
         python bump_version.py
-      
 
     - name: Install build tool
       run: |
         python -m pip install --upgrade pip build
-  
-    - name: Build Python package
+
+    - name: Build release distributions
       run: |
         python -m build --sdist --wheel .
-  
 
-
-    # Only publish to PyPI on a push to main, not on PRs
-    - name: Publish to PyPI
-      if: github.event.pull_request.merged == true
-      uses: pypa/gh-action-pypi-publish@release/v1
+    - name: Upload release distributions
+      uses: actions/upload-artifact@v3
       with:
-        user: __token__
-        password: ${{ env.PYPI_API_TOKEN }}
+        name: release-dists
+        path: dist/
+    
+  pypi-publish:
+    runs-on: ubuntu-latest
+    needs: release-build
+    permissions:
+      id-token: write
 
-    # Create a GitHub release
-    - name: Create GitHub Release
-      if: github.event.pull_request.merged == true
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.bump_version.outputs.new_version }}
-        release_name: Release ${{ steps.bump_version.outputs.new_version }}
-        draft: false
-        prerelease: false
+    steps:
+      - name: Retrieve release distributions
+        uses: actions/download-artifact@v3
+        with:
+          name: release-dists
+          path: dist/
 
-    # After the release, we upload assets
-    - name: Upload Release Assets
-      if: github.event.pull_request.merged == true
-      run: |
-        for asset in dist/*; do
-          gh release upload ${{ steps.create_release.outputs.tag_name }} $asset
-        done
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish release distributions to PyPI
+        if: github.event.pull_request.merged == true
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ env.PYPI_API_TOKEN }}
+      
+      # I added the Docker steps below to not remove them
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-    - name: Build Docker image
-      run: |
-        docker build src -f src/nebula/Dockerfile -t berylliumsec/nebula:latest
+      - name: Build Docker image
+        run: |
+          docker build src -f src/nebula/Dockerfile -t berylliumsec/nebula:latest
 
-    # Only push the Docker image on a push to main, not on PRs
-    - name: Push Docker image
-      if: github.event.pull_request.merged == true
-      run: |
-        docker push berylliumsec/nebula:latest
+      - name: Push Docker image
+        if: github.event.pull_request.merged == true
+        run: |
+          docker push berylliumsec/nebula:latest
+
+      - name: Create GitHub Release
+        if: github.event.pull_request.merged == true
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.bump_version.outputs.new_version }}
+          release_name: Release ${{ steps.bump_version.outputs.new_version }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Assets
+        if: github.event.pull_request.merged == true
+        run: |
+          for asset in dist/*; do
+            gh release upload ${{ steps.create_release.outputs.tag_name }} $asset
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
