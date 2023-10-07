@@ -134,6 +134,22 @@ nebula
 ``` 
 in your command line interface.
 
+## Upgrading
+
+To maintain optimal performance and benefit from the latest improvements, we regularly release updates and enhanced versions of our models. Prior to upgrading, please delete the unified_models directory to ensure the latest models are downloaded seamlessly.
+
+PIP:
+
+```bash
+pip install nebula-ai --upgrade
+```
+
+Docker:
+
+``` bash
+docker pull berylliumsec/nebula:latest
+```
+```
 ## Usage.
 
 In this beta release, there are three primary applications for Nebula:
