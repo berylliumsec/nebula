@@ -29,64 +29,44 @@ jobs:
 
     # Only push the Docker image on a push to main, not on PRs
     - name: Push Docker image
-      if: github.event_name == 'push'
+      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
       run: |
         docker push berylliumsec/nebula:latest
 
-  publish-pypi:
-    runs-on: ubuntu-latest
-    environment: nebula
-
-    steps:
-    - name: Check out the repo
-      uses: actions/checkout@v3
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-
-    - name: Bump version in setup.py
-      if: github.event_name == 'push'
-      run: |
-        python bump_version.py
-
-    - name: Commit and push version bump
-      if: github.event_name == 'push'
-      run: |
-      
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add setup.py
-        git commit -m "Bump version"
-        git push
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install setuptools wheel twine
-
-    - name: Build package
-      run: |
-        python setup.py sdist bdist_wheel
-
     # Only publish to PyPI on a push to main, not on PRs
     - name: Publish to PyPI
-      if: github.event_name == 'push'
+      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         user: __token__
         password: ${{ env.PYPI_API_TOKEN }}
 
+    - name: Install GitHub CLI
+      run: |
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key C99B11DEB97541F0
+        sudo apt-add-repository https://cli.github.com/packages
+        sudo apt update
+        sudo apt install gh
+
     # Create a GitHub release
     - name: Create GitHub Release
-      if: github.event_name == 'push'
+      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
       id: create_release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ steps.bump_version.outputs.new_version }}  # Assuming bump_version step sets new_version output
+        tag_name: ${{ steps.bump_version.outputs.new_version }}
         release_name: Release ${{ steps.bump_version.outputs.new_version }}
         draft: false
         prerelease: false
+
+    # After the release, we upload assets
+    - name: Upload Release Assets
+      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+      run: |
+        for asset in dist/*; do
+          gh release upload ${{ steps.create_release.outputs.tag_name }} $asset
+        done
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
