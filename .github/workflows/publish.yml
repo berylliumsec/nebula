@@ -6,7 +6,9 @@ on:
       - main
     types:
       - closed
-
+permissions:
+  contents: write
+      
 jobs:
   release-build:
     runs-on: ubuntu-latest
@@ -101,15 +103,14 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      - name: Build Docker image
+      - name: Build and Push Docker image
+        if: github.event.pull_request.merged == true && contains(github.event.pull_request.head.repo.full_name, 'src')
         run: |
           docker build src -f src/nebula/Dockerfile -t berylliumsec/nebula:latest
-
-      - name: Push Docker image
-        if: github.event.pull_request.merged == true
-        run: |
           docker push berylliumsec/nebula:latest
           
+
+
       - name: Download new version artifact
         uses: actions/download-artifact@v2
         with:
@@ -122,6 +123,9 @@ jobs:
           echo "NEW_VERSION=$(<new_version.txt)" >> $GITHUB_ENV
 
       - name: Create GitHub Release
+        permissions:
+          contents: write
+      
         if: github.event.pull_request.merged == true
         id: create_release
         uses: actions/create-release@v1
