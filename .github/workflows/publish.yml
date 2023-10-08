@@ -93,7 +93,7 @@ jobs:
           path: dist/
 
       - name: Publish release distributions to PyPI
-        if: github.event.pull_request.merged == true && github.event.pull_request.merged == true && contains(github.event.pull_request.head.repo.full_name, 'src')
+        if: github.event.pull_request.merged == true 
         uses: pypa/gh-action-pypi-publish@release/v1
 
       
