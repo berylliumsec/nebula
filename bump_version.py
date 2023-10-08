@@ -22,6 +22,11 @@ if match:
 
     # Output the new version for subsequent GitHub Actions steps
     print(f"::set-output name=new_version::{new_version}")
+    new_version_file = "new_version.txt"
+    with open(new_version_file, "w") as f:
+        f.write(new_version)
+
+    print(f"::set-output name=new_version::{new_version}")
 else:
     print("Version pattern not found!")
     sys.exit(1)

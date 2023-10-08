@@ -33,7 +33,13 @@ jobs:
       id: bump_version
       run: |
         python bump_version.py
-        cat setup.py
+    
+    - name: Upload new version as artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: new-version-artifact
+        path: new_version.txt
+
 
     - name: Configure Git
       run: |
@@ -77,7 +83,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
+
       - name: Retrieve release distributions
         uses: actions/download-artifact@v3
         with:
@@ -103,6 +109,16 @@ jobs:
         if: github.event.pull_request.merged == true
         run: |
           docker push berylliumsec/nebula:latest
+          - name: Download new version artifact
+          uses: actions/download-artifact@v2
+          with:
+            name: new-version-artifact
+            path: ./
+      
+      - name: Set new version variable
+        id: set_version_var
+        run: |
+          echo "NEW_VERSION=$(<new_version.txt)" >> $GITHUB_ENV
 
       - name: Create GitHub Release
         if: github.event.pull_request.merged == true
@@ -111,8 +127,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.bump_version.outputs.new_version }}
-          release_name: Release ${{ steps.bump_version.outputs.new_version }}
+          tag_name: ${{ env.NEW_VERSION }}
+          release_name: Release ${{ env.NEW_VERSION }}
           draft: false
           prerelease: false
 
