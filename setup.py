@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="nebula-ai",
-    version="1.0.8-beta.1",
+    version="1.0.9-beta.1.1",
     description="AI-Powered Ethical Hacking Assistant",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
