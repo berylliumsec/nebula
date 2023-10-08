@@ -10,7 +10,6 @@ on:
 jobs:
   release-build:
     runs-on: ubuntu-latest
-    environment: nebula
 
     steps:
       
@@ -65,8 +64,9 @@ jobs:
         name: release-dists
         path: dist/
     
-  pypi-publish:
+  pypi-docker-publish:
     runs-on: ubuntu-latest
+    environment: nebula
     needs: release-build
     permissions:
       id-token: write
@@ -83,7 +83,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
 
       
-      # I added the Docker steps below to not remove them
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
