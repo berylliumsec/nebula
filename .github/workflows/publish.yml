@@ -6,8 +6,7 @@ on:
       - main
     types:
       - closed
-permissions:
-  contents: write
+
       
 jobs:
   release-build:
@@ -78,6 +77,7 @@ jobs:
     needs: release-build
     permissions:
       id-token: write
+      contents: write
     
     steps:
 
@@ -122,10 +122,7 @@ jobs:
         run: |
           echo "NEW_VERSION=$(<new_version.txt)" >> $GITHUB_ENV
 
-      - name: Create GitHub Release
-        permissions:
-          contents: write
-      
+      - name: Create GitHub Release  
         if: github.event.pull_request.merged == true
         id: create_release
         uses: actions/create-release@v1
