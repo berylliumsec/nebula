@@ -109,12 +109,13 @@ jobs:
         if: github.event.pull_request.merged == true
         run: |
           docker push berylliumsec/nebula:latest
-          - name: Download new version artifact
-          uses: actions/download-artifact@v2
-          with:
-            name: new-version-artifact
-            path: ./
-      
+          
+      - name: Download new version artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: new-version-artifact
+          path: ./
+        
       - name: Set new version variable
         id: set_version_var
         run: |
