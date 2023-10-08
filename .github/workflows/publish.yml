@@ -41,8 +41,8 @@ jobs:
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         
-        - name: Commit and push version bump
-        run: |
+    - name: Commit and push version bump
+      run: |
           git add setup.py
           if git diff --staged --quiet; then
             echo "No changes to commit"
