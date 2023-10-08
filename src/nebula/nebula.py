@@ -187,7 +187,7 @@ class InteractiveGenerator:
             print("\nUnzipping...")
             subprocess.run(['unzip', output_name, '-d', target_dir])
 
-            # Remove the zip file (optional)
+
             os.remove(output_name)
         except subprocess.CalledProcessError as e:
             print(f"Error occurred: {e}")
