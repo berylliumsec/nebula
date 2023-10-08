@@ -93,7 +93,7 @@ jobs:
           path: dist/
 
       - name: Publish release distributions to PyPI
-        if: github.event.pull_request.merged == true
+        if: github.event.pull_request.merged == true && github.event.pull_request.merged == true && contains(github.event.pull_request.head.repo.full_name, 'src')
         uses: pypa/gh-action-pypi-publish@release/v1
 
       
@@ -138,7 +138,8 @@ jobs:
         if: github.event.pull_request.merged == true
         run: |
           for asset in dist/*; do
-            gh release upload ${{ steps.create_release.outputs.tag_name }} $asset
+            gh release upload ${{ env.NEW_VERSION }} $asset
           done
+      
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
