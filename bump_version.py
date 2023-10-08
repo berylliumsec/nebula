@@ -5,17 +5,15 @@ with open("setup.py", "r") as f:
     content = f.read()
 
 # Extract the current version
-match = re.search(r'version="([\d.]+)-beta\.\d+"', content)
+match = re.search(r'version="([\d.]+)b(\d+)"', content)
 if match:
     version = match.group(1)
-    parts = version.split('.')
-    # Increment the patch version number (the third number in the version)
-    parts[-1] = str(int(parts[-1]) + 1)
-    new_main_version = '.'.join(parts)
-    # Reset beta version to 1
-    new_version = f"{new_main_version}-beta.1"
+    beta_num = int(match.group(2))
 
-    content = content.replace(f'version="{version}-beta', f'version="{new_version}')
+    new_beta_num = beta_num + 1
+    new_version = f"{version}b{new_beta_num}"
+
+    content = content.replace(f'version="{version}b{beta_num}"', f'version="{new_version}"')
 
     print("new version")
     print(f"{new_version}")
