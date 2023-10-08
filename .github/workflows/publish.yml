@@ -104,7 +104,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Build and Push Docker image
-        if: github.event.pull_request.merged == true && contains(github.event.pull_request.head.repo.full_name, 'src')
+        if: github.event.pull_request.merged == true
         run: |
           docker build src -f src/nebula/Dockerfile -t berylliumsec/nebula:latest
           docker push berylliumsec/nebula:latest
@@ -123,7 +123,7 @@ jobs:
           echo "NEW_VERSION=$(<new_version.txt)" >> $GITHUB_ENV
 
       - name: Create GitHub Release  
-        if: github.event.pull_request.merged == true && contains(github.event.pull_request.head.repo.full_name, 'src')
+        if: github.event.pull_request.merged == true
         id: create_release
         uses: actions/create-release@v1
         env:
@@ -135,7 +135,7 @@ jobs:
           prerelease: false
 
       - name: Upload Release Assets
-        if: github.event.pull_request.merged == true && contains(github.event.pull_request.head.repo.full_name, 'src')
+        if: github.event.pull_request.merged == true
         run: |
           for asset in dist/*; do
             gh release upload ${{ env.NEW_VERSION }} $asset
