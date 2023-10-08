@@ -4,3 +4,4 @@ torch
 tqdm
 transformers
 whoosh
+pyspellchecker
