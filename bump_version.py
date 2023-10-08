@@ -15,7 +15,8 @@ if match:
     # Reset beta version to 1
     new_version = f"{new_main_version}-beta.1"
 
-    content = content.replace(f'version="{version}"', f'version="{new_version}"')
+    content = content.replace(f'version="{version}-beta', f'version="{new_version}')
+
     print("new version")
     print(f"{new_version}")
     with open("setup.py", "w") as f:
