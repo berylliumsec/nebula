@@ -42,6 +42,8 @@ To utilize the tools provided in this repository effectively, users are expected
 
 - Search for commands that help identify Vulnerabilities: Easily search and retrieve commands that aid in detecting vulnerabilities across a range of services. Whether you're dealing with HTTP, FTP, or SMB, Nebula guides you through.
 
+- Ensure maximum coverage of all IP addresses and ports in a Network penetration test using the nebula-watcher tool.
+
 ## Overview
 
 ![nebula](/images/overview.png)
