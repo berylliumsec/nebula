@@ -1,7 +1,0 @@
-include README.md
-recursive-include images *
-recursive-include src/nebula/indexdir *
-include src/nebula/nmap_flags
-include src/nebula/crackmap_flags
-include src/nebula/nuclei_flags
-include src/nebula/zap_flags
