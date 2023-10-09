@@ -33,7 +33,7 @@ To utilize the tools provided in this repository effectively, users are expected
 
 - Direct Command Line Access: Execute suggested commands without having to copy and paste.
 
-- Monitor the IP addresses and ports you've engaged with during a penetration test using the Nebula-Watcher tool. Visit [nebula-watcher](https://github.com/berylliumsec/nebula_watcher) for more information.
+- Monitor the IP addresses and ports you've engaged with during a penetration test using the Nebula-Watcher tool to ensure complete coverage. Visit [nebula-watcher](https://github.com/berylliumsec/nebula_watcher) for more information.
 
 
 **Disclaimer**: Only NMAP is currently supported for smart analysis of tool output.
@@ -42,7 +42,6 @@ To utilize the tools provided in this repository effectively, users are expected
 
 - Search for commands that help identify Vulnerabilities: Easily search and retrieve commands that aid in detecting vulnerabilities across a range of services. Whether you're dealing with HTTP, FTP, or SMB, Nebula guides you through.
 
-- Ensure maximum coverage of all IP addresses and ports in a Network penetration test using the nebula-watcher tool.
 
 ## Overview
 
