@@ -17,7 +17,7 @@ Welcome to Nebula.
 - [Examples of natural language queries](#examples-of-natural-language-queries)
 - [Links to videos](#links-to-videos)
 - [Contributing](#contributing)
-- [License](#license)
+
 
 ## Acknowledgement
 
