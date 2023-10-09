@@ -139,9 +139,7 @@ nebula
 in your command line interface.
 
 
-**OPTIONAL**
-
-**nebula-watcher installation**
+**OPTIONAL nebula-watcher installation**
 
 **PIP**:
 
@@ -152,7 +150,7 @@ pip3 install nebula-watcher
 ```
 
 **Docker**
- 
+
 Pulling the image:
 
 ``` bash
