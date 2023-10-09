@@ -162,7 +162,13 @@ Running the docker image :
 ```bash
 docker run --network host -v directory_that_contains_nmap_results/nmap_plain_text:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest
 ```
+
+To change the diagram name from the default:
+
+```bash
+docker run --network host -v directory_that_contains_nmap_results/nmap_plain_text:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest python3 nebula_watcher.py --diagram_name /app/your_diagram_name
 ```
+
 ## Upgrading
 
 To maintain optimal performance and benefit from the latest improvements, we regularly release updates and enhanced versions of our models. Prior to upgrading, please delete the unified_models directory to ensure the latest models are downloaded seamlessly.
