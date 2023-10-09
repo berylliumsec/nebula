@@ -220,6 +220,9 @@ In the current beta release, it is essential for the ethical hacker to have prio
 
 Nebula can process results from NMAP scans (plain text format) and suggest commands to run to detect vulnerabilities on services running on open ports.
 
+### As an ethical hacking coverage tool
+
+Using the optional [Nebula-Watcher](https://github.com/berylliumsec/nebula_watcher), it offers a method for ethical hackers to monitor the IP addresses and ports that they have engaged with during a penetration test. 
 
 ## DocuNebula.
 
