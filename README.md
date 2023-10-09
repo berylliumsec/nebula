@@ -131,12 +131,12 @@ docker run --rm --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
 pip install nebula-ai
 ```
 
-To run nebula simply enter:
+To run nebula simply run this command:
 
 ```bash 
 nebula
 ``` 
-in your command line interface.
+
 
 
 **OPTIONAL nebula-watcher installation**
