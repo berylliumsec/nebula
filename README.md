@@ -158,8 +158,10 @@ docker pull berylliumsec/nebula_watcher:latest
 ```
 Running the docker image :
 
+
 ```bash
-docker run --network host -v directory_containing_results/nmap_plain_text:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest
+docker run --network host -v directory_that_contains_nmap_results/nmap_plain_text:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest
+```
 ```
 ## Upgrading
 
