@@ -757,7 +757,7 @@ class InteractiveGenerator:
             parsed_results = []
 
             for host in hosts[1:]:
-                match = re.search(r'(?:[a-zA-Z0-9.-]+\s)?\(([\d\.]+)\)', host)
+                match = re.search(r'([a-zA-Z0-9.-]+)?\s?(\([\d\.]+\))?', host)
                 if not match:
                     continue
 
