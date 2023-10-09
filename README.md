@@ -222,7 +222,7 @@ Nebula can process results from NMAP scans (plain text format) and suggest comma
 
 ### As an ethical hacking coverage tool
 
-Using the optional [Nebula-Watcher](https://github.com/berylliumsec/nebula_watcher), it offers a method for ethical hackers to monitor the IP addresses and ports that they have engaged with during a penetration test. 
+Using the optional [Nebula-Watcher](https://github.com/berylliumsec/nebula_watcher), ethical hackers can automatically monitor the IP addresses and ports that they have engaged with during a penetration test to ensure maximum coverage . 
 
 ## DocuNebula.
 
