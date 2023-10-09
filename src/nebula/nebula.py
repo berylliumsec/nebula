@@ -756,10 +756,13 @@ class InteractiveGenerator:
 
             parsed_results = []
 
-            for host in hosts[1:]:  # Skip the first empty split
+            for host in hosts[1:]:
                 match = re.search(r'([a-zA-Z0-9.-]+)?\s?(\([\d\.]+\))?', host)
                 if not match:
                     continue
+
+                ip_address = match.group(1) or "Unknown"
+                ports = set()
 
                 device_name = match.group(1) or "Unknown"
                 ip_address = match.group(2).replace("(", "").replace(")", "") if match.group(2) else "Unknown"

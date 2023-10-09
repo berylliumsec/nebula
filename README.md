@@ -17,7 +17,7 @@ Welcome to Nebula.
 - [Examples of natural language queries](#examples-of-natural-language-queries)
 - [Links to videos](#links-to-videos)
 - [Contributing](#contributing)
-- [License](#license)
+
 
 ## Acknowledgement
 
@@ -33,11 +33,15 @@ To utilize the tools provided in this repository effectively, users are expected
 
 - Direct Command Line Access: Execute suggested commands without having to copy and paste.
 
+- Monitor the IP addresses and ports you've engaged with during a penetration test using the Nebula-Watcher tool to ensure complete coverage. Visit [nebula-watcher](https://github.com/berylliumsec/nebula_watcher) for more information.
+
+
 **Disclaimer**: Only NMAP is currently supported for smart analysis of tool output.
 
 - Smart Analysis of Tool Outputs: Whether it's the open ports from an NMAP scan or results from other tools, Nebula provides tailored suggestions to further investigate and identify potential vulnerabilities.
 
 - Search for commands that help identify Vulnerabilities: Easily search and retrieve commands that aid in detecting vulnerabilities across a range of services. Whether you're dealing with HTTP, FTP, or SMB, Nebula guides you through.
+
 
 ## Overview
 
@@ -51,7 +55,7 @@ Currently, Nebula is integrated with and supports the following ethical hacking 
 - NMAP: A versatile tool for network discovery and security auditing.
 - OWASP ZAP (Full Scan Only): A popular web application security scanner.
 - Crackmapexec: A robust network information gathering tool.
-- Nuclei: A tool is used to send requests across targets based on a template, leading to zero false positives and providing fast scanning on a large number of hosts. 
+- Nuclei: A tool is used to send requests across targets based on a template, leading to zero false positives and providing fast scanning on a large number of hosts.
 
 Our roadmap envisions Nebula's continuous expansion to incorporate the majority of the tools leveraged by ethical hackers globally. This commitment ensures that our users remain at the cutting edge of cybersecurity endeavors.
 
@@ -101,25 +105,26 @@ docker pull berylliumsec/nebula:latest
 Running the image without GPU:
 
 ```bash
-docker run -it berylliumsec/nebula:latest
+docker run --rm -it berylliumsec/nebula:latest
 ```
 
 To avoid downloading the models each time you run the docker container, mount a directory to store the models like so:
 
 ```bash
-docker run -v "$(pwd)":/app/unified_models_no_zap -it berylliumsec/nebula:latest
+docker run --rm -v "$(pwd)":/app/unified_models_no_zap -it berylliumsec/nebula:latest
 ```
 
 Running the model with all GPU(s)
 
 ```bash
-docker run --gpus all -v "$(pwd)":/app/unified_models_no_zap -it nebula:latest
+docker run --rm --gpus all -v "$(pwd)":/app/unified_models_no_zap -it nebula:latest
 
 ```
 
 ```bash
-docker run --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
+docker run --rm --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
 ```
+
 
 **PIP**:
 
@@ -127,12 +132,43 @@ docker run --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
 pip install nebula-ai
 ```
 
-To run nebula simply enter:
+To run nebula simply run this command:
 
 ```bash 
 nebula
 ``` 
-in your command line interface.
+
+
+
+**OPTIONAL nebula-watcher installation**
+
+**PIP**:
+
+To install nebula-watcher:
+
+```bash
+pip3 install nebula-watcher
+```
+
+**Docker**
+
+Pulling the image:
+
+``` bash
+docker pull berylliumsec/nebula_watcher:latest
+```
+Running the docker image :
+
+
+```bash
+docker run --network host -v directory_that_contains_nmap_results/nmap_plain_text:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest
+```
+
+To change the diagram name from the default:
+
+```bash
+docker run --network host -v directory_that_contains_nmap_results/nmap_plain_text:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest python3 nebula_watcher.py --diagram_name /app/your_diagram_name
+```
 
 ## Upgrading
 
@@ -144,11 +180,20 @@ PIP:
 pip install nebula-ai --upgrade
 ```
 
+```bash
+pip3 install nebula-watcher --upgrade
+```
+
 Docker:
 
 ``` bash
 docker pull berylliumsec/nebula:latest
 ```
+
+``` bash
+docker pull berylliumsec/nebula_watcher:latest
+```
+
 
 ## Usage.
 
@@ -176,6 +221,9 @@ In the current beta release, it is essential for the ethical hacker to have prio
 
 Nebula can process results from NMAP scans (plain text format) and suggest commands to run to detect vulnerabilities on services running on open ports.
 
+### As an ethical hacking coverage tool
+
+Using the optional [Nebula-Watcher](https://github.com/berylliumsec/nebula_watcher), ethical hackers can automatically monitor the IP addresses and ports that they have engaged with during a penetration test to ensure maximum coverage . 
 
 ## DocuNebula.
 
