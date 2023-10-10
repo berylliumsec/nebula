@@ -748,10 +748,6 @@ class InteractiveGenerator:
                 f"CPU memory usage: {process.memory_info().rss / (1024**2):.2f} MB",
                 "green",
             )
-        except psutil.NoSuchProcess:
-            cprint("No such process found.", "red")
-        except psutil.AccessDenied:
-            cprint("Access denied. Cannot fetch memory info for the process.", "red")
         except Exception as e:
             cprint(f"An error occurred while fetching CPU memory info: {e}", "red")
 
@@ -760,11 +756,8 @@ class InteractiveGenerator:
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # 0 for the first GPU
             info = pynvml.nvmlDeviceGetMemoryInfo(handle)
             cprint(f"Used GPU memory: {info.used / (1024**2):.2f} MB", "green")
-        except pynvml.NVMLError_InitializationFailed:
-            cprint("Failed to initialize NVML. GPU stats cannot be retrieved.", "red")
-        except pynvml.NVMLError_NotFound:
-            cprint("No GPU device found.", "red")
-        except pynvml.NVMLError:
+
+        except Exception as e:
             cprint("An error occurred while fetching GPU memory info.", "red")
 
         return first_loaded
