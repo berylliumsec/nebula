@@ -20,12 +20,30 @@ setup(
     # Explicitly define where the packages are
     package_dir={"": "src"},
     packages=find_packages(where="src"),
-    package_data={'nebula': ['images/*', 'indexdir/*', 'nmap_flags', 'crackmap_flags', 'nuclei_flags', 'zap_flags']},
-    install_requires=['argparse', 'typing', 'termcolor', 'torch', 'tqdm', 'transformers', 'whoosh', 'pyspellchecker'],
-    entry_points={
-        'console_scripts': [
-            'nebula = nebula.nebula:main_func'
-        ],
+    package_data={
+        "nebula": [
+            "images/*",
+            "indexdir/*",
+            "nmap_flags",
+            "crackmap_flags",
+            "nuclei_flags",
+            "zap_flags",
+        ]
     },
-    python_requires='>=3.10',
+    install_requires=[
+        "argparse",
+        "typing",
+        "termcolor",
+        "torch",
+        "tqdm",
+        "transformers",
+        "whoosh",
+        "pyspellchecker",
+        "psutil",
+        "nvidia-ml-py3",
+    ],
+    entry_points={
+        "console_scripts": ["nebula = nebula.nebula:main_func"],
+    },
+    python_requires=">=3.10",
 )

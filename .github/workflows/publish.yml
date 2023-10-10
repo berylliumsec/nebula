@@ -133,6 +133,12 @@ jobs:
           release_name: Release ${{ env.NEW_VERSION }}
           draft: false
           prerelease: false
+          body: |
+            Release Notes:
+
+            - Added support for loading one model at a time to ease memory usage.
+            - Display memory usage after loading model.
+            - Optimize index files
 
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
