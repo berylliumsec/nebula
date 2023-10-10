@@ -756,7 +756,7 @@ class InteractiveGenerator:
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # 0 for the first GPU
             info = pynvml.nvmlDeviceGetMemoryInfo(handle)
             cprint(f"Used GPU memory: {info.used / (1024**2):.2f} MB", "green")
-            
+
         except Exception as e:
             cprint("An error occurred while fetching GPU memory info.", "red")
 
