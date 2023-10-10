@@ -13,7 +13,9 @@ if match:
     new_beta_num = beta_num + 1
     new_version = f"{version}b{new_beta_num}"
 
-    content = content.replace(f'version="{version}b{beta_num}"', f'version="{new_version}"')
+    content = content.replace(
+        f'version="{version}b{beta_num}"', f'version="{new_version}"'
+    )
 
     print("new version")
     print(f"{new_version}")
