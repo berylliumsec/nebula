@@ -25,7 +25,14 @@ First i would like to thank the All-Mighty God who is the source of all knowledg
 
 **DISCLAIMER**
 
-To utilize the tools provided in this repository effectively, users are expected to possess a proficient understanding of nmap, nuclei, zap, and crackmap. The models within operate on nuanced natural language patterns. For optimal interactions, users are advised to consult the guidance provided in this README, which offers insights into crafting effective prompts. Please be advised that this repository is currently in its beta phase; as such, occasional discrepancies or bugs might be encountered. We are diligently working towards refining and resolving all known issues.
+At the moment, to utilize the tools provided in this repository effectively, users are expected to possess a proficient understanding of nmap, nuclei, zap, and crackmap. 
+
+In future versions, we'll focus on enhancing free natural language capabilities, and we're dedicated to making this vision a reality. 
+
+For now, the models within operate on nuanced natural language patterns. For optimal interactions, users are advised to consult the guidance provided in this README, which offers insights into crafting effective prompts. 
+
+Please be advised that this repository is currently in its beta phase; as such, occasional discrepancies or bugs might be encountered. We are diligently working towards refining and resolving all known issues.
+
 
 ## Why nebula?
 
@@ -84,9 +91,10 @@ Linux (debian based):
 ```bash
 sudo apt install -y libreadline-dev
 ```
-
+- [Docker](https://docs.docker.com/engine/install/)
 - [NMAP](https://nmap.org/download)
 - [crackmapexec](https://github.com/byt3bl33d3r/CrackMapExec/wiki/Installation)
+- [Nuclei](https://docs.nuclei.sh/getting-started/install)
 
 
 ## Installation
@@ -161,13 +169,13 @@ Running the docker image :
 
 
 ```bash
-docker run --network host -v directory_that_contains_nmap_results/nmap_plain_text:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest
+docker run --network host -v directory_that_contains_nmap_results/nmap_plain_text_or_xml:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest
 ```
 
 To change the diagram name from the default:
 
 ```bash
-docker run --network host -v directory_that_contains_nmap_results/nmap_plain_text:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest python3 nebula_watcher.py --diagram_name /app/your_diagram_name
+docker run --network host -v directory_that_contains_nmap_results/nmap_plain_text_or_xml:/app/results -v where/you/want/the/diagram:/app/output  berylliumsec/nebula_watcher:latest python3 nebula_watcher.py --diagram_name /app/your_diagram_name
 ```
 
 ## Upgrading
@@ -219,7 +227,7 @@ In the current beta release, it is essential for the ethical hacker to have prio
 
 ### As a command suggestion engine.
 
-Nebula can process results from NMAP scans (plain text format) and suggest commands to run to detect vulnerabilities on services running on open ports.
+Nebula can process results from NMAP scans (plain text or XML format) and suggest commands to run to detect vulnerabilities on services running on open ports.
 
 ### As an ethical hacking coverage tool
 
@@ -250,7 +258,7 @@ In the above screenshot, the user asks the NMAP model to perform a top 10 port-s
 
 In the above screenshot, the user reviews the output of the top 10 port-scan.
 
-**Process Previous Results**: Currently optimized for NMAP results (in plain text format), Nebula enables users to select previous scan findings and obtain command suggestions to assess potential vulnerabilities of uncovered ports. Users have the flexibility to select a suggested command, modify it if needed, and execute. Support for results from other tools is planned for future releases.
+**Process Previous Results**: Currently optimized for NMAP results (in plain text or XML format), Nebula enables users to select previous scan findings and obtain command suggestions to assess potential vulnerabilities of uncovered ports. Users have the flexibility to select a suggested command, modify it if needed, and execute. Support for results from other tools is planned for future releases.
 
 ![Process Previous Results](/images/process_results.png)
 

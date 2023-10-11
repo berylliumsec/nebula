@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="nebula-ai",
@@ -28,6 +28,7 @@ setup(
             "crackmap_flags",
             "nuclei_flags",
             "zap_flags",
+            "suggestions",
         ]
     },
     install_requires=[
@@ -41,6 +42,7 @@ setup(
         "pyspellchecker",
         "psutil",
         "nvidia-ml-py3",
+        "prompt-toolkit",
     ],
     entry_points={
         "console_scripts": ["nebula = nebula.nebula:main_func"],
