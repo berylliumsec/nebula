@@ -21,7 +21,7 @@ COPY nebula/requirements.txt /app/
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-COPY nebula/nebula.py nebula/nmap_flags nebula/nuclei_flags nebula/zap_flags nebula/crackmap_flags /app/
+COPY nebula/nebula.py nebula/nmap_flags nebula/nuclei_flags nebula/zap_flags nebula/crackmap_flags nebula/suggestions /app/
 COPY nebula/indexdir /app/indexdir
 
 CMD ["python", "nebula.py", "--model_dir", "/app/unified_models_no_zap"]

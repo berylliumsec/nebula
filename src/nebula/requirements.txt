@@ -7,3 +7,4 @@ whoosh
 pyspellchecker
 nvidia-ml-py3
 psutil
+prompt-toolkit
