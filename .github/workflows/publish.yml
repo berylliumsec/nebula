@@ -136,7 +136,8 @@ jobs:
           body: |
             Release Notes:
 
-            - Fixed minor issue with xml parsing
+            - Bumped CVE(s) to the top of the list.
+            - Fixed minor issue with processing results.
 
 
 
