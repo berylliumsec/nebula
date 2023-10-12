@@ -73,6 +73,7 @@ class InteractiveGenerator:
     IP_PATTERN = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b")
     FLAG_PATTERN = re.compile(r"(-\w+|--[\w-]+)")  # Updated Regular expression
     URL_PATTERN_VALIDATION = r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
+    CVE_PATTERN = re.compile(r'CVE-\d{4}-\d{4,7}')  # Regular expression for CVE pattern
 
     def __init__(self):
         self.args = self._parse_arguments()
@@ -949,10 +950,13 @@ class InteractiveGenerator:
                             content = res["content"]
                             lines = content.splitlines()
                             for line in lines:
-                                if cve.lower() in line.lower():
-                                    cve_results.append(line.strip())
-                                    if len(cve_results) >= max_results:
-                                        break
+                                if ":" in line:
+                                    # Get the part before the colon
+                                    before_colon = line.split(":")[0]
+                                    if cve.lower() in before_colon.lower():
+                                        cve_results.append(line.strip())
+                                        if len(cve_results) >= max_results:
+                                            break
 
                         if cve_results:
                             results_dict[cve] = cve_results
@@ -977,10 +981,13 @@ class InteractiveGenerator:
                             content = res["content"]
                             lines = content.splitlines()
                             for line in lines:
-                                if s.lower() in line.lower():
-                                    service_results.append(line.strip())
-                                    if len(service_results) >= max_results:
-                                        break
+                                if ":" in line:
+                                    # Get the part before the colon
+                                    before_colon = line.split(":")[0]
+                                    if s.lower() in before_colon.lower():
+                                        service_results.append(line.strip())
+                                        if len(service_results) >= max_results:
+                                            break
 
                         if service_results:
                             results_dict[f"Service {s}"] = service_results
@@ -1002,27 +1009,47 @@ class InteractiveGenerator:
         root = tree.getroot()
 
         parsed_results = []
+        
 
         for host in root.findall("host"):
-            device_name = host.find("hostnames/hostname").attrib.get("name", "Unknown")
-            ip_address = host.find("address").attrib.get("addr", "Unknown")
+            try:
+                device_name = host.find("hostnames/hostname").attrib.get("name", "Unknown")
+            except AttributeError:
+                device_name = "Unknown"
+
+            try:
+                ip_address = host.find("address").attrib.get("addr", "Unknown")
+            except AttributeError:
+                ip_address = "Unknown"
 
             ports = set()
             services = set()
+
             for port in host.findall("ports/port"):
-                port_id = port.attrib.get("portid")
-                port_state = port.find("state").attrib.get("state")
-                service_name = port.find("service").attrib.get("name")
+                try:
+                    port_id = port.attrib.get("portid")
+                    port_state = port.find("state").attrib.get("state")
+                    service_name = port.find("service").attrib.get("name")
 
-                if port_state == "open":
-                    ports.add(port_id)
-                    if service_name == "domain":
-                        services.add("dns")
-                    else:
-                        services.add(service_name)
+                    if port_state == "open":
+                        ports.add(port_id)
+                        if service_name == "domain":
+                            services.add("dns")
+                        else:
+                            services.add(service_name)
+                except AttributeError:
+                    continue  # If there's an error with a port, skip it and continue to the next one
 
-            # Extract CVEs from host xml_file (if available in XML, not present in given example)
+            # Extract CVEs from host xml_file 
             cve_matches = []
+            for elem in host.iter():  # Search within the host to associate CVE with the IP
+                try:
+                    if elem.text:
+                        cve_found = self.CVE_PATTERN.findall(elem.text)
+                        if cve_found:
+                            cve_matches.extend(cve_found)
+                except AttributeError:
+                    continue  # If there's an error with an element, skip it and continue to the next one
 
             parsed_results.append(
                 {
@@ -1038,7 +1065,8 @@ class InteractiveGenerator:
 
     def parse_nmap(self, file_path):
 
-        if str(file_path).strip().startswith("<?xml"):
+        extension = os.path.splitext(file_path)[1]
+        if extension == ".xml":
             return self._parse_nmap_xml(file_path)
         else:
             return self.parse_nmap_text(file_path)
@@ -1224,12 +1252,28 @@ class InteractiveGenerator:
 
         idx = 1
         for line in results:
+            is_service = line.strip().lower().startswith("service")
+            is_cve = (
+                line.strip().lower().startswith("cve")
+                and ":" in line
+                and line.split(":", 1)[1].strip()
+            )
+
             if line.endswith(":"):
                 print(colored(line, "yellow"))
+            elif is_service:
+                print(colored(line, "yellow"))  # Retain the yellow color for services
+            elif is_cve:
+                prefix, suffix = line.split(":", 1)  # Split the CVE line at the colon
+                print(
+                    colored(f"{idx}. {prefix}:", "red") + colored(f" {suffix}", "blue")
+                )
+                idx += 1
             else:
                 prefix, suffix = line.split(":", 1) if ":" in line else (line, "")
                 print(
-                    colored(f"{idx}. {prefix}:", "red") + colored(f" {suffix}", "blue")
+                    colored(f"{idx}. {prefix}:", "white")
+                    + colored(f" {suffix}", "green")
                 )
                 idx += 1
 
@@ -1240,13 +1284,27 @@ class InteractiveGenerator:
             "\nSelect a result number to modify and run the associated command or any other key to continue without running a command: "
         )
 
+        # Filtered results for selection
+        selectable_results = [
+            line
+            for line in results
+            if not (
+                line.strip().lower().startswith("service")
+                or (
+                    line.strip().lower().startswith("cve")
+                    and ":" in line
+                    and not line.split(":", 1)[1].strip()
+                )
+            )
+        ]
+
         try:
             selection = int(selection)
-            if 1 <= selection <= len(results):
+            if 1 <= selection <= len(selectable_results):
                 content_after_colon = (
-                    results[selection - 1].split(":", 1)[1].strip()
-                    if ":" in results[selection - 1]
-                    else results[selection - 1]
+                    selectable_results[selection - 1].split(":", 1)[1].strip()
+                    if ":" in selectable_results[selection - 1]
+                    else selectable_results[selection - 1]
                 )
 
                 modified_content = self.get_input_with_default(
@@ -1267,7 +1325,7 @@ class InteractiveGenerator:
         """Internal method to display previous results and loop back to the main prompt."""
 
         # Fetch filenames from the results directory
-        filenames = os.listdir(self.args.results_dir)
+        filenames = sorted(os.listdir(self.args.results_dir))
 
         # Check if there are no previous results
         if not filenames:
@@ -1393,7 +1451,7 @@ class InteractiveGenerator:
             num_results = prompt(
                 ANSI(
                     colored(
-                        "\nHow many results would you like? (Enter a number, (a) or (all) for all results, or press enter for default): ",
+                        "\nHow many results per category should i display? (Enter a number, (a) or (all) for all results, or press enter for default): ",
                         "blue",
                     )
                 ),
