@@ -364,6 +364,7 @@ class InteractiveGenerator:
         truncated_cmd = command_str[:15].replace(" ", "_") + (
             "..." if len(command_str) > 15 else ""
         )
+
         result_file_path = os.path.join(
             self.args.results_dir,
             f"result_{truncated_cmd}_{len(self.command_history) + 1}.txt",
@@ -1227,7 +1228,7 @@ class InteractiveGenerator:
         """Display the nmap results and prompt user for a result selection."""
 
         cmd_num = int(cmd)
-
+        self.command_history = self._get_command_history()
         _, file_path = self.command_history[cmd_num - 1]
 
         services = self.parse_nmap(file_path)
