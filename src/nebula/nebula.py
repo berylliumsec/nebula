@@ -417,7 +417,7 @@ class InteractiveGenerator:
         """
         try:
             ips = InteractiveGenerator.IP_PATTERN.findall(s)
-            return ips[0] if ips else None
+            return ips if ips else None
         except Exception as e:
             logging.error(f"Error while extracting IP from string '{s[:30]}...': {e}")
             return None
