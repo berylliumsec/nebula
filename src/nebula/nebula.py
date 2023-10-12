@@ -1141,7 +1141,6 @@ class InteractiveGenerator:
                     }
                 )
 
-            print("DONE")
             return parsed_results
 
         except Exception as e:
