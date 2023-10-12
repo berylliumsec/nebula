@@ -73,7 +73,7 @@ class InteractiveGenerator:
     IP_PATTERN = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b")
     FLAG_PATTERN = re.compile(r"(-\w+|--[\w-]+)")  # Updated Regular expression
     URL_PATTERN_VALIDATION = r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
-    CVE_PATTERN = re.compile(r'CVE-\d{4}-\d{4,7}')  # Regular expression for CVE pattern
+    CVE_PATTERN = re.compile(r"CVE-\d{4}-\d{4,7}")  # Regular expression for CVE pattern
 
     def __init__(self):
         self.args = self._parse_arguments()
@@ -1010,11 +1010,12 @@ class InteractiveGenerator:
         root = tree.getroot()
 
         parsed_results = []
-        
 
         for host in root.findall("host"):
             try:
-                device_name = host.find("hostnames/hostname").attrib.get("name", "Unknown")
+                device_name = host.find("hostnames/hostname").attrib.get(
+                    "name", "Unknown"
+                )
             except AttributeError:
                 device_name = "Unknown"
 
@@ -1041,9 +1042,11 @@ class InteractiveGenerator:
                 except AttributeError:
                     continue  # If there's an error with a port, skip it and continue to the next one
 
-            # Extract CVEs from host xml_file 
+            # Extract CVEs from host xml_file
             cve_matches = []
-            for elem in host.iter():  # Search within the host to associate CVE with the IP
+            for (
+                elem
+            ) in host.iter():  # Search within the host to associate CVE with the IP
                 try:
                     if elem.text:
                         cve_found = self.CVE_PATTERN.findall(elem.text)
