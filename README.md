@@ -36,6 +36,11 @@ Please be advised that this repository is currently in its beta phase; as such, 
 
 ## Why nebula?
 
+The youtube video below provide a quick example of how Nebula can speed up the process of identifying vulnerabilities
+
+[Nebula Usage Youtube Video](https://www.youtube.com/watch?v=FF8LEyRmqHk)
+
+
 - Effortless Tool Usage with Natural Language: No need to remember intricate commands or switches for various tools. With Nebula, you can seamlessly communicate your intent, whether it's initiating an NMAP scan or any other task. Let Nebula translate your natural language into precise tool commands.
 
 - Direct Command Line Access: Execute suggested commands without having to copy and paste.
