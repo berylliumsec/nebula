@@ -136,10 +136,9 @@ jobs:
           body: |
             Release Notes:
 
-            - Fixed bug of wrong model selection when in single mode.
-            - replaced the python input library with the prompts library.
-            - Added auto-complete for search.
-            - Added support for processing NMAP files in XML format.
+            - Fixed minor issue with xml parsing
+
+
 
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true

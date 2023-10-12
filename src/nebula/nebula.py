@@ -843,41 +843,6 @@ class InteractiveGenerator:
 
         return first_loaded
 
-    def _input_command(self) -> str:
-        """Internal method to get a command input from the user."""
-
-        # Styling definitions
-        style = Style.from_dict({"prompt": "cyan", "error": "red", "message": "green"})
-
-        while True:
-            # Prompt the user if they want to change the model or proceed
-            choice = (
-                prompt(
-                    "\nDo you want to (p) proceed with the current model, (m) select a different model, or (q) quit? [p/m/q]: ",
-                    style=style,
-                )
-                .strip()
-                .lower()
-            )
-
-            if choice == "q":
-                self.print_farewell_message()
-                exit(0)
-            elif choice == "m":
-                self._select_model()
-                return
-            elif choice == "p":
-                user_input = prompt("\nEnter a prompt: ", style=style).strip()
-                if user_input.lower() in ["quit", "exit"]:
-                    self.print_farewell_message()
-                    exit(0)
-                return user_input
-            else:
-                print_formatted_text(
-                    "Invalid choice. Please choose either 'p', 'm', or 'q'.",
-                    style="error",
-                )
-
     def _input_command_without_model_selection(self) -> str:
         """Internal method to get a command input from the user without model selection."""
 
@@ -1032,8 +997,9 @@ class InteractiveGenerator:
 
         return formatted_results
 
-    def _parse_nmap_xml(self, data):
-        root = ET.fromstring(data)
+    def _parse_nmap_xml(self, xml_file):
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
 
         parsed_results = []
 
@@ -1055,8 +1021,7 @@ class InteractiveGenerator:
                     else:
                         services.add(service_name)
 
-            # Extract CVEs from host data (if available in XML, not present in given example)
-            # For now, I'll keep it empty as placeholder
+            # Extract CVEs from host xml_file (if available in XML, not present in given example)
             cve_matches = []
 
             parsed_results.append(
@@ -1553,7 +1518,9 @@ class InteractiveGenerator:
                 "cyan",
             )
         else:
-            cprint("\nCommand completed!, you can view the result using the 'view previous results' option on the main menu"), "green"
+            cprint(
+                "\nCommand completed!, you can view the result using the 'view previous results' option on the main menu"
+            ), "green"
             self.command_history = self._get_command_history()
             with self.print_lock:
                 self.get_user_prompt()
