@@ -107,24 +107,26 @@ class InteractiveGenerator:
             self.single_model_mode = True
             self.autonomous_mode()
         self.args.autonomous_mode = False
-        if not self.args.testing_mode:
-            while True:  # This loop will keep asking until a valid mode is selected
-                mode = self.select_mode()
-                if mode == "a":
-                    self.current_model_name = self._load_tokenizer_and_model()
-                    break
-                elif mode == "d":
-                    self.single_model_mode = True
-                    self.current_model_name = self._select_model()
-                    break
-                else:
-                    cprint("\nInvalid Choice", "red")
+        if self.args.testing_mode:
+            cprint("testing completed, exiting...", "green")
+            exit()
+        while True:  # This loop will keep asking until a valid mode is selected
+            mode = self.select_mode()
+            if mode == "a":
+                self.current_model_name = self._load_tokenizer_and_model()
+                break
+            elif mode == "d":
+                self.single_model_mode = True
+                self.current_model_name = self._select_model()
+                break
+            else:
+                cprint("\nInvalid Choice", "red")
 
-            self.log_file_path = None
-            self.services = []
-            self.flag_file = self.return_path(self.current_model_name + "_flags")
-            self.flag_descriptions = self._load_flag_descriptions(self.flag_file)
-            self.extracted_flags = []
+        self.log_file_path = None
+        self.services = []
+        self.flag_file = self.return_path(self.current_model_name + "_flags")
+        self.flag_descriptions = self._load_flag_descriptions(self.flag_file)
+        self.extracted_flags = []
 
     @staticmethod
     def _parse_arguments():
@@ -145,7 +147,7 @@ class InteractiveGenerator:
             "--testing_mode",
             type=bool,
             default=False,
-            help="testing mode",
+            help="Run vulnerability scans but do not attempt any exploits",
         )
         parser.add_argument(
             "--targets_list",

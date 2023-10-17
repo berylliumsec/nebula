@@ -275,8 +275,8 @@ nebula -h
 ```
 
 ```bash
-usage: nebula [-h] [--results_dir RESULTS_DIR] [--model_dir MODEL_DIR] [--testing_mode TESTING_MODE] [--targets_list TARGETS_LIST]
-              [--autonomous_mode AUTONOMOUS_MODE]
+usage: nebula.py [-h] [--results_dir RESULTS_DIR] [--model_dir MODEL_DIR] [--testing_mode TESTING_MODE] [--targets_list TARGETS_LIST]
+                 [--autonomous_mode AUTONOMOUS_MODE] [--attack_mode ATTACK_MODE]
 
 Interactive Command Generator
 
@@ -287,11 +287,13 @@ options:
   --model_dir MODEL_DIR
                         Path to the model directory
   --testing_mode TESTING_MODE
-                        testing mode
+                        Run vulnerability scans but do not attempt any exploits
   --targets_list TARGETS_LIST
                         lists of targets for autonomous testing
   --autonomous_mode AUTONOMOUS_MODE
                         Flag to indicate autonomous mode
+  --attack_mode ATTACK_MODE
+                        Attack approach
 ```
 ### Autonomous Mode (Experimental).
 
