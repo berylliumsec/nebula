@@ -136,11 +136,8 @@ jobs:
           body: |
             Release Notes:
 
-            - Added autonomous mode.
+            - Added autonomous mode (Experimental): Autonomous node attempts to discover more vulnerabilities and exploit them if exploits are available.
             - Improve loading and unloading models.
-            - Added AI powered username and password generator.
-
-
 
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
