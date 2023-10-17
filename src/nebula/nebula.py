@@ -5,10 +5,13 @@ import logging
 import os
 import random
 import re
+import shlex
+import socket
 import subprocess
 import threading
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from typing import List, Optional, Tuple, Union
 
 import psutil
@@ -72,14 +75,19 @@ class WordValidator(Validator):
 class InteractiveGenerator:
     IP_PATTERN = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b")
     FLAG_PATTERN = re.compile(r"(-\w+|--[\w-]+)")  # Updated Regular expression
-    URL_PATTERN_VALIDATION = r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
+    URL_PATTERN_VALIDATION = r"http[s]?://(?:[a-zA-Z]|[0-9]|[-._~:/?#[\]@!$&'()*+,;=]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
     CVE_PATTERN = re.compile(r"CVE-\d{4}-\d{4,7}")  # Regular expression for CVE pattern
 
-    def __init__(self):
+    def __init__(self, results_dir=None, model_dir=None, testing_mode=None):
         self.args = self._parse_arguments()
+        if results_dir is not None:
+            self.args.results_dir = results_dir
+        if model_dir is not None:
+            self.args.model_dir = model_dir
+        if testing_mode is not None:
+            self.args.testing_mode = testing_mode
         self.index_dir = self.return_path("indexdir")
         self.s3_url = self._determine_s3_url()
-        self.command_history = self._get_command_history()
         self._ensure_model_folder_exists()
         self._validate_model_dirs()
         self.command_running = False
@@ -91,25 +99,235 @@ class InteractiveGenerator:
         self.print_star_sky()
         self.random_name = None
         self.current_model = None
-        while True:  # This loop will keep asking until a valid mode is selected
-            mode = self.select_mode()
-            if mode == "a":
-                self.current_model_name = self._load_tokenizer_and_model()
-                break
-            elif mode == "d":
-                self.single_model_mode = True
-                self.current_model_name = self._select_model()
-                break
-            else:
-                cprint("\nInvalid Choice", "red")
-
-        self.log_file_path = None
-        self.always_apply_action: bool = False
+        self.current_model_name = None
         self.print_lock = threading.Lock()
-        self.services = []
-        self.flag_file = self.return_path(self.current_model_name + "_flags")
-        self.flag_descriptions = self._load_flag_descriptions(self.flag_file)
-        self.extracted_flags = []
+        self.model_names = self.get_model_names()
+        self.always_apply_action: bool = False
+        if self.args.autonomous_mode is True:
+            self.single_model_mode = True
+            self.autonomous_mode()
+        self.args.autonomous_mode = False
+        if not self.args.testing_mode:
+            while True:  # This loop will keep asking until a valid mode is selected
+                mode = self.select_mode()
+                if mode == "a":
+                    self.current_model_name = self._load_tokenizer_and_model()
+                    break
+                elif mode == "d":
+                    self.single_model_mode = True
+                    self.current_model_name = self._select_model()
+                    break
+                else:
+                    cprint("\nInvalid Choice", "red")
+
+            self.log_file_path = None
+            self.services = []
+            self.flag_file = self.return_path(self.current_model_name + "_flags")
+            self.flag_descriptions = self._load_flag_descriptions(self.flag_file)
+            self.extracted_flags = []
+
+    @staticmethod
+    def _parse_arguments():
+        parser = argparse.ArgumentParser(description="Interactive Command Generator")
+        parser.add_argument(
+            "--results_dir",
+            type=str,
+            default="./results",
+            help="Directory to save command results",
+        )
+        parser.add_argument(
+            "--model_dir",
+            type=str,
+            default="./unified_models",
+            help="Path to the model directory",
+        )
+        parser.add_argument(
+            "--testing_mode",
+            type=bool,
+            default=False,
+            help="testing mode",
+        )
+        parser.add_argument(
+            "--targets_list",
+            type=str,
+            default="targets.txt",
+            help="lists of targets for autonomous testing",
+        )
+        parser.add_argument(
+            "--autonomous_mode",
+            type=bool,
+            default=False,
+            help="Flag to indicate autonomous mode",
+        )
+        parser.add_argument(
+            "--attack_mode",
+            type=str,
+            default="stealth",
+            help="Attack approach",
+        )
+        return parser.parse_args()
+
+    def split(self, data):
+        return data.split(": ", 1)
+
+    def unique_commands_based_on_params(self, commands, ip_address):
+        """
+        Given a list of commands, returns all commands with unique sets of significant parameters.
+        Excludes commands with nothing after the colon, commands with parameter '-p', and commands containing '-*'.
+        Replaces [IP] with a provided IP address.
+        """
+        seen_params = set()
+        unique_cmds = []
+
+        for command in commands:
+            # Extract the part of the command after the colon, if it exists
+            parts = self.split(command)
+            if len(parts) != 2 or not parts[1].strip():
+                continue
+
+            actual_command = parts[1].strip().rstrip(".").replace("[IP]", ip_address)
+
+            # if '-*' in actual_command: #check for faulty nmap script command, should be fixed in future models
+            #     continue
+
+            try:
+                # Split the command into tokens
+                tokens = shlex.split(actual_command)
+            except ValueError:
+                print(f"Error splitting command: {actual_command}")
+                continue
+
+            # Identify parameters in the tokens, excluding '-p'
+            params = frozenset(
+                token
+                for token in tokens
+                if (token.startswith("--") or token.startswith("-")) and token != "-p"
+            )
+
+            # Check if we've seen these parameters before
+            if params not in seen_params:
+                seen_params.add(params)
+                if actual_command.startswith("nmap"):
+                    timestamp = (
+                        datetime.now()
+                        .strftime("%I:%M:%S-%p-%Y-%m-%d")
+                        .replace(" ", "-")
+                    )
+                    output_xml = f"results/nmap_output_{timestamp}.xml"
+                    output_txt = f"results/nmap_output_{timestamp}.txt"
+                    actual_command += f" -oX {output_xml} -oN {output_txt}"
+                unique_cmds.append(actual_command)
+
+        return unique_cmds
+
+    def is_simple_port_scan(self, nmap_command):
+        # Ensure the command is an nmap command
+        if "nmap" not in nmap_command:
+            return False
+
+        # Check if script is in the command
+        if "--script" in nmap_command:
+            return False
+
+        return True
+
+    def autonomous_mode(self):
+        url = ""
+
+        def get_number_of_results(mode):
+            return {"stealth": 1, "raid": 5, "war": 1e6}.get(mode, 1)
+
+        def handle_command(command):
+            if self.is_simple_port_scan(command) or command in command_history:
+                cprint(f"Not running duplicate or useless command: {command}", "red")
+                return
+            cprint(f"Running command: {command}", "yellow")
+            if not self.args.testing_mode:
+                self.run_command_and_alert(command)
+            match = re.search(r"^(.*?)-oX", command)
+            if match:
+                command = match.group(1)
+            command_history.append(command)
+
+        if not os.path.exists(self.args.targets_list):
+            logging.error("The specified targets file does not exist, exiting...")
+            cprint("The specified targets file does not exist, exiting...", "red")
+            return
+
+        command_history = []
+        results = []
+
+        with open(self.args.targets_list, "r") as file:
+            for ip in file:
+                ip = ip.strip()
+                if not self.IP_PATTERN.match(ip):
+                    cprint(f"Invalid IP: {ip} skipping it", "red")
+                    continue
+
+                cprint(
+                    f"Running nmap vulnerability scans against {ip}, it may take several minutes please wait...",
+                    "yellow",
+                )
+                timestamp = (
+                    datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
+                )
+                output_xml = f"results/nmap_output_{timestamp}.xml"
+                output_txt = f"results/nmap_output_{timestamp}.txt"
+
+                result = self.run_command_and_alert(
+                    f"nmap -Pn --script=vuln {ip} -oX {output_xml} -oN {output_txt}"
+                )
+                results.append(result)
+
+                cprint(f"nmap scanning completed for {ip}", "green")
+
+        processed_data = self._parse_nmap_xml(output_xml)
+        number_of_results = get_number_of_results(self.args.attack_mode)
+        search_results = self.search_index(
+            processed_data, self.return_path("indexdir_auto"), number_of_results
+        )
+
+        for data in processed_data:
+            unique_commands = self.unique_commands_based_on_params(
+                search_results, data["ip"]
+            )
+            for comm in tqdm(unique_commands, desc="Processing commands"):
+                try:
+                    handle_command(comm)
+                except Exception as e:
+                    logging.error(e)
+                    cprint("Unable to run command, error", "red")
+
+        cprint("Consulting models", "yellow")
+        for model_name in self.model_names:
+            if model_name in ["zap", "scribe"]:
+                continue
+            self._load_tokenizer_and_model(model_name)
+
+            for data in processed_data:
+                ip = data["ip"]
+                for port, service in zip(data["ports"], data["services"]):
+                    if model_name == "nuclei" and port not in ["80", "443"]:
+                        continue
+                    constructed_query = f"{service} {port} {ip}"
+                    if port in ["80", "443"]:
+                        url = f"https://{ip}" if port == "443" else f"http://{ip}"
+                        constructed_query = (
+                            f"run an automatic scan on {url} using the latest templates"
+                        )
+                    elif model_name == "crackmap":
+                        constructed_query += " with a null session"
+
+                    cprint(f"Constructed query: {constructed_query}", "green")
+                    generated_text = self.generate_text(constructed_query.strip())
+                    clean_up = self.process_string(
+                        self.ensure_space_between_letter_and_number(generated_text),
+                        [ip],
+                        [url],
+                    )
+                    if model_name == "nmap":
+                        clean_up = self.process_string(clean_up, [ip], [url], [port])
+                    handle_command(clean_up)
 
     def select_mode(self):
         style = Style.from_dict(
@@ -189,23 +407,6 @@ class InteractiveGenerator:
                     print(" ", end="")
             print()  # Move to the next line after each row
 
-    @staticmethod
-    def _parse_arguments():
-        parser = argparse.ArgumentParser(description="Interactive Command Generator")
-        parser.add_argument(
-            "--results_dir",
-            type=str,
-            default="./results",
-            help="Directory to save command results",
-        )
-        parser.add_argument(
-            "--model_dir",
-            type=str,
-            default="./unified_models",
-            help="Path to the model directory",
-        )
-        return parser.parse_args()
-
     def _load_flag_descriptions(self, file_path):
         """Load flag descriptions from a file and return them as a dictionary."""
         with open(file_path, "r") as f:
@@ -246,18 +447,6 @@ class InteractiveGenerator:
             if os.environ.get("IN_DOCKER")
             else "https://nebula-models.s3.amazonaws.com/unified_models.zip"
         )
-
-    def _get_command_history(self):
-        if os.path.exists(self.args.results_dir):
-            # Sort the files by their name to ensure a consistent order
-            return sorted(
-                [
-                    (file, os.path.join(self.args.results_dir, file))
-                    for file in os.listdir(self.args.results_dir)
-                ],
-                key=lambda x: x[0],
-            )  # Sorting by the filename
-        return []
 
     def _ensure_model_folder_exists(self):
         if not self.folder_exists_and_not_empty(self.args.model_dir):
@@ -348,10 +537,11 @@ class InteractiveGenerator:
                 logging.error(f"Error while executing command {command}: {e}")
                 return -1, "", str(e)
 
-        cprint(
-            "\nExecuting command, you can choose the view previous command option in the main menu to view the results when command execution has been completed",
-            "yellow",
-        )
+        if not self.args.autonomous_mode:
+            cprint(
+                "\nExecuting command, you can choose the view previous command option in the main menu to view the results when command execution has been completed",
+                "yellow",
+            )
 
         if isinstance(text, list):
             command_str = " ".join(text)
@@ -360,30 +550,42 @@ class InteractiveGenerator:
 
         # Execute the command
         returncode, stdout, stderr = execute_command(command_str)
-
-        truncated_cmd = command_str[:15].replace(" ", "_") + (
+        truncated_cmd = command_str[:10].replace(" ", "_") + (
             "..." if len(command_str) > 15 else ""
         )
 
+        timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
+        file_name = f"{timestamp}_{truncated_cmd}"
         result_file_path = os.path.join(
             self.args.results_dir,
-            f"result_{truncated_cmd}_{len(self.command_history) + 1}.txt",
+            f"result_{file_name}.txt",
         )
+        try:
+            ET.ElementTree(ET.fromstring(stdout))
+            cprint("XML format detected, nothing to do", "green")
+            return
+        except Exception:
 
-        with open(result_file_path, "w") as f:
-            if returncode == 0:
-                f.write(stdout)
-            else:
-                if stderr:
-                    cprint("\nCommand Error Output:", "red")
-                    cprint(stderr, "red")
-                    f.write(stderr)
-                    logging.error(
-                        f"Command '{command_str}' failed with error:\n{stderr}"
-                    )
-                    cprint("\nhit the enter key to continue", "yellow")
-        # Update command history
-        self.command_history.append((text, result_file_path))
+            # Conditions to decide if the results should be written to the file or not
+            should_write_stderr = stderr and self.args.autonomous_mode is False
+            if stdout.startswith("Starting Nmap"):
+                return False
+            if stderr.strip() or stdout.strip():
+                with open(result_file_path, "w") as f:
+                    if stdout.strip():
+                        f.write(stdout)
+                        return stdout
+                    else:
+                        if should_write_stderr and stderr.strip():
+                            cprint("\nCommand Error Output:", "red")
+                            cprint(stderr, "red")
+
+                            f.write(stderr)
+                            logging.error(
+                                f"Command '{command_str}' failed with error:\n{stderr}"
+                            )
+                            cprint("\nhit the enter key to continue", "yellow")
+                            return False
 
     @staticmethod
     def ensure_space_between_letter_and_number(s: str) -> str:
@@ -424,9 +626,21 @@ class InteractiveGenerator:
             return None
 
     def process_string(
-        self, s: str, replacement_ips: list, replacement_urls: list
+        self,
+        s: str,
+        replacement_ips: List[str],
+        replacement_urls: List[str],
+        port_arg: Optional[int] = None,
     ) -> str:
         """Replace the IP addresses and URLs in the given string with the respective replacements."""
+
+        def get_local_ip() -> str:
+            """Get local machine IP"""
+            return socket.gethostbyname(socket.gethostname())
+
+        def get_random_port(above: int = 1000) -> int:
+            """Get random port above the specified number"""
+            return random.randint(above, 65535)
 
         try:
             if not isinstance(s, str):
@@ -434,7 +648,12 @@ class InteractiveGenerator:
         except Exception as e:
             logging.error(f"Error in input string validation: {e}")
 
+        # IP processing
         try:
+            # Check if replacement_ips is a single IP and not a list
+            if not isinstance(replacement_ips, list):
+                replacement_ips = [replacement_ips]
+
             for ip in replacement_ips:
                 if not re.match(self.IP_PATTERN, ip):
                     raise ValueError(f"One of the replacement IPs ({ip}) is not valid.")
@@ -447,25 +666,38 @@ class InteractiveGenerator:
         except Exception as e:
             logging.error(f"Error in IP processing: {e}")
 
-        # Validate URLs in replacement_urls list
+        # URL processing
         try:
+            if not isinstance(replacement_urls, list):
+                replacement_urls = [replacement_urls]
+
             for url in replacement_urls:
                 if not re.match(self.URL_PATTERN_VALIDATION, url):
                     raise ValueError(
                         f"One of the replacement URLs ({url}) is not valid."
                     )
-        except Exception as e:
-            logging.error(f"Error in URL validation: {e}")
 
-        # Extract and replace URLs
-        try:
-            if replacement_urls:
-                urls = self.extract_urls(s)
-                for i, url in enumerate(urls):
-                    if i < len(replacement_urls):
-                        s = s.replace(url, replacement_urls[i])
+            urls = self.extract_urls(s)
+            for i, url in enumerate(urls):
+                if i < len(replacement_urls):
+                    s = s.replace(url, replacement_urls[i])
         except Exception as e:
-            logging.error(f"Error in URL processing: {e}")
+            logging.error(f"Error in URL processing: {url}{e}")
+
+        # Replace placeholders
+        if replacement_ips and len(replacement_ips) > 0:
+            primary_ip = replacement_ips[0]
+            s = s.replace("{{ ip }}", primary_ip)
+            s = s.replace("{{ rhost }}", primary_ip)
+            if port_arg:
+                s = s.replace("{{ rport }}", str(port_arg))
+            s = s.replace("{{ lhost }}", get_local_ip())
+            s = s.replace("{{ lport }}", str(get_random_port()))
+        timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
+        if s.strip().startswith("nmap"):
+            output_xml = f"results/nmap_output_{timestamp}.xml"
+            output_txt = f"results/nmap_output_{timestamp}.txt"
+            s += f" -oX {output_xml} -oN {output_txt}"
 
         return s
 
@@ -495,7 +727,7 @@ class InteractiveGenerator:
         try:
             if len(prompt_text) > self.current_model.config.n_ctx:
                 logging.warning("Prompt too long! Truncating...")
-                print("Prompt too long! Truncating...")
+                cprint("Prompt too long! Truncating...", "red")
                 prompt_text = prompt_text[: self.current_model.config.n_ctx]
 
             encoding = self.current_tokenizer.encode_plus(
@@ -510,7 +742,9 @@ class InteractiveGenerator:
 
             input_ids = encoding["input_ids"].to(self.device)
             attention_mask = encoding["attention_mask"].to(self.device)
-
+            temp = 0.1
+            if self.current_model == "scribe":
+                temp = 0.5
             with tqdm(total=max_length, desc="Generating text", position=0) as pbar:
                 output = self.current_model.generate(
                     input_ids=input_ids,
@@ -520,7 +754,7 @@ class InteractiveGenerator:
                     do_sample=True,
                     top_k=40,
                     top_p=0.95,
-                    temperature=0.1,
+                    temperature=temp,
                     repetition_penalty=1.0,
                 )
                 pbar.update(len(output[0]))
@@ -553,7 +787,7 @@ class InteractiveGenerator:
                 prompt = self.get_user_prompt()
 
                 if prompt.lower() == "view_results":
-                    still_viewing = self._view_previous_results()
+                    still_viewing = self._view_previous_results(".txt")
                     if still_viewing:
                         continue
                     else:
@@ -584,15 +818,25 @@ class InteractiveGenerator:
                         f"Error during interactive session with prompt '{prompt[:30]}...': {e}"
                     )
 
-    def display_command_list(self) -> None:
+    def display_command_list(self, file_extension=None) -> None:
         """
         Display a list of previously saved result filenames truncated to self.max_truncate_length.
         """
         cprint("\nPrevious Results:", "cyan")
 
         # Fetching filenames from the results directory
-        filenames = sorted(os.listdir(self.args.results_dir))
+        all_files = os.listdir(self.args.results_dir)
 
+        # If a file extension is specified, filter the files by that extension
+        if file_extension:
+            filenames = sorted(
+                [file for file in all_files if file.endswith(file_extension)]
+            )
+        else:
+            filenames = sorted(all_files)
+        if not filenames:
+            cprint("no results found", "red")
+            return
         for idx, filename in enumerate(filenames):
             truncated_filename = (
                 (filename[: self.max_truncate_length] + "...")
@@ -645,9 +889,9 @@ class InteractiveGenerator:
                     self.print_farewell_message()
                     exit(0)
                 elif action == "v":
-                    return self._view_previous_results()
+                    return self._view_previous_results(".txt")
                 elif action == "pr":
-                    return self._process_previous_nmap_results()
+                    return self._process_previous_nmap_results(".xml")
                 elif action == "c":
                     return self._input_command_without_model_selection()
                 elif action == "m":
@@ -674,6 +918,16 @@ class InteractiveGenerator:
                 return True
         return False
 
+    def get_model_names(self):
+        self.model_names = [
+            model_name
+            for model_name in os.listdir(self.args.model_dir)
+            if self.contains_pytorch_model(
+                os.path.join(self.args.model_dir, model_name)
+            )
+        ]
+        return self.model_names
+
     def _select_model(self) -> str:
         """
         Interactively allows the user to select a model from the available models.
@@ -681,15 +935,6 @@ class InteractiveGenerator:
         Returns:
             str: The name of the selected model.
         """
-        # Displaying available models
-        model_names = [
-            model_name
-            for model_name in os.listdir(self.args.model_dir)
-            if self.contains_pytorch_model(
-                os.path.join(self.args.model_dir, model_name)
-            )
-        ]
-
         selected_model_name = None
 
         session = PromptSession()
@@ -698,7 +943,7 @@ class InteractiveGenerator:
             print_formatted_text(
                 "Available models:", style=Style.from_dict({"": "yellow"})
             )
-            for idx, model_name in enumerate(model_names, 1):
+            for idx, model_name in enumerate(self.model_names, 1):
                 print_formatted_text(
                     f"{idx}. {model_name}", style=Style.from_dict({"": "yellow"})
                 )
@@ -708,8 +953,8 @@ class InteractiveGenerator:
                 style=Style.from_dict({"": "cyan"}),
             )
 
-            if choice.isdigit() and 1 <= int(choice) <= len(model_names):
-                selected_model_name = model_names[int(choice) - 1]
+            if choice.isdigit() and 1 <= int(choice) <= len(self.model_names):
+                selected_model_name = self.model_names[int(choice) - 1]
                 break
             else:
                 print_formatted_text(
@@ -746,15 +991,25 @@ class InteractiveGenerator:
         return selected_model_name
 
     def unload_model(self):
+        # 1. Explicitly delete models and tokenizers
+        if hasattr(self, "current_model") and self.current_model:
+            del self.current_model
+            self.current_model = None
 
-        self.current_model = None
-        self.current_tokenizer = None
+        if hasattr(self, "current_tokenizer") and self.current_tokenizer:
+            del self.current_tokenizer
+            self.current_tokenizer = None
 
         # 2. Release GPU Memory
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # 3. Garbage Collection
+        # 3. Clear any cached states in model's `from_pretrained` methods
+        # This is specific to transformers library and can be useful for some models
+        if hasattr(GPT2LMHeadModel, "clear_cache"):
+            GPT2LMHeadModel.clear_cache()
+
+        # 4. Force garbage collection
         gc.collect()
 
     def _load_tokenizer_and_model(self, model_name: Optional[str] = None):
@@ -783,7 +1038,7 @@ class InteractiveGenerator:
                         end="",
                         flush=True,
                     )
-                    tokenizer = GPT2Tokenizer.from_pretrained(full_path)
+                    self.current_tokenizer = GPT2Tokenizer.from_pretrained(full_path)
                     cprint(" Done!", "green")
 
                     # Load model
@@ -793,18 +1048,15 @@ class InteractiveGenerator:
                         end="",
                         flush=True,
                     )
-                    model = GPT2LMHeadModel.from_pretrained(full_path)
-                    model.eval()
-                    model.to(self.device)
-                    if self.single_model_mode:
-                        self.current_model = model
-                        self.current_tokenizer = tokenizer
+                    self.current_model = GPT2LMHeadModel.from_pretrained(full_path)
+                    self.current_model.eval()
+                    self.current_model.to(self.device)
                     cprint(" Done!", "green")
 
                     # Add the successfully loaded model and tokenizer to their respective dictionaries
                     if not self.single_model_mode:
-                        self.tokenizers[model_folder] = tokenizer
-                        self.models[model_folder] = model
+                        self.tokenizers[model_folder] = self.current_tokenizer
+                        self.models[model_folder] = self.current_model
 
                     # Only set the 'first_loaded' once
                     if first_loaded is None:
@@ -854,62 +1106,76 @@ class InteractiveGenerator:
         # Initialize the spell checker
         spell = SpellChecker()
 
-        # Get the actual user input for the model to generate
-        user_input = prompt("\nEnter a prompt: ", style=style).strip()
+        while True:  # Keep prompting until valid input or 'q' is entered
+            # Get the actual user input for the model to generate
+            user_input = prompt(
+                "\nEnter a prompt (or 'q' to return): ", style=style
+            ).strip()
 
-        # Split the user input into words
-        words = user_input.split()
+            # If the user wants to return to the previous menu
+            if user_input.lower() == "q":
+                # Here, you can define what should be done to return to the previous menu.
+                # For this example, we'll just return an empty string.
+                return False
 
-        # Correct words that are not in the dictionary
-        corrections_made = False  # Flag to check if any corrections were accepted
-        for index, word in enumerate(words):
-            # Check if the word is a number or contains digits; if yes, then continue to the next iteration
-            if word.isdigit() or any(char.isdigit() for char in word):
+            # If input is empty, prompt again
+            if not user_input:
+                cprint("Please provide a prompt or enter 'q' to return.", "red")
                 continue
 
-            # Check if word is a URL; if yes, continue to the next iteration
-            if re.match(
-                r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+",
-                word,
-            ):
-                continue
+            # Split the user input into words
+            words = user_input.split()
 
-            # If the word is not in the dictionary
-            misspelled = spell.unknown([word])
-            if misspelled:
-                # Get the most likely correct spelling for the word
-                suggestion = spell.correction(word)
-
-                # If no suggestions are found, continue to the next iteration
-                if not suggestion:
+            # Correct words that are not in the dictionary
+            corrections_made = False  # Flag to check if any corrections were accepted
+            for index, word in enumerate(words):
+                # Check if the word is a number or contains digits; if yes, then continue to the next iteration
+                if word.isdigit() or any(char.isdigit() for char in word):
                     continue
 
-                # Display the suggestion to the user and ask for their choice
-                try:
-                    choice = prompt(
-                        f"Did you mean '{suggestion}' instead of '{word}'? (Y/n): ",
-                        style=style,
-                        validator=WordValidator(["y", "n", ""]),
-                        validate_while_typing=False,
-                    ).lower()
-                except Exception as e:
-                    print(f"Error occurred: {e}")
+                # Check if word is a URL; if yes, continue to the next iteration
+                if re.match(
+                    r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+",
+                    word,
+                ):
+                    continue
 
-                # If the user accepts the suggestion, replace the word in the list
-                if choice == "y" or choice == "":
-                    words[index] = suggestion
-                    corrections_made = True  # Update the flag
+                # If the word is not in the dictionary
+                misspelled = spell.unknown([word])
+                if misspelled:
+                    # Get the most likely correct spelling for the word
+                    suggestion = spell.correction(word)
 
-        if corrections_made:
-            corrected_input = " ".join([str(word) for word in words])
-        else:
-            corrected_input = user_input
+                    # If no suggestions are found, continue to the next iteration
+                    if not suggestion:
+                        continue
 
-        if user_input.lower() in ["quit", "exit"]:
-            self.print_farewell_message()
-            exit(0)
+                    # Display the suggestion to the user and ask for their choice
+                    try:
+                        choice = prompt(
+                            f"Did you mean '{suggestion}' instead of '{word}'? (Y/n): ",
+                            style=style,
+                            validator=WordValidator(["y", "n", ""]),
+                            validate_while_typing=False,
+                        ).lower()
+                    except Exception as e:
+                        print(f"Error occurred: {e}")
 
-        return corrected_input
+                    # If the user accepts the suggestion, replace the word in the list
+                    if choice == "y" or choice == "":
+                        words[index] = suggestion
+                        corrections_made = True  # Update the flag
+
+            if corrections_made:
+                corrected_input = " ".join([str(word) for word in words])
+            else:
+                corrected_input = user_input
+
+            if user_input.lower() in ["quit", "exit"]:
+                self.print_farewell_message()
+                exit(0)
+
+            return corrected_input
 
     def search_index(
         self, query_list: Union[list, str], indexdir: str, max_results: int = 10
@@ -1006,7 +1272,11 @@ class InteractiveGenerator:
         return formatted_results
 
     def _parse_nmap_xml(self, xml_file):
-        tree = ET.parse(xml_file)
+
+        if os.path.isfile(xml_file):
+            tree = ET.parse(xml_file)
+        else:
+            tree = ET.ElementTree(ET.fromstring(xml_file))
         root = tree.getroot()
 
         parsed_results = []
@@ -1024,8 +1294,8 @@ class InteractiveGenerator:
             except AttributeError:
                 ip_address = "Unknown"
 
-            ports = set()
-            services = set()
+            ports = []
+            services = []
 
             for port in host.findall("ports/port"):
                 try:
@@ -1033,20 +1303,20 @@ class InteractiveGenerator:
                     port_state = port.find("state").attrib.get("state")
                     service_name = port.find("service").attrib.get("name")
 
-                    if port_state == "open":
-                        ports.add(port_id)
+                    if (
+                        port_state == "open" and port_id not in ports
+                    ):  # Ensure ports are unique
+                        ports.append(port_id)
                         if service_name == "domain":
-                            services.add("dns")
+                            services.append("dns")
                         else:
-                            services.add(service_name)
+                            services.append(service_name)
                 except AttributeError:
                     continue  # If there's an error with a port, skip it and continue to the next one
 
             # Extract CVEs from host xml_file
             cve_matches = []
-            for (
-                elem
-            ) in host.iter():  # Search within the host to associate CVE with the IP
+            for elem in root.iter():  # Search within the entire XML tree
                 try:
                     if elem.text:
                         cve_found = self.CVE_PATTERN.findall(elem.text)
@@ -1054,98 +1324,17 @@ class InteractiveGenerator:
                             cve_matches.extend(cve_found)
                 except AttributeError:
                     continue  # If there's an error with an element, skip it and continue to the next one
-
             parsed_results.append(
                 {
                     "hostname": device_name,
                     "ip": ip_address,
-                    "ports": list(ports),
-                    "services": list(services),
+                    "ports": ports,
+                    "services": services,
                     "cves": cve_matches,
                 }
             )
 
         return parsed_results
-
-    def parse_nmap(self, file_path):
-
-        extension = os.path.splitext(file_path)[1]
-        if extension == ".xml":
-            return self._parse_nmap_xml(file_path)
-        else:
-            return self.parse_nmap_text(file_path)
-
-    def parse_nmap_text(self, file_path):
-        try:
-            with open(file_path, "r") as f:
-                data = f.read()
-                if not data:  # Check if the file content is empty
-                    raise ValueError("The file is empty.")
-        except FileNotFoundError:
-            print("Error: File not found.")
-            return False
-        except ValueError as e:  # Handle the exception for an empty file
-            print(f"Error: {e}")
-            return False
-        try:
-            if not data or not isinstance(data, str):
-                raise ValueError("The provided data is empty or not of type string.")
-
-            hosts = re.split(r"Nmap scan report for ", data)
-            if len(hosts) <= 1:
-                raise ValueError("No valid Nmap reports found in the provided data.")
-
-            parsed_results = []
-
-            for host in hosts[1:]:
-                match = re.search(r"([a-zA-Z0-9.-]+)?\s?(\([\d\.]+\))?", host)
-                if not match:
-                    continue
-
-                ports = set()
-
-                device_name = match.group(1) or "Unknown"
-                ip_address = (
-                    match.group(2).replace("(", "").replace(")", "")
-                    if match.group(2)
-                    else "Unknown"
-                )
-
-                ports = set()
-                services = set()
-
-                # Extract port, protocol, state, and service details
-                service_matches = re.findall(
-                    r"(\d+)/(tcp|udp)\s+(\w+)\s+([\w-]+)", host
-                )
-                for match in service_matches:
-                    port, _, state, service = match
-                    if state == "open":
-                        ports.add(port)
-                        if service == "domain":  # Replace "domain" service with "dns"
-                            services.add("dns")
-                        else:
-                            services.add(service)
-
-                # Extract CVEs from host data
-                cve_matches = re.findall(
-                    r"cve-\d{4}-\d+", host, re.IGNORECASE
-                )  # Updated regex for CVE
-                parsed_results.append(
-                    {
-                        "hostname": device_name,
-                        "ip": ip_address,
-                        "ports": list(ports),
-                        "services": list(services),
-                        "cves": cve_matches,  # Add CVEs to the result
-                    }
-                )
-
-            return parsed_results
-
-        except Exception as e:
-            print(f"Error occurred while parsing: {e}")
-            return []
 
     def colored_output(self, text):
         """Color everything before the first ':' in red and the rest in yellow."""
@@ -1205,10 +1394,11 @@ class InteractiveGenerator:
             user_input = prompt(message, history=history, style=style)
         return user_input
 
-    def _process_previous_nmap_results(self) -> bool:
+    def _process_previous_nmap_results(self, file_extension=None) -> bool:
         """Process the results of a previously executed nmap command."""
 
-        self.display_command_list()
+        # Display the command list based on the optional file extension filter
+        self.display_command_list(file_extension=file_extension)
 
         cmd = self.get_input_with_default(
             "Enter the number of the command you'd like to process results for (or type 'back' or 'b' to return): "
@@ -1224,16 +1414,34 @@ class InteractiveGenerator:
         if number_of_results in ["back", "b"]:
             return True
 
-        return self._display_and_select_results(cmd, number_of_results)
+        return self._display_and_select_results(cmd, number_of_results, file_extension)
 
-    def _display_and_select_results(self, cmd, number_of_results) -> bool:
+    def _display_and_select_results(
+        self, cmd, number_of_results, file_extension=None
+    ) -> bool:
         """Display the nmap results and prompt user for a result selection."""
 
         cmd_num = int(cmd)
-        self.command_history = self._get_command_history()
-        _, file_path = self.command_history[cmd_num - 1]
 
-        services = self.parse_nmap(file_path)
+        # Fetching filenames from the results directory based on the optional file extension filter
+        all_files = os.listdir(self.args.results_dir)
+
+        if file_extension:
+            filenames = sorted(
+                [file for file in all_files if file.endswith(file_extension)]
+            )
+        else:
+            filenames = sorted(all_files)
+
+        # Ensure the selected cmd_num is within range
+        if 0 <= cmd_num <= len(filenames):
+            selected_filename = filenames[cmd_num - 1]
+            file_path = os.path.join(self.args.results_dir, selected_filename)
+        else:
+            print(f"Invalid command number: {cmd_num}. Please choose a valid command.")
+            return True
+
+        services = self._parse_nmap_xml(file_path)
         max_results_value = (
             int(number_of_results)
             if number_of_results not in ["all", "a"]
@@ -1324,18 +1532,58 @@ class InteractiveGenerator:
         except ValueError:
             pass
 
-    def _view_previous_results(self) -> bool:
+    def nmap_xml_to_plain_text(self, tree):
+        # Parse the XML file
+
+        root = tree.getroot()
+
+        # Loop through each host in the XML
+        for host in root.findall("host"):
+            # Get IP address
+            ip_address = host.find("address").get("addr")
+            print(f"Host: {ip_address}")
+
+            # Get hostnames
+            hostnames = host.find("hostnames")
+            for name in hostnames.findall("hostname"):
+                print(f"Hostname: {name.get('name')}")
+
+            # Get ports information
+            ports = host.find("ports")
+            for port in ports.findall("port"):
+                port_id = port.get("portid")
+                protocol = port.get("protocol")
+                state = port.find("state").get("state")
+                service = port.find("service").get("name")
+                product = port.find("service").get("product", "")
+
+                cprint(
+                    f"Port: {port_id}/{protocol}, State: {state}, Service: {service} {product}",
+                    "cyan",
+                )
+
+        print("---------")
+
+    def _view_previous_results(self, file_extension=None) -> bool:
         """Internal method to display previous results and loop back to the main prompt."""
 
         # Fetch filenames from the results directory
-        filenames = sorted(os.listdir(self.args.results_dir))
+        all_files = os.listdir(self.args.results_dir)
+
+        # If a file extension is specified, filter the files by that extension
+        if file_extension:
+            filenames = sorted(
+                [file for file in all_files if file.endswith(file_extension)]
+            )
+        else:
+            filenames = sorted(all_files)
 
         # Check if there are no previous results
         if not filenames:
             cprint("No previous results available.", "red")
             return True  # Return to the main loop
 
-        self.display_command_list()
+        self.display_command_list(file_extension)
         style = Style.from_dict({"prompt": "cyan"})
 
         cmd = prompt(
@@ -1350,10 +1598,12 @@ class InteractiveGenerator:
             cmd_num = int(cmd)
             if 0 < cmd_num <= len(filenames):
                 file_path = os.path.join(self.args.results_dir, filenames[cmd_num - 1])
+
                 with open(file_path, "r") as f:
                     result = f.read()
-                cprint(f"\nResults for command #{cmd_num}:", "cyan")
-                cprint(result, "magenta")
+                    cprint(f"\nResults for command #{cmd_num}:", "cyan")
+                    cprint(result, "magenta")
+
             else:
                 cprint(
                     f"Invalid number. Please choose between 1 and {len(filenames)}.",
@@ -1379,17 +1629,19 @@ class InteractiveGenerator:
             urls = self.extract_urls(prompt)
             first_clean_up = self.ensure_space_between_letter_and_number(generated_text)
             second_clean_up = self.process_string(first_clean_up, prompt_ip, urls)
-            try:
-                help = self.extract_and_match_flags(second_clean_up)
-                if help:
-                    cprint(
-                        "Verify that the flags used in the command matches your intent:",
-                        "magenta",
-                    )
-                    for h in help:
-                        cprint("\n" + h, "red")
-            except:
-                logging.error("unable to extract")
+            if self.args.autonomous_mode is False:
+                cprint("showing flags", "red")
+                try:
+                    help = self.extract_and_match_flags(second_clean_up)
+                    if help:
+                        cprint(
+                            "Verify that the flags used in the command matches your intent:",
+                            "magenta",
+                        )
+                        for h in help:
+                            cprint("\n" + h, "red")
+                except:
+                    logging.error("unable to extract")
 
             cprint("\nGenerated Command:", "cyan")
             cprint(second_clean_up, "magenta")
@@ -1403,7 +1655,7 @@ class InteractiveGenerator:
                 "red",
             )
             # Depending on your application's need, you might want to return an empty string or the original prompt.
-            return prompt  # This returns the original prompt as a fallback. Adjust as needed.
+            return False  # This returns the original prompt as a fallback. Adjust as needed.
 
     def run_command(self, text: str) -> None:
         """
@@ -1447,7 +1699,9 @@ class InteractiveGenerator:
                 completer=protocol_completer,
                 history=history,
             )
-
+            if not query_str:
+                cprint("please enter a query or q to exit", "red")
+                continue
             if query_str.lower() == "q":
                 break
 
@@ -1582,9 +1836,8 @@ class InteractiveGenerator:
             cprint(
                 "\nCommand completed!, you can view the result using the 'view previous results' option on the main menu"
             ), "green"
-            self.command_history = self._get_command_history()
-            with self.print_lock:
-                self.get_user_prompt()
+
+            self.get_user_prompt()
 
     def get_modified_command(self, text: str) -> str:
         """Prompt the user to modify and return a command.
@@ -1635,6 +1888,9 @@ class InteractiveGenerator:
         Args:
             text (str): The generated text or command.
         """
+        if not text:
+            cprint("No text generated", "red")
+            return
         try:
             # If always_apply_action is set, simply run the command
             if self.always_apply_action:
@@ -1664,28 +1920,31 @@ class InteractiveGenerator:
             {"prompt": "yellow", "options": "green", "error": "red", "message": "blue"}
         )
 
-        action_choice_prompt = (
-            "Do you want to run a command based on the generated text?"
-        )
-        options = "(y/n/a) (yes/no/always):"
+        if self.current_model_name != "scribe":
+            action_choice_prompt = (
+                "Do you want to run a command based on the generated text?"
+            )
+            options = "(y/n/a) (yes/no/always):"
 
-        while True:
-            try:
-                action_choice = prompt(
-                    f"{action_choice_prompt} {options}",
-                    style=style,
-                    validator=ActionChoiceValidator(),
-                    validate_while_typing=False,
-                )
-                return action_choice.lower().strip()
-            except ValidationError:
-                continue
-            except Exception as e:
-                logging.error(f"Error during action choice prompt: {e}")
-                print_formatted_text(
-                    "An unexpected error occurred during action choice. Please try again or check logs.",
-                    style="error",
-                )
+            while True:
+                try:
+                    action_choice = prompt(
+                        f"{action_choice_prompt} {options}",
+                        style=style,
+                        validator=ActionChoiceValidator(),
+                        validate_while_typing=False,
+                    )
+                    return action_choice.lower().strip()
+                except ValidationError:
+                    continue
+                except Exception as e:
+                    logging.error(f"Error during action choice prompt: {e}")
+                    print_formatted_text(
+                        "An unexpected error occurred during action choice. Please try again or check logs.",
+                        style="error",
+                    )
+        else:
+            return
 
 
 def main_func():

@@ -24,6 +24,7 @@ setup(
         "nebula": [
             "images/*",
             "indexdir/*",
+            "indexdir_auto/*",
             "nmap_flags",
             "crackmap_flags",
             "nuclei_flags",

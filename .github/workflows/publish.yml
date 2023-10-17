@@ -136,8 +136,9 @@ jobs:
           body: |
             Release Notes:
 
-            - Bumped CVE(s) to the top of the list.
-            - Fixed minor issue with processing results.
+            - Added autonomous mode.
+            - Improve loading and unloading models.
+            - Added AI powered username and password generator.
 
 
 
