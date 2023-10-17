@@ -136,10 +136,8 @@ jobs:
           body: |
             Release Notes:
 
-            - Bumped CVE(s) to the top of the list.
-            - Fixed minor issue with processing results.
-
-
+            - Added autonomous mode (Experimental): Autonomous node attempts to discover more vulnerabilities and exploit them if exploits are available.
+            - Improve loading and unloading models.
 
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true

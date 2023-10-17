@@ -23,5 +23,5 @@ RUN pip install --upgrade pip && \
 
 COPY nebula/nebula.py nebula/nmap_flags nebula/nuclei_flags nebula/zap_flags nebula/crackmap_flags nebula/suggestions /app/
 COPY nebula/indexdir /app/indexdir
-
+COPY nebula/indexdir_auto /app/indexdir_auto
 CMD ["python", "nebula.py", "--model_dir", "/app/unified_models_no_zap"]

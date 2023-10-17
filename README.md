@@ -25,6 +25,8 @@ First i would like to thank the All-Mighty God who is the source of all knowledg
 
 **DISCLAIMER**
 
+**Please do not use this tool in a production environment, we are still experimenting and it is currently only suitable for testing environments**
+
 At the moment, to utilize the tools provided in this repository effectively, users are expected to possess a proficient understanding of nmap, nuclei, zap, and crackmap. 
 
 In future versions, we'll focus on enhancing free natural language capabilities, and we're dedicated to making this vision a reality. 
@@ -40,6 +42,7 @@ The youtube video below provide a quick example of how Nebula can speed up the p
 
 [Nebula Usage Youtube Video](https://www.youtube.com/watch?v=FF8LEyRmqHk)
 
+- Enhanced Vulnerability Identification and Exploitation: Nebula will execute a series of scripts to detect potential vulnerabilities. Leveraging AI-driven algorithms, it will subsequently try to exploit identified vulnerabilities.
 
 - Effortless Tool Usage with Natural Language: No need to remember intricate commands or switches for various tools. With Nebula, you can seamlessly communicate your intent, whether it's initiating an NMAP scan or any other task. Let Nebula translate your natural language into precise tool commands.
 
@@ -96,6 +99,12 @@ Linux (debian based):
 ```bash
 sudo apt install -y libreadline-dev
 ```
+- wget:
+
+Linux (debian based):
+```bash
+sudo apt install -y wget
+```
 - [Docker](https://docs.docker.com/engine/install/)
 - [NMAP](https://nmap.org/download)
 - [crackmapexec](https://github.com/byt3bl33d3r/CrackMapExec/wiki/Installation)
@@ -151,6 +160,17 @@ To run nebula simply run this command:
 nebula
 ``` 
 
+For performing operations that require elevated privileges, consider installing via sudo
+
+```bash
+sudo pip install nebula-ai
+```
+
+Then run:
+
+```bash
+sudo nebula
+```
 
 
 **OPTIONAL nebula-watcher installation**
@@ -212,9 +232,15 @@ docker pull berylliumsec/nebula_watcher:latest
 
 In this beta release, there are three primary applications for Nebula:
 
+- As an auto-exploitation engine.
 - As a dedicated search engine.
 - As an AI-driven assistant (currently in beta).
 - A command suggestion engine.
+
+### As an auto-exploitation Engine
+
+Using the [autonomous mode](#autonomous-mode-experimental), ethical hackers can supply a list of targets in a file named targets.txt. Nebula will run an NMAP vulnerability scan and then attempt
+to exploit the vulnerabilities using a combination of scripts and AI.
 
 ### As a search engine:
 
@@ -239,6 +265,78 @@ Nebula can process results from NMAP scans (plain text or XML format) and sugges
 Using the optional [Nebula-Watcher](https://github.com/berylliumsec/nebula_watcher), ethical hackers can automatically monitor the IP addresses and ports that they have engaged with during a penetration test to ensure maximum coverage . 
 
 ## DocuNebula.
+
+### Options
+
+To view Nebula's options run
+
+```
+nebula -h
+```
+
+```bash
+usage: nebula.py [-h] [--results_dir RESULTS_DIR] [--model_dir MODEL_DIR] [--testing_mode TESTING_MODE] [--targets_list TARGETS_LIST]
+                 [--autonomous_mode AUTONOMOUS_MODE] [--attack_mode ATTACK_MODE]
+
+Interactive Command Generator
+
+options:
+  -h, --help            show this help message and exit
+  --results_dir RESULTS_DIR
+                        Directory to save command results
+  --model_dir MODEL_DIR
+                        Path to the model directory
+  --testing_mode TESTING_MODE
+                        Run vulnerability scans but do not attempt any exploits
+  --targets_list TARGETS_LIST
+                        lists of targets for autonomous testing
+  --autonomous_mode AUTONOMOUS_MODE
+                        Flag to indicate autonomous mode
+  --attack_mode ATTACK_MODE
+                        Attack approach
+```
+### Autonomous Mode (Experimental).
+
+Nebula can be run in autonomous mode or manual mode.
+
+To activate the autonomous mode, run:
+
+```bash
+nebula --autonomous_mode True
+```
+
+Nebula will run an initial vulnerability scan, parse the results, attempt to discover more vulnerabilities. Your targets should be placed in a plain text file
+titled `targets.txt`. This is also customizable by using the `--targets_list` arg:
+
+If Nebula recognizes any CVEs, it will try to exploit them. By default, the commands are limited to 1 commands per service/port. You can set the number of commands like this:
+
+For up to 5 commands per service with open ports:
+
+```bash
+nebula --autonomous_mode True --attack_mode raid
+```
+
+To run every possible command per service with open ports:
+
+```bash
+nebula --autonomous_mode True --attack_mode war
+```
+
+If you want to do a dry-run of autonomous mode so that it does not attempt to exploit any vulnerabilities, set testing mode to `True`:
+
+**Note that testing mode will still perform a vulnerability scan, but it will not attempt to discover more vulnerabilities or attempt to exploit them**
+
+```bash
+nebula --autonomous_mode True --testing_mode True
+```
+
+For bruteforce/password spraying attacks `(if available or recommended by AI)`, provide these files `usernames.txt` and `passwords.txt` in the directory where you run nebula from.
+
+Depending on how many IP addresses you provide, you may have several files to review. After Nebula is done in autonomous mode, it will drop into manual mode where you can view the results. 
+
+**Note that results will only be written to a file if it is not empty.**
+
+### Manual mode.
 
 Upon initial access to Nebula, users are greeted with several options:
 
@@ -298,6 +396,8 @@ In the above screenshot, the user views the results of running the suggested com
 - Keep your commands as short as possible.
 
 **NMAP**:
+
+**Note that for nmap commands, -oX and -oN are automatically appended. The plain text version is for you to be able to easily read while the xml version is for processing, please do not remove them**
 
 - Always end the command with the IP addresses and always refer to IP addresses as hosts regardless of whether its a subnet or not. For example:
 
