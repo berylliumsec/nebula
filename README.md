@@ -332,7 +332,7 @@ For bruteforce/password spraying attacks `(if available or recommended by AI)`, 
 
 Depending on how many IP addresses you provide, you may have several files to review. After Nebula is done in autonomous mode, it will drop into manual mode where you can view the results. 
 
-**Note that results will only be written to a file if it is not empty. This is particularly important for crackmapexec because if there are no findings it simply has no output.**
+**Note that results will only be written to a file if it is not empty.**
 
 ### Manual mode.
 
