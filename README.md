@@ -446,6 +446,8 @@ The ZAP model currently only supports "full scan". Be sure to use the terms full
 
 [Search Usage Video](https://youtu.be/j-Ot3UxEwSY)
 
-## Contributing
+## Contributing and troubleshooting
 
 Should you encounter inaccuracies in the model's responses to your natural language prompts, or face any other challenges, we kindly request that you create an issue to document the specifics. Your feedback is invaluable to our continuous improvement efforts.
+
+You can also find error logs in `command_errors.log` in the folder where you run Nebula from
