@@ -107,9 +107,9 @@ sudo apt install -y wget
 ```
 - [Docker](https://docs.docker.com/engine/install)
 - [NMAP](https://nmap.org/download)
-- [crackmapexec](https://github.com/byt3bl33d3r/CrackMapExec/wiki/Installation)
+- [Crackmapexec](https://github.com/byt3bl33d3r/CrackMapExec/wiki/Installation)
 - [Nuclei](https://docs.nuclei.sh/getting-started/install)
-- [metasploit](https://docs.rapid7.com/metasploit/installing-the-metasploit-framework)
+- [Metasploit](https://docs.rapid7.com/metasploit/installing-the-metasploit-framework)
 
 
 ## Installation
