@@ -295,6 +295,11 @@ options:
   --attack_mode ATTACK_MODE
                         Attack approach
 ```
+
+### Modes.
+
+Nebula can be run in autonomous mode or manual mode.
+
 ### Autonomous Mode (Experimental).
 
 Nebula can be run in autonomous mode or manual mode.
@@ -334,7 +339,19 @@ For bruteforce/password spraying attacks `(if available or recommended by AI)`, 
 
 Depending on how many IP addresses you provide, you may have several files to review. After Nebula is done in autonomous mode, it will drop into manual mode where you can view the results. 
 
-**Note that results will only be written to a file if it is not empty.**
+Nebula will try to execute available Metasploit modules using the standard remote ports, your local IP, and a random port. Even if you provide incorrect arguments to Metasploit, it won't shut down; it'll just notify you of the error. Hence, we've included placeholders for certain arguments, whether or not they're required.
+
+```bash
+{{ LHOST }}
+{{ RHOST }}
+{{ RPORT }}
+{{ LPORT }}
+```
+
+
+In upcoming versions, we aim to enhance the sophistication of these attacks. As with other features, you can check out the outcomes in the `view previous results` menu option. For a deeper dive, launch the `msfconsole` and customize as needed. Our primary objective  with the autonomous mode is to pinpoint exploits and demonstrate a quick proof of concept (POC).
+
+**Note that results will only generally be written to a file if it is not empty.**
 
 ### Manual mode.
 

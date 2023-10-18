@@ -135,7 +135,8 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-            - Improved user experience.
+            - Added validation that selected LPORT for metasploit are not in use.
+            - Fixed LHOST auto-selection, will fall back to loop-back if it fails.
 
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
