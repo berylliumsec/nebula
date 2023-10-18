@@ -41,7 +41,11 @@ schema = Schema(
     path=ID(stored=True),
     content=TEXT(stored=True, analyzer=analyzer),
 )
-logging.basicConfig(filename="command_errors.log", level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    filename="command_errors.log",
+    level=logging.ERROR,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 MAX_RESULTS_DEFAULT = 1e6
 
 
@@ -76,7 +80,9 @@ class InteractiveGenerator:
     IP_PATTERN = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b")
     FLAG_PATTERN = re.compile(r"(-\w+|--[\w-]+)")  # Updated Regular expression
     URL_PATTERN_VALIDATION = r"http[s]?://(?:[a-zA-Z]|[0-9]|[-._~:/?#[\]@!$&'()*+,;=]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
-    CVE_PATTERN = re.compile(r"CVE-\d{4}-\d{4,7}")  # Regular expression for CVE pattern
+    CVE_PATTERN = re.compile(
+        r"CVE-\d{4}-\d{4,7}", re.IGNORECASE
+    )  # Regular expression for CVE pattern
 
     def __init__(self, results_dir=None, model_dir=None, testing_mode=None):
         self.args = self._parse_arguments()
@@ -189,7 +195,6 @@ class InteractiveGenerator:
 
             actual_command = parts[1].strip().rstrip(".").replace("[IP]", ip_address)
 
-
             try:
                 # Split the command into tokens
                 tokens = shlex.split(actual_command)
@@ -274,10 +279,14 @@ class InteractiveGenerator:
                 )
                 output_xml = f"results/nmap_output_{timestamp}.xml"
                 output_txt = f"results/nmap_output_{timestamp}.txt"
-
-                result = self.run_command_and_alert(
-                    f"nmap -Pn --script=vuln {ip} -oX {output_xml} -oN {output_txt}"
-                )
+                if self.args.testing_mode:
+                    result = self.run_command_and_alert(
+                        f"nmap -Pn --script=vuln {ip} -oX {output_xml} -oN {output_txt}"
+                    )
+                else:
+                    result = self.run_command_and_alert(
+                        f"nmap -Pn --script=vuln,exploit {ip} -oX {output_xml} -oN {output_txt}"
+                    )
                 results.append(result)
 
                 cprint(f"nmap scanning completed for {ip}", "green")
@@ -294,7 +303,9 @@ class InteractiveGenerator:
             )
             for comm in tqdm(unique_commands, desc="Processing commands"):
                 try:
-                    handle_command(comm)
+                    ip = data["ip"]
+
+                    handle_command(self.process_string(comm, [ip]))
                 except Exception as e:
                     logging.error(f"Unable to run command, error: {e}")
                     cprint("Unable to run command, error", "red")
@@ -631,20 +642,51 @@ class InteractiveGenerator:
 
     def process_string(
         self,
-        s: str,
-        replacement_ips: List[str],
-        replacement_urls: List[str],
+        s: str = "",
+        replacement_ips: Optional[List[str]] = None,
+        replacement_urls: Optional[List[str]] = None,
         port_arg: Optional[int] = None,
     ) -> str:
+
+        # Handle the default values
+        if replacement_ips is None:
+            replacement_ips = []
+
+        if replacement_urls is None:
+            replacement_urls = []
+
+        # Handle the default values
+        if replacement_ips is None:
+            replacement_ips = []
+
+        if replacement_urls is None:
+            replacement_urls = []
         """Replace the IP addresses and URLs in the given string with the respective replacements."""
 
         def get_local_ip() -> str:
             """Get local machine IP"""
-            return socket.gethostbyname(socket.gethostname())
+            try:
+                # This creates a new socket and connects to an external server's port.
+                # We use Google's public DNS server for this example, but no data is actually sent.
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                ip = s.getsockname()[0]
+                s.close()
+                return ip
+            except Exception:
+                return "127.0.0.1"  # default to loopback, if unable to determine IP
 
-        def get_random_port(above: int = 1000) -> int:
-            """Get random port above the specified number"""
-            return random.randint(above, 65535)
+        def get_random_port(above: int = 1000, max_retries: int = 100) -> int:
+            """Get random port above the specified number that's not in use."""
+            for _ in range(max_retries):
+                port = random.randint(above, 65535)
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    try:
+                        s.bind(("0.0.0.0", port))
+                        return port
+                    except socket.error:
+                        continue
+            raise ValueError("Unable to find an available port after multiple retries.")
 
         try:
             if not isinstance(s, str):
@@ -691,12 +733,11 @@ class InteractiveGenerator:
         # Replace placeholders
         if replacement_ips and len(replacement_ips) > 0:
             primary_ip = replacement_ips[0]
-            s = s.replace("{{ ip }}", primary_ip)
-            s = s.replace("{{ rhost }}", primary_ip)
+            s = s.replace("{{ RHOSTS }}", primary_ip)
             if port_arg:
-                s = s.replace("{{ rport }}", str(port_arg))
-            s = s.replace("{{ lhost }}", get_local_ip())
-            s = s.replace("{{ lport }}", str(get_random_port()))
+                s = s.replace("{{ RPORT }}", str(port_arg))
+            s = s.replace("{{ LHOST }}", get_local_ip())
+            s = s.replace("{{ LPORT }}", str(get_random_port()))
         timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
         if s.strip().startswith("nmap"):
             output_xml = f"results/nmap_output_{timestamp}.xml"
@@ -1160,7 +1201,7 @@ class InteractiveGenerator:
                             validate_while_typing=False,
                         ).lower()
                     except Exception as e:
-                        cprint(f"Error occurred: {e}","red")
+                        cprint(f"Error occurred: {e}", "red")
                         logging.error(f"Error occurred: {e}")
 
                     # If the user accepts the suggestion, replace the word in the list
@@ -1274,7 +1315,6 @@ class InteractiveGenerator:
         return formatted_results
 
     def _parse_nmap_xml(self, xml_file):
-
         if os.path.isfile(xml_file):
             tree = ET.parse(xml_file)
         else:
@@ -1282,7 +1322,29 @@ class InteractiveGenerator:
         root = tree.getroot()
 
         parsed_results = []
+        cve_matches = set()  # Use a set to avoid duplicate CVEs
 
+        # Extract CVEs from the entire XML once
+        for elem in root.iter():  # Search within the entire XML tree
+            # Check element tag for CVE
+            tag_cves = self.CVE_PATTERN.findall(elem.tag)
+            cve_matches.update(tag_cves)
+
+            # Check element text for CVE
+            if elem.text:
+                text_cves = self.CVE_PATTERN.findall(elem.text)
+                cve_matches.update(text_cves)
+
+            # Check all attributes for CVEs
+            for attrib_name, attrib_value in elem.attrib.items():
+                attrib_name_cves = self.CVE_PATTERN.findall(attrib_name)
+                cve_matches.update(attrib_name_cves)
+
+                attrib_value_cves = self.CVE_PATTERN.findall(attrib_value)
+                cve_matches.update(attrib_value_cves)
+
+        for attrib_value_cve in cve_matches:
+            cprint(f"CVE(s) found: {attrib_value_cve}", "red")
         for host in root.findall("host"):
             try:
                 device_name = host.find("hostnames/hostname").attrib.get(
@@ -1305,34 +1367,24 @@ class InteractiveGenerator:
                     port_state = port.find("state").attrib.get("state")
                     service_name = port.find("service").attrib.get("name")
 
-                    if (
-                        port_state == "open" and port_id not in ports
-                    ):  # Ensure ports are unique
+                    if port_state == "open" and port_id not in ports:
                         ports.append(port_id)
                         if service_name == "domain":
                             services.append("dns")
                         else:
                             services.append(service_name)
                 except AttributeError:
-                    continue  # If there's an error with a port, skip it and continue to the next one
+                    continue
 
-            # Extract CVEs from host xml_file
-            cve_matches = []
-            for elem in root.iter():  # Search within the entire XML tree
-                try:
-                    if elem.text:
-                        cve_found = self.CVE_PATTERN.findall(elem.text)
-                        if cve_found:
-                            cve_matches.extend(cve_found)
-                except AttributeError:
-                    continue  # If there's an error with an element, skip it and continue to the next one
             parsed_results.append(
                 {
                     "hostname": device_name,
                     "ip": ip_address,
                     "ports": ports,
                     "services": services,
-                    "cves": cve_matches,
+                    "cves": list(
+                        cve_matches
+                    ),  # Convert the set to a list before adding
                 }
             )
 
@@ -1601,7 +1653,9 @@ class InteractiveGenerator:
             try:
                 cmd_num = int(cmd)
                 if 0 < cmd_num <= len(filenames):
-                    file_path = os.path.join(self.args.results_dir, filenames[cmd_num - 1])
+                    file_path = os.path.join(
+                        self.args.results_dir, filenames[cmd_num - 1]
+                    )
 
                     with open(file_path, "r") as f:
                         result = f.read()
@@ -1614,7 +1668,6 @@ class InteractiveGenerator:
                     )
             except ValueError:
                 cprint("Please enter a valid number or type 'back'.", "red")
-
 
     def generate_and_display_text(self, prompt: str) -> str:
         """Generate and display text based on a given prompt.
@@ -1665,11 +1718,15 @@ class InteractiveGenerator:
 
         def threaded_function():
             self.run_command_and_alert(text)
-            self.command_running = False  # Set the flag to False once the command is done executing.
+            self.command_running = (
+                False  # Set the flag to False once the command is done executing.
+            )
 
         # Before starting the thread, set the command_running flag to True.
         self.command_running = True
-        time.sleep(0.1)  # Introduce a short delay to give main thread some breathing room
+        time.sleep(
+            0.1
+        )  # Introduce a short delay to give main thread some breathing room
         thread = threading.Thread(target=threaded_function)
         thread.start()
 
@@ -1685,20 +1742,24 @@ class InteractiveGenerator:
         history = InMemoryHistory()
 
         while True:
-            query_str = self.get_query_input(completer=protocol_completer, history=history)
+            query_str = self.get_query_input(
+                completer=protocol_completer, history=history
+            )
             if not query_str:
-                self.display_message("Please enter a query or 'b' to return to the main menu", "red")
+                self.display_message(
+                    "Please enter a query or 'b' to return to the main menu", "red"
+                )
                 continue
             if query_str.lower() == "b":
                 break
 
             num_results = self.get_num_results_input(history=history)
             results = self.get_search_results(query_str, num_results)
-            
+
             if not results:
                 self.display_message("No results found.", "red")
                 return True
-            
+
             self.display_results(results, history)
         return True
 
@@ -1707,29 +1768,36 @@ class InteractiveGenerator:
         with open(suggestions_file, "r") as file:
             return [line.strip() for line in file if line.strip()]
 
-
     def display_message(self, message, color):
         cprint(message, color)
 
-
     def get_query_input(self, completer, history):
         return prompt(
-            ANSI(colored("\nEnter your query or 'b' to return to the main menu: ", "blue")),
+            ANSI(
+                colored(
+                    "\nEnter your query or 'b' to return to the main menu: ", "blue"
+                )
+            ),
             completer=completer,
-            history=history
+            history=history,
         )
-
 
     def get_num_results_input(self, history):
         return prompt(
-            ANSI(colored("\nHow many results per category should i display? (Enter a number, (a) or (all) for all results, or press enter for default:", "blue")),
-            history=history
+            ANSI(
+                colored(
+                    "\nHow many results per category should i display? (Enter a number, (a) or (all) for all results, or press enter for default:",
+                    "blue",
+                )
+            ),
+            history=history,
         )
-
 
     def get_search_results(self, query_str, num_results):
         if num_results.lower() in ["a", "all"]:
-            return self.search_index(query_str, self.index_dir, max_results=float("inf"))
+            return self.search_index(
+                query_str, self.index_dir, max_results=float("inf")
+            )
         if not num_results:
             return self.search_index(query_str, self.index_dir)
         try:
@@ -1738,7 +1806,6 @@ class InteractiveGenerator:
         except ValueError:
             self.display_message("Invalid input. Returning to previous menu.", "red")
             return []
-
 
     def display_results(self, results, history):
         service_lines = [line for line in results if line.startswith("Service ")]
@@ -1752,29 +1819,45 @@ class InteractiveGenerator:
 
         self.handle_result_selection_and_modification(other_lines, history)
 
-
     def handle_result_selection_and_modification(self, other_lines, history):
         while True:
             try:
-                selection = int(prompt(
-                    ANSI(colored("\nSelect a result number to modify or any other key to continue: ", "blue")),
-                    history=history
-                ))
+                selection = int(
+                    prompt(
+                        ANSI(
+                            colored(
+                                "\nSelect a result number to modify or any other key to continue: ",
+                                "blue",
+                            )
+                        ),
+                        history=history,
+                    )
+                )
                 if 1 <= selection <= len(other_lines):
                     self.modify_and_run_command(other_lines[selection - 1])
                     break
                 else:
                     self.display_message("Invalid selection!", "red")
             except ValueError:
-                self.display_message("Invalid input! Returning to previous menu.", "red")
+                self.display_message(
+                    "Invalid input! Returning to previous menu.", "red"
+                )
                 break
 
-
     def modify_and_run_command(self, selected_line):
-        content_after_colon = selected_line.split(":", 1)[1].strip() if ":" in selected_line else selected_line
+        content_after_colon = (
+            selected_line.split(":", 1)[1].strip()
+            if ":" in selected_line
+            else selected_line
+        )
         modified_content = prompt(
-            ANSI(colored("\nEnter the modified content or press enter to keep it unchanged: ", "blue")),
-            default=content_after_colon
+            ANSI(
+                colored(
+                    "\nEnter the modified content or press enter to keep it unchanged: ",
+                    "blue",
+                )
+            ),
+            default=content_after_colon,
         )
         if modified_content:
             content_after_colon = modified_content
@@ -1797,7 +1880,6 @@ class InteractiveGenerator:
 
         # Combine the formatted service name with the hostname
         return f"{hostname}:{service}"
-
 
     def get_modified_command(self, text: str) -> str:
         """Prompt the user to modify and return a command.

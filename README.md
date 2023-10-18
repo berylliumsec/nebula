@@ -105,10 +105,11 @@ Linux (debian based):
 ```bash
 sudo apt install -y wget
 ```
-- [Docker](https://docs.docker.com/engine/install/)
+- [Docker](https://docs.docker.com/engine/install)
 - [NMAP](https://nmap.org/download)
-- [crackmapexec](https://github.com/byt3bl33d3r/CrackMapExec/wiki/Installation)
+- [Crackmapexec](https://github.com/byt3bl33d3r/CrackMapExec/wiki/Installation)
 - [Nuclei](https://docs.nuclei.sh/getting-started/install)
+- [Metasploit](https://docs.rapid7.com/metasploit/installing-the-metasploit-framework)
 
 
 ## Installation
@@ -295,6 +296,11 @@ options:
   --attack_mode ATTACK_MODE
                         Attack approach
 ```
+
+### Modes.
+
+Nebula can be run in autonomous mode or manual mode.
+
 ### Autonomous Mode (Experimental).
 
 Nebula can be run in autonomous mode or manual mode.
@@ -334,7 +340,19 @@ For bruteforce/password spraying attacks `(if available or recommended by AI)`, 
 
 Depending on how many IP addresses you provide, you may have several files to review. After Nebula is done in autonomous mode, it will drop into manual mode where you can view the results. 
 
-**Note that results will only be written to a file if it is not empty.**
+Nebula will try to execute available Metasploit modules using the standard remote ports, your local IP, and a random port. Even if you provide incorrect arguments to Metasploit, it won't shut down; it'll just notify you of the error. Hence, we've included placeholders for certain arguments, whether or not they're required.
+
+```bash
+{{ LHOST }}
+{{ RHOST }}
+{{ RPORT }}
+{{ LPORT }}
+```
+
+
+In upcoming versions, we aim to improve this feature. As with other features, you can check out the outcomes in the `view previous results` menu option. For a deeper dive, launch the `msfconsole` and customize as needed. Our primary objective  with the autonomous mode is to pinpoint exploits and demonstrate a quick proof of concept (POC) whenever possible using.
+
+**Note that results will only generally be written to a file if it is not empty.**
 
 ### Manual mode.
 
