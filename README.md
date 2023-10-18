@@ -350,7 +350,7 @@ Nebula will try to execute available Metasploit modules using the standard remot
 ```
 
 
-In upcoming versions, we aim to enhance the sophistication of these attacks. As with other features, you can check out the outcomes in the `view previous results` menu option. For a deeper dive, launch the `msfconsole` and customize as needed. Our primary objective  with the autonomous mode is to pinpoint exploits and demonstrate a quick proof of concept (POC) whenever possible using.
+In upcoming versions, we aim to improve this feature. As with other features, you can check out the outcomes in the `view previous results` menu option. For a deeper dive, launch the `msfconsole` and customize as needed. Our primary objective  with the autonomous mode is to pinpoint exploits and demonstrate a quick proof of concept (POC) whenever possible using.
 
 **Note that results will only generally be written to a file if it is not empty.**
 
