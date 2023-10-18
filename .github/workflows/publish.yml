@@ -135,9 +135,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-
-            - Added autonomous mode (Experimental): Autonomous node attempts to discover more vulnerabilities and exploit them if exploits are available.
-            - Improve loading and unloading models.
+            - Improved user experience.
 
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true

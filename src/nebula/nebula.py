@@ -41,7 +41,7 @@ schema = Schema(
     path=ID(stored=True),
     content=TEXT(stored=True, analyzer=analyzer),
 )
-logging.basicConfig(filename="command_errors.log", level=logging.ERROR)
+logging.basicConfig(filename="command_errors.log", level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 MAX_RESULTS_DEFAULT = 1e6
 
 
@@ -189,14 +189,13 @@ class InteractiveGenerator:
 
             actual_command = parts[1].strip().rstrip(".").replace("[IP]", ip_address)
 
-            # if '-*' in actual_command: #check for faulty nmap script command, should be fixed in future models
-            #     continue
 
             try:
                 # Split the command into tokens
                 tokens = shlex.split(actual_command)
             except ValueError:
                 print(f"Error splitting command: {actual_command}")
+                logging.error(f"Error splitting command: {actual_command}")
                 continue
 
             # Identify parameters in the tokens, excluding '-p'
@@ -297,7 +296,7 @@ class InteractiveGenerator:
                 try:
                     handle_command(comm)
                 except Exception as e:
-                    logging.error(e)
+                    logging.error(f"Unable to run command, error: {e}")
                     cprint("Unable to run command, error", "red")
 
         cprint("Consulting models", "yellow")
@@ -507,9 +506,11 @@ class InteractiveGenerator:
 
             os.remove(output_name)
         except subprocess.CalledProcessError as e:
-            print(f"Error occurred: {e}")
+            cprint(f"Error occurred: {e}", "red")
+            logging.error(f"Error occurred: {e}")
         except Exception as e:
-            print(f"Unexpected error: {e}")
+            cprint(f"Unexpected error: {e}", "red")
+            logging.error(f"Unexpected error: {e}")
 
     def run_command_and_alert(self, text: str) -> None:
         """
@@ -611,7 +612,8 @@ class InteractiveGenerator:
             return s.strip()
 
         except Exception as e:
-            print(f"Error in ensure_space_between_letter_and_number: {e}")
+            cprint(f"Error in ensure_space_between_letter_and_number: {e}", "red")
+            logging.error(f"Error in ensure_space_between_letter_and_number: {e}")
             return s
 
     @staticmethod
@@ -787,14 +789,6 @@ class InteractiveGenerator:
         while True:
             try:
                 prompt = self.get_user_prompt()
-
-                if prompt.lower() == "view_results":
-                    still_viewing = self._view_previous_results(".txt")
-                    if still_viewing:
-                        continue
-                    else:
-                        print("Returning to the main prompt.")
-                        continue
 
                 if not prompt:
                     print("Prompt is empty. Please enter a valid prompt.")
@@ -1069,6 +1063,9 @@ class InteractiveGenerator:
                         f"Failed to load model/tokenizer from {model_folder}: {e}",
                         "red",
                     )
+                    logging.error(
+                        f"Failed to load model/tokenizer from {model_folder}: {e}"
+                    )
 
         # If not in single_model_mode or no model was specified, set the first loaded model as the active model
         if (
@@ -1087,6 +1084,7 @@ class InteractiveGenerator:
             )
         except Exception as e:
             cprint(f"An error occurred while fetching CPU memory info: {e}", "red")
+            logging.error(f"An error occurred while fetching CPU memory info: {e}")
 
         try:
             pynvml.nvmlInit()
@@ -1094,8 +1092,9 @@ class InteractiveGenerator:
             info = pynvml.nvmlDeviceGetMemoryInfo(handle)
             cprint(f"Used GPU memory: {info.used / (1024**2):.2f} MB", "green")
 
-        except Exception:
-            cprint("An error occurred while fetching GPU memory info.", "red")
+        except Exception as e:
+            cprint(f"An error occurred while fetching GPU memory info: {e}", "red")
+            logging.error(f"An error occurred while fetching GPU memory info: {e}")
 
         return first_loaded
 
@@ -1111,14 +1110,14 @@ class InteractiveGenerator:
         while True:  # Keep prompting until valid input or 'q' is entered
             # Get the actual user input for the model to generate
             user_input = prompt(
-                "\nEnter a prompt (or 'q' to return): ", style=style
+                "\nEnter a prompt (or 'b' to return to the main menu): ", style=style
             ).strip()
 
             # If the user wants to return to the previous menu
-            if user_input.lower() == "q":
+            if user_input.lower() == "b":
                 # Here, you can define what should be done to return to the previous menu.
                 # For this example, we'll just return an empty string.
-                return False
+                return True
 
             # If input is empty, prompt again
             if not user_input:
@@ -1161,7 +1160,8 @@ class InteractiveGenerator:
                             validate_while_typing=False,
                         ).lower()
                     except Exception as e:
-                        print(f"Error occurred: {e}")
+                        cprint(f"Error occurred: {e}","red")
+                        logging.error(f"Error occurred: {e}")
 
                     # If the user accepts the suggestion, replace the word in the list
                     if choice == "y" or choice == "":
@@ -1585,36 +1585,36 @@ class InteractiveGenerator:
             cprint("No previous results available.", "red")
             return True  # Return to the main loop
 
-        self.display_command_list(file_extension)
         style = Style.from_dict({"prompt": "cyan"})
 
-        cmd = prompt(
-            "Enter the number of the result you'd like to view (or type 'back' or 'b' to return): ",
-            style=style,
-        )
+        while True:  # Keep looping until user decides to go back
+            self.display_command_list(file_extension)
 
-        if cmd.lower().strip() in ["back", "b"]:
-            return True  # Indicate that the user wants to return to the main loop
+            cmd = prompt(
+                "Enter the number of the result you'd like to view (or type 'back' or 'b' to return): ",
+                style=style,
+            )
 
-        try:
-            cmd_num = int(cmd)
-            if 0 < cmd_num <= len(filenames):
-                file_path = os.path.join(self.args.results_dir, filenames[cmd_num - 1])
+            if cmd.lower().strip() in ["back", "b"]:
+                return True  # Indicate that the user wants to return to the main loop
 
-                with open(file_path, "r") as f:
-                    result = f.read()
-                    cprint(f"\nResults for command #{cmd_num}:", "cyan")
-                    cprint(result, "magenta")
+            try:
+                cmd_num = int(cmd)
+                if 0 < cmd_num <= len(filenames):
+                    file_path = os.path.join(self.args.results_dir, filenames[cmd_num - 1])
 
-            else:
-                cprint(
-                    f"Invalid number. Please choose between 1 and {len(filenames)}.",
-                    "red",
-                )
-        except ValueError:
-            cprint("Please enter a valid number or type 'back'.", "red")
+                    with open(file_path, "r") as f:
+                        result = f.read()
+                        cprint(f"\nResults for command #{cmd_num}:", "cyan")
+                        cprint(result, "magenta")
+                else:
+                    cprint(
+                        f"Invalid number. Please choose between 1 and {len(filenames)}.",
+                        "red",
+                    )
+            except ValueError:
+                cprint("Please enter a valid number or type 'back'.", "red")
 
-        return True  # Indicate the user is still in the results view mode
 
     def generate_and_display_text(self, prompt: str) -> str:
         """Generate and display text based on a given prompt.
@@ -1642,8 +1642,8 @@ class InteractiveGenerator:
                         )
                         for h in help:
                             cprint("\n" + h, "red")
-                except:
-                    logging.error("unable to extract")
+                except Exception as e:
+                    logging.error(f"unable to extract, error: {e}")
 
             cprint("\nGenerated Command:", "cyan")
             cprint(second_clean_up, "magenta")
@@ -1656,7 +1656,6 @@ class InteractiveGenerator:
                 "An unexpected error occurred during text generation and display. Please try again or check logs.",
                 "red",
             )
-            # Depending on your application's need, you might want to return an empty string or the original prompt.
             return False  # This returns the original prompt as a fallback. Adjust as needed.
 
     def run_command(self, text: str) -> None:
@@ -1666,146 +1665,120 @@ class InteractiveGenerator:
 
         def threaded_function():
             self.run_command_and_alert(text)
-            self.command_running = (
-                False  # Set the flag to False once the command is done executing.
-            )
+            self.command_running = False  # Set the flag to False once the command is done executing.
 
         # Before starting the thread, set the command_running flag to True.
         self.command_running = True
+        time.sleep(0.1)  # Introduce a short delay to give main thread some breathing room
         thread = threading.Thread(target=threaded_function)
         thread.start()
 
         # Inform user that command has started
         print("\nThe operation has been initiated.")
 
-        return self.get_user_prompt()
+        return
 
     def user_search_interface(self):
         """Provide a user interface for searching."""
-        suggestions_file = self.return_path("suggestions")
-        with open(suggestions_file, "r") as file:
-            suggestions = [line.strip() for line in file if line.strip()]
-
-        # Use the suggestions in the WordCompleter
+        suggestions = self.get_suggestions()
         protocol_completer = WordCompleter(suggestions, ignore_case=True)
         history = InMemoryHistory()
 
         while True:
-            query_str = prompt(
-                ANSI(
-                    colored(
-                        "\nEnter your query, use keywords such as protocols HTTP, SSH, SMB or port numbers 443, 80 etc (or 'q' to to return to the main menu): ",
-                        "blue",
-                    )
-                ),
-                completer=protocol_completer,
-                history=history,
-            )
+            query_str = self.get_query_input(completer=protocol_completer, history=history)
             if not query_str:
-                cprint("please enter a query or q to exit", "red")
+                self.display_message("Please enter a query or 'b' to return to the main menu", "red")
                 continue
-            if query_str.lower() == "q":
+            if query_str.lower() == "b":
                 break
 
-            num_results = prompt(
-                ANSI(
-                    colored(
-                        "\nHow many results per category should i display? (Enter a number, (a) or (all) for all results, or press enter for default): ",
-                        "blue",
-                    )
-                ),
-                history=history,
-            )
+            num_results = self.get_num_results_input(history=history)
+            results = self.get_search_results(query_str, num_results)
+            
+            if not results:
+                self.display_message("No results found.", "red")
+                return True
+            
+            self.display_results(results, history)
+        return True
 
-            # Handle result input
-            if num_results.lower() == "a" or num_results.lower() == "all":
-                results = self.search_index(
-                    query_str, self.index_dir, max_results=float("inf")
-                )
-            elif not num_results:
-                results = self.search_index(query_str, self.index_dir)
-            else:
-                try:
-                    num = int(num_results)
-                    results = self.search_index(
-                        query_str, self.index_dir, max_results=num
-                    )
-                except ValueError:
-                    print_formatted_text(
-                        ANSI(
-                            colored("Invalid input. Returning to previous menu.", "red")
-                        )
-                    )
-                    return
+    def get_suggestions(self):
+        suggestions_file = self.return_path("suggestions")
+        with open(suggestions_file, "r") as file:
+            return [line.strip() for line in file if line.strip()]
 
-            random.shuffle(results)
 
-            if results:
-                service_lines = [
-                    line for line in results if line.startswith("Service ")
-                ]
-                other_lines = [
-                    line for line in results if not line.startswith("Service ")
-                ]
+    def display_message(self, message, color):
+        cprint(message, color)
 
-                # First, display the service lines without an index
-                for line in service_lines:
-                    print(colored(line, "green"))
 
-                # Next, display the other lines with an index
-                idx = 1  # Use this variable to manually control the index
-                for line in other_lines:
-                    colored_line = self.colored_output(line)
-                    print(f"{idx}. {colored_line}")
-                    idx += 1
+    def get_query_input(self, completer, history):
+        return prompt(
+            ANSI(colored("\nEnter your query or 'b' to return to the main menu: ", "blue")),
+            completer=completer,
+            history=history
+        )
 
-                while True:  # Loop for result selection and modification
-                    try:
-                        selection = int(
-                            prompt(
-                                ANSI(
-                                    colored(
-                                        "\nSelect a result number to modify or any other key to continue: ",
-                                        "blue",
-                                    )
-                                ),
-                                history=history,
-                                validate_while_typing=True,
-                            )
-                        )
-                        if 1 <= selection <= len(other_lines):
-                            content_after_colon = (
-                                other_lines[selection - 1].split(":", 1)[1].strip()
-                                if ":" in other_lines[selection - 1]
-                                else other_lines[selection - 1]
-                            )
-                            modified_content = prompt(
-                                ANSI(
-                                    colored(
-                                        "\nEnter the modified content (or press enter to keep it unchanged): ",
-                                        "blue",
-                                    )
-                                ),
-                                default=content_after_colon,
-                                history=history,
-                            )
 
-                            # Use the modification if it exists
-                            if modified_content:
-                                content_after_colon = modified_content
+    def get_num_results_input(self, history):
+        return prompt(
+            ANSI(colored("\nHow many results per category should i display? (Enter a number, (a) or (all) for all results, or press enter for default:", "blue")),
+            history=history
+        )
 
-                            self.run_command(content_after_colon)
-                            break
-                        else:
-                            cprint("Invalid selection!", "red")
-                    except ValueError:
-                        # User did not enter a valid number
-                        cprint("Invalid input! Returning to previous menu.", "red")
-                        break  # Break out of the loop and return to previous menu
 
-            else:
-                cprint("No results found.", "red")
-                return
+    def get_search_results(self, query_str, num_results):
+        if num_results.lower() in ["a", "all"]:
+            return self.search_index(query_str, self.index_dir, max_results=float("inf"))
+        if not num_results:
+            return self.search_index(query_str, self.index_dir)
+        try:
+            num = int(num_results)
+            return self.search_index(query_str, self.index_dir, max_results=num)
+        except ValueError:
+            self.display_message("Invalid input. Returning to previous menu.", "red")
+            return []
+
+
+    def display_results(self, results, history):
+        service_lines = [line for line in results if line.startswith("Service ")]
+        other_lines = [line for line in results if not line.startswith("Service ")]
+
+        for line in service_lines:
+            print(colored(line, "green"))
+
+        for idx, line in enumerate(other_lines, 1):
+            print(f"{idx}. {self.colored_output(line)}")
+
+        self.handle_result_selection_and_modification(other_lines, history)
+
+
+    def handle_result_selection_and_modification(self, other_lines, history):
+        while True:
+            try:
+                selection = int(prompt(
+                    ANSI(colored("\nSelect a result number to modify or any other key to continue: ", "blue")),
+                    history=history
+                ))
+                if 1 <= selection <= len(other_lines):
+                    self.modify_and_run_command(other_lines[selection - 1])
+                    break
+                else:
+                    self.display_message("Invalid selection!", "red")
+            except ValueError:
+                self.display_message("Invalid input! Returning to previous menu.", "red")
+                break
+
+
+    def modify_and_run_command(self, selected_line):
+        content_after_colon = selected_line.split(":", 1)[1].strip() if ":" in selected_line else selected_line
+        modified_content = prompt(
+            ANSI(colored("\nEnter the modified content or press enter to keep it unchanged: ", "blue")),
+            default=content_after_colon
+        )
+        if modified_content:
+            content_after_colon = modified_content
+        self.run_command(content_after_colon)
 
     def format_service_name(self, line):
         """Format the service name properly."""
@@ -1825,21 +1798,6 @@ class InteractiveGenerator:
         # Combine the formatted service name with the hostname
         return f"{hostname}:{service}"
 
-    def notify_command_status(self):
-        """
-        Notify user about command status.
-        """
-        if self.command_running:
-            cprint(
-                "\nThe operation has been initiated. You'll be notified once it's complete.",
-                "cyan",
-            )
-        else:
-            cprint(
-                "\nCommand completed!, you can view the result using the 'view previous results' option on the main menu"
-            ), "green"
-
-            self.get_user_prompt()
 
     def get_modified_command(self, text: str) -> str:
         """Prompt the user to modify and return a command.
