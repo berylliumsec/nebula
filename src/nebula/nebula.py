@@ -299,55 +299,55 @@ class InteractiveGenerator:
 
                 cprint(f"nmap scanning completed for {ip}", "green")
 
-        processed_data = self._parse_nmap_xml(output_xml)
-        number_of_results = get_number_of_results(self.args.attack_mode)
-        search_results = self.search_index(
-            processed_data, self.return_path("indexdir_auto"), number_of_results
-        )
+                processed_data = self._parse_nmap_xml(output_xml)
+                number_of_results = get_number_of_results(self.args.attack_mode)
+                search_results = self.search_index(
+                    processed_data, self.return_path("indexdir_auto"), number_of_results
+                )
 
-        for data in processed_data:
-            unique_commands = self.unique_commands_based_on_params(
-                search_results, data["ip"]
-            )
-            for comm in tqdm(unique_commands, desc="Processing commands"):
-                try:
-                    ip = data["ip"]
-
-                    handle_command(self.process_string(comm, [ip]))
-                except Exception as e:
-                    logging.error(f"Unable to run command, error: {e}")
-                    cprint("Unable to run command, error", "red")
-
-        cprint("Consulting models", "yellow")
-        for model_name in self.model_names:
-            if model_name in ["zap", "scribe"]:
-                continue
-            self._load_tokenizer_and_model(model_name)
-
-            for data in processed_data:
-                ip = data["ip"]
-                for port, service in zip(data["ports"], data["services"]):
-                    if model_name == "nuclei" and port not in ["80", "443"]:
-                        continue
-                    constructed_query = f"{service} {port} {ip}"
-                    if port in ["80", "443"]:
-                        url = f"https://{ip}" if port == "443" else f"http://{ip}"
-                        constructed_query = (
-                            f"run an automatic scan on {url} using the latest templates"
-                        )
-                    elif model_name == "crackmap":
-                        constructed_query += " with a null session"
-
-                    cprint(f"Constructed query: {constructed_query}", "green")
-                    generated_text = self.generate_text(constructed_query.strip())
-                    clean_up = self.process_string(
-                        self.ensure_space_between_letter_and_number(generated_text),
-                        [ip],
-                        [url],
+                for data in processed_data:
+                    unique_commands = self.unique_commands_based_on_params(
+                        search_results, data["ip"]
                     )
-                    if model_name == "nmap":
-                        clean_up = self.process_string(clean_up, [ip], [url], [port])
-                    handle_command(clean_up)
+                    for comm in tqdm(unique_commands, desc="Processing commands"):
+                        try:
+                            ip = data["ip"]
+
+                            handle_command(self.process_string(comm, [ip]))
+                        except Exception as e:
+                            logging.error(f"Unable to run command, error: {e}")
+                            cprint("Unable to run command, error", "red")
+
+                cprint("Consulting models", "yellow")
+                for model_name in self.model_names:
+                    if model_name in ["zap", "scribe"]:
+                        continue
+                    self._load_tokenizer_and_model(model_name)
+
+                    for data in processed_data:
+                        ip = data["ip"]
+                        for port, service in zip(data["ports"], data["services"]):
+                            if model_name == "nuclei" and port not in ["80", "443"]:
+                                continue
+                            constructed_query = f"{service} {port} {ip}"
+                            if port in ["80", "443"]:
+                                url = f"https://{ip}" if port == "443" else f"http://{ip}"
+                                constructed_query = (
+                                    f"run an automatic scan on {url} using the latest templates"
+                                )
+                            elif model_name == "crackmap":
+                                constructed_query += " with a null session"
+
+                            cprint(f"Constructed query: {constructed_query}", "green")
+                            generated_text = self.generate_text(constructed_query.strip())
+                            clean_up = self.process_string(
+                                self.ensure_space_between_letter_and_number(generated_text),
+                                [ip],
+                                [url],
+                            )
+                            if model_name == "nmap":
+                                clean_up = self.process_string(clean_up, [ip], [url], [port])
+                            handle_command(clean_up)
 
     def select_mode(self):
         style = Style.from_dict(
