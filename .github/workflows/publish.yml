@@ -135,7 +135,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Added option to bring your own nmap command in autonomous mode.
+              - Added the option to bring your own nmap command in autonomous mode.
               - Changed the LPORT range for metasploit to 1024-65535.
               - Added vulscan to the default scripts that are ran for nmap vulnerability scans.
 
