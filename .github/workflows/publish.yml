@@ -135,7 +135,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Fixing so that all targets are covered
+              - Fixing minor loop issue
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |

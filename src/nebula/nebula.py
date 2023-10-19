@@ -226,9 +226,6 @@ class InteractiveGenerator:
                         .strftime("%I:%M:%S-%p-%Y-%m-%d")
                         .replace(" ", "-")
                     )
-                    output_xml = f"results/nmap_output_{timestamp}.xml"
-                    output_txt = f"results/nmap_output_{timestamp}.txt"
-                    actual_command += f" -oX {output_xml} -oN {output_txt}"
                 unique_cmds.append(actual_command)
 
         return unique_cmds
@@ -340,13 +337,15 @@ class InteractiveGenerator:
 
                             cprint(f"Constructed query: {constructed_query}", "green")
                             generated_text = self.generate_text(constructed_query.strip())
-                            clean_up = self.process_string(
-                                self.ensure_space_between_letter_and_number(generated_text),
-                                [ip],
-                                [url],
-                            )
                             if model_name == "nmap":
-                                clean_up = self.process_string(clean_up, [ip], [url], [port])
+                                cleaned_text = self.ensure_space_between_letter_and_number(generated_text)
+                                clean_up = self.process_string(cleaned_text, [ip], [url], [port])
+                            else:
+                                clean_up = self.process_string(
+                                    self.ensure_space_between_letter_and_number(generated_text),
+                                    [ip],
+                                    [url],
+                                )
                             handle_command(clean_up)
 
     def select_mode(self):
