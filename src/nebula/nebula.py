@@ -226,9 +226,6 @@ class InteractiveGenerator:
                         .strftime("%I:%M:%S-%p-%Y-%m-%d")
                         .replace(" ", "-")
                     )
-                    output_xml = f"results/nmap_output_{timestamp}.xml"
-                    output_txt = f"results/nmap_output_{timestamp}.txt"
-                    actual_command += f" -oX {output_xml} -oN {output_txt}"
                 unique_cmds.append(actual_command)
 
         return unique_cmds
