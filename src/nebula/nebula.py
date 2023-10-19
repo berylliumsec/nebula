@@ -1783,7 +1783,7 @@ class InteractiveGenerator:
         return prompt(
             ANSI(
                 colored(
-                    "\nEnter your query or 'b' to return to the main menu: ", "blue"
+                    "\nEnter your query, use keywords such as protocols HTTP, SSH, SMB or port numbers 443, 80 etc or 'b' to return to the main menu: ", "blue"
                 )
             ),
             completer=completer,
