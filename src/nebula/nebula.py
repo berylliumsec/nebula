@@ -173,6 +173,13 @@ class InteractiveGenerator:
             default="stealth",
             help="Attack approach",
         )
+        parser.add_argument(
+            "--nmap_vuln_scan_command",
+            type=str,
+            default="nmap -Pn -sV --script=vuln,exploit,vulscan/vulscan.nse",
+            help="Nmap vulnerability scan command to run",
+        )
+
         return parser.parse_args()
 
     def split(self, data):
@@ -284,8 +291,9 @@ class InteractiveGenerator:
                         f"nmap -Pn --script=vuln {ip} -oX {output_xml} -oN {output_txt}"
                     )
                 else:
+                    cprint(f"nmap command passed in via args: {self.args.nmap_vuln_scan_command}","green")
                     result = self.run_command_and_alert(
-                        f"nmap -Pn --script=vuln,exploit {ip} -oX {output_xml} -oN {output_txt}"
+                        f"{self.args.nmap_vuln_scan_command}  {ip} -oX {output_xml} -oN {output_txt}"
                     )
                 results.append(result)
 
@@ -676,7 +684,7 @@ class InteractiveGenerator:
             except Exception:
                 return "127.0.0.1"  # default to loopback, if unable to determine IP
 
-        def get_random_port(above: int = 1000, max_retries: int = 100) -> int:
+        def get_random_port(above: int = 1024, max_retries: int = 100) -> int:
             """Get random port above the specified number that's not in use."""
             for _ in range(max_retries):
                 port = random.randint(above, 65535)
@@ -1775,7 +1783,8 @@ class InteractiveGenerator:
         return prompt(
             ANSI(
                 colored(
-                    "\nEnter your query or 'b' to return to the main menu: ", "blue"
+                    "\nEnter your query, use keywords such as protocols HTTP, SSH, SMB or port numbers 443, 80 etc or 'b' to return to the main menu: ",
+                    "blue",
                 )
             ),
             completer=completer,

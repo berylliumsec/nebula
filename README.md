@@ -110,6 +110,7 @@ sudo apt install -y wget
 - [Crackmapexec](https://github.com/byt3bl33d3r/CrackMapExec/wiki/Installation)
 - [Nuclei](https://docs.nuclei.sh/getting-started/install)
 - [Metasploit](https://docs.rapid7.com/metasploit/installing-the-metasploit-framework)
+- [Vulnscan-Nmap-Scripts](https://github.com/scipag/vulscan)
 
 
 ## Installation
@@ -277,7 +278,7 @@ nebula -h
 
 ```bash
 usage: nebula.py [-h] [--results_dir RESULTS_DIR] [--model_dir MODEL_DIR] [--testing_mode TESTING_MODE] [--targets_list TARGETS_LIST]
-                 [--autonomous_mode AUTONOMOUS_MODE] [--attack_mode ATTACK_MODE]
+                 [--autonomous_mode AUTONOMOUS_MODE] [--attack_mode ATTACK_MODE] [--nmap_vuln_scan_command NMAP_VULN_SCAN_COMMAND]
 
 Interactive Command Generator
 
@@ -295,6 +296,8 @@ options:
                         Flag to indicate autonomous mode
   --attack_mode ATTACK_MODE
                         Attack approach
+  --nmap_vuln_scan_command NMAP_VULN_SCAN_COMMAND
+                        Nmap vulnerability scan command to run
 ```
 
 ### Modes.
@@ -310,6 +313,14 @@ To activate the autonomous mode, run:
 ```bash
 nebula --autonomous_mode True
 ```
+
+By default it will run the `vuln`, `exploit`, `vulnscan`, service detection `-sV`,  and treat the host as online `-Pn`. You can override this by passing in your own nmap command and scripts:
+
+```bash
+nebula --autonomous_mode True --nmap_vuln_scan_command 'nmap -Pn -sV --script=your_script'
+```
+
+There is no need to add output flags such as `-oX` and `-oN` as those will be automatically added.
 
 Nebula will run an initial vulnerability scan, parse the results, attempt to discover more vulnerabilities. Your targets should be placed in a plain text file
 titled `targets.txt`. This is also customizable by using the `--targets_list` arg:
