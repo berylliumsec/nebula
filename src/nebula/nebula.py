@@ -291,7 +291,7 @@ class InteractiveGenerator:
                         f"nmap -Pn --script=vuln {ip} -oX {output_xml} -oN {output_txt}"
                     )
                 else:
-                    cprint(f"nmap command passed in via args {self.args.nmap_vuln_scan_command}","blue")
+                    cprint(f"nmap command passed in via args: {self.args.nmap_vuln_scan_command}","green")
                     result = self.run_command_and_alert(
                         f"{self.args.nmap_vuln_scan_command}  {ip} -oX {output_xml} -oN {output_txt}"
                     )
