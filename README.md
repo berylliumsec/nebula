@@ -466,8 +466,9 @@ The ZAP model currently only supports "full scan". Be sure to use the terms full
 
 **Nuclei**
 
-- do an automatic scan using only new templates on https://yourtarget.com
-- use only templates from author "joe" on https://yourtarget.com
+- How can i do an automatic scan using only new templates on https://yourtarget.com
+- How can i perform automated scan using templates from author john on https://yourtarget.com
+- do a silent scan on https://target.com and limit it to 10 retries
 
 ## Links to videos:
 

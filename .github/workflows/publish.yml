@@ -136,7 +136,7 @@ jobs:
           body: |
             Release Notes:
               - Fixing a bug where dates are seen as flags
-              - Added improved nmap model, much closer to free speech interactions (please download the latest models)
+              - Added improved models (nmap, crackmap, nuclie) much closer to free speech interactions (please download the latest models)
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
