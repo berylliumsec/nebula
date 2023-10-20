@@ -78,7 +78,9 @@ class WordValidator(Validator):
 
 class InteractiveGenerator:
     IP_PATTERN = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b")
-    FLAG_PATTERN = re.compile(r"(?<!\d{2}:\d{2}:\d{2})-\w+|(?<!\d{4}-\d{2}-\d{2})--[\w-]+")  # Updated Regular expression
+    FLAG_PATTERN = re.compile(
+        r"(?<!\d{2}:\d{2}:\d{2})-\w+|(?<!\d{4}-\d{2}-\d{2})--[\w-]+"
+    )  # Updated Regular expression
     URL_PATTERN_VALIDATION = r"http[s]?://(?:[a-zA-Z]|[0-9]|[-._~:/?#[\]@!$&'()*+,;=]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
     CVE_PATTERN = re.compile(
         r"CVE-\d{4}-\d{4,7}", re.IGNORECASE
@@ -220,12 +222,6 @@ class InteractiveGenerator:
             # Check if we've seen these parameters before
             if params not in seen_params:
                 seen_params.add(params)
-                if actual_command.startswith("nmap"):
-                    timestamp = (
-                        datetime.now()
-                        .strftime("%I:%M:%S-%p-%Y-%m-%d")
-                        .replace(" ", "-")
-                    )
                 unique_cmds.append(actual_command)
 
         return unique_cmds
@@ -288,7 +284,10 @@ class InteractiveGenerator:
                         f"nmap -Pn --script=vuln {ip} -oX {output_xml} -oN {output_txt}"
                     )
                 else:
-                    cprint(f"nmap command passed in via args: {self.args.nmap_vuln_scan_command}","green")
+                    cprint(
+                        f"nmap command passed in via args: {self.args.nmap_vuln_scan_command}",
+                        "green",
+                    )
                     result = self.run_command_and_alert(
                         f"{self.args.nmap_vuln_scan_command}  {ip} -oX {output_xml} -oN {output_txt}"
                     )
@@ -328,21 +327,31 @@ class InteractiveGenerator:
                                 continue
                             constructed_query = f"{service} {port} {ip}"
                             if port in ["80", "443"]:
-                                url = f"https://{ip}" if port == "443" else f"http://{ip}"
-                                constructed_query = (
-                                    f"run an automatic scan on {url} using the latest templates"
+                                url = (
+                                    f"https://{ip}" if port == "443" else f"http://{ip}"
                                 )
+                                constructed_query = f"run an automatic scan on {url} using the latest templates"
                             elif model_name == "crackmap":
                                 constructed_query += " with a null session"
 
                             cprint(f"Constructed query: {constructed_query}", "green")
-                            generated_text = self.generate_text(constructed_query.strip())
+                            generated_text = self.generate_text(
+                                constructed_query.strip()
+                            )
                             if model_name == "nmap":
-                                cleaned_text = self.ensure_space_between_letter_and_number(generated_text)
-                                clean_up = self.process_string(cleaned_text, [ip], [url], [port])
+                                cleaned_text = (
+                                    self.ensure_space_between_letter_and_number(
+                                        generated_text
+                                    )
+                                )
+                                clean_up = self.process_string(
+                                    cleaned_text, [ip], [url], [port]
+                                )
                             else:
                                 clean_up = self.process_string(
-                                    self.ensure_space_between_letter_and_number(generated_text),
+                                    self.ensure_space_between_letter_and_number(
+                                        generated_text
+                                    ),
                                     [ip],
                                     [url],
                                 )
@@ -452,7 +461,6 @@ class InteractiveGenerator:
 
         self.extracted_flags.extend(matched_descriptions)
         return matched_descriptions
-
 
     def return_path(self, path):
         if self.is_run_as_package():
