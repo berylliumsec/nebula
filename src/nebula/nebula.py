@@ -78,7 +78,9 @@ class WordValidator(Validator):
 
 class InteractiveGenerator:
     IP_PATTERN = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b")
-    FLAG_PATTERN = re.compile(r"(?<!\d{2}:\d{2}:\d{2})-\w+|(?<!\d{4}-\d{2}-\d{2})--[\w-]+")  # Updated Regular expression
+    FLAG_PATTERN = re.compile(
+        r"(?<!\d{2}:\d{2}:\d{2})-\w+|(?<!\d{4}-\d{2}-\d{2})--[\w-]+"
+    )  # Updated Regular expression
     URL_PATTERN_VALIDATION = r"http[s]?://(?:[a-zA-Z]|[0-9]|[-._~:/?#[\]@!$&'()*+,;=]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
     CVE_PATTERN = re.compile(
         r"CVE-\d{4}-\d{4,7}", re.IGNORECASE
@@ -220,12 +222,6 @@ class InteractiveGenerator:
             # Check if we've seen these parameters before
             if params not in seen_params:
                 seen_params.add(params)
-                if actual_command.startswith("nmap"):
-                    timestamp = (
-                        datetime.now()
-                        .strftime("%I:%M:%S-%p-%Y-%m-%d")
-                        .replace(" ", "-")
-                    )
                 unique_cmds.append(actual_command)
 
         return unique_cmds
@@ -288,7 +284,10 @@ class InteractiveGenerator:
                         f"nmap -Pn --script=vuln {ip} -oX {output_xml} -oN {output_txt}"
                     )
                 else:
-                    cprint(f"nmap command passed in via args: {self.args.nmap_vuln_scan_command}","green")
+                    cprint(
+                        f"nmap command passed in via args: {self.args.nmap_vuln_scan_command}",
+                        "green",
+                    )
                     result = self.run_command_and_alert(
                         f"{self.args.nmap_vuln_scan_command}  {ip} -oX {output_xml} -oN {output_txt}"
                     )
@@ -326,23 +325,35 @@ class InteractiveGenerator:
                         for port, service in zip(data["ports"], data["services"]):
                             if model_name == "nuclei" and port not in ["80", "443"]:
                                 continue
-                            constructed_query = f"{service} {port} {ip}"
-                            if port in ["80", "443"]:
-                                url = f"https://{ip}" if port == "443" else f"http://{ip}"
-                                constructed_query = (
-                                    f"run an automatic scan on {url} using the latest templates"
+                            constructed_query = f"{service} {ip}"
+                            if model_name == "nmap":
+                                constructed_query = f"check for vulnerabilities using a script on port {port} on host {ip}"
+                            if port in ["80", "443"] and model_name == "nuclei":
+                                url = (
+                                    f"https://{ip}" if port == "443" else f"http://{ip}"
                                 )
+                                constructed_query = f"run an automatic scan on {url} using the latest templates"
                             elif model_name == "crackmap":
-                                constructed_query += " with a null session"
+                                constructed_query += " using null username and null password or null session"
 
                             cprint(f"Constructed query: {constructed_query}", "green")
-                            generated_text = self.generate_text(constructed_query.strip())
+                            generated_text = self.generate_text(
+                                constructed_query.strip()
+                            )
                             if model_name == "nmap":
-                                cleaned_text = self.ensure_space_between_letter_and_number(generated_text)
-                                clean_up = self.process_string(cleaned_text, [ip], [url], [port])
+                                cleaned_text = (
+                                    self.ensure_space_between_letter_and_number(
+                                        generated_text
+                                    )
+                                )
+                                clean_up = self.process_string(
+                                    cleaned_text, [ip], [url], [port]
+                                )
                             else:
                                 clean_up = self.process_string(
-                                    self.ensure_space_between_letter_and_number(generated_text),
+                                    self.ensure_space_between_letter_and_number(
+                                        generated_text
+                                    ),
                                     [ip],
                                     [url],
                                 )
@@ -452,7 +463,6 @@ class InteractiveGenerator:
 
         self.extracted_flags.extend(matched_descriptions)
         return matched_descriptions
-
 
     def return_path(self, path):
         if self.is_run_as_package():
@@ -616,9 +626,9 @@ class InteractiveGenerator:
                 raise ValueError("The input must be a string.")
 
             # Regex operations
-            # Match everything up to the first colon that's not immediately followed by a MAC address or an IP address
+            # Match everything after the colon (with or without a space) that's not immediately followed by a MAC, IP, or IPv6 address.
             s = re.sub(
-                r"^.*?:\s(?!(?:[0-9a-fA-F]{2}:)+)(?!\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})",
+                r"^.*?:\s?(?!(?:[0-9a-fA-F]{2}:)+)(?!\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![0-9a-fA-F]{0,4}::[0-9a-fA-F]{0,4})",
                 "",
                 s,
             )
@@ -631,6 +641,7 @@ class InteractiveGenerator:
             return s.strip()
 
         except Exception as e:
+            # Assuming you've imported cprint and logging at the beginning of your file
             cprint(f"Error in ensure_space_between_letter_and_number: {e}", "red")
             logging.error(f"Error in ensure_space_between_letter_and_number: {e}")
             return s
@@ -1693,7 +1704,7 @@ class InteractiveGenerator:
             first_clean_up = self.ensure_space_between_letter_and_number(generated_text)
             second_clean_up = self.process_string(first_clean_up, prompt_ip, urls)
             if self.args.autonomous_mode is False:
-                cprint("showing flags....", "red")
+
                 try:
                     help = self.extract_and_match_flags(second_clean_up)
                     if help:
