@@ -135,7 +135,8 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Fixing minor loop issue
+              - Fixing a bug where dates are seen as flags
+              - Added improved nmap model, much closer to free speech interactions
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |

@@ -78,7 +78,7 @@ class WordValidator(Validator):
 
 class InteractiveGenerator:
     IP_PATTERN = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b")
-    FLAG_PATTERN = re.compile(r"(-\w+|--[\w-]+)")  # Updated Regular expression
+    FLAG_PATTERN = re.compile(r"(?<!\d{2}:\d{2}:\d{2})-\w+|(?<!\d{4}-\d{2}-\d{2})--[\w-]+")  # Updated Regular expression
     URL_PATTERN_VALIDATION = r"http[s]?://(?:[a-zA-Z]|[0-9]|[-._~:/?#[\]@!$&'()*+,;=]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
     CVE_PATTERN = re.compile(
         r"CVE-\d{4}-\d{4,7}", re.IGNORECASE
@@ -452,6 +452,7 @@ class InteractiveGenerator:
 
         self.extracted_flags.extend(matched_descriptions)
         return matched_descriptions
+
 
     def return_path(self, path):
         if self.is_run_as_package():
@@ -1692,7 +1693,7 @@ class InteractiveGenerator:
             first_clean_up = self.ensure_space_between_letter_and_number(generated_text)
             second_clean_up = self.process_string(first_clean_up, prompt_ip, urls)
             if self.args.autonomous_mode is False:
-                cprint("showing flags", "red")
+                cprint("showing flags....", "red")
                 try:
                     help = self.extract_and_match_flags(second_clean_up)
                     if help:
