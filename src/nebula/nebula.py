@@ -1693,7 +1693,7 @@ class InteractiveGenerator:
             first_clean_up = self.ensure_space_between_letter_and_number(generated_text)
             second_clean_up = self.process_string(first_clean_up, prompt_ip, urls)
             if self.args.autonomous_mode is False:
-                cprint("showing flags....", "red")
+
                 try:
                     help = self.extract_and_match_flags(second_clean_up)
                     if help:
