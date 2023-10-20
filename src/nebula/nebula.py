@@ -325,14 +325,16 @@ class InteractiveGenerator:
                         for port, service in zip(data["ports"], data["services"]):
                             if model_name == "nuclei" and port not in ["80", "443"]:
                                 continue
-                            constructed_query = f"{service} {port} {ip}"
-                            if port in ["80", "443"]:
+                            constructed_query = f"{service} {ip}"
+                            if model_name == "nmap":
+                                constructed_query = f"check for vulnerabilities using a script on port {port} on host {ip}"
+                            if port in ["80", "443"] and model_name == "nuclei":
                                 url = (
                                     f"https://{ip}" if port == "443" else f"http://{ip}"
                                 )
                                 constructed_query = f"run an automatic scan on {url} using the latest templates"
                             elif model_name == "crackmap":
-                                constructed_query += " with a null session"
+                                constructed_query += " using null username and null password or null session"
 
                             cprint(f"Constructed query: {constructed_query}", "green")
                             generated_text = self.generate_text(
@@ -624,9 +626,9 @@ class InteractiveGenerator:
                 raise ValueError("The input must be a string.")
 
             # Regex operations
-            # Match everything up to the first colon that's not immediately followed by a MAC address or an IP address
+            # Match everything after the colon (with or without a space) that's not immediately followed by a MAC, IP, or IPv6 address.
             s = re.sub(
-                r"^.*?:\s(?!(?:[0-9a-fA-F]{2}:)+)(?!\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})",
+                r"^.*?:\s?(?!(?:[0-9a-fA-F]{2}:)+)(?!\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![0-9a-fA-F]{0,4}::[0-9a-fA-F]{0,4})",
                 "",
                 s,
             )
@@ -639,6 +641,7 @@ class InteractiveGenerator:
             return s.strip()
 
         except Exception as e:
+            # Assuming you've imported cprint and logging at the beginning of your file
             cprint(f"Error in ensure_space_between_letter_and_number: {e}", "red")
             logging.error(f"Error in ensure_space_between_letter_and_number: {e}")
             return s
