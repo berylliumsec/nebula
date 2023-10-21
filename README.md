@@ -141,7 +141,7 @@ docker run --rm -v "$(pwd)":/app/unified_models_no_zap -it berylliumsec/nebula:l
 Running the model with all GPU(s)
 
 ```bash
-docker run --rm --gpus all -v "$(pwd)":/app/unified_models_no_zap -it nebula:latest
+docker run --rm --gpus all -v "$(pwd)":/app/unified_models_no_zap -it berylliumsec/nebula:latest
 
 ```
 
