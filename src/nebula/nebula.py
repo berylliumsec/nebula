@@ -549,11 +549,11 @@ class InteractiveGenerator:
             cprint(f"You are running the latest version ({current_version}).", "greens")
 
     def return_path(self, path):
-        if os.environ.get("IN_DOCKER"):
-            return path
         if self.is_run_as_package():
             with resource_path("nebula", path) as correct_path:
                 return str(correct_path)
+        else:
+            return path
 
     @staticmethod
     def _determine_s3_url():
