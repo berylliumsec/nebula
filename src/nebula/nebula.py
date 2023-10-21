@@ -596,7 +596,7 @@ class InteractiveGenerator:
 
                 # Logic to remove unified_model directory if it exists
                 if os.path.exists(self.args.model_dir):
-                    cprint(f"Removing existing unified_model folder...", "yellow")
+                    cprint("Removing existing unified_model folder...", "yellow")
                     shutil.rmtree(self.args.model_dir)
 
             cprint(
