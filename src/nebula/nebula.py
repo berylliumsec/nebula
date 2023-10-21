@@ -1,21 +1,25 @@
 import argparse
 import gc
-import importlib.resources as resources
+import json
 import logging
 import os
 import random
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from importlib.metadata import version
+from importlib.resources import path as resource_path
 from typing import List, Optional, Tuple, Union
 
 import psutil
 import pynvml
+import requests
 import torch
 from prompt_toolkit import PromptSession, prompt
 from prompt_toolkit.completion import WordCompleter
@@ -99,6 +103,10 @@ class InteractiveGenerator:
             self.args.model_dir = model_dir
         if testing_mode is not None:
             self.args.testing_mode = testing_mode
+        self.image_name = "berylliumsec/nebula"
+        self.docker_hub_api_url = (
+            f"https://hub.docker.com/v2/repositories/{self.image_name}/tags/"
+        )
         self.index_dir = self.return_path("indexdir")
         self.s3_url = self._determine_s3_url()
         self._ensure_model_folder_exists()
@@ -113,9 +121,10 @@ class InteractiveGenerator:
         self.random_name = None
         self.current_model = None
         self.current_model_name = None
-        self.print_lock = threading.Lock()
         self.model_names = self.get_model_names()
         self.always_apply_action: bool = False
+        if self.is_run_as_package():
+            self.check_new_pypi_version()  # Check for newer PyPI package
         if self.args.autonomous_mode is True:
             self.single_model_mode = True
             self.autonomous_mode()
@@ -475,11 +484,76 @@ class InteractiveGenerator:
         self.extracted_flags.extend(matched_descriptions)
         return matched_descriptions
 
+    @staticmethod
+    def get_latest_pypi_version(package_name):
+        """Return the latest version of the package on PyPI."""
+        response = requests.get(f"https://pypi.org/pypi/{package_name}/json")
+        if response.status_code == 200:
+            return response.json()["info"]["version"]
+
+    def check_new_pypi_version(self, package_name="nebula-ai"):
+        """Check if a newer version of the package is available on PyPI."""
+        installed_version = version(package_name)
+        cprint(f"installed version: {installed_version}", "green")
+        latest_version = self.get_latest_pypi_version(package_name)
+
+        if latest_version and latest_version > installed_version:
+            cprint(
+                f"A newer version ({latest_version}) of {package_name} is available on PyPI. Please consider updating to access the latest features!",
+                "yellow",
+            )
+
+    def _get_installed_docker_version(self):
+        try:
+            # Run docker version command and get Client Version
+            result = subprocess.run(
+                ["docker", "version", "--format", "{{.Client.Version}}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            return result.stdout.decode("utf-8").strip()
+        except subprocess.CalledProcessError:
+            return None
+
+    def get_current_version(self):
+        # This assumes you have a way of determining your current version
+        # Perhaps an environment variable or a file in the container with the version
+        # For this example, I'll assume an environment variable named "DOCKER_APP_VERSION"
+        current_version = os.environ.get("DOCKER_APP_VERSION")
+        if not current_version:
+            raise ValueError(
+                "Could not determine current version from environment variable."
+            )
+        return current_version
+
+    def get_latest_version(self):
+        response = requests.get(self.docker_hub_api_url)
+        response.raise_for_status()
+        data = response.json()
+        # This assumes that the most recent version is the first in the list of tags
+        latest_version = data["results"][0]["name"]
+        return latest_version
+
+    def check_for_update(self):
+        current_version = self.get_current_version()
+        latest_version = self.get_latest_version()
+
+        if current_version != latest_version:
+            cprint(
+                f"You are running version {current_version}, but version {latest_version} is available!",
+                "yellow",
+            )
+            print("Consider updating for the latest features and improvements.")
+        else:
+            cprint(f"You are running the latest version ({current_version}).", "greens")
+
     def return_path(self, path):
+        if os.environ.get("IN_DOCKER"):
+            return path
         if self.is_run_as_package():
-            with resources.path("nebula", path) as correct_path:
+            with resource_path("nebula", path) as correct_path:
                 return str(correct_path)
-        return path
 
     @staticmethod
     def _determine_s3_url():
@@ -489,13 +563,49 @@ class InteractiveGenerator:
             else "https://nebula-models.s3.amazonaws.com/unified_models.zip"
         )
 
+    def get_s3_file_etag(self, s3_url):
+        response = requests.head(s3_url)
+        return response.headers.get("ETag")
+
+    def save_local_metadata(self, file_name, etag):
+        with open(file_name, "w") as f:
+            json.dump({"etag": etag}, f)
+
+    def get_local_metadata(self, file_name):
+        try:
+            with open(file_name, "r") as f:
+                data = json.load(f)
+                return data.get("etag")
+        except FileNotFoundError:
+            return None
+
     def _ensure_model_folder_exists(self):
-        if not self.folder_exists_and_not_empty(self.args.model_dir):
+        metadata_file = "metadata.json"
+        local_etag = self.get_local_metadata(metadata_file)
+        s3_etag = self.get_s3_file_etag(self.s3_url)
+
+        if not self.folder_exists_and_not_empty(self.args.model_dir) or (
+            local_etag != s3_etag
+        ):
+            if local_etag != s3_etag:
+                user_input = prompt(
+                    "New versions of the models are available, would you like to download them? (y/n) "
+                )
+                if user_input.lower() != "y":
+                    return
+
+                # Logic to remove unified_model directory if it exists
+                if os.path.exists(self.args.model_dir):
+                    cprint(f"Removing existing unified_model folder...", "yellow")
+                    shutil.rmtree(self.args.model_dir)
+
             cprint(
-                f"{self.args.model_dir} not found or is empty. Downloading and unzipping...",
+                f"{self.args.model_dir} not found or is different. Downloading and unzipping...",
                 "yellow",
             )
             self.download_and_unzip(self.s3_url, f"{self.args.model_dir}.zip")
+            # Save new metadata
+            self.save_local_metadata(metadata_file, s3_etag)
         else:
             cprint(
                 f"found {self.args.model_dir}, to download new models remove {self.args.model_dir} or invoke nebula from a different directory",
@@ -503,13 +613,23 @@ class InteractiveGenerator:
             )
 
     def _validate_model_dirs(self):
-        model_dirs = [
-            d
-            for d in os.listdir(self.args.model_dir)
-            if os.path.isdir(os.path.join(self.args.model_dir, d))
-        ]
-        if not model_dirs:
-            raise ValueError("No model directories found in the specified directory.")
+
+        while True:
+            try:
+                model_dirs = [
+                    d
+                    for d in os.listdir(self.args.model_dir)
+                    if os.path.isdir(os.path.join(self.args.model_dir, d))
+                ]
+                if not model_dirs:
+                    raise Exception(
+                        "No model directories found in the specified directory."
+                    )
+                break
+            except Exception as e:
+                cprint(f"Error: {e}.", "red")
+                cprint("Download the models at the next prompt", "blue")
+                self._ensure_model_folder_exists()
 
     def _ensure_results_directory_exists(self):
         if not os.path.exists(self.args.results_dir):
@@ -517,6 +637,9 @@ class InteractiveGenerator:
 
     def is_run_as_package(self):
         # Check if the script is within a 'site-packages' directory
+        if os.environ.get("IN_DOCKER"):
+            self.check_for_update()
+            return False
         return "site-packages" in os.path.abspath(__file__)
 
     def folder_exists_and_not_empty(self, folder_path):

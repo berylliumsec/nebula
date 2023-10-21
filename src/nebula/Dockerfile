@@ -1,5 +1,7 @@
 FROM kalilinux/kali-bleeding-edge:amd64
-
+ARG APP_VERSION
+ENV DOCKER_APP_VERSION=$APP_VERSION
+ENV IN_DOCKER=yes
 LABEL org.opencontainers.image.authors="david@berylliumsec.com"
 
 RUN apt update && \
@@ -10,9 +12,6 @@ RUN apt update && \
     apt-get autoremove -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* 
-
-ENV PYTHONUNBUFFERED=1 \
-    IN_DOCKER=yes
 
 WORKDIR /app
 
