@@ -7,18 +7,15 @@ on:
     types:
       - closed
 
-      
 jobs:
   release-build:
     runs-on: ubuntu-latest
 
     steps:
-      
     - name: Check out the repo
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-
 
     - name: Install GitHub CLI
       run: |
@@ -40,7 +37,6 @@ jobs:
       with:
         name: new-version-artifact
         path: new_version.txt
-
 
     - name: Configure Git
       run: |
@@ -70,7 +66,7 @@ jobs:
       with:
         name: release-dists
         path: dist/
-    
+
   pypi-docker-publish:
     runs-on: ubuntu-latest
     environment: nebula
@@ -80,7 +76,6 @@ jobs:
       contents: write
     
     steps:
-
       - name: Check out the repo
         uses: actions/checkout@v4
         with:
@@ -96,7 +91,17 @@ jobs:
         if: github.event.pull_request.merged == true 
         uses: pypa/gh-action-pypi-publish@release/v1
 
-      
+      - name: Download new version artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: new-version-artifact
+          path: ./
+
+      - name: Set new version variable
+        id: set_version_var
+        run: |
+          echo "NEW_VERSION=$(<new_version.txt)" >> $GITHUB_ENV
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -106,21 +111,12 @@ jobs:
       - name: Build and Push Docker image
         if: github.event.pull_request.merged == true
         run: |
-          docker build src -f src/nebula/Dockerfile -t berylliumsec/nebula:latest
+          NEW_VERSION=$(<new_version.txt)
+          docker build src -f src/nebula/Dockerfile --build-arg APP_VERSION=$NEW_VERSION -t berylliumsec/nebula:$NEW_VERSION
+          docker push berylliumsec/nebula:$NEW_VERSION
+          docker tag berylliumsec/nebula:$NEW_VERSION berylliumsec/nebula:latest
           docker push berylliumsec/nebula:latest
-          
-
-
-      - name: Download new version artifact
-        uses: actions/download-artifact@v2
-        with:
-          name: new-version-artifact
-          path: ./
-        
-      - name: Set new version variable
-        id: set_version_var
-        run: |
-          echo "NEW_VERSION=$(<new_version.txt)" >> $GITHUB_ENV
+      
 
       - name: Create GitHub Release  
         if: github.event.pull_request.merged == true
@@ -135,17 +131,16 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Fixed a file naming bug
-              - Improved AI prompts in autonomous mode
-              - Allows user to pass in their LAN or WAN IP addresses for metasploit tests
-              - CVE(s) found are now written to the results dir
-              - Updated diagrams
+              - Nebula will now check for updates to the models using a file named "metadata.json"
+              - Nebula will now check for PYPI packages and alert the user if there is a newer version
+              - Nebula will now check for updates in the docker container (for newer docker versions)
+              - Nebula's docker releases are now versioned
+              
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
           for asset in dist/*; do
             gh release upload ${{ env.NEW_VERSION }} $asset
           done
-      
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
