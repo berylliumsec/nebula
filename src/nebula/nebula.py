@@ -77,7 +77,12 @@ class WordValidator(Validator):
 
 
 class InteractiveGenerator:
-    IP_PATTERN = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b")
+    # Define the IP pattern
+    # This ip pattern is very generous and should change in the future
+    IP_PATTERN = re.compile(
+        r"\b\d{1,3}\.\d{1,3}(?:\.\d{1,3}(?:\.\d{1,3}(?:/\d{1,2})?)?)?\b"
+    )
+
     FLAG_PATTERN = re.compile(
         r"(?<!\d{2}:\d{2}:\d{2})-\w+|(?<!\d{4}-\d{2}-\d{2})--[\w-]+"
     )  # Updated Regular expression
@@ -181,7 +186,11 @@ class InteractiveGenerator:
             default="nmap -Pn -sV --script=vuln,exploit,vulscan/vulscan.nse",
             help="Nmap vulnerability scan command to run",
         )
-
+        parser.add_argument(
+            "--lan_or_wan_ip",
+            type=str,
+            help="Pass in your lan or wan ip for metasploit tests",
+        )
         return parser.parse_args()
 
     def split(self, data):
@@ -325,14 +334,16 @@ class InteractiveGenerator:
                         for port, service in zip(data["ports"], data["services"]):
                             if model_name == "nuclei" and port not in ["80", "443"]:
                                 continue
-                            constructed_query = f"{service} {ip}"
+                            constructed_query = f"{service} on {ip}"
                             if model_name == "nmap":
-                                constructed_query = f"check for vulnerabilities using a script on port {port} on host {ip}"
+                                constructed_query = (
+                                    f"run all {service} scripts on port {port} on {ip}"
+                                )
                             if port in ["80", "443"] and model_name == "nuclei":
                                 url = (
                                     f"https://{ip}" if port == "443" else f"http://{ip}"
                                 )
-                                constructed_query = f"run an automatic scan on {url} using the latest templates"
+                                constructed_query = f"run an automatic scan employ only new templates on {url}"
                             elif model_name == "crackmap":
                                 constructed_query += " using null username and null password or null session"
 
@@ -602,22 +613,35 @@ class InteractiveGenerator:
             should_write_stderr = stderr and self.args.autonomous_mode is False
             if stdout.startswith("Starting Nmap"):
                 return False
-            if stderr.strip() or stdout.strip():
-                with open(result_file_path, "w") as f:
-                    if stdout.strip():
-                        f.write(stdout)
-                        return stdout
-                    else:
-                        if should_write_stderr and stderr.strip():
-                            cprint("\nCommand Error Output:", "red")
-                            cprint(stderr, "red")
+            try:
+                if stderr.strip() or stdout.strip():
+                    with open(result_file_path, "w") as f:
+                        if stdout.strip():
+                            f.write(stdout)
+                            return stdout
+                        else:
+                            if should_write_stderr and stderr.strip():
+                                cprint("\nCommand Error Output:", "red")
+                                cprint(stderr, "red")
 
-                            f.write(stderr)
-                            logging.error(
-                                f"Command '{command_str}' failed with error:\n{stderr}"
-                            )
-                            cprint("\nhit the enter key to continue", "yellow")
-                            return False
+                                f.write(stderr)
+                                logging.error(
+                                    f"Command '{command_str}' failed with error:\n{stderr}"
+                                )
+                                cprint("\nhit the enter key to continue", "yellow")
+                                return False
+
+            except FileNotFoundError:
+                cprint(
+                    f"Error: File not found or invalid path: {result_file_path}", "red"
+                )
+                logging.debug(
+                    f"Error: File not found or invalid path: {result_file_path}"
+                )
+            except Exception as e:
+                # Handle or log other exceptions as required
+                cprint(f"An error occurred: {e}", "red")
+                logging.debug(f"An error occurred: {e}", "red")
 
     @staticmethod
     def ensure_space_between_letter_and_number(s: str) -> str:
@@ -625,13 +649,18 @@ class InteractiveGenerator:
             if not isinstance(s, str):
                 raise ValueError("The input must be a string.")
 
-            # Regex operations
-            # Match everything after the colon (with or without a space) that's not immediately followed by a MAC, IP, or IPv6 address.
-            s = re.sub(
-                r"^.*?:\s?(?!(?:[0-9a-fA-F]{2}:)+)(?!\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![0-9a-fA-F]{0,4}::[0-9a-fA-F]{0,4})",
-                "",
-                s,
-            )
+            segments = s.split(":")
+
+            for i, segment in enumerate(segments[:-1]):
+                # If current segment ends with http or looks like a URL or IP prefix
+                if segment.strip().endswith(("http", "https")) or re.match(
+                    r"\s?(https?://[^\s]*|(?:(?:[0-9a-fA-F]{2}:)+)|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[0-9a-fA-F]{0,4}::[0-9a-fA-F]{0,4})",
+                    segment,
+                ):
+                    continue
+                else:
+                    s = ":".join(segments[i + 1 :])
+                    break
 
             s = re.sub(r"-(?=\d)", "", s)
             s = re.sub(r"(?<=[a-zA-Z])(?=\d)", " ", s)
@@ -641,7 +670,6 @@ class InteractiveGenerator:
             return s.strip()
 
         except Exception as e:
-            # Assuming you've imported cprint and logging at the beginning of your file
             cprint(f"Error in ensure_space_between_letter_and_number: {e}", "red")
             logging.error(f"Error in ensure_space_between_letter_and_number: {e}")
             return s
@@ -755,13 +783,21 @@ class InteractiveGenerator:
             s = s.replace("{{ RHOSTS }}", primary_ip)
             if port_arg:
                 s = s.replace("{{ RPORT }}", str(port_arg))
-            s = s.replace("{{ LHOST }}", get_local_ip())
+            s = s.replace(
+                "{{ LHOST }}",
+                get_local_ip()
+                if not self.args.lan_or_wan_ip
+                else self.args.lan_or_wan_ip,
+            )
             s = s.replace("{{ LPORT }}", str(get_random_port()))
         timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
         if s.strip().startswith("nmap"):
             output_xml = f"results/nmap_output_{timestamp}.xml"
             output_txt = f"results/nmap_output_{timestamp}.txt"
             s += f" -oX {output_xml} -oN {output_txt}"
+
+        if s.strip().startswith("nuclei"):
+            s = re.sub(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b\s*$", "", s).strip()
 
         return s
 
@@ -827,6 +863,7 @@ class InteractiveGenerator:
                 output[0], skip_special_tokens=True
             )
 
+            cprint(f"generated text: {generated_text}", "red")
             return generated_text
 
         except Exception as e:
@@ -1406,8 +1443,15 @@ class InteractiveGenerator:
                     ),  # Convert the set to a list before adding
                 }
             )
-
-        return parsed_results
+        timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
+        cve_file_name = f"results/CVEs-{timestamp}.txt"
+        with open(cve_file_name, "w") as file:
+            if isinstance(cve_matches, list):
+                for match in cve_matches:
+                    file.write(str(match) + "\n")
+            else:
+                file.write(str(cve_matches))
+                return parsed_results
 
     def colored_output(self, text):
         """Color everything before the first ':' in red and the rest in yellow."""

@@ -135,8 +135,11 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Fixing a bug where dates are seen as flags
-              - Added improved models (nmap, crackmap, nuclie) much closer to free speech interactions (please download the latest models)
+              - Fixed a file naming bug
+              - Improved AI prompts in autonomous mode
+              - Allows user to pass in their LAN or WAN IP addresses for metasploit tests
+              - CVE(s) found are now written to the results dir
+              - Updated diagrams
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |

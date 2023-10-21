@@ -277,8 +277,8 @@ nebula -h
 ```
 
 ```bash
-usage: nebula.py [-h] [--results_dir RESULTS_DIR] [--model_dir MODEL_DIR] [--testing_mode TESTING_MODE] [--targets_list TARGETS_LIST]
-                 [--autonomous_mode AUTONOMOUS_MODE] [--attack_mode ATTACK_MODE] [--nmap_vuln_scan_command NMAP_VULN_SCAN_COMMAND]
+usage: nebula.py [-h] [--results_dir RESULTS_DIR] [--model_dir MODEL_DIR] [--testing_mode TESTING_MODE] [--targets_list TARGETS_LIST] [--autonomous_mode AUTONOMOUS_MODE]
+                 [--attack_mode ATTACK_MODE] [--nmap_vuln_scan_command NMAP_VULN_SCAN_COMMAND] [--lan_or_wan_ip LAN_OR_WAN_IP]
 
 Interactive Command Generator
 
@@ -298,6 +298,8 @@ options:
                         Attack approach
   --nmap_vuln_scan_command NMAP_VULN_SCAN_COMMAND
                         Nmap vulnerability scan command to run
+  --lan_or_wan_ip LAN_OR_WAN_IP
+                        Pass in your lan or wan ip for metasploit tests
 ```
 
 ### Modes.
@@ -351,7 +353,7 @@ For bruteforce/password spraying attacks `(if available or recommended by AI)`, 
 
 Depending on how many IP addresses you provide, you may have several files to review. After Nebula is done in autonomous mode, it will drop into manual mode where you can view the results. 
 
-Nebula will try to execute available Metasploit modules using the standard remote ports, your local IP, and a random port. Even if you provide incorrect arguments to Metasploit, it won't shut down; it'll just notify you of the error. Hence, we've included placeholders for certain arguments, whether or not they're required.
+Nebula will try to execute available Metasploit modules using the standard remote ports, your local IP (or whatever ip you specify via args), and a random port. Even if you provide incorrect arguments to Metasploit, it won't shut down; it'll just notify you of the error. Hence, we've included placeholders for certain arguments, whether or not they're required.
 
 ```bash
 {{ LHOST }}
@@ -466,7 +468,9 @@ The ZAP model currently only supports "full scan". Be sure to use the terms full
 
 **Nuclei**
 
-- How can i do an automatic scan using only new templates on https://yourtarget.com
+- How can i do an automatic scan and employ only new templates on https://yourtarget.com
+- scan https://yourtarget.com using templates added in version 2.0
+- scan https://yourtarget.com using templates added in version 2.0 and be verbose about it
 - How can i perform automated scan using templates from author john on https://yourtarget.com
 - do a silent scan on https://target.com and limit it to 10 retries
 
