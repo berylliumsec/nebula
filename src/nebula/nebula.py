@@ -1451,7 +1451,7 @@ class InteractiveGenerator:
                     file.write(str(match) + "\n")
             else:
                 file.write(str(cve_matches))
-                return parsed_results
+        return parsed_results
 
     def colored_output(self, text):
         """Color everything before the first ':' in red and the rest in yellow."""
