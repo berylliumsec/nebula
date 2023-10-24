@@ -23,9 +23,17 @@ Welcome to Nebula.
 
 First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.
 
+<span style="color:green">📢 Announcement📢 </span>
+
+Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest version of the NMAP model, characterized by significant advancements in context comprehension. Watch this video for a demonstration of its capabilities.
+
+📺 [Watch the Demo: Latest NMAP Model](https://www.youtube.com/watch?v=DGfFi9RVcEY) 🚀
+
+
 **DISCLAIMER**
 
 **Please do not use this tool in a production environment, we are still experimenting and it is currently only suitable for testing environments**
+
 
 At the moment, to utilize the tools provided in this repository effectively, users are expected to possess a proficient understanding of nmap, nuclei, zap, and crackmap. 
 
@@ -149,7 +157,18 @@ docker run --rm --gpus all -v "$(pwd)":/app/unified_models_no_zap -it berylliums
 docker run --rm --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
 ```
 
+For autonomous mode and to use the default vulnerability scan:
 
+``bash
+docker run --rm --gpus all -v "$(pwd)/targets.txt":/app/targets.txt -v "$(pwd)"/unified_models:/app/unified_models -v $(pwd)/targets:/app/targets -it nebula_testn:latest --autonomous_mode True --targets_list /app/targets.txt
+
+```
+For autonomous mode and to use your own nmap vulnerability scan:
+
+``bash
+docker run --rm --gpus all -v "$(pwd)/targets.txt":/app/targets.txt -v "$(pwd)"/unified_models:/app/unified_models -v $(pwd)/targets:/app/targets -it nebula_testn:latest --autonomous_mode True --nmap_vuln_scan_command="nmap -Pn -sV --exclude-ports 21 --script=vulscan/vulscan.nse" --targets_list /app/targets.txt
+
+```
 **PIP**:
 
 ```
@@ -476,9 +495,10 @@ The ZAP model currently only supports "full scan". Be sure to use the terms full
 
 ## Links to videos:
 
-[Model Usage Video](https://youtu.be/Rz3DzuvX6bI)
+📺 [Watch the Demo: Latest NMAP Model](https://www.youtube.com/watch?v=DGfFi9RVcEY) 🚀
 
-[Search Usage Video](https://youtu.be/j-Ot3UxEwSY)
+🔍 [Watch How to Use the Search Feature](https://youtu.be/j-Ot3UxEwSY) 🎥
+
 
 ## Contributing and troubleshooting
 
