@@ -13,6 +13,8 @@ RUN apt update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* 
 
+WORKDIR /
+RUN git clone https://github.com/scipag/vulscan scipag_vulscan && ln -s `pwd`/scipag_vulscan /usr/share/nmap/scripts/vulscan
 WORKDIR /app
 
 COPY nebula/requirements.txt /app/
@@ -23,4 +25,7 @@ RUN pip install --upgrade pip && \
 COPY nebula/nebula.py nebula/nmap_flags nebula/nuclei_flags nebula/zap_flags nebula/crackmap_flags nebula/suggestions /app/
 COPY nebula/indexdir /app/indexdir
 COPY nebula/indexdir_auto /app/indexdir_auto
-CMD ["python", "nebula.py", "--model_dir", "/app/unified_models_no_zap"]
+
+# Define the entry point
+ENTRYPOINT ["python", "nebula.py"]
+CMD ["--model_dir", "/app/unified_models_no_zap"]
