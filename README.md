@@ -21,11 +21,11 @@ Welcome to Nebula.
 
 ## Acknowledgement
 
-First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.
+**First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.**
 
 <span style="color:green">📢 Announcement📢 </span>
 
-Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest versions of the NMAP and Nuclei models, characterized by significant advancements in context comprehension. Watch this video for a demonstration of its capabilities.
+Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest versions of the NMAP and Nuclei models, characterized by significant advancements in context comprehension. Watch these videos for a demonstration of thier capabilities.
 
 📺 [Watch the Demo: Latest NMAP Model](https://www.youtube.com/watch?v=DGfFi9RVcEY) 🚀
 
@@ -38,11 +38,9 @@ Driven by our dedication to enhancing penetration testing through natural langua
 **Please do not use this tool in a production environment, we are still experimenting and it is currently only suitable for testing environments**
 
 
-At the moment, to utilize the tools provided in this repository effectively, users are expected to possess a proficient understanding of nmap, nuclei, zap, and crackmap. 
+At the moment, to utilize the tools provided in this repository effectively, users are expected to possess a basic understanding of nmap, nuclei, zap, and crackmap. 
 
 In future versions, we'll focus on enhancing free natural language capabilities, and we're dedicated to making this vision a reality. 
-
-For now, the models within operate on nuanced natural language patterns. For optimal interactions, users are advised to consult the guidance provided in this README, which offers insights into crafting effective prompts. 
 
 Please be advised that this repository is currently in its beta phase; as such, occasional discrepancies or bugs might be encountered. We are diligently working towards refining and resolving all known issues.
 
@@ -229,7 +227,7 @@ docker run --network host -v directory_that_contains_nmap_results/nmap_plain_tex
 
 ## Upgrading
 
-To maintain optimal performance and benefit from the latest improvements, we regularly release updates and enhanced versions of our models. Prior to upgrading, please delete the unified_models directory to ensure the latest models are downloaded seamlessly.
+For optimal performance and to ensure access to the most recent advancements, we consistently release updates and refinements to our models. Nebula will proactively inform you of any available updates to the package or the models upon each execution.
 
 PIP:
 
@@ -276,9 +274,6 @@ Within the search engine capability, ethical hackers can input port numbers or s
 **DISCLAIMER**: The results provided by this tool may contain inaccuracies or may not be suitable for all scenarios. We highly recommend users to review and, if necessary, modify the suggested commands before executing them. Proceed with caution and always ensure you are acting within legal and ethical boundaries
 Queries can be presented naturally to the AI-driven assistant, which then translates them into specific commands. 
 
-In the current beta release, it is essential for the ethical hacker to have prior familiarity with this tool to formulate valid inquiries effectively. Refer to the example provided below for a demonstration.
-
-**Pro Tip**: **In the beta version, for optimal performance, limit your queries to a combination of up to two switches. Also, queries should be formulated as commands rather than questions, see the [natural language examples](#examples-of-natural-language-queries) section for more information**
 
 ### As a command suggestion engine.
 
@@ -441,36 +436,16 @@ In the above screenshot, the user views the results of running the suggested com
 
 ## Examples of natural language queries
 
-**Although the models are trained to be able to construct commands from natural languages, there are some nuances to get the right results**:
-**General rules**
-
-- Use numbers instead of the word equivalent, for example use `10` instead of ten.
-- Use all caps for abbreviations, for example use `SMB` instead of smb.
-- Keep your commands as short as possible.
-
 **NMAP**:
 
 **Note that for nmap commands, -oX and -oN are automatically appended. The plain text version is for you to be able to easily read while the xml version is for processing, please do not remove them**
 
-- Always end the command with the IP addresses and always refer to IP addresses as hosts regardless of whether its a subnet or not. For example:
+Examples:
 
-`do a top 10 scan on host 192.168.1.1`
-
-
-- If you want to do a vulnerability scan using a script, be sure to mention the "script" keyword as there are many ways NMAP can detect vulnerabilities that do not involve the scripting engine. For example:
-
-`discover vulnerabilities using a script on host 192.168.1.1`
-
-- Always place ports before the host, so if you want to discover vulnerabilities on port 80 on host 192.168.1.1 do:
-
-`discover vulnerabilities on port 80 on host 192.168.1.1`
-
-More examples:
-
-- do OS detection on list of hosts in file.txt
-- discover vulnerabilities on port 80 on host 192.168.1.1
-- do a ping scan on random targets in host 192.168.1.0/24 and exclude host 192.168.1.9
-- do service detection on host 192.168.1.1
+- how can i perform OS detection on a list of hosts in file targets.txt
+- how can i discover vulnerabilities on port 80 on 192.168.1.1
+- how can i perform ping scan on random targets in 192.168.1.0/24 and exclude 192.168.1.9 from the scan
+- how can i perform service detection on host 192.168.1.1
 
 **CRACKMAPEXEC**:
 
@@ -492,6 +467,7 @@ The ZAP model currently only supports "full scan". Be sure to use the terms full
 
 - How can i do an automatic scan and employ only new templates on https://yourtarget.com
 - scan https://yourtarget.com using templates added in version 2.0
+- scan https://target.com using templates that contain tags generic,jira and protocol dns
 - scan https://yourtarget.com using templates added in version 2.0 and be verbose about it
 - How can i perform automated scan using templates from author john on https://yourtarget.com
 - do a silent scan on https://target.com and limit it to 10 retries
