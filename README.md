@@ -23,12 +23,12 @@ Welcome to Nebula.
 
 First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.
 
-
-**Announcement**
+<span style="color:green">📢 Announcement📢 </span>
 
 Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest version of the NMAP model, characterized by significant advancements in context comprehension. Watch this video for a demonstration of its capabilities.
 
-[Latest-NMAP-Model-Youtube-Demonstration](https://www.youtube.com/watch?v=DGfFi9RVcEY)
+📺 [Watch the Demo: Latest NMAP Model](https://www.youtube.com/watch?v=DGfFi9RVcEY) 🚀
+
 
 **DISCLAIMER**
 
@@ -495,9 +495,10 @@ The ZAP model currently only supports "full scan". Be sure to use the terms full
 
 ## Links to videos:
 
-[Model Usage Video](https://youtu.be/Rz3DzuvX6bI)
+📺 [Watch the Demo: Latest NMAP Model](https://www.youtube.com/watch?v=DGfFi9RVcEY) 🚀
 
-[Search Usage Video](https://youtu.be/j-Ot3UxEwSY)
+🔍 [Watch How to Use the Search Feature](https://youtu.be/j-Ot3UxEwSY) 🎥
+
 
 ## Contributing and troubleshooting
 
