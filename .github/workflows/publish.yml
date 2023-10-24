@@ -131,11 +131,8 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Nebula will now check for updates to the models using a file named "metadata.json"
-              - Nebula will now check for PYPI packages and alert the user if there is a newer version
-              - Nebula will now check for updates in the docker container (for newer docker versions)
-              - Nebula's docker releases are now versioned
-              
+              - Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest version of the NMAP and Nuclei models, characterized by significant advancements in context comprehension.
+              - Docker has been updated to accept args for autonomous mode
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |

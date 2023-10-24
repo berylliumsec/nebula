@@ -25,9 +25,12 @@ First i would like to thank the All-Mighty God who is the source of all knowledg
 
 <span style="color:green">📢 Announcement📢 </span>
 
-Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest version of the NMAP model, characterized by significant advancements in context comprehension. Watch this video for a demonstration of its capabilities.
+Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest versions of the NMAP and Nuclei models, characterized by significant advancements in context comprehension. Watch this video for a demonstration of its capabilities.
 
 📺 [Watch the Demo: Latest NMAP Model](https://www.youtube.com/watch?v=DGfFi9RVcEY) 🚀
+
+📺 [Watch the Demo: Latest Nuclei Model](https://youtu.be/MN6hLPon2iA) 🚀
+
 
 
 **DISCLAIMER**
