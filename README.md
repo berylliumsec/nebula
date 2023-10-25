@@ -25,7 +25,7 @@ Welcome to Nebula.
 
 <span style="color:green">📢 Announcement📢 </span>
 
-Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest versions of the NMAP and Nuclei models, characterized by significant advancements in context comprehension. Watch these videos for a demonstration of thier capabilities.
+Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest versions of the NMAP and Nuclei models, characterized by significant advancements in context comprehension. Watch these videos for a demonstration of their capabilities.
 
 📺 [Watch the Demo: Latest NMAP Model](https://www.youtube.com/watch?v=DGfFi9RVcEY) 🚀
 
