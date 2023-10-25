@@ -338,14 +338,10 @@ class InteractiveGenerator:
                         continue
                     constructed_query = f"{service} on {ip}"
                     if model_name == "nmap":
-                        constructed_query = (
-                            f"run all {service} scripts on port {port} on {ip}"
-                        )
+                        constructed_query = f"run all {service} vulnerability scripts on port {port} on {ip}"
                     if port in ["80", "443"] and model_name == "nuclei":
                         url = f"https://{ip}" if port == "443" else f"http://{ip}"
-                        constructed_query = (
-                            f"run an automatic scan employ only new templates on {url}"
-                        )
+                        constructed_query = f"run an automatic scan and employ only new templates on {url}"
                     elif model_name == "crackmap":
                         constructed_query += (
                             " using null username and null password or null session"
