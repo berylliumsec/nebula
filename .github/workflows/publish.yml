@@ -131,8 +131,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest version of the NMAP and Nuclei models, characterized by significant advancements in context comprehension.
-              - Docker has been updated to accept args for autonomous mode
+              - Updated autonomous mode to use the NMAP -iL switch to consolidate results thereby reducing number of output files
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |

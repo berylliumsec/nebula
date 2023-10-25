@@ -257,6 +257,7 @@ class InteractiveGenerator:
 
     def autonomous_mode(self):
         url = ""
+        timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
 
         def get_number_of_results(mode):
             return {"stealth": 1, "raid": 5, "war": 1e6}.get(mode, 1)
@@ -267,7 +268,7 @@ class InteractiveGenerator:
                 return
             cprint(f"Running command: {command}", "yellow")
             if not self.args.testing_mode:
-                self.run_command_and_alert(command)
+                self.run_command_and_alert(command, timestamp)
             match = re.search(r"^(.*?)-oX", command)
             if match:
                 command = match.group(1)
@@ -281,103 +282,87 @@ class InteractiveGenerator:
         command_history = []
         results = []
 
-        with open(self.args.targets_list, "r") as file:
-            for ip in file:
-                ip = ip.strip()
-                if not self.IP_PATTERN.match(ip):
-                    cprint(f"Invalid IP: {ip} skipping it", "red")
-                    continue
+        cprint(
+            f"Running nmap vulnerability scans against {self.args.targets_list}, it may take several minutes please wait...",
+            "yellow",
+        )
+        output_xml = f"results/nmap_output_{timestamp}.xml"
+        output_txt = f"results/nmap_output_{timestamp}.txt"
+        if self.args.testing_mode:
+            result = self.run_command_and_alert(
+                f"nmap -Pn --script=vuln -iL {self.args.targets_list} -oX {output_xml} -oN {output_txt}",
+                timestamp,
+            )
+        else:
+            cprint(
+                f"nmap command passed in via args: {self.args.nmap_vuln_scan_command}",
+                "green",
+            )
+            result = self.run_command_and_alert(
+                f"{self.args.nmap_vuln_scan_command}  -iL {self.args.targets_list} -oX {output_xml} -oN {output_txt}",
+                timestamp,
+            )
+        results.append(result)
 
-                cprint(
-                    f"Running nmap vulnerability scans against {ip}, it may take several minutes please wait...",
-                    "yellow",
-                )
-                timestamp = (
-                    datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
-                )
-                output_xml = f"results/nmap_output_{timestamp}.xml"
-                output_txt = f"results/nmap_output_{timestamp}.txt"
-                if self.args.testing_mode:
-                    result = self.run_command_and_alert(
-                        f"nmap -Pn --script=vuln {ip} -oX {output_xml} -oN {output_txt}"
-                    )
-                else:
-                    cprint(
-                        f"nmap command passed in via args: {self.args.nmap_vuln_scan_command}",
-                        "green",
-                    )
-                    result = self.run_command_and_alert(
-                        f"{self.args.nmap_vuln_scan_command}  {ip} -oX {output_xml} -oN {output_txt}"
-                    )
-                results.append(result)
+        cprint(f"nmap scanning completed for {self.args.targets_list}", "green")
 
-                cprint(f"nmap scanning completed for {ip}", "green")
+        processed_data = self._parse_nmap_xml(output_xml)
+        number_of_results = get_number_of_results(self.args.attack_mode)
+        search_results = self.search_index(
+            processed_data, self.return_path("indexdir_auto"), number_of_results
+        )
 
-                processed_data = self._parse_nmap_xml(output_xml)
-                number_of_results = get_number_of_results(self.args.attack_mode)
-                search_results = self.search_index(
-                    processed_data, self.return_path("indexdir_auto"), number_of_results
-                )
+        for data in processed_data:
+            unique_commands = self.unique_commands_based_on_params(
+                search_results, data["ip"]
+            )
+            for comm in tqdm(unique_commands, desc="Processing commands"):
+                try:
+                    ip = data["ip"]
 
-                for data in processed_data:
-                    unique_commands = self.unique_commands_based_on_params(
-                        search_results, data["ip"]
-                    )
-                    for comm in tqdm(unique_commands, desc="Processing commands"):
-                        try:
-                            ip = data["ip"]
+                    handle_command(self.process_string(comm, [ip]))
+                except Exception as e:
+                    logging.error(f"Unable to run command, error: {e}")
+                    cprint("Unable to run command, error", "red")
 
-                            handle_command(self.process_string(comm, [ip]))
-                        except Exception as e:
-                            logging.error(f"Unable to run command, error: {e}")
-                            cprint("Unable to run command, error", "red")
+        cprint("Consulting models", "yellow")
+        for model_name in self.model_names:
+            if model_name in ["zap", "scribe"]:
+                continue
+            self._load_tokenizer_and_model(model_name)
 
-                cprint("Consulting models", "yellow")
-                for model_name in self.model_names:
-                    if model_name in ["zap", "scribe"]:
+            for data in processed_data:
+                ip = data["ip"]
+                for port, service in zip(data["ports"], data["services"]):
+                    if model_name == "nuclei" and port not in ["80", "443"]:
                         continue
-                    self._load_tokenizer_and_model(model_name)
+                    constructed_query = f"{service} on {ip}"
+                    if model_name == "nmap":
+                        constructed_query = f"run all {service} vulnerability scripts on port {port} on {ip}"
+                    if port in ["80", "443"] and model_name == "nuclei":
+                        url = f"https://{ip}" if port == "443" else f"http://{ip}"
+                        constructed_query = f"run an automatic scan and employ only new templates on {url}"
+                    elif model_name == "crackmap":
+                        constructed_query += (
+                            " using null username and null password or null session"
+                        )
 
-                    for data in processed_data:
-                        ip = data["ip"]
-                        for port, service in zip(data["ports"], data["services"]):
-                            if model_name == "nuclei" and port not in ["80", "443"]:
-                                continue
-                            constructed_query = f"{service} on {ip}"
-                            if model_name == "nmap":
-                                constructed_query = (
-                                    f"run all {service} scripts on port {port} on {ip}"
-                                )
-                            if port in ["80", "443"] and model_name == "nuclei":
-                                url = (
-                                    f"https://{ip}" if port == "443" else f"http://{ip}"
-                                )
-                                constructed_query = f"run an automatic scan employ only new templates on {url}"
-                            elif model_name == "crackmap":
-                                constructed_query += " using null username and null password or null session"
-
-                            cprint(f"Constructed query: {constructed_query}", "green")
-                            generated_text = self.generate_text(
-                                constructed_query.strip()
-                            )
-                            if model_name == "nmap":
-                                cleaned_text = (
-                                    self.ensure_space_between_letter_and_number(
-                                        generated_text
-                                    )
-                                )
-                                clean_up = self.process_string(
-                                    cleaned_text, [ip], [url], [port]
-                                )
-                            else:
-                                clean_up = self.process_string(
-                                    self.ensure_space_between_letter_and_number(
-                                        generated_text
-                                    ),
-                                    [ip],
-                                    [url],
-                                )
-                            handle_command(clean_up)
+                    cprint(f"Constructed query: {constructed_query}", "green")
+                    generated_text = self.generate_text(constructed_query.strip())
+                    if model_name == "nmap":
+                        cleaned_text = self.ensure_space_between_letter_and_number(
+                            generated_text
+                        )
+                        clean_up = self.process_string(
+                            cleaned_text, [ip], [url], [port]
+                        )
+                    else:
+                        clean_up = self.process_string(
+                            self.ensure_space_between_letter_and_number(generated_text),
+                            [ip],
+                            [url],
+                        )
+                    handle_command(clean_up)
 
     def select_mode(self):
         style = Style.from_dict(
@@ -675,7 +660,12 @@ class InteractiveGenerator:
             cprint(f"Unexpected error: {e}", "red")
             logging.error(f"Unexpected error: {e}")
 
-    def run_command_and_alert(self, text: str) -> None:
+    def run_command_and_alert(self, text: str, timestamp=None) -> None:
+        if timestamp is None:
+            timestamp = (
+                datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
+            )
+
         """
         A function to run a command in the background, capture its output, and print it to the screen.
         """
@@ -720,7 +710,6 @@ class InteractiveGenerator:
             "..." if len(command_str) > 15 else ""
         )
 
-        timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
         file_name = f"{timestamp}_{truncated_cmd}"
         result_file_path = os.path.join(
             self.args.results_dir,
@@ -738,9 +727,10 @@ class InteractiveGenerator:
                 return False
             try:
                 if stderr.strip() or stdout.strip():
-                    with open(result_file_path, "w") as f:
+                    with open(result_file_path, "a") as f:
                         if stdout.strip():
-                            f.write(stdout)
+                            f.write("\n" + stdout)
+
                             return stdout
                         else:
                             if should_write_stderr and stderr.strip():
