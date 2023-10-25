@@ -257,6 +257,7 @@ class InteractiveGenerator:
 
     def autonomous_mode(self):
         url = ""
+        timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
 
         def get_number_of_results(mode):
             return {"stealth": 1, "raid": 5, "war": 1e6}.get(mode, 1)
@@ -267,7 +268,7 @@ class InteractiveGenerator:
                 return
             cprint(f"Running command: {command}", "yellow")
             if not self.args.testing_mode:
-                self.run_command_and_alert(command)
+                self.run_command_and_alert(command, timestamp)
             match = re.search(r"^(.*?)-oX", command)
             if match:
                 command = match.group(1)
@@ -285,12 +286,12 @@ class InteractiveGenerator:
             f"Running nmap vulnerability scans against {self.args.targets_list}, it may take several minutes please wait...",
             "yellow",
         )
-        timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
         output_xml = f"results/nmap_output_{timestamp}.xml"
         output_txt = f"results/nmap_output_{timestamp}.txt"
         if self.args.testing_mode:
             result = self.run_command_and_alert(
-                f"nmap -Pn --script=vuln -iL {self.args.targets_list} -oX {output_xml} -oN {output_txt}"
+                f"nmap -Pn --script=vuln -iL {self.args.targets_list} -oX {output_xml} -oN {output_txt}",
+                timestamp,
             )
         else:
             cprint(
@@ -298,7 +299,8 @@ class InteractiveGenerator:
                 "green",
             )
             result = self.run_command_and_alert(
-                f"{self.args.nmap_vuln_scan_command}  -iL {self.args.targets_list} -oX {output_xml} -oN {output_txt}"
+                f"{self.args.nmap_vuln_scan_command}  -iL {self.args.targets_list} -oX {output_xml} -oN {output_txt}",
+                timestamp,
             )
         results.append(result)
 
@@ -662,7 +664,12 @@ class InteractiveGenerator:
             cprint(f"Unexpected error: {e}", "red")
             logging.error(f"Unexpected error: {e}")
 
-    def run_command_and_alert(self, text: str) -> None:
+    def run_command_and_alert(self, text: str, timestamp=None) -> None:
+        if timestamp is None:
+            timestamp = (
+                datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
+            )
+
         """
         A function to run a command in the background, capture its output, and print it to the screen.
         """
@@ -707,7 +714,6 @@ class InteractiveGenerator:
             "..." if len(command_str) > 15 else ""
         )
 
-        timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
         file_name = f"{timestamp}_{truncated_cmd}"
         result_file_path = os.path.join(
             self.args.results_dir,
@@ -725,9 +731,10 @@ class InteractiveGenerator:
                 return False
             try:
                 if stderr.strip() or stdout.strip():
-                    with open(result_file_path, "w") as f:
+                    with open(result_file_path, "a") as f:
                         if stdout.strip():
-                            f.write(stdout)
+                            f.write("\n" + stdout)
+
                             return stdout
                         else:
                             if should_write_stderr and stderr.strip():
