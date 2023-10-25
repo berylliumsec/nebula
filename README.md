@@ -31,6 +31,7 @@ Driven by our dedication to enhancing penetration testing through natural langua
 
 📺 [Watch the Demo: Latest Nuclei Model](https://youtu.be/MN6hLPon2iA) 🚀
 
+📺 [Watch the Demo: Latest Zap Model](https://youtu.be/CFeOozmXf5k) 🚀
 
 
 **DISCLAIMER**
@@ -459,9 +460,9 @@ For crackmap, always include a username and a password in your prompt or indicat
 
 The ZAP model currently only supports "full scan". Be sure to use the terms full scan in your commands.
 
-- do a full scan on https://192.168.1.1
-- do a full scan on https://192.168.1.1 and spider for 5 minutes
-- do a full scan on https://192.168.1.1 and spider for 5 minutes and write the report to html file nebula.html
+- scan https://yourtarget.com with a delay of 10 seconds and show logging
+- scan https://yourtarget.com using listening port 40 and use the default rules and dont return failure on warning
+- do a scan on https://yourtarget.com using a maximum wait time of 2 minutes, use username john and use the Ajax spider
 
 **Nuclei**
 
