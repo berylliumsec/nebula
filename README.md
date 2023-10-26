@@ -161,10 +161,10 @@ docker run --rm --gpus all -v "$(pwd)":/app/unified_models -it nebula:latest
 
 For autonomous mode and to use the default vulnerability scan:
 
-``bash
+```bash
 docker run --rm --gpus all -v "$(pwd)/targets.txt":/app/targets.txt -v "$(pwd)"/unified_models:/app/unified_models -v $(pwd)/targets:/app/targets -it nebula_testn:latest --autonomous_mode True --targets_list /app/targets.txt
-
 ```
+
 For autonomous mode and to use your own nmap vulnerability scan:
 
 ``bash
