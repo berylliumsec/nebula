@@ -131,7 +131,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Updated autonomous mode to use the NMAP -iL switch to consolidate results thereby reducing number of output files
+              - In this release, common acronyms such as SMB, FTP etc are added to the spellcheck so that they are not corrected.
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
