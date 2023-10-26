@@ -38,6 +38,7 @@ from whoosh.fields import ID, TEXT, Schema
 from whoosh.index import open_dir
 from whoosh.qparser import MultifieldParser, OrGroup
 
+
 trans_log.set_verbosity_error()
 analyzer = StandardAnalyzer(stoplist=None)
 schema = Schema(
@@ -123,6 +124,11 @@ class InteractiveGenerator:
         self.current_model_name = None
         self.model_names = self.get_model_names()
         self.always_apply_action: bool = False
+        self.suggestions_file = self.return_path("suggestions")
+        with open(self.suggestions_file, "r") as f:
+            # Each line in the file is a word you want to exclude
+            self.words_to_exclude = [line.strip() for line in f]
+        self.suggestions = self.get_suggestions()
         if self.is_run_as_package():
             self.check_new_pypi_version()  # Check for newer PyPI package
         if self.args.autonomous_mode is True:
@@ -1316,7 +1322,7 @@ class InteractiveGenerator:
 
         # Initialize the spell checker
         spell = SpellChecker()
-
+        spell.word_frequency.load_words(self.words_to_exclude)
         while True:  # Keep prompting until valid input or 'q' is entered
             # Get the actual user input for the model to generate
             user_input = prompt(
@@ -1913,8 +1919,8 @@ class InteractiveGenerator:
 
     def user_search_interface(self):
         """Provide a user interface for searching."""
-        suggestions = self.get_suggestions()
-        protocol_completer = WordCompleter(suggestions, ignore_case=True)
+
+        protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
         history = InMemoryHistory()
 
         while True:
@@ -1940,8 +1946,8 @@ class InteractiveGenerator:
         return True
 
     def get_suggestions(self):
-        suggestions_file = self.return_path("suggestions")
-        with open(suggestions_file, "r") as file:
+
+        with open(self.suggestions_file, "r") as file:
             return [line.strip() for line in file if line.strip()]
 
     def display_message(self, message, color):
