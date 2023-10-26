@@ -125,7 +125,7 @@ class InteractiveGenerator:
         self.model_names = self.get_model_names()
         self.always_apply_action: bool = False
         self.suggestions_file = self.return_path("suggestions")
-        with open(self.suggestions_file, 'r') as f:
+        with open(self.suggestions_file, "r") as f:
             # Each line in the file is a word you want to exclude
             self.words_to_exclude = [line.strip() for line in f]
         self.suggestions = self.get_suggestions()
@@ -1919,7 +1919,7 @@ class InteractiveGenerator:
 
     def user_search_interface(self):
         """Provide a user interface for searching."""
-        
+
         protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
         history = InMemoryHistory()
 
@@ -1946,7 +1946,7 @@ class InteractiveGenerator:
         return True
 
     def get_suggestions(self):
-        
+
         with open(self.suggestions_file, "r") as file:
             return [line.strip() for line in file if line.strip()]
 
