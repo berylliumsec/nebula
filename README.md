@@ -152,7 +152,6 @@ Running the model with all GPU(s)
 
 ```bash
 docker run --rm --gpus all -v "$(pwd)":/app/unified_models_no_zap -it berylliumsec/nebula:latest
-
 ```
 
 ```bash
@@ -167,7 +166,7 @@ docker run --rm --gpus all -v "$(pwd)/targets.txt":/app/targets.txt -v "$(pwd)"/
 
 For autonomous mode and to use your own nmap vulnerability scan:
 
-``bash
+```bash
 docker run --rm --gpus all -v "$(pwd)/targets.txt":/app/targets.txt -v "$(pwd)"/unified_models:/app/unified_models -v $(pwd)/targets:/app/targets -it nebula_testn:latest --autonomous_mode True --nmap_vuln_scan_command="nmap -Pn -sV --exclude-ports 21 --script=vulscan/vulscan.nse" --targets_list /app/targets.txt
 
 ```
