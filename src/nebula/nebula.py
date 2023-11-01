@@ -152,8 +152,8 @@ class InteractiveGenerator:
 
         self.log_file_path = None
         self.services = []
-        self.flag_file = self.return_path(self.current_model_name + "_flags")
-        self.flag_descriptions = self._load_flag_descriptions(self.flag_file)
+        self.flag_file = None
+        self.flag_descriptions = None
         self.extracted_flags = []
 
     @staticmethod
@@ -261,8 +261,56 @@ class InteractiveGenerator:
 
         return True
 
-    def autonomous_mode(self):
+    def construct_query_for_models(self, services):
+        commands = []
         url = ""
+        for model_name in self.model_names:
+            if model_name in ["scribe"]:
+                continue
+            self._load_tokenizer_and_model(model_name)
+
+            for data in services:
+                ip = data["ip"]
+                for port, service in zip(data["ports"], data["services"]):
+                    if (model_name == "nuclei" or model_name == "zap") and port not in [
+                        "80",
+                        "443",
+                    ]:
+                        continue
+                    constructed_query = f"{service} on {ip}"
+                    if model_name == "nmap":
+                        constructed_query = f"run all {service} vulnerability scripts on port {port} on {ip}"
+                    if port in ["80", "443"] and model_name == "nuclei":
+                        url = f"https://{ip}" if port == "443" else f"http://{ip}"
+                        constructed_query = f"run an automatic scan and employ only new templates on {url}"
+                    if port in ["80", "443"] and model_name == "zap":
+                        # to remove
+                        cprint(f'{port},"red')
+                        url = f"https://{ip}" if port == "443" else f"http://{ip}"
+                        constructed_query = f"scan {url}"
+
+                    elif model_name == "crackmap":
+                        constructed_query = f"how can i find vulnerabilities in the {service} service using a null session on {ip}"
+
+                    cprint(f"Constructed query: {constructed_query}", "green")
+                    generated_text = self.generate_text(constructed_query.strip())
+                    if model_name == "nmap":
+                        cleaned_text = self.ensure_space_between_letter_and_number(
+                            generated_text
+                        )
+                        clean_up = self.process_string(
+                            cleaned_text, [ip], [url], [port]
+                        )
+                    else:
+                        clean_up = self.process_string(
+                            self.ensure_space_between_letter_and_number(generated_text),
+                            [ip],
+                            [url],
+                        )
+                commands.append(clean_up)
+        return list(set(commands))
+
+    def autonomous_mode(self):
         timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
 
         def get_number_of_results(mode):
@@ -292,8 +340,8 @@ class InteractiveGenerator:
             f"Running nmap vulnerability scans against {self.args.targets_list}, it may take several minutes please wait...",
             "yellow",
         )
-        output_xml = f"results/nmap_output_{timestamp}.xml"
-        output_txt = f"results/nmap_output_{timestamp}.txt"
+        output_xml = f"{self.args.results_dir}/nmap_output_{timestamp}.xml"
+        output_txt = f"{self.args.results_dir}/nmap_output_{timestamp}.txt"
         if self.args.testing_mode:
             result = self.run_command_and_alert(
                 f"nmap -Pn --script=vuln -iL {self.args.targets_list} -oX {output_xml} -oN {output_txt}",
@@ -332,43 +380,9 @@ class InteractiveGenerator:
                     cprint("Unable to run command, error", "red")
 
         cprint("Consulting models", "yellow")
-        for model_name in self.model_names:
-            if model_name in ["zap", "scribe"]:
-                continue
-            self._load_tokenizer_and_model(model_name)
-
-            for data in processed_data:
-                ip = data["ip"]
-                for port, service in zip(data["ports"], data["services"]):
-                    if model_name == "nuclei" and port not in ["80", "443"]:
-                        continue
-                    constructed_query = f"{service} on {ip}"
-                    if model_name == "nmap":
-                        constructed_query = f"run all {service} vulnerability scripts on port {port} on {ip}"
-                    if port in ["80", "443"] and model_name == "nuclei":
-                        url = f"https://{ip}" if port == "443" else f"http://{ip}"
-                        constructed_query = f"run an automatic scan and employ only new templates on {url}"
-                    elif model_name == "crackmap":
-                        constructed_query += (
-                            " using null username and null password or null session"
-                        )
-
-                    cprint(f"Constructed query: {constructed_query}", "green")
-                    generated_text = self.generate_text(constructed_query.strip())
-                    if model_name == "nmap":
-                        cleaned_text = self.ensure_space_between_letter_and_number(
-                            generated_text
-                        )
-                        clean_up = self.process_string(
-                            cleaned_text, [ip], [url], [port]
-                        )
-                    else:
-                        clean_up = self.process_string(
-                            self.ensure_space_between_letter_and_number(generated_text),
-                            [ip],
-                            [url],
-                        )
-                    handle_command(clean_up)
+        commands = self.construct_query_for_models(processed_data)
+        for command in commands:
+            handle_command(command)
 
     def select_mode(self):
         style = Style.from_dict(
@@ -448,16 +462,23 @@ class InteractiveGenerator:
                     print(" ", end="")
             print()  # Move to the next line after each row
 
-    def _load_flag_descriptions(self, file_path):
+    def _load_flag_descriptions(self, file_path, selected_model_name):
         """Load flag descriptions from a file and return them as a dictionary."""
-        with open(file_path, "r") as f:
-            lines = f.readlines()
-            # Store the entire line as the value in the dictionary using flag as key
-            return {
-                line.split(":")[0].strip(): line.strip()
-                for line in lines
-                if ":" in line
-            }
+        try:
+            with open(file_path, "r") as f:
+                lines = f.readlines()
+                # Store the entire line as the value in the dictionary using flag as key
+                return {
+                    line.split(":")[0].strip(): line.strip()
+                    for line in lines
+                    if ":" in line
+                }
+        except FileNotFoundError:
+            cprint(
+                f"Flags file '{file_path}' not found, commands for '{selected_model_name}' will not contain descriptions",
+                "yellow",
+            )
+            return {}
 
     def extract_and_match_flags(self, command):
         """Extract flags from the command and match them with descriptions."""
@@ -911,8 +932,8 @@ class InteractiveGenerator:
             s = s.replace("{{ LPORT }}", str(get_random_port()))
         timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
         if s.strip().startswith("nmap"):
-            output_xml = f"results/nmap_output_{timestamp}.xml"
-            output_txt = f"results/nmap_output_{timestamp}.txt"
+            output_xml = f"{self.args.results_dir}/nmap_output_{timestamp}.xml"
+            output_txt = f"{self.args.results_dir}/nmap_output_{timestamp}.txt"
             s += f" -oX {output_xml} -oN {output_txt}"
 
         if s.strip().startswith("nuclei"):
@@ -1190,8 +1211,11 @@ class InteractiveGenerator:
             self.flag_file = self.return_path("nuclei_flags")
         elif selected_model_name == "zap":
             self.flag_file = self.return_path("zap_flags")
-
-        self.flag_descriptions = self._load_flag_descriptions(self.flag_file)
+        elif selected_model_name == "vuln":
+            self.flag_file = self.return_path(" ")
+        self.flag_descriptions = self._load_flag_descriptions(
+            self.flag_file, selected_model_name
+        )
 
         Style.from_dict({"message": "bg:#ff0066 #ffff00"})
 
@@ -1563,7 +1587,7 @@ class InteractiveGenerator:
                 }
             )
         timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
-        cve_file_name = f"results/CVEs-{timestamp}.txt"
+        cve_file_name = f"{self.args.results_dir}/CVEs-{timestamp}.txt"
         with open(cve_file_name, "w") as file:
             if isinstance(cve_matches, list):
                 for match in cve_matches:
@@ -1636,25 +1660,22 @@ class InteractiveGenerator:
         # Display the command list based on the optional file extension filter
         self.display_command_list(file_extension=file_extension)
 
-        cmd = self.get_input_with_default(
-            "Enter the number of the command you'd like to process results for (or type 'back' or 'b' to return): "
-        )
+        while True:
+            cmd = self.get_input_with_default(
+                "Enter the number of the command you'd like to process results for (or type 'back' or 'b' to return): "
+            )
 
-        if cmd in ["back", "b"]:
-            return True
+            if cmd in ["back", "b"]:
+                return True
 
-        number_of_results = self.get_input_with_default(
-            "Enter the number of the processed results you would like to receive (or type 'back' or 'b' to return, 'all' or 'a' for all results): "
-        )
+            # Here, you may want to validate that `cmd` is an expected number or value.
+            # If `cmd` is valid, break out of the loop.
+            if self._display_and_select_results(cmd, file_extension):
+                return True
 
-        if number_of_results in ["back", "b"]:
-            return True
+            print("Invalid input. Please try again.")
 
-        return self._display_and_select_results(cmd, number_of_results, file_extension)
-
-    def _display_and_select_results(
-        self, cmd, number_of_results, file_extension=None
-    ) -> bool:
+    def _display_and_select_results(self, cmd, file_extension=None) -> bool:
         """Display the nmap results and prompt user for a result selection."""
 
         cmd_num = int(cmd)
@@ -1670,35 +1691,66 @@ class InteractiveGenerator:
             filenames = sorted(all_files)
 
         # Ensure the selected cmd_num is within range
-        if 0 <= cmd_num <= len(filenames):
+        if 0 <= cmd_num < len(filenames):
             selected_filename = filenames[cmd_num - 1]
             file_path = os.path.join(self.args.results_dir, selected_filename)
         else:
-            print(f"Invalid command number: {cmd_num}. Please choose a valid command.")
+            cprint(
+                f"Invalid command number: {cmd_num}. Please choose a valid command.",
+                "red",
+            )
             return True
 
         services = self._parse_nmap_xml(file_path)
-        max_results_value = (
-            int(number_of_results)
-            if number_of_results not in ["all", "a"]
-            else MAX_RESULTS_DEFAULT
-        )
-        results = self.search_index(services, self.index_dir, max_results_value)
 
-        if not results:
-            print("No results found.")
-            return True
+        while True:
+            cmd = self.get_input_with_default(
+                "Would you like to process the results? You can choose between Parsing (type 'p'), the experimental AI method (type 'ai'), or you can go back (type 'b'): "
+            )
 
-        self._display_search_results(results)
-        self._select_and_run_command(results)
+            if cmd == "p":
+                number_of_results = self.get_input_with_default(
+                    "Please enter the number of processed results you would like to receive. If you wish to return to the previous menu, type 'back' or 'b'. If you would like to receive all results, type 'all' or 'a': "
+                )
+                if number_of_results in ["back", "b"]:
+                    return True
 
+                max_results_value = (
+                    int(number_of_results)
+                    if number_of_results not in ["all", "a"]
+                    else MAX_RESULTS_DEFAULT
+                )
+                results = self.search_index(services, self.index_dir, max_results_value)
+                break
+
+            elif cmd == "ai":
+                results = self.construct_query_for_models(services)
+                break
+
+            elif cmd == "b":
+                return True
+
+            else:
+                print("Invalid input. Please try again.")
+
+        if cmd == "ai":
+            self._display_search_results(results, ai=True)
+            self._select_and_run_command(results, ai=True)
+        else:
+            self._display_search_results(results, ai=True)
+            self._select_and_run_command(results, ai=True)
         return True
 
-    def _display_search_results(self, results):
+    def _display_search_results(self, results, ai):
         """Display the search results."""
 
         idx = 1
         for line in results:
+            if ai:
+                print(colored(f"{idx}. {line}", "yellow"))
+                idx += 1
+                continue
+
             is_service = line.strip().lower().startswith("service")
             is_cve = (
                 line.strip().lower().startswith("cve")
@@ -1724,36 +1776,41 @@ class InteractiveGenerator:
                 )
                 idx += 1
 
-    def _select_and_run_command(self, results):
+    def _select_and_run_command(self, results, ai):
         """Prompt user to select a search result and then run a command based on that result."""
 
         selection = self.get_input_with_default(
             "\nSelect a result number to modify and run the associated command or any other key to continue without running a command: "
         )
 
-        # Filtered results for selection
-        selectable_results = [
-            line
-            for line in results
-            if not (
-                line.strip().lower().startswith("service")
-                or (
-                    line.strip().lower().startswith("cve")
-                    and ":" in line
-                    and not line.split(":", 1)[1].strip()
+        if ai:
+            selectable_results = results
+        else:
+            # Filtered results for selection based on the original conditions
+            selectable_results = [
+                line
+                for line in results
+                if not (
+                    line.strip().lower().startswith("service")
+                    or (
+                        line.strip().lower().startswith("cve")
+                        and ":" in line
+                        and not line.split(":", 1)[1].strip()
+                    )
                 )
-            )
-        ]
+            ]
 
         try:
             selection = int(selection)
             if 1 <= selection <= len(selectable_results):
-                content_after_colon = (
-                    selectable_results[selection - 1].split(":", 1)[1].strip()
-                    if ":" in selectable_results[selection - 1]
-                    else selectable_results[selection - 1]
-                )
-
+                if ai:
+                    content_after_colon = selectable_results[selection - 1]
+                else:
+                    content_after_colon = (
+                        selectable_results[selection - 1].split(":", 1)[1].strip()
+                        if ":" in selectable_results[selection - 1]
+                        else selectable_results[selection - 1]
+                    )
                 modified_content = self.get_input_with_default(
                     "\nEnter the modified content (or press enter to keep it unchanged): ",
                     content_after_colon,

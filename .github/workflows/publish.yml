@@ -131,7 +131,8 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - In this release, common acronyms such as SMB, FTP etc are added to the spellcheck so that they are not corrected.
+              - In this release, AI suggestions is added to processing results and some minor bugs are fixed
+              - Updated crackmapexec model
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
