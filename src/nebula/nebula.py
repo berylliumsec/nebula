@@ -311,7 +311,6 @@ class InteractiveGenerator:
         return list(set(commands))
 
     def autonomous_mode(self):
-        url = ""
         timestamp = datetime.now().strftime("%I:%M:%S-%p-%Y-%m-%d").replace(" ", "-")
 
         def get_number_of_results(mode):
