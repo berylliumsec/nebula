@@ -132,6 +132,7 @@ jobs:
           body: |
             Release Notes:
               - In this release, AI suggestions is added to processing results and some minor bugs are fixed
+              - Updated crackmapexec model
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
