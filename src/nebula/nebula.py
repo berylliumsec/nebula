@@ -1620,6 +1620,7 @@ class InteractiveGenerator:
         validator = None
         if valid_fn:
             validator = FunctionValidator(valid_fn)
+            print(validator)
 
         while True:
             try:
@@ -1702,7 +1703,12 @@ class InteractiveGenerator:
             return True
 
         services = self._parse_nmap_xml(file_path)
-
+        if not services:
+            cprint(
+                f"Nothing to do here, the file you have selected does not contain validdata",
+                "red",
+            )
+            return False
         while True:
             cmd = self.get_input_with_default(
                 "Would you like to process the results? You can choose between Parsing (type 'p'), the experimental AI method (type 'ai'), or you can go back (type 'b'): "
