@@ -38,7 +38,6 @@ from whoosh.fields import ID, TEXT, Schema
 from whoosh.index import open_dir
 from whoosh.qparser import MultifieldParser, OrGroup
 
-
 trans_log.set_verbosity_error()
 analyzer = StandardAnalyzer(stoplist=None)
 schema = Schema(
@@ -119,6 +118,12 @@ class InteractiveGenerator:
         self.tokenizers = {}
         self.models = {}
         self.print_star_sky()
+        self.log_file_path = None
+        self.services = []
+        self.flag_file = None
+        self.flag_descriptions = None
+        self.extracted_flags = []
+
         self.random_name = None
         self.current_model = None
         self.current_model_name = None
@@ -149,12 +154,6 @@ class InteractiveGenerator:
                 break
             else:
                 cprint("\nInvalid Choice", "red")
-
-        self.log_file_path = None
-        self.services = []
-        self.flag_file = None
-        self.flag_descriptions = None
-        self.extracted_flags = []
 
     @staticmethod
     def _parse_arguments():
@@ -600,7 +599,7 @@ class InteractiveGenerator:
             local_etag != s3_etag
         ):
             if local_etag != s3_etag:
-                user_input = prompt(
+                user_input = self.get_input_with_default(
                     "New versions of the models are available, would you like to download them? (y/n) "
                 )
                 if user_input.lower() != "y":
@@ -1803,14 +1802,16 @@ class InteractiveGenerator:
         try:
             selection = int(selection)
             if 1 <= selection <= len(selectable_results):
-                if ai:
-                    content_after_colon = selectable_results[selection - 1]
+                selected_result = selectable_results[selection - 1]
+                if ":" in selected_result:
+                    content_after_colon = selected_result.split(":", 1)[1].strip()
+                    if (
+                        not content_after_colon
+                    ):  # If the content after the colon is empty
+                        content_after_colon = selected_result
                 else:
-                    content_after_colon = (
-                        selectable_results[selection - 1].split(":", 1)[1].strip()
-                        if ":" in selectable_results[selection - 1]
-                        else selectable_results[selection - 1]
-                    )
+                    content_after_colon = selected_result
+
                 modified_content = self.get_input_with_default(
                     "\nEnter the modified content (or press enter to keep it unchanged): ",
                     content_after_colon,
@@ -2097,7 +2098,7 @@ class InteractiveGenerator:
                     "blue",
                 )
             ),
-            default=content_after_colon,
+            default=self.process_string(content_after_colon),
         )
         if modified_content:
             content_after_colon = modified_content
