@@ -1979,10 +1979,10 @@ class InteractiveGenerator:
     def user_search_interface(self):
         """Provide a user interface for searching."""
 
-        protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
-        history = InMemoryHistory()
-
         while True:
+            protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
+            history = InMemoryHistory()
+
             query_str = self.get_query_input(
                 completer=protocol_completer, history=history
             )
