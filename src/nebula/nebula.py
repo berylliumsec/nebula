@@ -1743,8 +1743,8 @@ class InteractiveGenerator:
             self._display_search_results(results, ai=True)
             self._select_and_run_command(results, ai=True)
         else:
-            self._display_search_results(results, ai=True)
-            self._select_and_run_command(results, ai=True)
+            self._display_search_results(results, ai=False)
+            self._select_and_run_command(results, ai=False)
         return True
 
     def _display_search_results(self, results, ai):
@@ -1810,7 +1810,7 @@ class InteractiveGenerator:
             selection = int(selection)
             if 1 <= selection <= len(selectable_results):
                 selected_result = selectable_results[selection - 1]
-                if ":" in selected_result:
+                if not ai and ":" in selected_result:
                     content_after_colon = selected_result.split(":", 1)[1].strip()
                     if (
                         not content_after_colon
