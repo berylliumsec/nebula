@@ -131,8 +131,9 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - In this release, AI suggestions is added to processing results and some minor bugs are fixed
-              - Updated crackmapexec model
+              - Fixed a bug where nmap commands being ran after search queries were not being stored
+              - Updated search index
+              - Fixed a bug where command explanations were not being displayed
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
