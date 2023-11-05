@@ -38,6 +38,7 @@ from whoosh.fields import ID, TEXT, Schema
 from whoosh.index import open_dir
 from whoosh.qparser import MultifieldParser, OrGroup
 
+
 trans_log.set_verbosity_error()
 analyzer = StandardAnalyzer(stoplist=None)
 schema = Schema(
@@ -1690,7 +1691,7 @@ class InteractiveGenerator:
             filenames = sorted(all_files)
 
         # Ensure the selected cmd_num is within range
-        if 0 <= cmd_num < len(filenames):
+        if 1 <= cmd_num <= len(filenames):
             selected_filename = filenames[cmd_num - 1]
             file_path = os.path.join(self.args.results_dir, selected_filename)
         else:
