@@ -119,6 +119,12 @@ class InteractiveGenerator:
         self.tokenizers = {}
         self.models = {}
         self.print_star_sky()
+        self.log_file_path = None
+        self.services = []
+        self.flag_file = None
+        self.flag_descriptions = None
+        self.extracted_flags = []
+
         self.random_name = None
         self.current_model = None
         self.current_model_name = None
@@ -149,12 +155,6 @@ class InteractiveGenerator:
                 break
             else:
                 cprint("\nInvalid Choice", "red")
-
-        self.log_file_path = None
-        self.services = []
-        self.flag_file = None
-        self.flag_descriptions = None
-        self.extracted_flags = []
 
     @staticmethod
     def _parse_arguments():
@@ -600,7 +600,7 @@ class InteractiveGenerator:
             local_etag != s3_etag
         ):
             if local_etag != s3_etag:
-                user_input = prompt(
+                user_input = self.get_input_with_default(
                     "New versions of the models are available, would you like to download them? (y/n) "
                 )
                 if user_input.lower() != "y":
@@ -1620,6 +1620,7 @@ class InteractiveGenerator:
         validator = None
         if valid_fn:
             validator = FunctionValidator(valid_fn)
+            print(validator)
 
         while True:
             try:
@@ -1691,7 +1692,7 @@ class InteractiveGenerator:
             filenames = sorted(all_files)
 
         # Ensure the selected cmd_num is within range
-        if 0 <= cmd_num < len(filenames):
+        if 1 <= cmd_num <= len(filenames):
             selected_filename = filenames[cmd_num - 1]
             file_path = os.path.join(self.args.results_dir, selected_filename)
         else:
@@ -1702,7 +1703,12 @@ class InteractiveGenerator:
             return True
 
         services = self._parse_nmap_xml(file_path)
-
+        if not services:
+            cprint(
+                "Nothing to do here, the file you have selected does not contain valid data",
+                "red",
+            )
+            return False
         while True:
             cmd = self.get_input_with_default(
                 "Would you like to process the results? You can choose between Parsing (type 'p'), the experimental AI method (type 'ai'), or you can go back (type 'b'): "
@@ -1737,8 +1743,8 @@ class InteractiveGenerator:
             self._display_search_results(results, ai=True)
             self._select_and_run_command(results, ai=True)
         else:
-            self._display_search_results(results, ai=True)
-            self._select_and_run_command(results, ai=True)
+            self._display_search_results(results, ai=False)
+            self._select_and_run_command(results, ai=False)
         return True
 
     def _display_search_results(self, results, ai):
@@ -1803,14 +1809,16 @@ class InteractiveGenerator:
         try:
             selection = int(selection)
             if 1 <= selection <= len(selectable_results):
-                if ai:
-                    content_after_colon = selectable_results[selection - 1]
+                selected_result = selectable_results[selection - 1]
+                if not ai and ":" in selected_result:
+                    content_after_colon = selected_result.split(":", 1)[1].strip()
+                    if (
+                        not content_after_colon
+                    ):  # If the content after the colon is empty
+                        content_after_colon = selected_result
                 else:
-                    content_after_colon = (
-                        selectable_results[selection - 1].split(":", 1)[1].strip()
-                        if ":" in selectable_results[selection - 1]
-                        else selectable_results[selection - 1]
-                    )
+                    content_after_colon = selected_result
+
                 modified_content = self.get_input_with_default(
                     "\nEnter the modified content (or press enter to keep it unchanged): ",
                     content_after_colon,
@@ -1977,10 +1985,10 @@ class InteractiveGenerator:
     def user_search_interface(self):
         """Provide a user interface for searching."""
 
-        protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
-        history = InMemoryHistory()
-
         while True:
+            protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
+            history = InMemoryHistory()
+
             query_str = self.get_query_input(
                 completer=protocol_completer, history=history
             )
@@ -2097,7 +2105,7 @@ class InteractiveGenerator:
                     "blue",
                 )
             ),
-            default=content_after_colon,
+            default=self.process_string(content_after_colon),
         )
         if modified_content:
             content_after_colon = modified_content
