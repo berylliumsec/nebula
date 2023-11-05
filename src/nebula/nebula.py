@@ -1705,7 +1705,7 @@ class InteractiveGenerator:
         services = self._parse_nmap_xml(file_path)
         if not services:
             cprint(
-                f"Nothing to do here, the file you have selected does not contain validdata",
+                "Nothing to do here, the file you have selected does not contain validdata",
                 "red",
             )
             return False
