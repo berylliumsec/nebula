@@ -1811,13 +1811,15 @@ class InteractiveGenerator:
             if 1 <= selection <= len(selectable_results):
                 selected_result = selectable_results[selection - 1]
                 if not ai and ":" in selected_result:
-                    content_after_colon = selected_result.split(":", 1)[1].strip()
+                    content_after_colon = self.process_string(
+                        selected_result.split(":", 1)[1].strip()
+                    )
                     if (
                         not content_after_colon
                     ):  # If the content after the colon is empty
                         content_after_colon = selected_result
                 else:
-                    content_after_colon = selected_result
+                    content_after_colon = self.process_string(selected_result)
 
                 modified_content = self.get_input_with_default(
                     "\nEnter the modified content (or press enter to keep it unchanged): ",
