@@ -1992,9 +1992,6 @@ class InteractiveGenerator:
                 )
                 continue
             if query_str.lower() == "b":
-                # Reset the completer and history before breaking out of the loop
-                protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
-                history = InMemoryHistory()
                 break
 
             num_results = self.get_num_results_input(history=history)
@@ -2005,11 +2002,6 @@ class InteractiveGenerator:
                 return True
 
             self.display_results(results, history)
-
-            # Reset the completer and history at the end of the loop
-            protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
-            history = InMemoryHistory()
-
         return True
 
     def get_suggestions(self):
