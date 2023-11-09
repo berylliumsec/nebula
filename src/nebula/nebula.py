@@ -1,4 +1,5 @@
 import argparse
+import ast
 import gc
 import json
 import logging
@@ -37,6 +38,104 @@ from whoosh.analysis import StandardAnalyzer
 from whoosh.fields import ID, TEXT, Schema
 from whoosh.index import open_dir
 from whoosh.qparser import MultifieldParser, OrGroup
+
+libraries_and_functions_cli = {
+    "argparse": True,
+    "optparse": True,
+    "getopt": True,
+}
+
+# New mapping for input prompt functions
+libraries_and_functions_input = {
+    "input": True,
+    "raw_input": True,  # Python 2
+    "prompt_toolkit.shortcuts.prompt": True,
+    "PyInquirer.prompt": True,
+    "click.prompt": True,
+    "sys.stdin.read": True,
+}
+
+
+class InputAnalyzer(ast.NodeVisitor):
+    def __init__(self):
+        self.detected_cli_libs = set()
+        self.detected_input_libs = set()
+        self.options = {}
+        self.has_input = False
+        self.imported_libraries = set()
+        self.is_python2 = False
+
+    def visit_Import(self, node):
+        for n in node.names:
+            self.imported_libraries.add(n.name)
+            if n.name in libraries_and_functions_cli:
+                self.detected_cli_libs.add(n.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = node.module
+        self.imported_libraries.add(module)
+        for n in node.names:
+            full_name = f"{module}.{n.name}"
+            if full_name in libraries_and_functions_cli:
+                self.detected_cli_libs.add(full_name)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Attribute):
+            # Check for command-line arguments methods (argparse, optparse)
+            if (
+                node.func.attr == "add_argument"
+                and "argparse" in self.detected_cli_libs
+            ):
+                option_name = None
+                help_text = None
+                if node.args and isinstance(node.args[0], ast.Str):
+                    option_name = node.args[0].s
+                for keyword in node.keywords:
+                    if keyword.arg == "help" and isinstance(keyword.value, ast.Str):
+                        help_text = keyword.value.s
+                if option_name:
+                    self.options[option_name] = help_text
+            elif (
+                node.func.attr in ["add_option", "option"]
+                and "optparse" in self.detected_cli_libs
+            ):
+                option_name = None
+                help_text = None
+                if node.args and isinstance(node.args[0], ast.Str):
+                    option_name = node.args[0].s
+                for keyword in node.keywords:
+                    if keyword.arg == "help" and isinstance(keyword.value, ast.Str):
+                        help_text = keyword.value.s
+                if option_name:
+                    self.options[option_name] = help_text
+
+            # Check for input functions using attribute access (e.g., module.function())
+            full_name = None
+            if hasattr(node.func.value, "id"):
+                full_name = f"{node.func.value.id}.{node.func.attr}"
+            elif hasattr(node.func.value, "attr"):
+                full_name = f"{node.func.value.attr}.{node.func.attr}"
+            if full_name and full_name in libraries_and_functions_input:
+                self.has_input = True
+                self.detected_input_libs.add(full_name)
+
+        elif isinstance(node.func, ast.Name):
+            # Check for direct input function calls (e.g., input())
+            if node.func.id in libraries_and_functions_input:
+                self.has_input = True
+                self.detected_input_libs.add(node.func.id)
+            elif node.func.id == "getopt" and "getopt" in self.detected_cli_libs:
+                # Process getopt options
+                if node.args and isinstance(node.args[0], ast.Str):
+                    options = node.args[0].s.split()
+                    for opt in options:
+                        self.options[opt] = None
+            elif node.func.id == "print" and not isinstance(node, ast.Call):
+                # Check for Python 2 print statement
+                self.is_python2 = True
+        self.generic_visit(node)
 
 
 trans_log.set_verbosity_error()
@@ -124,7 +223,6 @@ class InteractiveGenerator:
         self.flag_file = None
         self.flag_descriptions = None
         self.extracted_flags = []
-
         self.random_name = None
         self.current_model = None
         self.current_model_name = None
@@ -204,9 +302,70 @@ class InteractiveGenerator:
         parser.add_argument(
             "--lan_or_wan_ip",
             type=str,
-            help="Pass in your lan or wan ip for metasploit tests",
+            help="Your lan or wan ip for metasploit tests",
         )
+        parser.add_argument(
+            "--exploit_db_base_location",
+            type=str,
+            default="/opt/exploit-database/",
+            help="the base location of exploit_db files",
+        )
+
         return parser.parse_args()
+
+    def _extract_python_files(self, text):
+        """Extract .py files from the given text."""
+        return [word for word in text.split() if word.endswith(".py")]
+
+    def _analyze_and_modify_python_file(self, file):
+        """Analyze a Python file and prompt the user for input options."""
+        if not os.path.exists(file):
+            cprint(f"Warning: File {file} does not exist.", "red")
+            return None
+
+        try:
+            with open(file, "r") as f:
+                content = f.read()
+                tree = ast.parse(content)
+                analyzer = InputAnalyzer()
+                analyzer.visit(tree)
+
+                if not analyzer.detected_cli_libs:
+                    cprint(
+                        f"{file} does not use recognized input libraries, please run it manually.",
+                        "red",
+                    )
+                    return None
+                if analyzer.detected_input_libs:
+                    cprint(
+                        f"{file} has direct user prompt embedded in it and cannot be ran automatically, please run it manually.",
+                        "red",
+                    )
+                    return None
+                options = []
+                cprint(
+                    "IMPORTANT: I will attempt to guide you through the process of using this exploit...",
+                    "green",
+                )
+                for option, description in analyzer.options.items():
+                    prompt_text = f"Enter value for {option}"
+                    if description:
+                        prompt_text += f" ({description})"
+                    prompt_text += " (or 'q' to stop): "
+                    cprint(prompt_text, "yellow", end="")
+                    value = input()
+                    if value == "q":
+                        cprint("Operation aborted by user.", "red")
+                        return None
+                    options.extend([option, value])
+
+                return options
+
+        except (FileNotFoundError, SyntaxError) as e:
+            cprint(
+                f"Warning: File {file} had an issue ({str(e)}). Run it manually.", "red"
+            )
+            return None
 
     def split(self, data):
         return data.split(": ", 1)
@@ -307,7 +466,7 @@ class InteractiveGenerator:
                             [ip],
                             [url],
                         )
-                commands.append(clean_up)
+                    commands.append(clean_up)
         return list(set(commands))
 
     def autonomous_mode(self):
@@ -603,6 +762,7 @@ class InteractiveGenerator:
                 user_input = self.get_input_with_default(
                     "New versions of the models are available, would you like to download them? (y/n) "
                 )
+
                 if user_input.lower() != "y":
                     return
 
@@ -714,6 +874,7 @@ class InteractiveGenerator:
 
                 # Reset the terminal to a sane state after subprocess execution
                 os.system("stty sane")
+                os.system("stty echo")
 
                 return process.returncode, stdout, stderr
             except Exception as e:
@@ -736,6 +897,7 @@ class InteractiveGenerator:
         truncated_cmd = command_str[:10].replace(" ", "_") + (
             "..." if len(command_str) > 15 else ""
         )
+        truncated_cmd = self.remove_slashes(truncated_cmd)
 
         file_name = f"{timestamp}_{truncated_cmd}"
         result_file_path = os.path.join(
@@ -826,6 +988,18 @@ class InteractiveGenerator:
         except Exception as e:
             logging.error(f"Error while extracting IP from string '{s[:30]}...': {e}")
             return None
+
+    def replace_base_location(self, path):
+        """
+        Replace the placeholder {base_file_location} with new_location.
+
+        :param path: The original path with the placeholder.
+        :param new_location: The string to replace the placeholder with.
+        :return: The new path with the placeholder replaced.
+        """
+        return path.replace(
+            "{base_file_location}", self.args.exploit_db_base_location.rstrip("/")
+        )
 
     def process_string(
         self,
@@ -938,7 +1112,8 @@ class InteractiveGenerator:
 
         if s.strip().startswith("nuclei"):
             s = re.sub(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b\s*$", "", s).strip()
-
+        if "{base_file_location}" in s:
+            s = self.replace_base_location(s)
         return s
 
     def extract_urls(self, s: str) -> list:
@@ -953,7 +1128,7 @@ class InteractiveGenerator:
         url_pattern = r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
         return re.findall(url_pattern, s)
 
-    def generate_text(self, prompt_text: str, max_length: int = 300000) -> str:
+    def generate_text(self, prompt_text: str, max_length: int = 1024) -> str:
         """
         Generate text using the current model based on the provided prompt.
 
@@ -977,7 +1152,7 @@ class InteractiveGenerator:
                 max_length=max_length,
                 pad_to_max_length=False,
                 return_attention_mask=True,
-                truncation=True,
+                truncation=False,
             )
 
             input_ids = encoding["input_ids"].to(self.device)
@@ -1596,6 +1771,23 @@ class InteractiveGenerator:
                 file.write(str(cve_matches))
         return parsed_results
 
+    def correct_cve_filename(self, filepath):
+        # This regular expression is looking for the CVE pattern anywhere in the string
+        match = re.search(r"(CVE)\s*(\d{4})(\d+)(\..+)", filepath, re.IGNORECASE)
+        if match:
+            # Reformat the CVE with the correct structure
+            corrected_cve = (
+                f"{match.group(1).upper()}-{match.group(2)}-{match.group(3)}"
+            )
+            # Replace the incorrect CVE part with the corrected one
+            corrected_filepath = re.sub(
+                r"CVE\s*\d{4}\d+", corrected_cve, filepath, flags=re.IGNORECASE
+            )
+            return corrected_filepath
+        else:
+            # If the filepath does not contain a CVE pattern, return it as is
+            return filepath
+
     def colored_output(self, text):
         """Color everything before the first ':' in red and the rest in yellow."""
 
@@ -1620,7 +1812,6 @@ class InteractiveGenerator:
         validator = None
         if valid_fn:
             validator = FunctionValidator(valid_fn)
-            print(validator)
 
         while True:
             try:
@@ -1819,7 +2010,16 @@ class InteractiveGenerator:
                     ):  # If the content after the colon is empty
                         content_after_colon = selected_result
                 else:
-                    content_after_colon = self.process_string(selected_result)
+                    content_after_colon = selected_result
+                if not content_after_colon.endswith(
+                    (".py", ".sh")
+                ) and not content_after_colon.startswith("nmap"):
+                    cprint(
+                        "Exploit cannot be run directly, please copy the file path and run it manually",
+                        "red",
+                    )
+                    cprint(f"{content_after_colon}", "green")
+                    return
 
                 modified_content = self.get_input_with_default(
                     "\nEnter the modified content (or press enter to keep it unchanged): ",
@@ -1901,7 +2101,7 @@ class InteractiveGenerator:
 
             try:
                 cmd_num = int(cmd)
-                if 0 < cmd_num <= len(filenames):
+                if 1 <= cmd_num <= len(filenames):
                     file_path = os.path.join(
                         self.args.results_dir, filenames[cmd_num - 1]
                     )
@@ -1960,6 +2160,9 @@ class InteractiveGenerator:
             )
             return False  # This returns the original prompt as a fallback. Adjust as needed.
 
+    def remove_slashes(self, input_str: str) -> str:
+        return input_str.replace("/", "").replace("\\", "")
+
     def run_command(self, text: str) -> None:
         """
         A function to run a command in the background based on the generated text.
@@ -1980,13 +2183,16 @@ class InteractiveGenerator:
         thread.start()
 
         # Inform user that command has started
-        print("\nThe operation has been initiated.")
+        cprint(f"\nThe operation has been initiated, running {text}", "green")
 
         return
 
     def user_search_interface(self):
         """Provide a user interface for searching."""
-
+        cprint(
+            "Please ensure that you have set the base path to exploit_db_base_location using --exploit_db_base_location",
+            "yellow",
+        )
         while True:
             protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
             history = InMemoryHistory()
@@ -2083,7 +2289,9 @@ class InteractiveGenerator:
                         history=history,
                     )
                 )
+
                 if 1 <= selection <= len(other_lines):
+
                     self.modify_and_run_command(other_lines[selection - 1])
                     break
                 else:
@@ -2095,11 +2303,31 @@ class InteractiveGenerator:
                 break
 
     def modify_and_run_command(self, selected_line):
+        """Modify the command based on user input and then run it."""
+
+        # Extract content after the colon if present, or use the entire line.
         content_after_colon = (
             selected_line.split(":", 1)[1].strip()
             if ":" in selected_line
-            else selected_line
+            else selected_line.strip()
         )
+
+        # Check if the line is not a Python or shell script and does not start with "nmap".
+        if not content_after_colon.endswith(
+            (".py", ".sh")
+        ) and not content_after_colon.startswith("nmap"):
+            cprint(
+                "Exploit cannot be run directly, please copy the file path and run it manually",
+                "red",
+            )
+            return
+
+        # Extract python files from the content, if any.
+        python_files = self._extract_python_files(
+            self.process_string(content_after_colon)
+        )
+
+        # Prompt the user to modify the content or keep it unchanged.
         modified_content = prompt(
             ANSI(
                 colored(
@@ -2107,11 +2335,34 @@ class InteractiveGenerator:
                     "blue",
                 )
             ),
-            default=self.process_string(content_after_colon),
+            default=self.process_string(
+                "python3 " + content_after_colon
+                if python_files
+                else content_after_colon
+            ),
         )
+
+        # If the user provided modified content, use it.
         if modified_content:
             content_after_colon = modified_content
-        self.run_command(content_after_colon)
+
+        # If there are python files, analyze and run each with potential options.
+        if python_files:
+            for file in python_files:
+                options = self._analyze_and_modify_python_file(file)
+                if options:
+                    cmd = ["python3"] + [file] + options
+                    self.run_command(" ".join(cmd))
+
+                else:
+                    # If no options are returned, log an appropriate message and exit.
+                    cprint(
+                        f"Could not determine options for the file {file}.", "yellow"
+                    )
+                    return
+        else:
+            # If no python files, run the content directly.
+            self.run_command(content_after_colon)
 
     def format_service_name(self, line):
         """Format the service name properly."""
@@ -2132,27 +2383,17 @@ class InteractiveGenerator:
         return f"{hostname}:{service}"
 
     def get_modified_command(self, text: str) -> str:
-        """Prompt the user to modify and return a command.
-
-        Args:
-            text (str): The proposed command.
-
-        Returns:
-            str: The modified command.
-        """
+        """Prompt the user to modify and return a command."""
         history = InMemoryHistory()
         style = Style.from_dict(
             {
                 "prompt": "yellow",
             }
         )
-        try:
-            print_formatted_text(
-                ANSI(colored("\nThe current command is:", "cyan")), end=""
-            )
-            print_formatted_text(ANSI(colored(text, "magenta")))
 
-            # Prompt the user to modify the command with a default value
+        try:
+            cprint(f"\nThe current command is: {text}", "cyan")
+
             modified_text = prompt(
                 "\nModify the command as needed and press Enter: ",
                 default=text,
@@ -2160,17 +2401,24 @@ class InteractiveGenerator:
                 style=style,
             )
 
-            return modified_text.strip()
+            python_files = self._extract_python_files(modified_text)
+            if python_files:
+                for file in python_files:
+                    options = self._analyze_and_modify_python_file(file)
+                    if options:
+                        modified_text += " " + " ".join(options)
+                        cprint(f"{modified_text}", "red")
+                    else:
+                        return None
+                return modified_text.strip()
+            else:
+                return modified_text.strip()
 
         except Exception as e:
             logging.error(f"Error during modified command prompt: {e}")
-            print_formatted_text(
-                ANSI(
-                    colored(
-                        "An unexpected error occurred while modifying the command. Please try again or check logs.",
-                        "red",
-                    )
-                )
+            cprint(
+                "An unexpected error occurred while modifying the command. Please try again or check logs.",
+                "red",
             )
             return text  # Return the original text as a fallback
 
@@ -2190,7 +2438,11 @@ class InteractiveGenerator:
                 return
 
             # Ask the user for their action choice
-            action_choice = self.get_action_choice()
+            if text.strip().endswith(".txt") and not text.strip().startswith("nmap"):
+
+                return
+            else:
+                action_choice = self.get_action_choice()
 
             # If 'always' is chosen, set the flag and run the command
             if action_choice in ["always", "a"]:
@@ -2199,6 +2451,8 @@ class InteractiveGenerator:
             # If 'yes' is chosen, let the user modify the command and then run it
             elif action_choice in ["yes", "y"]:
                 modified_command = self.get_modified_command(text)
+                if not modified_command:
+                    return
                 self.run_command(modified_command if modified_command else text)
         except Exception as e:
             logging.error(f"Error handling generated text: {e}")

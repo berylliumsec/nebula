@@ -104,8 +104,22 @@ Non-Docker versions of Nebula have been extensively tested and optimized for Lin
 
 - [Python3](https://www.python.org/downloads/)
 - libreadline-dev:
+- [exploitdb](https://www.exploit-db.com/searchsploit)
 
+You can install exploitdb via APT or GIT, note that that will affect what you set the `--exploit_db_base_location` as.
 Linux (debian based):
+
+APT based install:
+```bash
+sudo apt -y install exploitdb
+```
+
+GIT based install:
+```bash
+sudo git clone https://gitlab.com/exploit-database/exploitdb.git /opt/exploitdb
+sudo ln -sf /opt/exploitdb/searchsploit /usr/local/bin/searchsploit
+```
+
 ```bash
 sudo apt install -y libreadline-dev
 ```
@@ -295,7 +309,7 @@ nebula -h
 
 ```bash
 usage: nebula.py [-h] [--results_dir RESULTS_DIR] [--model_dir MODEL_DIR] [--testing_mode TESTING_MODE] [--targets_list TARGETS_LIST] [--autonomous_mode AUTONOMOUS_MODE]
-                 [--attack_mode ATTACK_MODE] [--nmap_vuln_scan_command NMAP_VULN_SCAN_COMMAND] [--lan_or_wan_ip LAN_OR_WAN_IP]
+                 [--attack_mode ATTACK_MODE] [--nmap_vuln_scan_command NMAP_VULN_SCAN_COMMAND] [--lan_or_wan_ip LAN_OR_WAN_IP] [--vuln_db_base_location VULN_DB_BASE_LOCATION]
 
 Interactive Command Generator
 
@@ -316,7 +330,9 @@ options:
   --nmap_vuln_scan_command NMAP_VULN_SCAN_COMMAND
                         Nmap vulnerability scan command to run
   --lan_or_wan_ip LAN_OR_WAN_IP
-                        Pass in your lan or wan ip for metasploit tests
+                        Your lan or wan ip for metasploit tests
+  --vuln_db_base_location VULN_DB_BASE_LOCATION
+                        the base location of vuln_db files
 ```
 
 ### Modes.
