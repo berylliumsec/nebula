@@ -131,7 +131,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Search has now been expanded to include all CVE(s) in vuln-db
+              - Search has now been expanded to include all CVE(s) in vuln-db. Supported exploits can be run directly from Nebula's interface.
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
