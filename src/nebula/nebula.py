@@ -639,6 +639,7 @@ class InteractiveGenerator:
                 f"Flags file '{file_path}' not found, commands for '{selected_model_name}' will not contain descriptions",
                 "yellow",
             )
+            logging.error({e})
             return {}
 
     def extract_and_match_flags(self, command):
