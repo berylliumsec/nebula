@@ -624,6 +624,8 @@ class InteractiveGenerator:
     def _load_flag_descriptions(self, file_path, selected_model_name):
         """Load flag descriptions from a file and return them as a dictionary."""
         try:
+            if file_path is None:
+                raise ValueError("file_path cannot be None")
             with open(file_path, "r") as f:
                 lines = f.readlines()
                 # Store the entire line as the value in the dictionary using flag as key
@@ -632,11 +634,12 @@ class InteractiveGenerator:
                     for line in lines
                     if ":" in line
                 }
-        except FileNotFoundError:
+        except Exception as e:
             cprint(
                 f"Flags file '{file_path}' not found, commands for '{selected_model_name}' will not contain descriptions",
                 "yellow",
             )
+            logging.error({e})
             return {}
 
     def extract_and_match_flags(self, command):
