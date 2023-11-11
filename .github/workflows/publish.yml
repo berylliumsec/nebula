@@ -131,7 +131,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - This release removes unnecessary values in the index files and improves the users experience when searching for vulnerabilities.
+              - This release removes unnecessary values in the index files and improves the users experience when using the search interface and suggestions feature.
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
