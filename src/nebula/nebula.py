@@ -967,9 +967,7 @@ class InteractiveGenerator:
                     s = ":".join(segments[i + 1 :])
                     break
 
-            s = re.sub(r"-(?=\d)", "", s)
-            s = re.sub(r"(?<=[a-zA-Z])(?=\d)", " ", s)
-            s = re.sub(r"(?<=\d)(?=[a-zA-Z])", " ", s)
+
             s = re.sub(r"\.$", "", s)
 
             return s.strip()
