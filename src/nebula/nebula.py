@@ -753,7 +753,7 @@ class InteractiveGenerator:
     def get_s3_file_etag(self, s3_url):
         if not self.is_internet_available():
             cprint("No internet connection available. Skipping version check.", "red")
-            return
+            return False
         response = requests.head(s3_url)
         return response.headers.get("ETag")
 
@@ -773,11 +773,12 @@ class InteractiveGenerator:
         metadata_file = "metadata.json"
         local_etag = self.get_local_metadata(metadata_file)
         s3_etag = self.get_s3_file_etag(self.s3_url)
-
+        if s3_etag is False:
+            return
         if not self.folder_exists_and_not_empty(self.args.model_dir) or (
             local_etag != s3_etag
         ):
-            if local_etag != s3_etag:
+            if local_etag and local_etag != s3_etag:
                 user_input = self.get_input_with_default(
                     "New versions of the models are available, would you like to download them? (y/n) "
                 )
