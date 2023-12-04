@@ -667,6 +667,10 @@ class InteractiveGenerator:
 
     def check_new_pypi_version(self, package_name="nebula-ai"):
         """Check if a newer version of the package is available on PyPI."""
+        if not self.is_internet_available():
+            cprint("No internet connection available. Skipping version check.", "red")
+            return
+
         installed_version = version(package_name)
         cprint(f"installed version: {installed_version}", "green")
         latest_version = self.get_latest_pypi_version(package_name)
@@ -737,7 +741,19 @@ class InteractiveGenerator:
             else "https://nebula-models.s3.amazonaws.com/unified_models.zip"
         )
 
+    def is_internet_available(self, host="8.8.8.8", port=53, timeout=3):
+        """Check if there is an internet connection."""
+        try:
+            socket.setdefaulttimeout(timeout)
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+            return True
+        except Exception:
+            return False
+
     def get_s3_file_etag(self, s3_url):
+        if not self.is_internet_available():
+            cprint("No internet connection available. Skipping version check.", "red")
+            return
         response = requests.head(s3_url)
         return response.headers.get("ETag")
 
@@ -788,7 +804,6 @@ class InteractiveGenerator:
             )
 
     def _validate_model_dirs(self):
-
         while True:
             try:
                 model_dirs = [
@@ -912,7 +927,6 @@ class InteractiveGenerator:
             cprint("XML format detected, nothing to do", "green")
             return
         except Exception:
-
             # Conditions to decide if the results should be written to the file or not
             should_write_stderr = stderr and self.args.autonomous_mode is False
             if stdout.startswith("Starting Nmap"):
@@ -967,7 +981,6 @@ class InteractiveGenerator:
                     s = ":".join(segments[i + 1 :])
                     break
 
-
             s = re.sub(r"\.$", "", s)
 
             return s.strip()
@@ -1009,7 +1022,6 @@ class InteractiveGenerator:
         replacement_urls: Optional[List[str]] = None,
         port_arg: Optional[int] = None,
     ) -> str:
-
         # Handle the default values
         if replacement_ips is None:
             replacement_ips = []
@@ -2135,7 +2147,6 @@ class InteractiveGenerator:
             first_clean_up = self.ensure_space_between_letter_and_number(generated_text)
             second_clean_up = self.process_string(first_clean_up, prompt_ip, urls)
             if self.args.autonomous_mode is False:
-
                 try:
                     help = self.extract_and_match_flags(second_clean_up)
                     if help:
@@ -2220,7 +2231,6 @@ class InteractiveGenerator:
         return True
 
     def get_suggestions(self):
-
         with open(self.suggestions_file, "r") as file:
             return [line.strip() for line in file if line.strip()]
 
@@ -2292,7 +2302,6 @@ class InteractiveGenerator:
                 )
 
                 if 1 <= selection <= len(other_lines):
-
                     self.modify_and_run_command(other_lines[selection - 1])
                     break
                 else:
@@ -2440,7 +2449,6 @@ class InteractiveGenerator:
 
             # Ask the user for their action choice
             if text.strip().endswith(".txt") and not text.strip().startswith("nmap"):
-
                 return
             else:
                 action_choice = self.get_action_choice()
