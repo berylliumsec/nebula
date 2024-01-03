@@ -25,13 +25,25 @@ Welcome to Nebula.
 
 <span style="color:green">📢 Announcement📢 </span>
 
-Driven by our dedication to enhancing penetration testing through natural language, we're proud to unveil the latest versions of the NMAP and Nuclei models, characterized by significant advancements in context comprehension. Watch these videos for a demonstration of their capabilities.
+🌐 Introducing Nebula Pro: A New Era in Ethical Hacking 🌐
 
-📺 [Watch the Demo: Latest NMAP Model](https://www.youtube.com/watch?v=DGfFi9RVcEY) 🚀
+🚀 We're thrilled to unveil a sneak peek of Nebula Pro, our latest innovation designed to empower ethical hackers with advanced, AI-driven capabilities. After months of dedicated development, we're almost ready to launch the beta version!
 
-📺 [Watch the Demo: Latest Nuclei Model](https://youtu.be/MN6hLPon2iA) 🚀
+💡 What's in Store?
 
-📺 [Watch the Demo: Latest Zap Model](https://youtu.be/CFeOozmXf5k) 🚀
+Enhanced AI Features: Delve into AI-powered tools that redefine efficiency and precision in penetration testing.
+User-Centric Design: Experience a platform crafted for both novice and veteran ethical hackers, with seamless navigation and intuitive controls.
+Robust Functionality: From automated vulnerability scans to real-time data analysis, Nebula Pro is packed with features that cater to every aspect of ethical hacking.
+
+📅 Beta Launching Soon: Get ready to transform your ethical hacking journey!
+
+👀 Sneak Peek Inside: Don't miss our exclusive preview video that gives you a glimpse of what Nebula Pro has in store.
+
+🔗 Stay Updated: Follow us for the latest updates and be the first to know when Nebula Pro Beta goes live!
+
+📢 We're eager to hear your feedback and insights. Let's redefine ethical hacking together with Nebula Pro!
+
+📺 [Nebula Pro Sneak Peek](https://www.youtube.com/watch?v=EE9u7TCUAnA) 🚀
 
 
 **DISCLAIMER**
