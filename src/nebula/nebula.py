@@ -218,6 +218,7 @@ class InteractiveGenerator:
         self.tokenizers = {}
         self.models = {}
         self.print_star_sky()
+        self.show_nebula_pro()
         self.log_file_path = None
         self.services = []
         self.flag_file = None
@@ -591,6 +592,20 @@ class InteractiveGenerator:
                     print(" ", end="")
             print()  # Move to the next line after each row
 
+    def show_nebula_pro(self):
+        # Define your message components
+        header = colored('Introducing Nebula Pro!', 'cyan', attrs=['bold', 'blink'])
+        body = colored('Unlock the full potential of your experience with our new Nebula Pro coming this January. Watch the videos that showcase its features.', 'yellow')
+        video_link = colored('Check out the videos here: https://www.youtube.com/playlist?list=PLySxaLbLL0gpAaDQYq6g6sb1q6KwqOAr4', 'blue', attrs=['underline'])
+        twitter_info = colored('Stay updated! Follow us on Twitter: https://twitter.com/berylliumsec_', 'green')
+        # Print your message
+        cprint(header, 'cyan')
+        print(body)
+        print(video_link)
+        print(twitter_info)
+
+        # Additional message to catch user's attention
+        cprint('\nBe part of the revolution. Upgrade to Nebula Pro now!', 'magenta', attrs=['bold'])
     def print_star_sky(self, width=30, height=10, density=0.5):
         # Calculate the position to print the welcome message
         welcome_msg = "Welcome to Nebula"
