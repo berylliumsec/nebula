@@ -603,9 +603,7 @@ class InteractiveGenerator:
         print(body)
         print(video_link)
         print(twitter_info)
-
-        # Additional message to catch user's attention
-        cprint('\nBe part of the revolution. Upgrade to Nebula Pro now!', 'magenta', attrs=['bold'])
+        
     def print_star_sky(self, width=30, height=10, density=0.5):
         # Calculate the position to print the welcome message
         welcome_msg = "Welcome to Nebula"
