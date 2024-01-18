@@ -131,7 +131,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - This release checks if the internet is avaiable, if it is not, it skips update checks
+              - This release adds awareness for Nebula Pro
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
