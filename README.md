@@ -25,7 +25,7 @@ Welcome to Nebula.
 
 <span style="color:green">📢 Announcement📢 </span>
 
-🌐 Introducing Nebula Pro: A New Era in Ethical Hacking 🌐
+## 🌐 Introducing Nebula Pro: A New Era in Ethical Hacking 🌐
 
 🚀 We're thrilled to unveil a sneak peek of Nebula Pro, our latest innovation designed to empower ethical hackers with advanced, AI-driven capabilities. After months of dedicated development, we're almost ready to launch the beta version!
 
