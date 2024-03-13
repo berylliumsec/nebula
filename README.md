@@ -43,7 +43,7 @@ Robust Functionality: From automated vulnerability scans to real-time data analy
 
 📢 We're eager to hear your feedback and insights. Let's redefine ethical hacking together with Nebula Pro!
 
-📺 [Nebula Pro Sneak Peek](https://www.youtube.com/playlist?list=PLySxaLbLL0gpAaDQYq6g6sb1q6KwqOAr4) 🚀
+# 📺 [Click Here to Get Access To Nebula Pro Now](https://www.berylliumsec.com/nebula-pro-waitlist) 🚀
 
 
 **DISCLAIMER**
