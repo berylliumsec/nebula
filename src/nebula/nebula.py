@@ -229,10 +229,8 @@ class InteractiveGenerator:
         self.current_model_name = None
         self.model_names = self.get_model_names()
         self.always_apply_action: bool = False
-        self.suggestions_file = self.return_path("suggestions")
-        with open(self.suggestions_file, "r") as f:
-            # Each line in the file is a word you want to exclude
-            self.words_to_exclude = [line.strip() for line in f]
+        self.words_to_exclude = []
+        self.load_exclusions()
         self.suggestions = self.get_suggestions()
         if self.is_run_as_package():
             self.check_new_pypi_version()  # Check for newer PyPI package
@@ -317,6 +315,28 @@ class InteractiveGenerator:
     def _extract_python_files(self, text):
         """Extract .py files from the given text."""
         return [word for word in text.split() if word.endswith(".py")]
+
+    def load_exclusions(self):
+        try:
+            self.suggestions_file = self.return_path("suggestions")
+            
+            # Initialize the list to empty first, in case the file does not exist or an error occurs
+            
+
+            if not os.path.exists(self.suggestions_file):
+                print(f"Warning: {self.suggestions_file} does not exist. Continuing without exclusion words.")
+                return  # Return from the function, but continue the program
+
+            with open(self.suggestions_file, "r") as f:
+
+                self.words_to_exclude = [line.strip() for line in f]
+
+        except PermissionError as e:
+            print(f"Permission denied: {e}. Please check your file permissions.")
+
+
+        except Exception as e:  # Catch all other exceptions.
+            print(f"An unexpected error occurred: {e}. Continuing with default settings.")
 
     def _analyze_and_modify_python_file(self, file):
         """Analyze a Python file and prompt the user for input options."""
@@ -596,8 +616,8 @@ class InteractiveGenerator:
         # Define your message components
         header = colored('Introducing Nebula Pro!', 'cyan', attrs=['bold', 'blink'])
         body = colored('Unlock the full potential of your experience with our new Nebula Pro coming this January. Watch the videos that showcase its features.', 'yellow')
-        video_link = colored('Check out the videos here: https://www.youtube.com/playlist?list=PLySxaLbLL0gpAaDQYq6g6sb1q6KwqOAr4', 'blue', attrs=['underline'])
-        twitter_info = colored('Stay updated! Follow us on Twitter: https://twitter.com/berylliumsec_', 'green')
+        video_link = colored('Get Access Now: https://www.berylliumsec.com/nebula-pro-waitlist', 'blue', attrs=['underline'])
+        twitter_info = colored('Stay updated! Follow us on X: https://x.com/berylliumsec_', 'green')
         # Print your message
         cprint(header, 'cyan')
         print(body)
