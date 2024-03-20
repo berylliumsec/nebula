@@ -220,6 +220,18 @@ Then run:
 sudo nebula
 ```
 
+**Kali Linux Specific Post Installation Steps**
+
+By default, nebula is installed in the following path on Kali
+
+```bash
+"$HOME/.local/bin/.local/bin
+```
+To ensure that nebula is in your system path, add this to your .zshrc file
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 **OPTIONAL nebula-watcher installation**
 
