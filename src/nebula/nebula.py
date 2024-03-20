@@ -319,24 +319,25 @@ class InteractiveGenerator:
     def load_exclusions(self):
         try:
             self.suggestions_file = self.return_path("suggestions")
-            
+
             # Initialize the list to empty first, in case the file does not exist or an error occurs
-            
 
             if not os.path.exists(self.suggestions_file):
-                print(f"Warning: {self.suggestions_file} does not exist. Continuing without exclusion words.")
+                print(
+                    f"Warning: {self.suggestions_file} does not exist. Continuing without exclusion words."
+                )
                 return  # Return from the function, but continue the program
 
             with open(self.suggestions_file, "r") as f:
-
                 self.words_to_exclude = [line.strip() for line in f]
 
         except PermissionError as e:
             print(f"Permission denied: {e}. Please check your file permissions.")
 
-
         except Exception as e:  # Catch all other exceptions.
-            print(f"An unexpected error occurred: {e}. Continuing with default settings.")
+            print(
+                f"An unexpected error occurred: {e}. Continuing with default settings."
+            )
 
     def _analyze_and_modify_python_file(self, file):
         """Analyze a Python file and prompt the user for input options."""
@@ -567,7 +568,7 @@ class InteractiveGenerator:
     def select_mode(self):
         style = Style.from_dict(
             {
-                "prompt": "cyan",
+                "prompt": "white",
             }
         )
 
@@ -600,7 +601,7 @@ class InteractiveGenerator:
                 # Check if we are at the position to print the farewell message
                 if y == start_y and start_x <= x < start_x + len(farewell_msg):
                     print(
-                        colored(farewell_msg[x - start_x], "green", attrs=["bold"]),
+                        colored(farewell_msg[x - start_x], "white", attrs=["bold"]),
                         end="",
                     )
                     continue
@@ -614,16 +615,25 @@ class InteractiveGenerator:
 
     def show_nebula_pro(self):
         # Define your message components
-        header = colored('Introducing Nebula Pro!', 'cyan', attrs=['bold', 'blink'])
-        body = colored('Unlock the full potential of your experience with our new Nebula Pro coming this January. Watch the videos that showcase its features.', 'yellow')
-        video_link = colored('Get Access Now: https://www.berylliumsec.com/nebula-pro-waitlist', 'blue', attrs=['underline'])
-        twitter_info = colored('Stay updated! Follow us on X: https://x.com/berylliumsec_', 'green')
+        header = colored("Introducing Nebula Pro!", "cyan", attrs=["bold", "blink"])
+        body = colored(
+            "Unlock the full potential of your experience with our new Nebula Pro, get it now!",
+            "white",
+        )
+        video_link = colored(
+            "Get Access Now: https://www.berylliumsec.com/nebula-pro-waitlist",
+            "cyan",
+            attrs=["underline"],
+        )
+        twitter_info = colored(
+            "Stay updated! Follow us on X: https://x.com/berylliumsec_", "white"
+        )
         # Print your message
-        cprint(header, 'cyan')
+        cprint(header, "cyan")
         print(body)
         print(video_link)
         print(twitter_info)
-        
+
     def print_star_sky(self, width=30, height=10, density=0.5):
         # Calculate the position to print the welcome message
         welcome_msg = "Welcome to Nebula"
@@ -642,7 +652,7 @@ class InteractiveGenerator:
                 # Check if we are at the position to print the welcome message
                 if y == start_y and start_x <= x < start_x + len(welcome_msg):
                     print(
-                        colored(welcome_msg[x - start_x], "green", attrs=["bold"]),
+                        colored(welcome_msg[x - start_x], "white", attrs=["bold"]),
                         end="",
                     )
                     continue
@@ -705,7 +715,7 @@ class InteractiveGenerator:
             return
 
         installed_version = version(package_name)
-        cprint(f"installed version: {installed_version}", "green")
+        cprint(f"installed version: {installed_version}", "cyan")
         latest_version = self.get_latest_pypi_version(package_name)
 
         if latest_version and latest_version > installed_version:
@@ -834,7 +844,7 @@ class InteractiveGenerator:
         else:
             cprint(
                 f"found {self.args.model_dir}, to download new models remove {self.args.model_dir} or invoke nebula from a different directory",
-                "green",
+                "white",
             )
 
     def _validate_model_dirs(self):
@@ -1225,7 +1235,8 @@ class InteractiveGenerator:
                 output[0], skip_special_tokens=True
             )
 
-            cprint(f"generated text: {generated_text}", "red")
+            cprint("\n generated text:", "cyan")
+            cprint(f"{generated_text}", "white")
             return generated_text
 
         except Exception as e:
@@ -1298,7 +1309,7 @@ class InteractiveGenerator:
                 if len(filename) > self.max_truncate_length
                 else filename
             )
-            cprint(f"{idx+1}. {truncated_filename}", "yellow")
+            cprint(f"{idx+1}. {truncated_filename}", "white")
 
     def get_user_prompt(self) -> str:
         """
@@ -1307,7 +1318,7 @@ class InteractiveGenerator:
         Returns:
             str: The user's command input.
         """
-        style = Style.from_dict({"prompt": "cyan", "error": "red"})
+        style = Style.from_dict({"prompt": "white", "error": "red"})
 
         while True:
             try:
@@ -1396,16 +1407,16 @@ class InteractiveGenerator:
 
         while True:
             print_formatted_text(
-                "Available models:", style=Style.from_dict({"": "yellow"})
+                "Available models:", style=Style.from_dict({"": "cyan"})
             )
             for idx, model_name in enumerate(self.model_names, 1):
                 print_formatted_text(
-                    f"{idx}. {model_name}", style=Style.from_dict({"": "yellow"})
+                    f"{idx}. {model_name}", style=Style.from_dict({"": "white"})
                 )
 
             choice = session.prompt(
                 "Select a model by entering its number: ",
-                style=Style.from_dict({"": "cyan"}),
+                style=Style.from_dict({"": "white"}),
             )
 
             if choice.isdigit() and 1 <= int(choice) <= len(self.model_names):
@@ -1443,7 +1454,7 @@ class InteractiveGenerator:
 
         print_formatted_text(
             f"You've selected the {selected_model_name} model!",
-            style=Style.from_dict({"": "yellow"}),
+            style=Style.from_dict({"": "cyan"}),
         )
 
         return selected_model_name
@@ -1492,24 +1503,24 @@ class InteractiveGenerator:
                         self.unload_model()
                     cprint(
                         f"Loading tokenizer for {model_folder}...",
-                        "yellow",
+                        "white",
                         end="",
                         flush=True,
                     )
                     self.current_tokenizer = GPT2Tokenizer.from_pretrained(full_path)
-                    cprint(" Done!", "green")
+                    cprint(" Done!", "cyan")
 
                     # Load model
                     cprint(
                         f"Loading model for {model_folder}...",
-                        "yellow",
+                        "white",
                         end="",
                         flush=True,
                     )
                     self.current_model = GPT2LMHeadModel.from_pretrained(full_path)
                     self.current_model.eval()
                     self.current_model.to(self.device)
-                    cprint(" Done!", "green")
+                    cprint(" Done!", "cyan")
 
                     # Add the successfully loaded model and tokenizer to their respective dictionaries
                     if not self.single_model_mode:
@@ -1542,7 +1553,7 @@ class InteractiveGenerator:
             process = psutil.Process(os.getpid())
             cprint(
                 f"CPU memory usage: {process.memory_info().rss / (1024**2):.2f} MB",
-                "green",
+                "white",
             )
         except Exception as e:
             cprint(f"An error occurred while fetching CPU memory info: {e}", "red")
@@ -1552,7 +1563,7 @@ class InteractiveGenerator:
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            cprint(f"Used GPU memory: {info.used / (1024**2):.2f} MB", "green")
+            cprint(f"Used GPU memory: {info.used / (1024**2):.2f} MB", "white")
 
         except Exception as e:
             cprint(f"An error occurred while fetching GPU memory info: {e}", "red")
@@ -1564,7 +1575,7 @@ class InteractiveGenerator:
         """Internal method to get a command input from the user without model selection."""
 
         # Styling definitions
-        style = Style.from_dict({"prompt": "cyan", "error": "red", "message": "green"})
+        style = Style.from_dict({"prompt": "white", "error": "red", "message": "white"})
 
         # Initialize the spell checker
         spell = SpellChecker()
@@ -1844,7 +1855,7 @@ class InteractiveGenerator:
         # Color everything before the first ':' in red
         if len(parts) > 1:
             colored_text = (
-                f"\033[91m{parts[0]}\033[0m\033[93m{parts[1]}{parts[2]}\033[0m"
+                f"\033[97m{parts[0]}\033[0m\033[93m{parts[1]}{parts[2]}\033[0m"
             )
         else:
             colored_text = f"\033[93m{text}\033[0m"
@@ -1854,7 +1865,7 @@ class InteractiveGenerator:
     def get_input_with_validation(
         self, prompt_text: str, valid_fn: Optional[callable] = None
     ) -> str:
-        style = Style.from_dict({"prompt": "cyan", "error": "red", "message": "green"})
+        style = Style.from_dict({"prompt": "white", "error": "red", "message": "green"})
 
         validator = None
         if valid_fn:
@@ -1883,7 +1894,7 @@ class InteractiveGenerator:
         return choice.isdigit() and int(choice) > 0
 
     def get_input_with_default(self, message, default_text=None):
-        style = Style.from_dict({"prompt": "cyan", "info": "cyan"})
+        style = Style.from_dict({"prompt": "white", "info": "white"})
         history = InMemoryHistory()
         if default_text:
             user_input = prompt(
@@ -2133,7 +2144,7 @@ class InteractiveGenerator:
             cprint("No previous results available.", "red")
             return True  # Return to the main loop
 
-        style = Style.from_dict({"prompt": "cyan"})
+        style = Style.from_dict({"prompt": "white"})
 
         while True:  # Keep looping until user decides to go back
             self.display_command_list(file_extension)
@@ -2156,7 +2167,7 @@ class InteractiveGenerator:
                     with open(file_path, "r") as f:
                         result = f.read()
                         cprint(f"\nResults for command #{cmd_num}:", "cyan")
-                        cprint(result, "magenta")
+                        cprint(result, "white")
                 else:
                     cprint(
                         f"Invalid number. Please choose between 1 and {len(filenames)}.",
@@ -2186,15 +2197,15 @@ class InteractiveGenerator:
                     if help:
                         cprint(
                             "Verify that the flags used in the command matches your intent:",
-                            "magenta",
+                            "cyan",
                         )
                         for h in help:
-                            cprint("\n" + h, "red")
+                            cprint("\n" + h, "white")
                 except Exception as e:
                     logging.error(f"unable to extract, error: {e}")
 
             cprint("\nGenerated Command:", "cyan")
-            cprint(second_clean_up, "magenta")
+            cprint(second_clean_up, "white")
             cprint("-" * 50, "blue")
 
             return second_clean_up
@@ -2237,7 +2248,7 @@ class InteractiveGenerator:
         """Provide a user interface for searching."""
         cprint(
             "Please ensure that you have set the base path to exploit_db_base_location using --exploit_db_base_location",
-            "yellow",
+            "cyan",
         )
         while True:
             protocol_completer = WordCompleter(self.suggestions, ignore_case=True)
@@ -2276,7 +2287,7 @@ class InteractiveGenerator:
             ANSI(
                 colored(
                     "\nEnter your query, use keywords such as protocols HTTP, SSH, SMB or port numbers 443, 80 etc or 'b' to return to the main menu: ",
-                    "blue",
+                    "white",
                 )
             ),
             completer=completer,
@@ -2288,7 +2299,7 @@ class InteractiveGenerator:
             ANSI(
                 colored(
                     "\nHow many results per category should i display? (Enter a number, (a) or (all) for all results, or press enter for default:",
-                    "blue",
+                    "white",
                 )
             ),
             history=history,
@@ -2313,7 +2324,7 @@ class InteractiveGenerator:
         other_lines = [line for line in results if not line.startswith("Service ")]
 
         for line in service_lines:
-            print(colored(line, "green"))
+            print(colored(line, "cyan"))
 
         for idx, line in enumerate(other_lines, 1):
             print(f"{idx}. {self.colored_output(line)}")
@@ -2328,7 +2339,7 @@ class InteractiveGenerator:
                         ANSI(
                             colored(
                                 "\nSelect a result number to modify or any other key to continue: ",
-                                "blue",
+                                "white",
                             )
                         ),
                         history=history,
@@ -2376,7 +2387,7 @@ class InteractiveGenerator:
             ANSI(
                 colored(
                     "\nEnter the modified content or press enter to keep it unchanged: ",
-                    "blue",
+                    "white",
                 )
             ),
             default=self.process_string(
@@ -2431,12 +2442,17 @@ class InteractiveGenerator:
         history = InMemoryHistory()
         style = Style.from_dict(
             {
-                "prompt": "yellow",
+                "prompt": "white",
             }
         )
 
         try:
-            cprint(f"\nThe current command is: {text}", "cyan")
+            cprint(
+                "\nThe current command is: ", "cyan", end=""
+            )  # 'end=""' prevents new line
+            cprint(
+                text, "white"
+            )  # Change "yellow" to whatever color you prefer for 'text'
 
             modified_text = prompt(
                 "\nModify the command as needed and press Enter: ",
@@ -2506,7 +2522,7 @@ class InteractiveGenerator:
 
     def get_action_choice(self) -> str:
         style = Style.from_dict(
-            {"prompt": "yellow", "options": "green", "error": "red", "message": "blue"}
+            {"prompt": "white", "options": "green", "error": "red", "message": "blue"}
         )
 
         if self.current_model_name != "scribe":
