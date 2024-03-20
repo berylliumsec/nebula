@@ -53,7 +53,7 @@ Robust Functionality: From automated vulnerability scans to real-time data analy
 
 At the moment, to utilize the tools provided in this repository effectively, users are expected to possess a basic understanding of nmap, nuclei, zap, and crackmap. 
 
-In future versions, we'll focus on enhancing free natural language capabilities, and we're dedicated to making this vision a reality. 
+For an AI assistant that supports almost any tool, consider [neutron](https://github.com/berylliumsec/neutron) and [Nebula Pro](https://www.berylliumsec.com/nebula-pro-waitlist)
 
 Please be advised that this repository is currently in its beta phase; as such, occasional discrepancies or bugs might be encountered. We are diligently working towards refining and resolving all known issues.
 
