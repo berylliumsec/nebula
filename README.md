@@ -27,21 +27,11 @@ Welcome to Nebula.
 
 ## 🌐 Introducing Nebula Pro: A New Era in Ethical Hacking 🌐
 
-🚀 We're thrilled to unveil a sneak peek of Nebula Pro, our latest innovation designed to empower ethical hackers with advanced, AI-driven capabilities. After months of dedicated development, we're almost ready to launch the beta version!
+🚀 We're thrilled to unveil a sneak peek of Nebula Pro, our latest innovation designed to empower ethical hackers with advanced, AI-driven capabilities. After months of dedicated development, we have launched the preview version. Some of the exciting features are:
 
-💡 What's in Store?
-
-Enhanced AI Features: Delve into AI-powered tools that redefine efficiency and precision in penetration testing.
-User-Centric Design: Experience a platform crafted for both novice and veteran ethical hackers, with seamless navigation and intuitive controls.
-Robust Functionality: From automated vulnerability scans to real-time data analysis, Nebula Pro is packed with features that cater to every aspect of ethical hacking.
-
-📅 Beta Launching Soon: Get ready to transform your ethical hacking journey!
-
-👀 Sneak Peek Inside: Don't miss our exclusive preview video that gives you a glimpse of what Nebula Pro has in store.
-
-🔗 Stay Updated: Follow us for the latest updates and be the first to know when Nebula Pro Beta goes live!
-
-📢 We're eager to hear your feedback and insights. Let's redefine ethical hacking together with Nebula Pro!
+- AI Powered Autonomous Mode
+- AI Powered Suggestions
+- AI Powered Note Taking
 
 # 📺 [Click Here to Get Access To Nebula Pro Now](https://www.berylliumsec.com/nebula-pro-waitlist) 🚀
 
