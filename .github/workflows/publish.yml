@@ -97,7 +97,7 @@ jobs:
           body: |
             Release Notes:
               - This version adds a GUI to Nebula
-              - Upgrades the model to a selection between DeepSeek-R1-Distill-Llama-8B and Llama-3.3-70B-Instruct
+              - Upgrades the model to DeepSeek-R1-Distill-Llama-8B
               - Adds AI powered Notetaking and Suggestions
               - Direct command execution in a terminal interface
               - Add your cheat sheets for auto-suggestion

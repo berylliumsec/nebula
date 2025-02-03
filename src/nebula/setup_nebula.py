@@ -118,7 +118,6 @@ class settings(QWidget):
         self.modelComboBox = QComboBox()
         self.modelComboBox.setFont(QFont("Arial", 10))
         self.modelComboBox.addItem("deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
-        self.modelComboBox.addItem("meta-llama/Llama-3.3-70B-Instruct")
         self.modelComboBox.currentTextChanged.connect(self.onModelChanged)
         self.onModelChanged(self.modelComboBox.currentText())
         modelLayout = QHBoxLayout()
