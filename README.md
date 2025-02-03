@@ -21,10 +21,12 @@ Nebula is a cutting-edge toolkit designed for penetration testers. It integrates
 
 ## Installation
 
+## System Requirements
+
+- At least 8GB of GPU memory, we tested with 12GB
+- Python >= 3.11
+
 ```bash
-conda create --name nebula-2.0 python=3.11
-conda install conda-forge::poetry
-poetry install
 python -m pip install nebula-ai --upgrade
 ```
 
