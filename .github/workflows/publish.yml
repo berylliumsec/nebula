@@ -10,62 +10,31 @@ on:
 jobs:
   release-build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Check out the repo
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Check out the repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Install GitHub CLI
-      run: |
-        type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
-        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-        sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-        sudo apt update
-        sudo apt install gh -y
+      # Set up a conda environment with Python 3.11 and activate it.
+      - name: Setup Conda Environment
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          python-version: 3.11
+          activate-environment: nebula-2.0
+          channels: conda-forge
 
-    - name: Bump version in setup.py
-      if: github.event.pull_request.merged == true
-      id: bump_version
-      run: |
-        python bump_version.py
-    
-    - name: Upload new version as artifact
-      uses: actions/upload-artifact@v2
-      with:
-        name: new-version-artifact
-        path: new_version.txt
+      - name: Install Poetry via Conda
+        run: conda install poetry -y
 
-    - name: Configure Git
-      run: |
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
-        
-    - name: Commit and push version bump
-      run: |
-          git add setup.py
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-          git commit -m "Bump version [ci skip]"
-          git push origin main
-  
-    - name: Install build tool
-      run: |
-        python -m pip install --upgrade pip build
+      - name: Build release distributions using Poetry
+        run: poetry build
 
-    - name: Build release distributions
-      run: |
-        python -m build --sdist --wheel .
-
-    - name: Upload release distributions
-      uses: actions/upload-artifact@v3
-      with:
-        name: release-dists
-        path: dist/
+      - name: Upload release distributions
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-dists
+          path: dist/
 
   pypi-docker-publish:
     runs-on: ubuntu-latest
@@ -74,12 +43,22 @@ jobs:
     permissions:
       id-token: write
       contents: write
-    
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Set up the same conda environment in this job as well.
+      - name: Setup Conda Environment
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          python-version: 3.11
+          activate-environment: nebula-2.0
+          channels: conda-forge
+
+      - name: Install Poetry via Conda
+        run: conda install poetry -y
 
       - name: Retrieve release distributions
         uses: actions/download-artifact@v3
@@ -91,32 +70,18 @@ jobs:
         if: github.event.pull_request.merged == true 
         uses: pypa/gh-action-pypi-publish@release/v1
 
-      - name: Download new version artifact
-        uses: actions/download-artifact@v2
-        with:
-          name: new-version-artifact
-          path: ./
 
-      - name: Set new version variable
-        id: set_version_var
+      - name: Set version from pyproject.toml
+        id: get_version
         run: |
-          echo "NEW_VERSION=$(<new_version.txt)" >> $GITHUB_ENV
+          NEW_VERSION=$(grep '^version =' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-      - name: Build and Push Docker image
-        if: github.event.pull_request.merged == true
-        run: |
-          NEW_VERSION=$(<new_version.txt)
-          docker build src -f src/nebula/Dockerfile --build-arg APP_VERSION=$NEW_VERSION -t berylliumsec/nebula:$NEW_VERSION
-          docker push berylliumsec/nebula:$NEW_VERSION
-          docker tag berylliumsec/nebula:$NEW_VERSION berylliumsec/nebula:latest
-          docker push berylliumsec/nebula:latest
-      
 
       - name: Create GitHub Release  
         if: github.event.pull_request.merged == true
@@ -131,7 +96,15 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - This release adds awareness for Nebula Pro
+              - This version adds a GUI to Nebula
+              - Upgrades the model to DeepSeek-R1-Distill-Llama-8B
+              - Adds AI powered Notetaking and Suggestions
+              - Direct command execution in a terminal interface
+              - Add your cheat sheets for auto-suggestion
+              - Take Screenshots
+              - Basic Image editing
+
+
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |

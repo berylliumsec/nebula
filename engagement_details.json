@@ -1,0 +1,8 @@
+{
+    "engagement_name": "nebula",
+    "ip_addresses": [],
+    "urls": [],
+    "lookout_items": [],
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "cache_dir": "/home/agent/.cache/huggingface/transformers"
+}
