@@ -1,4 +1,3 @@
-# Publish workflow
 name: Build, Test, and Release
 
 on:
@@ -17,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Set up a conda environment with Python 3.11 and activate it.
+      # Set up and activate a conda environment with Python 3.11.
       - name: Setup Conda Environment
         uses: conda-incubator/setup-miniconda@v2
         with:
@@ -25,13 +24,20 @@ jobs:
           activate-environment: nebula-2.0
           channels: conda-forge
 
-      # Install Poetry into the activated conda environment.
+      # Install Poetry from conda-forge into the activated environment.
       - name: Install Poetry via Conda
-        run: conda install poetry -y
+        run: conda install -c conda-forge poetry -y
 
-      # Run the Poetry build command using `conda run` to ensure it uses the correct environment.
+      # Use a login shell and explicitly activate the environment so Poetry is on PATH.
       - name: Build release distributions using Poetry
-        run: conda run -n nebula-2.0 poetry build
+        shell: bash -l {0}
+        run: |
+          # Source the conda hook and re-activate the environment
+          eval "$(conda shell.bash hook)"
+          conda activate nebula-2.0
+          # Verify that Poetry is installed and then build
+          poetry --version
+          poetry build
 
       - name: Upload release distributions
         uses: actions/upload-artifact@v4
@@ -60,9 +66,9 @@ jobs:
           activate-environment: nebula-2.0
           channels: conda-forge
 
-      # (Optional) Install Poetry if you need it later in this job.
+      # (Optional) Install Poetry if needed later in this job.
       - name: Install Poetry via Conda
-        run: conda install poetry -y
+        run: conda install -c conda-forge poetry -y
 
       - name: Retrieve release distributions
         uses: actions/download-artifact@v3
@@ -79,7 +85,6 @@ jobs:
         run: |
           NEW_VERSION=$(grep '^version =' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
-
 
       - name: Create GitHub Release  
         if: github.event.pull_request.merged == true
