@@ -145,7 +145,8 @@ For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula
 
 ### Roadmap
 
-- Autonomous mode
+- Support more models
+
 
 
 ### Troubleshooting
