@@ -70,7 +70,7 @@ jobs:
         run: conda install -c conda-forge poetry -y
 
       - name: Retrieve release distributions
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: release-dists
           path: dist/
