@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Set up and activate a conda environment with Python 3.11.
+      # Set up and activate the Conda environment.
       - name: Setup Conda Environment
         uses: conda-incubator/setup-miniconda@v2
         with:
@@ -24,19 +24,18 @@ jobs:
           activate-environment: nebula-2.0
           channels: conda-forge
 
-      # Install Poetry from conda-forge into the activated environment.
-      - name: Install Poetry via Conda
-        run: conda install -c conda-forge poetry -y
-
-      # Use a login shell and explicitly activate the environment so Poetry is on PATH.
+      # Install Poetry and build the release distributions in one step.
       - name: Build release distributions using Poetry
         shell: bash -l {0}
         run: |
-          # Source the conda hook and re-activate the environment
+          # Source Conda's shell hook and re-activate the environment.
           eval "$(conda shell.bash hook)"
           conda activate nebula-2.0
-          # Verify that Poetry is installed and then build
-          poetry --version
+          # Install Poetry from conda-forge.
+          conda install -c conda-forge poetry -y
+          # (Optional) Check that Poetry is installed.
+          which poetry && poetry --version
+          # Build the distributions.
           poetry build
 
       - name: Upload release distributions
@@ -58,7 +57,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Set up the same conda environment.
+      # Set up the same Conda environment.
       - name: Setup Conda Environment
         uses: conda-incubator/setup-miniconda@v2
         with:
