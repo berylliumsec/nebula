@@ -45,6 +45,10 @@ This step only needs to be completed once. Monitor the command line interface wh
 
 ## Key Features
 
+### Interacting with the models. 
+
+To interact with the models, begin your input with a `!` for example: `! write a python script to scan the ports of a remote system`
+
 ### AI-Assisted Note-Taking
 Automatically records pivotal security findings, categorizes them with CWE-IDs, and aligns them with NIST controls when applicable.
 
