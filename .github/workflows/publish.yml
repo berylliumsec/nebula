@@ -15,7 +15,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
+        
+      - name: Install bump script dependencies
+        run: pip install toml
+        
       # Bump version before building the distributions.
       - name: Bump version in pyproject.toml
         run: python bump_version.py prerelease
