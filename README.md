@@ -14,9 +14,9 @@ Introducing the Deep Application Profiler (DAP). DAP uses neural networks to ana
 
 Introducing Nebula Pro, Nebula Pro improves on Nebula 2.0 by adding additional features such as autonomous mode, code analysis and more. [Learn More Here](https://www.berylliumsec.com/nebula-pro-overview)
 
-## Nebula: AI-Driven Penetration Testing Platform
+## Nebula: AI-Powered Penetration Testing Platform
 
-Nebula is a cutting-edge toolkit designed for penetration testers. It integrates AI Models right into the command line interface and supports any tool that can be invoked from the CLI
+Nebula is an AI-Powered penetration testing tool. It integrates AI Models right into the command line interface and supports any tool that can be invoked from the CLI
 
 
 ## Installation
