@@ -122,10 +122,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              Adding the following models:
-              - meta-llama/Llama-3.1-8B-Instruct
-              - mistralai/Mistral-7B-Instruct-v0.2
-        
+              This PR fixes the status bar
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
