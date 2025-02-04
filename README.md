@@ -1,8 +1,10 @@
-#Nebula
+# Nebula – AI-Powered Penetration Testing Assistant
 
-Welcome to Nebula
+Nebula is an advanced, open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking.
 
-![nebula](/images/nebula.webp)
+
+![Nebula AI-Powered Penetration Testing CLI Interface](/images/nebula.webp)
+
 ## Acknowledgement
 
 **First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.**
@@ -21,147 +23,73 @@ Nebula is a cutting-edge, AI-powered penetration testing tool designed for cyber
 
 ## Installation
 
-## System Requirements
+**System Requirements:**
+- At least 8GB of GPU memory (tested with 12GB)
+- Python 3.11 or higher
 
-- At least 8GB of GPU memory, we tested with 12GB
-- Python >= 3.11
-
+**Installation Command:**
 ```bash
 python -m pip install nebula-ai --upgrade
 ```
 
+
 ## Running Nebula
 
-**important**
+**Important:** 
 
-The first time you run Nebula, it will ask you to select a cache dir. The cache dir is where it will download the Model that you choose. For the models, you will need to create a free [Hugging Face Account](https://huggingface.co/), agree to the terms, generate an access token and export it to your CLI like so:
+On your first run, you’ll be prompted to select a cache directory where Nebula will download your chosen AI model. Follow these steps:
 
-
-```bash
-export HF_TOKEN=Your Token
-```
+1. Create a free [Hugging Face Account](https://huggingface.co/), agree to the terms, and generate an access token.
+2. Export your token to the CLI:
+   ```bash
+   export HF_TOKEN=YourTokenHere
+   ```
+3. Launch Nebula and monitor the download progress on the CLI.
 
 This step only needs to be completed once. Monitor the command line interface where you invoked `nebula` from to monitor the download progress.
-
-## Key Features
 
 ### Interacting with the models. 
 
 To interact with the models, begin your input with a `!` for example: `! write a python script to scan the ports of a remote system`
 
-### AI-Assisted Note-Taking
-Automatically records pivotal security findings, categorizes them with CWE-IDs, and aligns them with NIST controls when applicable.
+## Key Features
 
-### Real-Time AI-Driven Insights
-Provides immediate suggestions for discovering and exploiting vulnerabilities, based on outputs from integrated terminal tools.
+- **AI-Powered Internet Search:**  
+  Enhance responses by integrating real-time, internet-sourced context to keep you updated on cybersecurity trends.
 
-### Enhanced Tool Integration
-Seamlessly import data from external tools to capitalize on AI-powered note-taking and receive instant advice.
+- **AI-Assisted Note-Taking:**  
+  Automatically record and categorize security findings.
 
-### Integrated Screenshot and Editing
-Facilitates capturing and editing images within the toolkit for streamlined documentation.
+- **Real-Time AI-Driven Insights:**  
+  Get immediate suggestions for discovering and exploiting vulnerabilities based on terminal tool outputs.
 
-### Manual Note-Taking
-Offers a dedicated space for user-driven documentation, complementing the AI's automated notes. (Notes are auto-saved)
+- **Enhanced Tool Integration:**  
+  Seamlessly import data from external tools for AI-powered note-taking and advice.
 
-### Automatic Command Logging
-Keeps a record of all commands executed within the terminal for easy reference and analysis.
+- **Integrated Screenshot & Editing:**  
+  Capture and annotate images directly within Nebula for streamlined documentation.
+
+- **Manual Note-Taking & Automatic Command Logging:**  
+  Maintain a detailed log of your actions and findings with both automated and manual note-taking features.
+
 
 ## Getting Started
 
 For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula-pro-feature-guide) and [here](https://www.youtube.com/playlist?list=PLySxaLbLL0gpAaDQYq6g6sb1q6KwqOAr4). Please note that some features are only applicable to Nebula Pro
 
-### Home Screen
-- **AI-Based Note-Taking:** Toggle the icon below. You will be prompted to select your a file to store your notes in  
-  ![AI Notes](src/nebula/Images_readme/ai_notes.png)
-
-- **AI Suggestions:** Activate by toggling the icon below.  
-  ![Enable AI Suggestions](src/nebula/Images_readme/enable_ai_suggestions.png)
-
-- **Viewing Suggestions:** When available, the icon lights up. Click to view.  
-  ![Suggestions Available](src/nebula/Images_readme/suggestions_available.png)
-
-- **Sending for Analysis:** Send uploaded files or previous commands for suggestions or recommendations.  
-  ![Previous Results Context Menu](src/nebula/Images_readme/previous_results_context_menu.png)
-
-- **Taking Screenshots:** Click the icon below.  
-  ![Screenshot](src/nebula/Images_readme/take-screenshot.png)
-
-- **Command Search:** Search and select commands, then hit enter to populate the command input area.  
-  ![Search Area](src/nebula/Images_readme/Search_area.png)
-
-- **Manual Note-Taking:** Click the icon below.  
-  ![Take Notes](src/nebula/Images_readme/take_notes.png)
-
-- **Opening a New Terminal:** Click the icon below.  
-  ![Terminal](src/nebula/Images_readme/terminal.png)
-
-### Image and Note Editing Features
-- **Adding Images:** Click 'Add Image' and choose a file.  
-  ![Add Image](src/nebula/Images_readme/add_image.png "Adding an Image")
-
-- **Blurring Parts of an Image:** Select 'Blur', choose area, and adjust intensity.  
-  ![Blur](src/nebula/Images_readme/blur.png "Blurring an Image")
-
-- **Cropping Images:** Select 'Crop', drag the box, and apply.  
-  ![Crop](src/nebula/Images_readme/crop.png "Cropping an Image")
-
-- **Drawing Arrows:** Select 'Draw Arrow', choose start and end points.  
-  ![Draw Arrow](src/nebula/Images_readme/draw_arrow.png "Drawing an Arrow")
-
-- **Drawing Text:** Select 'The text icons', choose start and end points.  
-  ![Draw Arrow](src/nebula/Images_readme/draw_arrow.png "Drawing an Arrow")
-  Select 'Draw Text', click an area in the image to start typing. You can use backspace to undo text, note that once you click out of typed text, to undo you would need to click the undo button or CTRL + Z
-- **Saving Changes:** Click 'Save' frequently to avoid data loss.  
-  ![Save](src/nebula/Images_readme/save.png "Saving Changes")
-
-- **Selecting Colors:** Use 'Select Color' to choose from the palette.  
-  ![Select Color](src/nebula/Images_readme/select_color.png "Selecting a Color")
-
-- **Adjusting Thickness:** Use 'Thickness' to choose the level.  
-  ![Thickness](src/nebula/Images_readme/thickness.png "Adjusting Thickness")
-
-- **Adding Headings:** Select 'Heading' and type your text.  
-  ![Heading](src/nebula/Images_readme/heading.png "Adding a Heading")
-
-- **Highlighting:** Use 'Highlight' to emphasize areas.  
-  ![Highlight](src/nebula/Images_readme/highlight.png "Highlighting Text")
-
-- **Replacing Content:** Use 'Replace' for content modification.  
-  ![Replace](src/nebula/Images_readme/replace.png "Replacing Content")
-
-- **Text Searching:** Use 'Search' to find specific text.  
-  ![Search](src/nebula/Images_readme/search.png "Searching Text")
-
-- **Undoing Actions:** Click 'Undo' to revert the last action.  
-  ![Undo](src/nebula/Images_readme/undo.png "Undoing an Action")
-
-- **Redoing Actions:** Click 'Redo' to reapply an undone action.  
-  ![Redo](src/nebula/Images_readme/redo.png "Redoing an Action")
-
-### Settings and Customization
-- **Accessing Settings:** Click the settings icon below.  
-  ![Settings](src/nebula/Images_readme/settings.png)
-
-
-
-### Context Menu
-- Interact with any text for AI-based note taking or vulnerability exploitation suggestions.  
-  ![Context Menu](src/nebula/Images_readme/context_menu.png)
-
+You can also access the help screen within Nebula or refer to the [Manual.md](/MANUAL.md) document
 
 ### Roadmap
 
 - Support more models
 - Add agents
 
-
-
 ### Troubleshooting
 
 Logs are located at `/home/[your_username]/.local/share/nebula/logs`. You would most likely find the reason for the error in one fo those logs
 
-### Get more support
+## Get More Support
 
-Please open an Issue
----
+- Have questions or need help? [Open an Issue](https://github.com/berylliumsec/nebula/issues) on GitHub.
+- For comprehensive guides, check out our [Video Guide](https://www.berylliumsec.com/nebula-pro-feature-guide) and [User Manual](/MANUAL.md).
+
