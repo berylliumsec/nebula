@@ -88,7 +88,7 @@ class InteractiveModel:
                 "text-generation",
                 model=self.model,
                 tokenizer=self.tokenizer,
-                max_new_tokens=32000,
+                max_new_tokens=8000,
                 use_fast=True,
                 return_full_text=False,  # Only return the new text, not the full prompt.
             )
