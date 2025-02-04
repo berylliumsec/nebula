@@ -75,9 +75,7 @@ To interact with the models, begin your input with a `!` for example: `! write a
 
 ## Getting Started
 
-For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula-pro-feature-guide) and [here](https://www.youtube.com/playlist?list=PLySxaLbLL0gpAaDQYq6g6sb1q6KwqOAr4). Please note that some features are only applicable to Nebula Pro
-
-You can also access the help screen within Nebula or refer to the [Manual.md](/MANUAL.md) document
+For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula-pro-feature-guide) and [here](https://www.youtube.com/playlist?list=PLySxaLbLL0gpAaDQYq6g6sb1q6KwqOAr4). Please note that some features are only applicable to Nebula Pro.You can also access the help screen within Nebula or refer to the [Manual.md](/MANUAL.md) document
 
 ### Roadmap
 
