@@ -5,7 +5,7 @@ include = [ "src/nebula/images/*", "src/nebula/Images_readme/*", "src/nebula/com
 
 [tool.poetry]
 name = "nebula-ai"
-version = "2.0.1"
+version = "2.0.0b0"
 description = "AI-Powered Ethical Hacking Assistant"
 readme = "README.md"
 authors = [ "David I <david@berylliumsec.com>",]

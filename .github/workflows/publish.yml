@@ -16,6 +16,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Bump version before building the distributions.
+      - name: Bump version in pyproject.toml
+        run: python bump_version.py prerelease
+
       # Set up and activate the Conda environment.
       - name: Setup Conda Environment
         uses: conda-incubator/setup-miniconda@v2
@@ -44,7 +48,6 @@ jobs:
           name: release-dists
           path: dist/
 
-
   pypi-docker-publish:
     runs-on: ubuntu-latest
     environment: nebula
@@ -70,10 +73,6 @@ jobs:
 
       - name: Install bump script dependencies
         run: pip install toml
-
-      # Run the bump version script (adjust bump type as needed)
-      - name: Bump version in pyproject.toml
-        run: python bump_version.py patch
 
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4
