@@ -1151,9 +1151,6 @@ class CommandInputArea(QLineEdit):
         self.model = None
         self.terminal.start()
         self.terminal.data_ready.connect(self.update_terminal_output)
-        self.terminal.autonomous_terminal_execution_iteration_is_done.connect(
-            self.execute_next_command
-        )
         self.terminal.busy.connect(self.set_style_sheet)
         self.unique_commands_to_run = set()
         self.unique_information = set()
@@ -1549,7 +1546,7 @@ class CommandInputArea(QLineEdit):
             )
             return
         logger.debug(f"Starting execute_api_call to endpoint: {endpoint} in free mode")
-        self.threads_status.emit("in_progress")
+        
 
         if not self.model:
             logger.error("No loaded model")
@@ -1558,12 +1555,13 @@ class CommandInputArea(QLineEdit):
                 "An error may have occurred while loading the selected model during Nebula's startup, please restart Nebula and try again",
             )
             return
+        self.threads_status.emit("in_progress")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         model_task = ModelTaskRunner(self.model, endpoint, command, self.manager)
         model_task.signals.result.connect(self.onTaskResult)
         model_task.signals.finished.connect(self.onTaskFinished)  # If needed
         self.threadpool.start(model_task)
-        self.threads_status.emit("completed")
+        
 
     def parse_json(self, data):
         try:
@@ -1577,152 +1575,6 @@ class CommandInputArea(QLineEdit):
         except Exception as e:
             logger.error(f"error while parsing json: {e}")
             return None  # You might want to return None or handle the error differently
-
-    def process_autonomous_mode(self, data):
-        logger.info(
-            "Starting autonomous mode processing"
-        )  # Log the start of the process
-
-        logger.debug(
-            f"Number of queued autonomous mode items is {self.queued_autonomous_items_for_api}"
-        )
-        try:
-            # logger.debug(f"The data received from the API in autonomous mode is {data}")
-            parsed_json = self.parse_json(data)  # Parse JSON into a Python dictionary
-            # logger.debug(f"The parsed data the API in autonomous mode is {parsed_json}")
-
-            # Extract and store information, ensuring no duplicates
-            self.unique_commands_to_run.update(parsed_json.get("commands_to_run", []))
-            self.unique_information.add(parsed_json.get("explanation", ""))
-            self.unique_vulnerabilities_confirmed.add(
-                parsed_json.get("vulnerabilities_confirmed", "")
-            )
-            self.unique_evidence.add(
-                utilities.process_text_for_html(parsed_json.get("evidence", ""))
-            )
-
-            logger.info("Successfully processed the current set of data")
-            self.threads_status.emit("completed")
-        except json.JSONDecodeError as e:
-            logger.error(f"Error while parsing JSON data: {e}")
-            utilities.show_message(
-                "Autonomy Error",
-                "An error occured please resend the last output to the autonomous assistant",
-            )
-            self.threads_status.emit("completed")
-            return
-        except Exception as e:
-            logger.error(f"Unexpected error while processing JSON data: {e}")
-            utilities.show_message("Error", "No Suggestions for this iteration")
-            self.threads_status.emit("completed")
-            return
-
-        # Prepare and display the final data if all tasks are processed or if there were none to begin with
-        if self.queued_autonomous_items_for_api <= 0:
-            logger.info("Preparing to display final data")
-            try:
-                # Convert sets to lists or strings as appropriate for the dialog
-                final_commands_to_run = list(self.unique_commands_to_run)
-                final_information = "\n\n".join(self.unique_information)
-                final_vulnerabilities_confirmed = "\n".join(
-                    self.unique_vulnerabilities_confirmed
-                )
-                final_evidence = "\n".join(self.unique_evidence)
-
-                # Check if there is any data to show
-                if (
-                    final_commands_to_run
-                    or final_information
-                    or final_vulnerabilities_confirmed
-                    or final_evidence
-                ):
-                    logger.info("Displaying data in CheckListDialog")
-                    dialog = CheckListDialog(
-                        commands_to_run=final_commands_to_run,
-                        information_text=final_information,
-                        manager=self.manager,
-                        vulnerabilities_confirmed=final_vulnerabilities_confirmed,
-                        evidence=final_evidence,
-                    )
-                    if final_evidence and final_evidence.lower() != "none":
-                        final_evidence = utilities.process_text(final_evidence)
-                        self.update_ai_notes.emit(final_evidence)
-                    if dialog.exec():
-                        checked_items = dialog.checkedItems()
-                        self.number_of_autonomous_commands = len(checked_items)
-                        self.number_of_autonomous_commands_signal.emit(
-                            self.number_of_autonomous_commands
-                        )
-                        self.run_autonomous_commands(checked_items)
-                        logger.info("Commands from the dialog have been executed")
-                    else:
-                        logger.info("CheckListDialog was cancelled by the user")
-                        self.number_of_autonomous_commands = 0
-                        self.unique_commands_to_run.clear()
-                        self.terminal.current_command_output = ""
-                        self.commands = []
-                        self.threads_status.emit("completed")
-                else:
-                    logger.warning("No data to display after processing")
-
-                # Reset class variables for future use
-                self.unique_commands_to_run.clear()
-                self.unique_information.clear()
-                self.unique_vulnerabilities_confirmed.clear()
-                self.unique_evidence.clear()
-
-                self.threads_status.emit("completed")
-            except Exception as e:
-                logger.error(
-                    f"Unexpected error during final data preparation or dialog display: {e}"
-                )
-                utilities.show_message(
-                    "Error",
-                    "No Suggestions for this iteration",
-                )
-                self.unique_commands_to_run.clear()
-                self.unique_information.clear()
-                self.unique_vulnerabilities_confirmed.clear()
-                self.unique_evidence.clear()
-                self.threads_status.emit("completed")
-        else:
-            logger.info("Waiting for more tasks")
-
-    def run_autonomous_commands(self, commands):
-        self.commands = commands
-        if self.commands:
-            self.execute_next_command()
-
-    def execute_next_command(self):
-        if self.currentCommandIndex < len(self.commands):
-            command = self.commands[self.currentCommandIndex]
-            # Assuming self.terminal.write not only writes but also executes the command
-
-            logger.debug(f"executing next autonomous command {command}")
-            self.set_style_sheet(True)
-            self.execute_command(command)
-
-            # Increment the index to prepare for the next command
-            self.currentCommandIndex += 1
-            self.number_of_autonomous_commands -= 1
-            self.number_of_autonomous_commands_signal.emit(
-                self.number_of_autonomous_commands
-            )
-
-        else:
-            logger.debug("All commands have been executed")
-            self.currentCommandIndex = 0
-            self.number_of_autonomous_commands = 0
-            self.number_of_autonomous_commands_signal.emit(
-                self.number_of_autonomous_commands
-            )
-            self.unique_commands_to_run.clear()
-            self.unique_information.clear()
-            self.unique_vulnerabilities_confirmed.clear()
-            self.unique_evidence.clear()
-            self.threads_status.emit("completed")
-            self.commands = []
-            self.set_style_sheet(False)
 
     def tell_main_window_file_processing_that_api_call_execution_is_ready(self):
         self.api_call_execution_finished.emit()
