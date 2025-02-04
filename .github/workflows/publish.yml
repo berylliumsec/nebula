@@ -33,13 +33,19 @@ jobs:
           NEW_VERSION=$(grep '^version =' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
+      # Commit and push the bumped version if there are changes.
       - name: Commit bumped version
         run: |
           git config --global user.email "david@berylliumsec.com"
           git config --global user.name "David I"
           git add pyproject.toml
-          git commit -m "Bump version to ${NEW_VERSION}"
-          git push
+          if ! git diff-index --quiet HEAD; then
+            NEW_VERSION=$(grep '^version =' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+            git commit -m "Bump version to $NEW_VERSION"
+            git push
+          else
+            echo "No changes to commit"
+          fi
 
       - name: Setup Conda Environment
         uses: conda-incubator/setup-miniconda@v2
