@@ -20,24 +20,26 @@ logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/neutron.log")
 class AfterThinkOutputParser(StrOutputParser):
     """
     A custom output parser that extracts only the text after the marker </think>.
-    If the marker is not found, returns an empty string.
+    If the marker is not found, returns the full result.
+    Logs the raw text and the parsed text.
     """
 
     def parse(self, text: str) -> str:
-        logger.debug("AfterThinkOutputParser: Parsing output text.")
+        logger.debug("AfterThinkOutputParser: Starting to parse output text.")
+        logger.debug("AfterThinkOutputParser: Raw text received: %s", text)
         marker = "</think>"
         if marker in text:
-            parsed_text = text.split(marker, 1)[1].strip()
-            logger.debug(
-                "AfterThinkOutputParser: Marker found; parsed text successfully."
-            )
+            # Log the splitting operation details.
+            parts = text.split(marker, 1)
+            logger.debug("AfterThinkOutputParser: Split text into %d part(s).", len(parts))
+            parsed_text = parts[1].strip()
+            logger.debug("AfterThinkOutputParser: Marker found; parsed text: %s", parsed_text)
             return parsed_text
         else:
-            logger.warning(
-                "AfterThinkOutputParser: Marker '</think>' not found in output."
-            )
-            # Optionally, you could return the full text or raise an error.
-            return ""
+            logger.warning("AfterThinkOutputParser: Marker '</think>' not found in output. Returning full text.")
+            final_text = text.strip()
+            logger.debug("AfterThinkOutputParser: Final text after stripping: %s", final_text)
+            return final_text
 
 
 class InteractiveModel:
@@ -49,21 +51,16 @@ class InteractiveModel:
         self.use_think_marker = "deepseek" in model_name.lower()
 
         try:
-            logger.info("Initializing InteractiveModel.")
+            logger.info("InteractiveModel: Initializing model '%s'.", model_name)
             # Ensure GPU is available.
             if not torch.cuda.is_available():
                 logger.error("InteractiveModel: No GPUs available.")
                 raise Exception("No GPUs available")
 
-            logger.debug(
-                "InteractiveModel: GPU is available. Configuring model for 8-bit quantization."
-            )
+            logger.debug("InteractiveModel: GPU is available. Configuring model for 8-bit quantization.")
             bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
-            logger.debug(
-                "InteractiveModel: Loading tokenizer from pretrained model '%s'.",
-                model_name,
-            )
+            logger.debug("InteractiveModel: Loading tokenizer from pretrained model '%s'.", model_name)
             self.tokenizer = AutoTokenizer.from_pretrained(
                 model_name,
                 model_max_length=8192,
@@ -71,10 +68,7 @@ class InteractiveModel:
                 cache_dir=cache_dir,
             )
 
-            logger.debug(
-                "InteractiveModel: Loading model from pretrained checkpoint '%s'.",
-                model_name,
-            )
+            logger.debug("InteractiveModel: Loading model from pretrained checkpoint '%s'.", model_name)
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 low_cpu_mem_usage=True,
@@ -96,13 +90,11 @@ class InteractiveModel:
 
             self.search = DuckDuckGoSearchRun()
 
-            logger.debug(
-                "InteractiveModel: Wrapping pipeline with HuggingFacePipeline for LangChain."
-            )
+            logger.debug("InteractiveModel: Wrapping pipeline with HuggingFacePipeline for LangChain.")
             self.llm = HuggingFacePipeline(pipeline=self.pipe)
-            logger.info("InteractiveModel initialized successfully.")
+            logger.info("InteractiveModel: Model initialization complete.")
         except Exception as e:
-            logger.error(f"Unable to load model {model_name}: {e}")
+            logger.error("InteractiveModel: Unable to load model '%s': %s", model_name, e)
             raise
 
     def get_template_for_mode(self, mode: str) -> str:
@@ -110,7 +102,7 @@ class InteractiveModel:
         think_marker = "\n</think>" if self.use_think_marker else ""
 
         if "notes" in mode:
-            return f"""
+            template = f"""
     As a penetration testing assistant, please take detailed notes based on the context of a penetration test.
     Summarize important information, key points, and observations from the provided contexts.
     If a context is not available, ignore it.
@@ -122,7 +114,7 @@ class InteractiveModel:
     Question: {{question}}{think_marker}
     """
         elif "suggestion" in mode:
-            return f"""
+            template = f"""
                     As a penetration testing assistant, provide actionable next steps with actual commands based on the context of a penetration test.
                     Your suggestions should include executable terminal commands enclosed in backticks and focus on immediate next steps.
                     If a context is not available, ignore it.
@@ -133,7 +125,7 @@ class InteractiveModel:
                     Question: {{question}}{think_marker}
                     """
         else:  # "general_question" mode: no additional messaging or think marker.
-            return f"""
+            template = f"""
                     As a penetration testing assistant, provide a response based on your knowledge and the provided contexts.
                     Ensure the response is directly relevant to the inputs, focusing on elements common to both contexts.
                     If a context is not available, ignore it.
@@ -143,6 +135,8 @@ class InteractiveModel:
                     - Context2: {{context2}}
                     Question: {{question}}
                     """
+        logger.debug("InteractiveModel: Built prompt template for mode '%s': %s", mode, template)
+        return template
 
     def invoke(self, question: str, mode: str = "general_question", use_search=False):
         """
@@ -151,17 +145,15 @@ class InteractiveModel:
           - "general_question": (default) Provides a general answer.
           - "notes": Instructs the model to take detailed notes.
           - "suggestion": Instructs the model to suggest actionable next steps with commands.
+        Logs the raw output and, if applicable, the final output after processing the think marker.
         """
-        logger.info(
-            "InteractiveModel: Invoking chain with question: '%s' (mode: %s).",
-            question[:50],
-            mode,
-        )
+        logger.info("InteractiveModel: Invoking chain with question (first 50 chars): '%s' (mode: %s).",
+                    question[:50], mode)
         # Optionally perform a search if enabled.
         if use_search:
             logger.debug("InteractiveModel: Performing search for question.")
             self.search_results = self.search.run(question)
-            logger.debug("InteractiveModel: Search results obtained.")
+            logger.debug("InteractiveModel: Search results obtained: %s", self.search_results)
         else:
             logger.debug("InteractiveModel: Search disabled; skipping search step.")
 
@@ -171,7 +163,7 @@ class InteractiveModel:
         prompt_template = ChatPromptTemplate.from_template(template_str)
         logger.debug("InteractiveModel: Prompt template built successfully.")
 
-        # Compose the chain.
+        # Compose the chain up to the language model.
         chain = (
             {
                 "context": lambda _: "",  # No additional static context provided.
@@ -181,11 +173,20 @@ class InteractiveModel:
             | prompt_template
             | self.llm
         )
-        # Only apply the AfterThinkOutputParser if we are using the think marker.
-        if self.use_think_marker:
-            chain = chain | AfterThinkOutputParser()
 
-        logger.debug("InteractiveModel: Invoking the chain with the provided question.")
-        result = chain.invoke(question)
-        logger.info("InteractiveModel: Chain invocation complete.")
+        logger.debug("InteractiveModel: Invoking the chain to get raw output.")
+        raw_output = chain.invoke(question)
+        logger.info("InteractiveModel: Raw output from chain: %s", raw_output)
+
+        if self.use_think_marker:
+            logger.debug("InteractiveModel: Using think marker. Applying AfterThinkOutputParser.")
+            parser = AfterThinkOutputParser()
+            final_output = parser.parse(raw_output)
+            logger.info("InteractiveModel: Final output after applying think marker: %s", final_output)
+            result = final_output
+        else:
+            logger.debug("InteractiveModel: Think marker not in use. Returning raw output.")
+            result = raw_output
+
+        logger.info("InteractiveModel: Chain invocation complete. Returning result.")
         return result
