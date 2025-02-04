@@ -16,7 +16,7 @@ Introducing Nebula Pro, Nebula Pro improves on Nebula 2.0 by adding additional f
 
 ## Nebula: AI-Powered Penetration Testing Platform
 
-Nebula is an AI-Powered penetration testing tool. It integrates AI Models right into the command line interface and supports any tool that can be invoked from the CLI
+Nebula is a cutting-edge, AI-powered penetration testing tool designed for cybersecurity professionals and ethical hackers. It integrates advanced open-source AI models such as Meta's Llama-3.1-8B-Instruct, Mistralai's Mistral-7B-Instruct-v0.2, and DeepSeek-R1-Distill-Llama-8B—directly into the command line interface (CLI). By leveraging these state-of-the-art models, Nebula not only enhances vulnerability assessments and penetration testing workflows but also supports any tool that can be invoked from the CLI.
 
 
 ## Installation
