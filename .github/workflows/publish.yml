@@ -122,7 +122,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              This PR fixes the status bar
+              This release ensures that models always return output even if the marker that differentiates between prompts and text generation are not found
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
