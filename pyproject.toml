@@ -1,36 +1,28 @@
+[build-system]
+requires = [ "poetry-core>=1.0.0",]
+build-backend = "poetry.core.masonry.api"
+include = [ "src/nebula/images/*", "src/nebula/Images_readme/*", "src/nebula/command_search_index/*", "src/nebula/config/*",]
+
 [tool.poetry]
 name = "nebula-ai"
-version = "2.0.0b0"
+version = "2.0.1"
 description = "AI-Powered Ethical Hacking Assistant"
 readme = "README.md"
-authors = ["David I <david@berylliumsec.com>"]
+authors = [ "David I <david@berylliumsec.com>",]
 license = "BSD"
 homepage = "https://github.com/berylliumsec/nebula"
-keywords = ["AI", "ethical hacking", "nmap", "zap", "crackmapexec"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: BSD License",
-    "Programming Language :: Python :: 3",
-]
-
-# Define the directory structure for your package
-packages = [
-  { include = "nebula", from = "src" }
-]
-
-# These patterns ensure additional non-Python files (like images) are included in your package
-include = [
-  "src/nebula/images/*"
-]
+keywords = [ "AI", "ethical hacking", "nmap", "zap", "crackmapexec",]
+classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Developers", "License :: OSI Approved :: BSD License", "Programming Language :: Python :: 3",]
+include = [ "src/nebula/images/*",]
+[[tool.poetry.packages]]
+include = "nebula"
+from = "src"
 
 [tool.poetry.scripts]
 nebula = "nebula.nebula:main"
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.12"
-
-
 Cython = "*"
 IPython = "*"
 PyQt6 = "*"
@@ -60,20 +52,7 @@ langchain-core = "*"
 accelerate = "*"
 bitsandbytes = "*"
 duckduckgo-search = "*"
-toml ="*"
+toml = "*"
 
 [tool.poetry.extras]
-flash = ["flash-attn"]
-
-
-
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
-
-include = [
-  "src/nebula/images/*",
-  "src/nebula/Images_readme/*",
-  "src/nebula/command_search_index/*",
-  "src/nebula/config/*"
-]
+flash = [ "flash-attn",]
