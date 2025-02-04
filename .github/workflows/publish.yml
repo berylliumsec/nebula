@@ -10,20 +10,37 @@ on:
 jobs:
   release-build:
     runs-on: ubuntu-latest
+    # Define an output that later jobs can use.
+    outputs:
+      new_version: ${{ steps.get_bumped_version.outputs.new_version }}
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-        
+
       - name: Install bump script dependencies
         run: pip install toml
-        
-      # Bump version before building the distributions.
+
+      # Bump the version in pyproject.toml.
       - name: Bump version in pyproject.toml
         run: python bump_version.py prerelease
 
-      # Set up and activate the Conda environment.
+      # Read the bumped version from pyproject.toml and set it as an output.
+      - name: Get bumped version
+        id: get_bumped_version
+        run: |
+          NEW_VERSION=$(grep '^version =' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Commit bumped version
+        run: |
+          git config --global user.email "david@berylliumsec.com"
+          git config --global user.name "David I"
+          git add pyproject.toml
+          git commit -m "Bump version to ${NEW_VERSION}"
+          git push
+
       - name: Setup Conda Environment
         uses: conda-incubator/setup-miniconda@v2
         with:
@@ -31,11 +48,10 @@ jobs:
           activate-environment: nebula-2.0
           channels: conda-forge
 
-      # Install Poetry and build the release distributions in one step.
       - name: Build release distributions using Poetry
         shell: bash -l {0}
         run: |
-          # Source Conda's shell hook and re-activate the environment.
+          # Source Conda's shell hook and activate the environment.
           eval "$(conda shell.bash hook)"
           conda activate nebula-2.0
           # Install Poetry from conda-forge.
@@ -87,12 +103,6 @@ jobs:
         if: github.event.pull_request.merged == true 
         uses: pypa/gh-action-pypi-publish@release/v1
 
-      - name: Set version from pyproject.toml
-        id: get_version
-        run: |
-          NEW_VERSION=$(grep '^version =' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
-
       - name: Create GitHub Release  
         if: github.event.pull_request.merged == true
         id: create_release
@@ -100,8 +110,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.NEW_VERSION }}
-          release_name: Release ${{ env.NEW_VERSION }}
+          tag_name: ${{ needs.release-build.outputs.new_version }}
+          release_name: Release ${{ needs.release-build.outputs.new_version }}
           draft: false
           prerelease: false
           body: |
@@ -114,7 +124,7 @@ jobs:
         if: github.event.pull_request.merged == true
         run: |
           for asset in dist/*; do
-            gh release upload ${{ env.NEW_VERSION }} $asset
+            gh release upload ${{ needs.release-build.outputs.new_version }} $asset
           done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
