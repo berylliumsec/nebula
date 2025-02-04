@@ -69,12 +69,8 @@ Keeps a record of all commands executed within the terminal for easy reference a
 
 ## Getting Started
 
-### Intuitive User Interface
-Designed for ease of use, with tooltips for quick guidance and icons that intuitively represent their functions.
-
-## User Guide
-
 For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula-pro-feature-guide) and [here](https://www.youtube.com/playlist?list=PLySxaLbLL0gpAaDQYq6g6sb1q6KwqOAr4). Please note that some features are only applicable to Nebula Pro
+
 ### Home Screen
 - **AI-Based Note-Taking:** Toggle the icon below. You will be prompted to select your a file to store your notes in  
   ![AI Notes](src/nebula/Images_readme/ai_notes.png)
@@ -157,6 +153,7 @@ For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula
 ### Roadmap
 
 - Support more models
+- Add agents
 
 
 

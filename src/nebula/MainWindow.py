@@ -7,7 +7,6 @@ import time
 import warnings
 from queue import Queue
 
-import requests
 from PyQt6 import QtCore
 from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QPoint,
                           QRunnable, QSize, Qt, QThread, QThreadPool, QTimer,
@@ -220,9 +219,7 @@ class FileProcessorWorker(QObject):
                 logger.debug("Processing next chunk")
                 num_items = self.chunks_queue.qsize()
                 logger.debug(f"Number of items to be processed is {num_items}")
-                if self.autonomous_mode:
-                    self.command_input_area.queued_autonomous_items_for_api = num_items
-                    logger.debug(f"Setting autonomous_queue to {num_items}")
+
                 self.command_input_area.execute_api_call(
                     next_chunk, self.gate_way_endpoint
                 )
@@ -590,6 +587,7 @@ class NebulaPro(QMainWindow):
 
         self.clear_button.setIcon(QIcon(self.clear_button_icon_path))
         self.upload_button = QPushButton()
+        self.upload_button.setEnabled(False)  # This disables the button.
         self.upload_button.setFixedHeight(50)
         self.upload_button.setObjectName("uploadButton")
         self.upload_button.setToolTip("Upload a file for analysis")
@@ -993,8 +991,7 @@ class NebulaPro(QMainWindow):
             window_title = window_title + " - " + engagement_json["engagement_name"]
 
         self.setWindowTitle(window_title)
-        self.model_signal.connect(self.command_input_area.create_model)
-        self.model_signal.emit(True)
+
         self.center()
         logger.debug("centered application")
         self.current_action_index = 0
@@ -1003,7 +1000,15 @@ class NebulaPro(QMainWindow):
         logger.debug("Starting tour")
         self.tour_timer.timeout.connect(self.next_step)
         self.main_window_loaded.emit(True)
+        self.model_signal.connect(self.command_input_area.create_model)
+        self.model_signal.emit(True)
+        self.model_ready_status = False
+        self.command_input_area.model_created.connect(self.allow_file_uploads)
         logger.debug("main window loaded")
+
+    def allow_file_uploads(self, signal):
+        if signal:
+            self.upload_button.setEnabled(True)
 
     def open_tour(self):
         self.current_action_index = 0
@@ -1012,7 +1017,6 @@ class NebulaPro(QMainWindow):
             1000,
             lambda: self.highlight_action(self.help_actions[self.current_action_index]),
         )
-
 
     def updatePreference(self, preference: str, value: bool):
         # Load the current configuration.
@@ -1391,7 +1395,6 @@ class NebulaPro(QMainWindow):
             self,
             manager=self.manager,
             terminal_emulator_number=self.terminal_emulator_number,
-            model=self.model,
         )
         self.model_signal.connect(self.terminalWindow.command_input_area.create_model)
         self.child_windows.append(self.terminalWindow)
@@ -1405,14 +1408,6 @@ class NebulaPro(QMainWindow):
 
         self.terminalWindow.command_input_area.threads_status.connect(
             self.setThreadStatus
-        )
-
-        self.autonomous_mode_status.connect(
-            self.terminalWindow.command_input_area.set_autonomous_mode
-        )
-
-        self.autonomous_mode_status.connect(
-            self.terminalWindow.command_input_area.terminal.set_autonomous_mode
         )
         self.terminalWindow.show()
 

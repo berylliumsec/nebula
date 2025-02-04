@@ -44,6 +44,7 @@ jobs:
           name: release-dists
           path: dist/
 
+
   pypi-docker-publish:
     runs-on: ubuntu-latest
     environment: nebula
@@ -57,7 +58,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Set up the same Conda environment.
       - name: Setup Conda Environment
         uses: conda-incubator/setup-miniconda@v2
         with:
@@ -65,9 +65,15 @@ jobs:
           activate-environment: nebula-2.0
           channels: conda-forge
 
-      # (Optional) Install Poetry if needed later in this job.
       - name: Install Poetry via Conda
         run: conda install -c conda-forge poetry -y
+
+      - name: Install bump script dependencies
+        run: pip install toml
+
+      # Run the bump version script (adjust bump type as needed)
+      - name: Bump version in pyproject.toml
+        run: python bump_version.py patch
 
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4
@@ -98,14 +104,10 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - This version adds a GUI to Nebula
-              - Upgrades the model to DeepSeek-R1-Distill-Llama-8B
-              - Adds AI powered Notetaking and Suggestions
-              - Direct command execution in a terminal interface
-              - Add your cheat sheets for auto-suggestion
-              - Take Screenshots
-              - Basic Image editing
-
+              Adding the following models:
+              - meta-llama/Llama-3.1-8B-Instruct
+              - mistralai/Mistral-7B-Instruct-v0.2
+        
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |

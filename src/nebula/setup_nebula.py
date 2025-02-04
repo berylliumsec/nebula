@@ -118,6 +118,8 @@ class settings(QWidget):
         self.modelComboBox = QComboBox()
         self.modelComboBox.setFont(QFont("Arial", 10))
         self.modelComboBox.addItem("deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
+        self.modelComboBox.addItem("meta-llama/Llama-3.1-8B-Instruct")
+        self.modelComboBox.addItem("mistralai/Mistral-7B-Instruct-v0.2")
         self.modelComboBox.currentTextChanged.connect(self.onModelChanged)
         self.onModelChanged(self.modelComboBox.currentText())
         modelLayout = QHBoxLayout()
@@ -277,33 +279,38 @@ class settings(QWidget):
             return
 
         try:
-            current_engagement_settings = self.loadEngagementDetails() or {}
+            # Directly read the current values from the UI.
             ip_addresses = [
                 ip.strip()
-                for ip in self.ipAddressesInput.toPlainText().split("\n")
+                for ip in self.ipAddressesInput.toPlainText().splitlines()
                 if ip.strip()
             ]
             urls = [
                 url.strip()
-                for url in self.urlsInput.toPlainText().split("\n")
+                for url in self.urlsInput.toPlainText().splitlines()
                 if url.strip()
             ]
             lookout_items = [
                 item.strip()
-                for item in self.lookoutInput.toPlainText().split("\n")
+                for item in self.lookoutInput.toPlainText().splitlines()
                 if item.strip()
             ]
+            # Capture the current model selection
             self.model_name = self.modelComboBox.currentText()
+            cache_dir = self.cacheDirLineEdit.text()
 
+            # Build the settings dictionary using the current UI values.
+            current_engagement_settings = {
+                "engagement_name": self.engagementName,
+                "ip_addresses": ip_addresses,
+                "urls": urls,
+                "lookout_items": lookout_items,
+                "model": self.model_name,
+                "cache_dir": cache_dir,
+            }
+
+            # Save the settings to the file.
             file_path = os.path.join(self.engagementFolder, "engagement_details.json")
-            current_engagement_settings["engagement_name"] = self.engagementName
-            current_engagement_settings["ip_addresses"] = ip_addresses
-            current_engagement_settings["urls"] = urls
-            current_engagement_settings["lookout_items"] = lookout_items
-            current_engagement_settings["model"] = self.model_name
-            current_engagement_settings["cache_dir"] = self.cacheDirLineEdit.text()
-
-            logger.debug(f"Current engagement settings: {current_engagement_settings}")
             with open(file_path, "w") as file:
                 json.dump(current_engagement_settings, file, indent=4)
 
@@ -314,7 +321,7 @@ class settings(QWidget):
                 f"Engagement details saved successfully in {self.engagementFolder}."
             )
             self.setupCompleted.emit(self.engagementFolder)
-            # Reset the flag after saving
+            # Reset the flag after saving.
             self.cache_dir_updated = False
 
         except Exception as e:
