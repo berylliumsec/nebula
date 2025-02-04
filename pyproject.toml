@@ -60,6 +60,7 @@ langchain-core = "*"
 accelerate = "*"
 bitsandbytes = "*"
 duckduckgo-search = "*"
+toml ="*"
 
 [tool.poetry.extras]
 flash = ["flash-attn"]

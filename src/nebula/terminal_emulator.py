@@ -45,22 +45,24 @@ class ModelCreationWorker(QRunnable):
         self.signals = ModelWorkerSignals()
 
     def run(self):
-        # This is where you create your model. For demonstration:
         logger.debug("creating model")
         self.signals.modelCreationInProgress.emit(True)
-        config = self.manager.load_config()
-        model = config["MODEL"]
-        cache_dir = config["CACHE_DIR"]
 
-        model = InteractiveModel(model_name=model, cache_dir=cache_dir)
-        if not model:
-            utilities.show_message(
-                "Unable to load model",
-                "Could not start model, possibly because there is no gpu available",
-            )
-            return False
-        self.signals.modelCreated.emit(model)  # Emit the signal with the created model
-        self.signals.modelCreationInProgress.emit(False)
+        try:
+            config = self.manager.load_config()
+            model_name = config["MODEL"]
+            cache_dir = config["CACHE_DIR"]
+            model = InteractiveModel(model_name=model_name, cache_dir=cache_dir)
+        except Exception as e:
+
+            logger.error(f"Could not start model {e}")
+            return  # Early exit; the finally block will still run.
+        finally:
+            # This will always execute, ensuring that the progress signal is updated.
+            self.signals.modelCreationInProgress.emit(False)
+
+        # Only emit modelCreated if model creation succeeded.
+        self.signals.modelCreated.emit(model)
 
 
 class ModelTaskRunnerSignals(QObject):
@@ -107,7 +109,10 @@ class ModelTaskRunner(QRunnable):
                 self.endpoint, self.command, result
             )  # Emit the result signal upon success
         except Exception as e:
-            utilities.show_message("An error occurred, try disabling search or checking the logs for errors")
+            utilities.show_message(
+                "Unable to fufill request",
+                "An error occurred, try disabling search or checking the logs for errors",
+            )
             logger.error(
                 f"An error occurred while retrieving data, the model may not be available yet, check the terminal where you invoked Nebula to see if it has been fully loaded {e}"
             )  # Log the error
@@ -1105,6 +1110,7 @@ class CommandInputArea(QLineEdit):
     update_store = pyqtSignal(str)
     update_data = pyqtSignal(str)
     update_data_error = pyqtSignal(str)
+    model_created = pyqtSignal(bool)
 
     def __init__(self, parent=None, manager=None):
         super().__init__(parent)
@@ -1468,12 +1474,24 @@ class CommandInputArea(QLineEdit):
 
     def startModelCreation(self):
         worker = ModelCreationWorker(self.manager)
+        if not worker:
+            utilities.show_message(
+                "Unable to load model",
+                "Could not start model, ensure you have access to it, check the logs for more info",
+            )
+            return
         worker.signals.modelCreated.connect(self.onModelCreated)  # Connect to your slot
         worker.signals.modelCreationInProgress.connect(self.set_neutron_creation_status)
-        self.threadPool.start(worker)
+        try:
+            self.threadPool.start(worker)
+        except Exception as e:
+            logger.error(f"Unable to create model{e}")
+        logger.info("model creation in progress")
 
     def onModelCreated(self, model):
-        self.model = model  # Now you have your model ready to be used
+        if model:
+            self.model = model  # Now you have your model ready to be used
+            self.model_created.emit(True)
 
     def create_model(self, status):
 
@@ -1521,75 +1539,31 @@ class CommandInputArea(QLineEdit):
         QApplication.restoreOverrideCursor()
 
     def execute_api_call(self, command=None, endpoint=None):
-
-        engagement_folder = self.CONFIG["ENGAGEMENT_FOLDER"]
-        self.engagement_details_file = os.path.join(
-            engagement_folder, "engagement_details.json"
+        logger.debug(
+            f"Model Creation Progress is {self.free_model_creation_in_progress}"
         )
-        with open(self.engagement_details_file, "r") as file:
-            self.engagement_details = json.load(file)
-
-            logger.debug(
-                f"Model Creation Progress is {self.free_model_creation_in_progress}"
+        if self.free_model_creation_in_progress:
+            utilities.show_message(
+                "Model Creation In Progress",
+                "The Model is still being downloaded, please wait. You can check the progress in the terminal where you launched Nebula",
             )
-            if self.free_model_creation_in_progress:
-                utilities.show_message(
-                    "Model Creation In Progress",
-                    "The Model is still being downloaded, please wait. You can check the progress in the terminal where you launched Nebula",
-                )
-                return
-            logger.debug(
-                f"Starting execute_api_call to endpoint: {endpoint} in free mode"
+            return
+        logger.debug(f"Starting execute_api_call to endpoint: {endpoint} in free mode")
+        self.threads_status.emit("in_progress")
+
+        if not self.model:
+            logger.error("No loaded model")
+            utilities.show_message(
+                "No model loaded",
+                "An error may have occurred while loading the selected model during Nebula's startup, please restart Nebula and try again",
             )
-            self.threads_status.emit("in_progress")
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-
-            model_task = ModelTaskRunner(self.model, endpoint, command, self.manager)
-            model_task.signals.result.connect(self.onTaskResult)
-            model_task.signals.finished.connect(self.onTaskFinished)  # If needed
-            self.threadpool.start(model_task)
-
-            # else:
-
-            #     self.threads_status.emit("in_progress")
-            #     if (
-            #         endpoint == "command"
-            #         or endpoint == "autonomous"
-            #         or endpoint == "web"
-            #     ):
-
-            #     elif endpoint == "notes" or endpoint == "notes_files":
-            #         self.api_tasks += 1
-            #         logger.debug(
-            #             "Endpoint is NOTE_TAKING_API_GATEWAY_ENDPOINT. Setting up finished signal."
-            #         )
-            #         try:
-            #             apiCallWorker.signals.finished.connect(
-            #                 self.update_ai_notes_function
-            #             )
-            #             logger.debug(
-            #                 "Successfully connected to update_ai_notes_function."
-            #             )
-            #         except TypeError as e:
-            #             logger.debug(
-            #                 f"Failed to connect to update_ai_notes_function: {e}"
-            #             )
-            #     elif endpoint == "suggestion" or endpoint == "suggestion_files":
-            #         self.api_tasks += 1
-            #         logger.debug(
-            #             "Endpoint is SUGGESTIONS_API_GATEWAY_ENDPOINT. Setting up finished signal."
-            #         )
-            #         try:
-            #             apiCallWorker.signals.finished.connect(
-            #                 self.update_suggestion_notes_function
-            #             )
-            #             logger.debug(
-            #                 "Successfully connected to update_suggestion_notes_function."
-            #             )
-            #         except TypeError as e:
-            #             logger.debug(
-            #                 f"Failed to connect to update_suggestion_notes_function: {e}"
-            #             )
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        model_task = ModelTaskRunner(self.model, endpoint, command, self.manager)
+        model_task.signals.result.connect(self.onTaskResult)
+        model_task.signals.finished.connect(self.onTaskFinished)  # If needed
+        self.threadpool.start(model_task)
+        self.threads_status.emit("completed")
 
     def parse_json(self, data):
         try:

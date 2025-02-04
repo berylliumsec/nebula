@@ -366,7 +366,7 @@ def process_text(
 
 
 def process_single_line(
-    line: str, model_manager, device, confidence_threshold: float = 0.80
+    line: str, model_manager, device, confidence_threshold: float = 1.0
 ):
     # Rest of the function remains unchanged
 

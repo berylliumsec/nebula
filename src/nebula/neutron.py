@@ -44,100 +44,105 @@ class InteractiveModel:
     def __init__(
         self, cache_dir, model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
     ):
-        logger.info("Initializing InteractiveModel.")
-        # Ensure GPU is available.
-        if not torch.cuda.is_available():
-            logger.error("InteractiveModel: No GPUs available.")
-            raise Exception("No GPUs available")
+        # Save the model name and set a flag to indicate if we should use the think marker.
+        self.model_name = model_name
+        self.use_think_marker = "deepseek" in model_name.lower()
 
-        logger.debug(
-            "InteractiveModel: GPU is available. Configuring model for 8-bit quantization."
-        )
-        bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+        try:
+            logger.info("Initializing InteractiveModel.")
+            # Ensure GPU is available.
+            if not torch.cuda.is_available():
+                logger.error("InteractiveModel: No GPUs available.")
+                raise Exception("No GPUs available")
 
-        logger.debug(
-            "InteractiveModel: Loading tokenizer from pretrained model '%s'.",
-            model_name,
-        )
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            model_max_length=8192,
-            low_cpu_mem_usage=True,
-            cache_dir=cache_dir,
-        )
+            logger.debug(
+                "InteractiveModel: GPU is available. Configuring model for 8-bit quantization."
+            )
+            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
-        logger.debug(
-            "InteractiveModel: Loading model from pretrained checkpoint '%s'.",
-            model_name,
-        )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            low_cpu_mem_usage=True,
-            quantization_config=bnb_config,
-            device_map="auto",
-            cache_dir=cache_dir,
-        )
+            logger.debug(
+                "InteractiveModel: Loading tokenizer from pretrained model '%s'.",
+                model_name,
+            )
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                model_max_length=8192,
+                low_cpu_mem_usage=True,
+                cache_dir=cache_dir,
+            )
 
-        logger.debug("InteractiveModel: Setting up text-generation pipeline.")
-        self.pipe = pipeline(
-            "text-generation",
-            model=self.model,
-            tokenizer=self.tokenizer,
-            max_new_tokens=7000,
-            repetition_penalty=1.2,
-            use_fast=True,
-            return_full_text=False,  # Only return the new text, not the full prompt.
-        )
-        self.search_results = ""
+            logger.debug(
+                "InteractiveModel: Loading model from pretrained checkpoint '%s'.",
+                model_name,
+            )
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                low_cpu_mem_usage=True,
+                quantization_config=bnb_config,
+                device_map="auto",
+                cache_dir=cache_dir,
+            )
 
-        self.search = DuckDuckGoSearchRun()
+            logger.debug("InteractiveModel: Setting up text-generation pipeline.")
+            self.pipe = pipeline(
+                "text-generation",
+                model=self.model,
+                tokenizer=self.tokenizer,
+                max_new_tokens=32000,
+                use_fast=True,
+                return_full_text=False,  # Only return the new text, not the full prompt.
+            )
+            self.search_results = ""
 
-        logger.debug(
-            "InteractiveModel: Wrapping pipeline with HuggingFacePipeline for LangChain."
-        )
-        self.llm = HuggingFacePipeline(pipeline=self.pipe)
-        logger.info("InteractiveModel initialized successfully.")
+            self.search = DuckDuckGoSearchRun()
+
+            logger.debug(
+                "InteractiveModel: Wrapping pipeline with HuggingFacePipeline for LangChain."
+            )
+            self.llm = HuggingFacePipeline(pipeline=self.pipe)
+            logger.info("InteractiveModel initialized successfully.")
+        except Exception as e:
+            logger.error(f"Unable to load model {model_name}: {e}")
+            raise
 
     def get_template_for_mode(self, mode: str) -> str:
-        logger.debug("InteractiveModel: Selecting prompt template for mode '%s'.", mode)
+        # For "notes" and "suggestion", include the think marker if the model is deepseek.
+        think_marker = "\n</think>" if self.use_think_marker else ""
+
         if "notes" in mode:
-            return """
-        As a penetration testing assistant, please take detailed notes based on the context of a penetration test.
-        Summarize important information, key points, and observations from the context provided. Use bullet points where appropriate.
+            return f"""
+    As a penetration testing assistant, please take detailed notes based on the context of a penetration test.
+    Summarize important information, key points, and observations from the provided contexts.
+    If a context is not available, ignore it.
+    Use bullet points where appropriate.
 
-        Given contexts:
-        - Context: {context}
-        - Context2: {context2}
-        Question: {question}
-
-        </think>
-        """
+    Given contexts:
+    - Context: {{context}}
+    - Context2: {{context2}}
+    Question: {{question}}{think_marker}
+    """
         elif "suggestion" in mode:
-            return """
-        As a penetration testing assistant, provide actionable next steps with actual commands based on the context of a penetration test.
-        Your suggestions should include executable terminal commands enclosed in backticks and focus on immediate next steps.
+            return f"""
+                    As a penetration testing assistant, provide actionable next steps with actual commands based on the context of a penetration test.
+                    Your suggestions should include executable terminal commands enclosed in backticks and focus on immediate next steps.
+                    If a context is not available, ignore it.
 
-        Given contexts:
-        - Context: {context}
-        - Context2: {context2}
-        Question: {question}
+                    Given contexts:
+                    - Context: {{context}}
+                    - Context2: {{context2}}
+                    Question: {{question}}{think_marker}
+                    """
+        else:  # "general_question" mode: no additional messaging or think marker.
+            return f"""
+                    As a penetration testing assistant, provide a response based on your knowledge and the provided contexts.
+                    Ensure the response is directly relevant to the inputs, focusing on elements common to both contexts.
+                    If a context is not available, ignore it.
 
-        </think>
-        """
-        else:  # default to "general_question"
-            return """
-        As a penetration testing assistant, provide a response based on your knowledge and the provided contexts.
-        Ensure the response is directly relevant to the inputs, focusing particularly on elements common to both contexts.
-        Revise your responses to maintain a consistent context throughout and do not alter commands returned in the contexts, but you can modify surrounding statements.
-        All commands should be formatted using backticks. Eliminate any sections that diverge from or do not fit within this established context.
-
-        Given contexts:
-        - Context: {context}
-        - Context2: {context2}
-        Question: {question}
-
-        </think>
-        """
+                    Given contexts:
+                    - Context: {{context}}
+                    - Context2: {{context2}}
+                    Question: {{question}}
+                    """
 
     def invoke(self, question: str, mode: str = "general_question", use_search=False):
         """
@@ -166,8 +171,7 @@ class InteractiveModel:
         prompt_template = ChatPromptTemplate.from_template(template_str)
         logger.debug("InteractiveModel: Prompt template built successfully.")
 
-        # Compose the chain: first providing contexts, then formatting the prompt,
-        # running the LLM, and finally parsing the output using our custom parser.
+        # Compose the chain.
         chain = (
             {
                 "context": lambda _: "",  # No additional static context provided.
@@ -176,8 +180,10 @@ class InteractiveModel:
             }
             | prompt_template
             | self.llm
-            | AfterThinkOutputParser()
         )
+        # Only apply the AfterThinkOutputParser if we are using the think marker.
+        if self.use_think_marker:
+            chain = chain | AfterThinkOutputParser()
 
         logger.debug("InteractiveModel: Invoking the chain with the provided question.")
         result = chain.invoke(question)
