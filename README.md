@@ -46,6 +46,10 @@ On your first run, you’ll be prompted to select a cache directory where Nebula
    ```
 3. Launch Nebula and monitor the download progress on the CLI.
 
+   ```bash
+   nebula
+   ```
+
 This step only needs to be completed once. Monitor the command line interface where you invoked `nebula` from to monitor the download progress.
 
 ### Interacting with the models. 
