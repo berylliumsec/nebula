@@ -122,7 +122,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              This release ensures that models always return output even if the marker that differentiates between prompts and text generation are not found
+              This release adds an indicator to show that the model is busy upon startup
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
