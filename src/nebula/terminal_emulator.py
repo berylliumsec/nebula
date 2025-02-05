@@ -1487,12 +1487,14 @@ class CommandInputArea(QLineEdit):
 
     def onModelCreated(self, model):
         if model:
+            self.threads_status.emit("completed")
             self.model = model  # Now you have your model ready to be used
             self.model_created.emit(True)
 
     def create_model(self, status):
 
         if status is True and self.model is None:
+            self.threads_status.emit("in_progress")
             logger.debug("loading model")
 
             self.startModelCreation()
