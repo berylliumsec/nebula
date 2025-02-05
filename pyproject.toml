@@ -53,6 +53,7 @@ accelerate = "*"
 bitsandbytes = "*"
 duckduckgo-search = "*"
 toml = "*"
+setuptools = "*"
 
 [tool.poetry.extras]
 flash = [ "flash-attn",]

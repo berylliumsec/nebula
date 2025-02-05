@@ -186,13 +186,13 @@ class settings(QWidget):
         self.model_name = text
         logger.debug(f"Model selected: {text}")
 
-        if text == "deepseek-ai/DeepSeek-R1-Distill-Llama-8B":
-            if not torch.cuda.is_available():
-                utilities.show_systems_requirements_message(
-                    "Important information",
-                    "No GPU(s) available. Please select another model if possible.",
-                )
-                return
+    
+        if not torch.cuda.is_available():
+            utilities.show_systems_requirements_message(
+                "Important information",
+                "No GPU(s) available. You will not be able to use any models",
+            )
+            return
 
     def center(self):
         screen = QApplication.primaryScreen()

@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
                              QHBoxLayout, QInputDialog, QLabel, QListWidget,
                              QListWidgetItem, QMainWindow, QMenu, QMessageBox,
                              QPushButton, QRadioButton, QSizePolicy, QToolBar,
-                             QToolTip, QVBoxLayout, QWidget)
+                             QToolTip, QVBoxLayout, QWidget,QToolButton)
 
 from . import constants, eclipse, tool_configuration, update_utils, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
@@ -967,6 +967,18 @@ class NebulaPro(QMainWindow):
             lambda state: self.updatePreference("USE_INTERNET_SEARCH", state)
         )
 
+        self.model_selection_button = QToolButton()
+        icon = QIcon(return_path("Images/model_selection.png"))
+        self.model_selection_button.setIcon(icon)
+        self.model_selection_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.menu = QMenu(self.model_selection_button)
+        self.menu.addAction("deepseek-ai/DeepSeek-R1-Distill-Llama-8B", lambda: self.on_model_selected("deepseek-ai/DeepSeek-R1-Distill-Llama-8B"))
+        self.menu.addAction("meta-llama/Llama-3.1-8B-Instruct", lambda: self.on_model_selected("mistralai/Mistral-7B-Instruct-v0.2"))
+        self.menu.addAction("mistralai/Mistral-7B-Instruct-v0.2", lambda: self.on_model_selected("mistralai/Mistral-7B-Instruct-v0.2"))
+        self.model_selection_button.setMenu(self.menu)
+
+        # Add the button to the toolbar
+        self.toolbar.addWidget(self.model_selection_button )
         self.icons_path = "path/to/tools/icons"  # Adjust to your icons path
         self.tools_window = tool_configuration.ToolsWindow(
             self.CONFIG.get("AVAILABLE_TOOLS", []),
@@ -1003,12 +1015,39 @@ class NebulaPro(QMainWindow):
         self.model_signal.connect(self.command_input_area.create_model)
         self.model_signal.emit(True)
         self.model_ready_status = False
-        self.command_input_area.model_created.connect(self.allow_file_uploads)
+        self.menu.setEnabled(False)
+        self.command_input_area.model_created.connect(self.enable_disabled_due_to_model_creation)
         logger.debug("main window loaded")
 
-    def allow_file_uploads(self, signal):
+    def on_model_selected(self, model ):
+            # Load the current configuration.
+        self.CONFIG = self.manager.load_config()
+        self.engagement_folder = self.CONFIG["ENGAGEMENT_FOLDER"]
+
+        # Build the path to the config.json file.
+        self.CONFIG_FILE_PATH = os.path.join(self.engagement_folder, "config.json")
+
+        # Read the existing JSON data from config.json, if it exists.
+        if os.path.exists(self.CONFIG_FILE_PATH):
+            with open(self.CONFIG_FILE_PATH, "r") as file:
+                data = json.load(file)
+        else:
+            data = {}
+
+        # Update the configuration with the new value.
+        data["MODEL"] = model
+        logger.debug(f"Dumping model preference data: {data}")
+
+        # Write the updated data back to config.json.
+        with open(self.CONFIG_FILE_PATH, "w") as file:
+            json.dump(data, file, indent=4)
+        self.model_signal.emit(True)
+        self.upload_button.setEnabled(False)
+        self.menu.setEnabled(False)
+    def enable_disabled_due_to_model_creation(self, signal):
         if signal:
             self.upload_button.setEnabled(True)
+            self.menu.setEnabled(True)
 
     def open_tour(self):
         self.current_action_index = 0
