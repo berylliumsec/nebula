@@ -88,7 +88,7 @@ For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula
 
 ### Troubleshooting
 
-Logs are located at `/home/[your_username]/.local/share/nebula/logs`. You would most likely find the reason for the error in one fo those logs
+Logs are located at `/home/[your_username]/.local/share/nebula/logs`. You would most likely find the reason for the error in one of those logs
 
 ## Get More Support
 
