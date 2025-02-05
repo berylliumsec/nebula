@@ -8,7 +8,7 @@ import signal
 import threading
 import time
 import warnings
-
+import torch
 from PyQt6 import QtCore
 from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
                           QStringListModel, Qt, QThread, QThreadPool, QTimer,
@@ -36,6 +36,7 @@ class ModelWorkerSignals(QObject):
     # Signal to emit when the model is created
     modelCreated = pyqtSignal(object)
     modelCreationInProgress = pyqtSignal(bool)
+    modelName =  pyqtSignal(str)
 
 
 class ModelCreationWorker(QRunnable):
@@ -63,6 +64,7 @@ class ModelCreationWorker(QRunnable):
 
         # Only emit modelCreated if model creation succeeded.
         self.signals.modelCreated.emit(model)
+        self.signals.modelName.emit(model_name)
 
 
 class ModelTaskRunnerSignals(QObject):
@@ -1478,6 +1480,7 @@ class CommandInputArea(QLineEdit):
             )
             return
         worker.signals.modelCreated.connect(self.onModelCreated)  # Connect to your slot
+        worker.signals.modelName.connect(self.setModelName) 
         worker.signals.modelCreationInProgress.connect(self.set_neutron_creation_status)
         try:
             self.threadPool.start(worker)
@@ -1485,6 +1488,8 @@ class CommandInputArea(QLineEdit):
             logger.error(f"Unable to create model{e}")
         logger.info("model creation in progress")
 
+    def setModelName(self, model_name):
+        self.model_name = model_name
     def onModelCreated(self, model):
         if model:
             self.threads_status.emit("completed")
@@ -1492,13 +1497,37 @@ class CommandInputArea(QLineEdit):
             self.model_created.emit(True)
 
     def create_model(self, status):
+        # Load the configuration to get the requested model name.
+        config = self.manager.load_config()
+        requested_model_name = config.get("MODEL", "")
 
-        if status is True and self.model is None:
+        # If a model is already loaded, check if it's the same as requested.
+        if self.model is not None:
+            if self.model_name == requested_model_name:
+                logger.info("Requested model '%s' is already loaded. Skipping creation.", requested_model_name)
+                return
+            else:
+                logger.info("Different model requested. Offloading current model and creating new one.")
+                self.offload_current_model()
+
+        # Now that we have ensured no model or an old model is present, create the new model.
+        if status is True:
             self.threads_status.emit("in_progress")
-            logger.debug("loading model")
-
+            logger.debug("Loading model '%s'.", requested_model_name)
             self.startModelCreation()
 
+    def offload_current_model(self):
+        """
+        Offload the current model from GPU memory.
+        This function moves the model to CPU (if possible), deletes the model instance,
+        and clears the CUDA cache.
+        """
+        if self.model is not None:
+            # Remove the model reference so that it can be garbage-collected.
+            del self.model
+            self.model = None
+            torch.cuda.empty_cache()
+            logger.info("Current model offloaded and GPU cache cleared.")
     def onTaskResult(self, endpoint, command, result):
         if endpoint == "command":
             logger.debug(f"free model results for command endpoint {result}")
@@ -1544,7 +1573,7 @@ class CommandInputArea(QLineEdit):
         if self.free_model_creation_in_progress:
             utilities.show_message(
                 "Model Creation In Progress",
-                "The Model is still being downloaded, please wait. You can check the progress in the terminal where you launched Nebula",
+                "The Model is still being downloaded or loaded, please wait. You can check the progress in the terminal where you launched Nebula",
             )
             return
         logger.debug(f"Starting execute_api_call to endpoint: {endpoint} in free mode")

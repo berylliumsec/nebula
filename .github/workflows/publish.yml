@@ -122,7 +122,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              This release adds an indicator to show that the model is busy upon startup
+              This release adds the option to select models on the fly and also improves deep seek's output
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |

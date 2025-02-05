@@ -1,5 +1,6 @@
 import torch
 import transformers
+import re
 from langchain_community.llms.huggingface_pipeline import HuggingFacePipeline
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.output_parsers import StrOutputParser
@@ -7,31 +8,24 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig, pipeline)
-
 from . import constants
 from .log_config import setup_logging
 
 # Suppress verbose warnings from transformers.
 transformers.logging.set_verbosity_error()
-
 logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/neutron.log")
-
 
 class AfterThinkOutputParser(StrOutputParser):
     """
-    A custom output parser that extracts only the text after the marker </think>.
+    A generic output parser that extracts text following a '</think>' marker.
     If the marker is not found, returns the full result.
-    Logs the raw text and the parsed text.
     """
-
     def parse(self, text: str) -> str:
         logger.debug("AfterThinkOutputParser: Starting to parse output text.")
         logger.debug("AfterThinkOutputParser: Raw text received: %s", text)
         marker = "</think>"
         if marker in text:
-            # Log the splitting operation details.
             parts = text.split(marker, 1)
-            logger.debug("AfterThinkOutputParser: Split text into %d part(s).", len(parts))
             parsed_text = parts[1].strip()
             logger.debug("AfterThinkOutputParser: Marker found; parsed text: %s", parsed_text)
             return parsed_text
@@ -41,18 +35,33 @@ class AfterThinkOutputParser(StrOutputParser):
             logger.debug("AfterThinkOutputParser: Final text after stripping: %s", final_text)
             return final_text
 
+class DeepSeekOutputParser(StrOutputParser):
+    """
+    A DeepSeek-specific parser that returns only the text that appears after the last
+    '</think>' marker in the model's output.
+    """
+    def parse(self, text: str) -> str:
+        logger.debug("DeepSeekOutputParser: Parsing output to return text after last '</think>' marker.")
+        marker = "</think>"
+        if marker in text:
+            last_index = text.rfind(marker)
+            cleaned = text[last_index + len(marker):].strip()
+            logger.debug("DeepSeekOutputParser: Found marker; returning text after last marker: %s", cleaned)
+            return cleaned
+        else:
+            logger.warning("DeepSeekOutputParser: Marker '</think>' not found in output. Returning full text.")
+            final_text = text.strip()
+            logger.debug("DeepSeekOutputParser: Final text after stripping: %s", final_text)
+            return final_text
 
 class InteractiveModel:
-    def __init__(
-        self, cache_dir, model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
-    ):
-        # Save the model name and set a flag to indicate if we should use the think marker.
+    def __init__(self, cache_dir, model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"):
         self.model_name = model_name
+        # For DeepSeek models we assume chain-of-thought is always output.
         self.use_think_marker = "deepseek" in model_name.lower()
 
         try:
             logger.info("InteractiveModel: Initializing model '%s'.", model_name)
-            # Ensure GPU is available.
             if not torch.cuda.is_available():
                 logger.error("InteractiveModel: No GPUs available.")
                 raise Exception("No GPUs available")
@@ -84,12 +93,10 @@ class InteractiveModel:
                 tokenizer=self.tokenizer,
                 max_new_tokens=8000,
                 use_fast=True,
-                return_full_text=False,  # Only return the new text, not the full prompt.
+                return_full_text=False,  # Request only new tokens (though some models ignore this)
             )
             self.search_results = ""
-
             self.search = DuckDuckGoSearchRun()
-
             logger.debug("InteractiveModel: Wrapping pipeline with HuggingFacePipeline for LangChain.")
             self.llm = HuggingFacePipeline(pipeline=self.pipe)
             logger.info("InteractiveModel: Model initialization complete.")
@@ -98,43 +105,47 @@ class InteractiveModel:
             raise
 
     def get_template_for_mode(self, mode: str) -> str:
-        # For "notes" and "suggestion", include the think marker if the model is deepseek.
-        think_marker = "\n</think>" if self.use_think_marker else ""
+        # For DeepSeek models, use a simplified prompt to avoid chain-of-thought output.
+        if self.use_think_marker:
+            template = (
+                "You are a helpful assistant. Provide only the final answer, without any internal chain-of-thought or reasoning steps.\n\n"
+                "User: {question}\n\nAssistant:"
+            )
+        else:
+            if "notes" in mode:
+                template = f"""
+As a penetration testing assistant, please take detailed notes based on the context of a penetration test.
+Summarize important information, key points, and observations from the provided contexts.
+If a context is not available, ignore it.
+Use bullet points where appropriate.
 
-        if "notes" in mode:
-            template = f"""
-    As a penetration testing assistant, please take detailed notes based on the context of a penetration test.
-    Summarize important information, key points, and observations from the provided contexts.
-    If a context is not available, ignore it.
-    Use bullet points where appropriate.
+Given contexts:
+- Context: {{context}}
+- Context2: {{context2}}
+Question: {{question}}
+"""
+            elif "suggestion" in mode:
+                template = f"""
+As a penetration testing assistant, provide actionable next steps with actual commands based on the context of a penetration test.
+Your suggestions should include executable terminal commands enclosed in backticks and focus on immediate next steps.
+If a context is not available, ignore it.
 
-    Given contexts:
-    - Context: {{context}}
-    - Context2: {{context2}}
-    Question: {{question}}{think_marker}
-    """
-        elif "suggestion" in mode:
-            template = f"""
-                    As a penetration testing assistant, provide actionable next steps with actual commands based on the context of a penetration test.
-                    Your suggestions should include executable terminal commands enclosed in backticks and focus on immediate next steps.
-                    If a context is not available, ignore it.
+Given contexts:
+- Context: {{context}}
+- Context2: {{context2}}
+Question: {{question}}
+"""
+            else:  # "general_question" mode: no additional messaging.
+                template = f"""
+As a penetration testing assistant, provide a response based on your knowledge and the provided contexts.
+Ensure the response is directly relevant to the inputs, focusing on elements common to both contexts.
+If a context is not available, ignore it.
 
-                    Given contexts:
-                    - Context: {{context}}
-                    - Context2: {{context2}}
-                    Question: {{question}}{think_marker}
-                    """
-        else:  # "general_question" mode: no additional messaging or think marker.
-            template = f"""
-                    As a penetration testing assistant, provide a response based on your knowledge and the provided contexts.
-                    Ensure the response is directly relevant to the inputs, focusing on elements common to both contexts.
-                    If a context is not available, ignore it.
-
-                    Given contexts:
-                    - Context: {{context}}
-                    - Context2: {{context2}}
-                    Question: {{question}}
-                    """
+Given contexts:
+- Context: {{context}}
+- Context2: {{context2}}
+Question: {{question}}
+"""
         logger.debug("InteractiveModel: Built prompt template for mode '%s': %s", mode, template)
         return template
 
@@ -145,11 +156,9 @@ class InteractiveModel:
           - "general_question": (default) Provides a general answer.
           - "notes": Instructs the model to take detailed notes.
           - "suggestion": Instructs the model to suggest actionable next steps with commands.
-        Logs the raw output and, if applicable, the final output after processing the think marker.
         """
         logger.info("InteractiveModel: Invoking chain with question (first 50 chars): '%s' (mode: %s).",
                     question[:50], mode)
-        # Optionally perform a search if enabled.
         if use_search:
             logger.debug("InteractiveModel: Performing search for question.")
             self.search_results = self.search.run(question)
@@ -157,13 +166,18 @@ class InteractiveModel:
         else:
             logger.debug("InteractiveModel: Search disabled; skipping search step.")
 
-        # Build the appropriate prompt template based on the mode.
         logger.debug("InteractiveModel: Building prompt template.")
         template_str = self.get_template_for_mode(mode)
+        full_prompt = template_str.format(
+            context="",
+            context2=(self.search_results if use_search else ""),
+            question=question
+        )
+        logger.debug("InteractiveModel: Full prompt constructed: %s", full_prompt)
+
         prompt_template = ChatPromptTemplate.from_template(template_str)
         logger.debug("InteractiveModel: Prompt template built successfully.")
 
-        # Compose the chain up to the language model.
         chain = (
             {
                 "context": lambda _: "",  # No additional static context provided.
@@ -173,20 +187,37 @@ class InteractiveModel:
             | prompt_template
             | self.llm
         )
-
         logger.debug("InteractiveModel: Invoking the chain to get raw output.")
         raw_output = chain.invoke(question)
         logger.info("InteractiveModel: Raw output from chain: %s", raw_output)
 
-        if self.use_think_marker:
-            logger.debug("InteractiveModel: Using think marker. Applying AfterThinkOutputParser.")
+        # For DeepSeek models, use the specialized parser to extract only the text after the last </think> marker.
+        if self.use_think_marker and "deepseek" in self.model_name.lower():
+            parser = DeepSeekOutputParser()
+            processed_text = parser.parse(raw_output)
+            logger.debug("InteractiveModel: Processed text after DeepSeek parsing: %s", processed_text)
+        elif self.use_think_marker:
             parser = AfterThinkOutputParser()
-            final_output = parser.parse(raw_output)
-            logger.info("InteractiveModel: Final output after applying think marker: %s", final_output)
-            result = final_output
+            processed_text = parser.parse(raw_output)
+            logger.debug("InteractiveModel: Processed text after marker parsing: %s", processed_text)
         else:
-            logger.debug("InteractiveModel: Think marker not in use. Returning raw output.")
-            result = raw_output
+            processed_text = raw_output
+
+        # Now ensure that only the generated text (i.e. text beyond the original prompt) is returned.
+        if processed_text.startswith(full_prompt):
+            generated_text = processed_text[len(full_prompt):].strip()
+            logger.debug("InteractiveModel: Detected full prompt in output; sliced generated text: %s", generated_text)
+        else:
+            prompt_tokens = self.tokenizer.encode(full_prompt, add_special_tokens=False)
+            output_tokens = self.tokenizer.encode(processed_text, add_special_tokens=False)
+            if len(output_tokens) > len(prompt_tokens):
+                generated_tokens = output_tokens[len(prompt_tokens):]
+                generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+                logger.debug("InteractiveModel: Sliced generated text using tokenizer: %s", generated_text)
+            else:
+                generated_text = processed_text.strip()
+                logger.debug("InteractiveModel: Output shorter than prompt tokens; using full output: %s", generated_text)
 
         logger.info("InteractiveModel: Chain invocation complete. Returning result.")
-        return result
+        return generated_text
+
