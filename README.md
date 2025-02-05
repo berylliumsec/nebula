@@ -1,3 +1,4 @@
+<meta name="google-site-verification" content="QZGtj-fu_8S_PCyll_drRRkQGb18Ij9EQrcViFiZCFM" />
 # Nebula – AI-Powered Penetration Testing Assistant
 
 Nebula is an advanced, open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking.
