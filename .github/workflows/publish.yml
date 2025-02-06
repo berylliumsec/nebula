@@ -122,7 +122,11 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              This release adds the option to select models on the fly and also improves deep seek's output
+              You can either select note-taking or suggestions, not both
+              AI prompts are now being logged
+              Improved prompt templates
+              Improved error handling
+              
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |

@@ -2,3 +2,8 @@ build
 dist
 .ruff_cache
 __pycache__
+engagement_details.json
+config.json
+suggestions_notes/1.html
+suggestions_notes/ai_notes.html
+suggestions_notes/suggestions.html

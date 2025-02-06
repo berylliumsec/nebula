@@ -8,6 +8,7 @@ import signal
 import threading
 import time
 import warnings
+
 import torch
 from PyQt6 import QtCore
 from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
@@ -36,7 +37,7 @@ class ModelWorkerSignals(QObject):
     # Signal to emit when the model is created
     modelCreated = pyqtSignal(object)
     modelCreationInProgress = pyqtSignal(bool)
-    modelName =  pyqtSignal(str)
+    modelName = pyqtSignal(str)
 
 
 class ModelCreationWorker(QRunnable):
@@ -111,10 +112,6 @@ class ModelTaskRunner(QRunnable):
                 self.endpoint, self.command, result
             )  # Emit the result signal upon success
         except Exception as e:
-            utilities.show_message(
-                "Unable to fufill request",
-                "An error occurred, try disabling search or checking the logs for errors",
-            )
             logger.error(
                 f"An error occurred while retrieving data, the model may not be available yet, check the terminal where you invoked Nebula to see if it has been fully loaded {e}"
             )  # Log the error
@@ -770,7 +767,6 @@ class TerminalEmulator(QThread):
                     utilities.log_command_output(
                         self.current_command,
                         self.current_command_output,
-                        "bash",
                         self.CONFIG,
                     )
                     self.busy.emit(False)
@@ -811,7 +807,6 @@ class TerminalEmulator(QThread):
                     utilities.log_command_output(
                         self.current_command_concatenated_in_autonomous_mode,
                         self.current_command_output,
-                        "bash",
                         self.CONFIG,
                     )
                     self.autonomous_terminal_execution_iteration_is_done.emit()
@@ -1113,6 +1108,7 @@ class CommandInputArea(QLineEdit):
     update_data = pyqtSignal(str)
     update_data_error = pyqtSignal(str)
     model_created = pyqtSignal(bool)
+    model_busy_busy_signal = pyqtSignal(bool)
 
     def __init__(self, parent=None, manager=None):
         super().__init__(parent)
@@ -1160,7 +1156,7 @@ class CommandInputArea(QLineEdit):
         self.unique_evidence = set()
         self.incognito_mode = False
         self.queued_autonomous_items_for_api = 0
-
+        self.model_busy = False
         num_cores = os.cpu_count()
 
         self.threadPool = QThreadPool()
@@ -1480,7 +1476,7 @@ class CommandInputArea(QLineEdit):
             )
             return
         worker.signals.modelCreated.connect(self.onModelCreated)  # Connect to your slot
-        worker.signals.modelName.connect(self.setModelName) 
+        worker.signals.modelName.connect(self.setModelName)
         worker.signals.modelCreationInProgress.connect(self.set_neutron_creation_status)
         try:
             self.threadPool.start(worker)
@@ -1490,6 +1486,7 @@ class CommandInputArea(QLineEdit):
 
     def setModelName(self, model_name):
         self.model_name = model_name
+
     def onModelCreated(self, model):
         if model:
             self.threads_status.emit("completed")
@@ -1504,10 +1501,15 @@ class CommandInputArea(QLineEdit):
         # If a model is already loaded, check if it's the same as requested.
         if self.model is not None:
             if self.model_name == requested_model_name:
-                logger.info("Requested model '%s' is already loaded. Skipping creation.", requested_model_name)
+                logger.info(
+                    "Requested model '%s' is already loaded. Skipping creation.",
+                    requested_model_name,
+                )
                 return
             else:
-                logger.info("Different model requested. Offloading current model and creating new one.")
+                logger.info(
+                    "Different model requested. Offloading current model and creating new one."
+                )
                 self.offload_current_model()
 
         # Now that we have ensured no model or an old model is present, create the new model.
@@ -1528,7 +1530,11 @@ class CommandInputArea(QLineEdit):
             self.model = None
             torch.cuda.empty_cache()
             logger.info("Current model offloaded and GPU cache cleared.")
+
     def onTaskResult(self, endpoint, command, result):
+        if not any(sub in endpoint for sub in ["suggestion", "notes"]):
+
+            utilities.log_command_output("ai", result, self.CONFIG)
         if endpoint == "command":
             logger.debug(f"free model results for command endpoint {result}")
             self.update_terminal_output_for_api(command, result)
@@ -1565,6 +1571,8 @@ class CommandInputArea(QLineEdit):
     def onTaskFinished(self):
         self.threads_status.emit("completed")
         QApplication.restoreOverrideCursor()
+        self.model_busy_busy_signal.emit(False)
+        self.model_busy = False
 
     def execute_api_call(self, command=None, endpoint=None):
         logger.debug(
@@ -1577,22 +1585,29 @@ class CommandInputArea(QLineEdit):
             )
             return
         logger.debug(f"Starting execute_api_call to endpoint: {endpoint} in free mode")
-        
 
         if not self.model:
             logger.error("No loaded model")
             utilities.show_message(
                 "No model loaded",
-                "An error may have occurred while loading the selected model during Nebula's startup, please restart Nebula and try again",
+                "An error may have occurred while loading the selected model during Nebula's startup, also, the models can only be used from the central display area",
             )
             return
+        if self.model_busy:
+            utilities.show_message(
+                "Model is busy",
+                "The model is busy, please wait untill the current inference is completed",
+            )
+            return
+
         self.threads_status.emit("in_progress")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         model_task = ModelTaskRunner(self.model, endpoint, command, self.manager)
+        self.model_busy = True
+        self.model_busy_busy_signal.emit(True)
         model_task.signals.result.connect(self.onTaskResult)
         model_task.signals.finished.connect(self.onTaskFinished)  # If needed
         self.threadpool.start(model_task)
-        
 
     def parse_json(self, data):
         try:

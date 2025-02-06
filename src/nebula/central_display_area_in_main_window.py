@@ -26,6 +26,7 @@ class CentralDisplayAreaInMainWindow(QTextEdit):
     suggestions_signal_from_central_display_area = pyqtSignal(str, str)
     notes_signal_from_central_display_area = pyqtSignal(str, str)
     commandEntered = pyqtSignal(str)
+    model_creation_in_progress = pyqtSignal(bool)
 
     def __init__(self, parent=None, manager=None, command_input_area=None):
         super().__init__(parent)
@@ -54,6 +55,35 @@ class CentralDisplayAreaInMainWindow(QTextEdit):
             self.CONFIG = self.manager.load_config()
         except Exception as e:
             logger.debug({e})
+
+        # Create all actions and connect their signals
+        self.copy_action = QAction("Copy", self)
+        self.copy_action.triggered.connect(self.copy)
+
+        self.ask_assistant_action = QAction("Ask Terminal Assistant", self)
+        self.ask_assistant_action.triggered.connect(self.ask_assistant)
+
+        self.edit_and_run_action = QAction("Edit and Run", self)
+        self.edit_and_run_action.triggered.connect(self.edit_and_run)
+
+        self.edit_and_run_python_action = QAction("Run Python", self)
+        self.edit_and_run_python_action.triggered.connect(self.edit_and_run_python)
+
+        self.exclude_action = QAction("Exclude", self)
+        self.exclude_action.triggered.connect(self.excludeWord)
+
+        self.send_to_ai_notes_action = QAction("Send to AI Notes", self)
+        self.send_to_ai_notes_action.triggered.connect(self.send_to_ai_notes)
+
+        self.send_to_ai_suggestions_action = QAction("Send to AI Suggestions", self)
+        self.send_to_ai_suggestions_action.triggered.connect(
+            self.send_to_ai_suggestions
+        )
+
+        # Connect any signals that affect the enabled/disabled state
+        self.model_creation_in_progress.connect(
+            self.enable_or_disable_due_to_model_creation
+        )
 
     def set_font_size_for_copy_button(self, size):
         font = QFont()
@@ -139,40 +169,35 @@ class CentralDisplayAreaInMainWindow(QTextEdit):
             context_menu.aboutToShow.connect(self.prepareContextMenu)
             context_menu.setStyleSheet(
                 """
-            QMenu::item:selected {
-                background-color:#1e1e1e; 
-            }
-        """
+                QMenu::item:selected {
+                    background-color:#1e1e1e; 
+                }
+                """
             )
-            copy_action = QAction("Copy", self)
-            copy_action.triggered.connect(self.copy)
-            context_menu.addAction(copy_action)
-            ask_assistant = QAction("Ask Terminal Assistant", self)
-            ask_assistant.triggered.connect(self.ask_assistant)
-            context_menu.addAction(ask_assistant)
-            edit_and_run = QAction("Edit and Run", self)
-            edit_and_run.triggered.connect(self.edit_and_run)
-            context_menu.addAction(edit_and_run)
-            edit_and_run_python = QAction("Run Python", self)
-            edit_and_run_python.triggered.connect(self.edit_and_run_python)
-            context_menu.addAction(edit_and_run_python)
-            exclude_action = QAction("Exclude", self)
-            exclude_action.triggered.connect(self.excludeWord)
-            context_menu.addAction(exclude_action)
-            self.send_to_ai_notes_action = QAction("Send to AI Notes", self)
-            self.send_to_ai_notes_action.triggered.connect(self.send_to_ai_notes)
+            # Add the pre-created actions to the context menu
+            context_menu.addAction(self.copy_action)
+            context_menu.addAction(self.ask_assistant_action)
+            context_menu.addAction(self.edit_and_run_action)
+            context_menu.addAction(self.edit_and_run_python_action)
+            context_menu.addAction(self.exclude_action)
             context_menu.addAction(self.send_to_ai_notes_action)
-
-            self.send_to_ai_suggestions_action = QAction("Send to AI Suggestions", self)
-            self.send_to_ai_suggestions_action.triggered.connect(
-                self.send_to_ai_suggestions
-            )
             context_menu.addAction(self.send_to_ai_suggestions_action)
-
             return context_menu
         except Exception as e:
             logger.error(f"Error in createContextMenu: {e}")
             return QMenu(self)
+
+    def enable_or_disable_due_to_model_creation(self, signal):
+        if signal:
+            logger.debug("Disabling send to ai and send to suggestions")
+            self.send_to_ai_notes_action.setEnabled(False)
+            self.send_to_ai_suggestions_action.setEnabled(False)
+        else:
+            logger.debug(
+                "Enabling send to ai and send to suggestions while model is being created"
+            )
+            self.send_to_ai_notes_action.setEnabled(True)
+            self.send_to_ai_suggestions_action.setEnabled(True)
 
     def edit_and_run(self):
         cursor = self.textCursor()
