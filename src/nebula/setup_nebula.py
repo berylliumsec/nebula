@@ -117,9 +117,10 @@ class settings(QWidget):
 
         self.modelComboBox = QComboBox()
         self.modelComboBox.setFont(QFont("Arial", 10))
+        self.modelComboBox.addItem("mistralai/Mistral-7B-Instruct-v0.2")
         self.modelComboBox.addItem("deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
         self.modelComboBox.addItem("meta-llama/Llama-3.1-8B-Instruct")
-        self.modelComboBox.addItem("mistralai/Mistral-7B-Instruct-v0.2")
+
         self.modelComboBox.currentTextChanged.connect(self.onModelChanged)
         self.onModelChanged(self.modelComboBox.currentText())
         modelLayout = QHBoxLayout()
@@ -186,7 +187,6 @@ class settings(QWidget):
         self.model_name = text
         logger.debug(f"Model selected: {text}")
 
-    
         if not torch.cuda.is_available():
             utilities.show_systems_requirements_message(
                 "Important information",

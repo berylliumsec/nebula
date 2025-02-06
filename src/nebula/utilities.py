@@ -393,13 +393,13 @@ def is_linux_asking_for_password(text):
         return None  # Or any other indication that an error occurred
 
 
-def log_command_output(command, current_command_output, command_type, CONFIG):
+def log_command_output(command, current_command_output, CONFIG):
     if not current_command_output.strip():
         logger.warning("Current command output is empty. Nothing to write.")
         return
     logger.info(f"The command output to be intelligently named is {command}")
     try:
-        base_filename = create_filename_from_command(command, command_type)
+        base_filename = create_filename_from_command(command)
         if not base_filename:
             logger.error("Failed to create a valid filename.")
             return
@@ -435,7 +435,7 @@ def replace_placeholder_with_datetime(input_string):
     return output_string
 
 
-def create_filename_from_command(command, command_type):
+def create_filename_from_command(command):
     try:
         logger.debug("Creating filename...")
 

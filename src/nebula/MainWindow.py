@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
                              QHBoxLayout, QInputDialog, QLabel, QListWidget,
                              QListWidgetItem, QMainWindow, QMenu, QMessageBox,
                              QPushButton, QRadioButton, QSizePolicy, QToolBar,
-                             QToolTip, QVBoxLayout, QWidget,QToolButton)
+                             QToolButton, QToolTip, QVBoxLayout, QWidget)
 
 from . import constants, eclipse, tool_configuration, update_utils, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
@@ -201,7 +201,7 @@ class FileProcessorWorker(QObject):
         else:
             self.command_input_area.queued_autonomous_items_for_api = 0
             logger.debug(
-                f"Finished chunking, sending to API, gateway endpoint is {self.gate_way_endpoint}"
+                f"Finished chunking, sending to API, gateway endpoint is {self.gate_way_endpoint}, the content being sent is {file_contents}"
             )
             self.command_input_area.execute_api_call(
                 file_contents, self.gate_way_endpoint
@@ -254,7 +254,7 @@ class FileProcessorWorker(QObject):
         return string_chunks
 
 
-class PreviousResults(QListWidget):
+class LogSideBar(QListWidget):
     send_to_ai_notes_signal = pyqtSignal(str, str)
     send_to_ai_suggestions_signal = pyqtSignal(str, str)
     send_to_autonomous_ai_signal = pyqtSignal(str, str)
@@ -264,39 +264,54 @@ class PreviousResults(QListWidget):
         self.lastHoverPos = QPoint()
         self.manager = manager
         self.CONFIG = self.manager.load_config()
+        self.send_to_ai_notes_action = QAction("Send to AI Notes", self)
+        self.send_to_ai_notes_action.triggered.connect(self.send_to_ai_notes)
+        self.send_to_ai_suggestions_action = QAction("Send to AI Suggestions", self)
+        self.send_to_ai_suggestions_action.triggered.connect(
+            self.send_to_ai_suggestions
+        )
+        self.delete_action = QAction("Delete", self)
+        self.delete_action.triggered.connect(self.delete_file)
+        self.delete_all_files_action = QAction("Delete All files", self)
+        self.delete_all_files_action.triggered.connect(self.delete_all_files)
+        self.rename_action = QAction("Rename", self)
+        self.rename_action.triggered.connect(self.rename_file)
+        self.context_menu = QMenu(self)
 
     def contextMenuEvent(self, event):
         self.lastHoverPos = event.pos()
 
-        context_menu = QMenu(self)
-        context_menu.setStyleSheet(
+        self.context_menu.setStyleSheet(
             """
             QMenu::item:selected {
                 background-color:#333333; 
             }
         """
         )
-        self.send_to_ai_notes_action = QAction("Send to AI Notes", self)
-        self.send_to_ai_notes_action.triggered.connect(self.send_to_ai_notes)
-        context_menu.addAction(self.send_to_ai_notes_action)
 
-        self.send_to_ai_suggestions_action = QAction("Send to AI Suggestions", self)
-        self.send_to_ai_suggestions_action.triggered.connect(
-            self.send_to_ai_suggestions
-        )
-        context_menu.addAction(self.send_to_ai_suggestions_action)
-        delete_action = QAction("Delete", self)
-        delete_action.triggered.connect(self.delete_file)
-        context_menu.addAction(delete_action)
+        self.context_menu.addAction(self.send_to_ai_notes_action)
 
-        delete_all_files_action = QAction("Delete All files", self)
-        delete_all_files_action.triggered.connect(self.delete_all_files)
-        context_menu.addAction(delete_all_files_action)
-        rename_action = QAction("Rename", self)
-        rename_action.triggered.connect(self.rename_file)
-        context_menu.addAction(rename_action)
+        self.context_menu.addAction(self.send_to_ai_suggestions_action)
 
-        context_menu.exec(event.globalPos())
+        self.context_menu.addAction(self.delete_action)
+
+        self.context_menu.addAction(self.delete_all_files_action)
+
+        self.context_menu.addAction(self.rename_action)
+
+        self.context_menu.exec(event.globalPos())
+
+    def enable_or_disable_due_to_model_creation(self, signal):
+        if signal:
+            logger.debug("Disabling send to ai and send to suggestions")
+            self.send_to_ai_notes_action.setEnabled(False)
+            self.send_to_ai_suggestions_action.setEnabled(False)
+            self.context_menu.update()
+        else:
+            logger.debug("Enabling send to ai and send to suggestions")
+            self.send_to_ai_notes_action.setEnabled(True)
+            self.send_to_ai_suggestions_action.setEnabled(True)
+            self.context_menu.update()
 
     def confirm_delete(self, file_path):
         msgBox = QMessageBox()
@@ -435,6 +450,7 @@ class NebulaPro(QMainWindow):
     web_autonomous_mode_status = pyqtSignal(bool)
     model_signal = pyqtSignal(bool)
     main_window_loaded = pyqtSignal(bool)
+    model_creation_in_progress = pyqtSignal(bool)
 
     def __init__(self, engagement_folder=None):
         super().__init__()
@@ -457,31 +473,29 @@ class NebulaPro(QMainWindow):
         )
         if not os.path.exists(self.eclipse_model_path):
             eclipse.ensure_model_folder_exists(self.eclipse_model_path)
-        self.prev_results_list = PreviousResults(manager=self.manager)
-        self.child_windows.append(self.prev_results_list)
+        self.log_side_bar = LogSideBar(manager=self.manager)
+        self.child_windows.append(self.log_side_bar)
         self.auth = None
 
         num_cores = os.cpu_count()
         self.threadPool = QThreadPool()
         self.threadPool.setMaxThreadCount(num_cores)
-        self.prev_results_list.send_to_ai_notes_signal.connect(
-            self.process_new_file_with_ai
-        )
-        self.prev_results_list.send_to_autonomous_ai_signal.connect(
+        self.log_side_bar.send_to_ai_notes_signal.connect(self.process_new_file_with_ai)
+        self.log_side_bar.send_to_autonomous_ai_signal.connect(
             self.process_new_file_with_ai
         )
 
-        self.prev_results_list.send_to_ai_suggestions_signal.connect(
+        self.log_side_bar.send_to_ai_suggestions_signal.connect(
             self.process_new_file_with_ai
         )
-        self.prev_results_list.setSelectionMode(
+        self.log_side_bar.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
-        self.prev_results_list.setSpacing(5)
-        self.prev_results_list.setMaximumWidth(300)
+        self.log_side_bar.setSpacing(5)
+        self.log_side_bar.setMaximumWidth(300)
 
-        self.prev_results_list.setObjectName("prevResultsList")
-        self.prev_results_list.itemClicked.connect(self.on_file_item_clicked)
+        self.log_side_bar.setObjectName("prevResultsList")
+        self.log_side_bar.itemClicked.connect(self.on_file_item_clicked)
 
         self.populate_file_list()
         self.file_system_watcher = QFileSystemWatcher([self.CONFIG["LOG_DIRECTORY"]])
@@ -533,7 +547,9 @@ class NebulaPro(QMainWindow):
         self.suggestions_layout.addWidget(self.suggestions_button, 1)
 
         self.command_input_area = CommandInputArea(manager=self.manager)
-
+        self.command_input_area.model_created.connect(
+            self.enable_disabled_due_to_model_creation
+        )
         self.command_input_area.setFixedHeight(50)
         self.command_input_area.setObjectName("commandInputArea")
         self.command_input_area.setToolTip(
@@ -644,6 +660,7 @@ class NebulaPro(QMainWindow):
         self.ai_notes_on_icon = QIcon(return_path("Images/ai_note_taking_on.png"))
         self.ai_note_taking_action.setIcon(self.ai_notes_off_icon)
         self.toolbar.addAction(self.ai_note_taking_action)
+        self.ai_note_taking_action.triggered.connect(self.ai_note_taking_function)
         self.suggestions_action = QAction("Click Here to Activate AI Suggestions", self)
         self.toolbar.addAction(self.suggestions_action)
         self.help_actions.append(self.suggestions_action)
@@ -670,8 +687,6 @@ class NebulaPro(QMainWindow):
                 lambda: self.adjust_font_size(-1),
             )
         )
-
-        self.ai_note_taking_action.triggered.connect(self.ai_note_taking_function)
 
         self.open_image_command_window_action = QAction(
             "Click Here to Open the Image Editing Window", self
@@ -814,7 +829,7 @@ class NebulaPro(QMainWindow):
         self.v_layout_two.setStretch(0, 1)
         self.v_layout_two.setStretch(1, 1)
 
-        self.main_layout.addWidget(self.prev_results_list)
+        self.main_layout.addWidget(self.log_side_bar)
         self.main_layout.addLayout(self.v_layout)
         self.main_layout.addLayout(self.v_layout_two)
 
@@ -970,15 +985,26 @@ class NebulaPro(QMainWindow):
         self.model_selection_button = QToolButton()
         icon = QIcon(return_path("Images/model_selection.png"))
         self.model_selection_button.setIcon(icon)
-        self.model_selection_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        self.menu = QMenu(self.model_selection_button)
-        self.menu.addAction("deepseek-ai/DeepSeek-R1-Distill-Llama-8B", lambda: self.on_model_selected("deepseek-ai/DeepSeek-R1-Distill-Llama-8B"))
-        self.menu.addAction("meta-llama/Llama-3.1-8B-Instruct", lambda: self.on_model_selected("mistralai/Mistral-7B-Instruct-v0.2"))
-        self.menu.addAction("mistralai/Mistral-7B-Instruct-v0.2", lambda: self.on_model_selected("mistralai/Mistral-7B-Instruct-v0.2"))
-        self.model_selection_button.setMenu(self.menu)
+        self.model_selection_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        )
+        self.model_menu = QMenu(self.model_selection_button)
+        self.model_menu.addAction(
+            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+            lambda: self.on_model_selected("deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
+        )
+        self.model_menu.addAction(
+            "meta-llama/Llama-3.1-8B-Instruct",
+            lambda: self.on_model_selected("mistralai/Mistral-7B-Instruct-v0.2"),
+        )
+        self.model_menu.addAction(
+            "mistralai/Mistral-7B-Instruct-v0.2",
+            lambda: self.on_model_selected("mistralai/Mistral-7B-Instruct-v0.2"),
+        )
+        self.model_selection_button.setMenu(self.model_menu)
 
         # Add the button to the toolbar
-        self.toolbar.addWidget(self.model_selection_button )
+        self.toolbar.addWidget(self.model_selection_button)
         self.icons_path = "path/to/tools/icons"  # Adjust to your icons path
         self.tools_window = tool_configuration.ToolsWindow(
             self.CONFIG.get("AVAILABLE_TOOLS", []),
@@ -1006,6 +1032,7 @@ class NebulaPro(QMainWindow):
 
         self.center()
         logger.debug("centered application")
+
         self.current_action_index = 0
         self.tour_timer = QTimer()
         self.tour_timer.setSingleShot(True)
@@ -1013,14 +1040,25 @@ class NebulaPro(QMainWindow):
         self.tour_timer.timeout.connect(self.next_step)
         self.main_window_loaded.emit(True)
         self.model_signal.connect(self.command_input_area.create_model)
+        self.command_input_area.model_busy_busy_signal.connect(
+            self.central_display_area.enable_or_disable_due_to_model_creation
+        )
+        self.command_input_area.model_busy_busy_signal.connect(
+            self.log_side_bar.enable_or_disable_due_to_model_creation
+        )
+        self.model_creation_in_progress.connect(
+            self.log_side_bar.enable_or_disable_due_to_model_creation
+        )
+        self.model_creation_in_progress.emit(True)
+        self.central_display_area.model_creation_in_progress.emit(True)
         self.model_signal.emit(True)
         self.model_ready_status = False
-        self.menu.setEnabled(False)
-        self.command_input_area.model_created.connect(self.enable_disabled_due_to_model_creation)
+        self.model_menu.setEnabled(False)
+
         logger.debug("main window loaded")
 
-    def on_model_selected(self, model ):
-            # Load the current configuration.
+    def on_model_selected(self, model):
+        # Load the current configuration.
         self.CONFIG = self.manager.load_config()
         self.engagement_folder = self.CONFIG["ENGAGEMENT_FOLDER"]
 
@@ -1043,11 +1081,16 @@ class NebulaPro(QMainWindow):
             json.dump(data, file, indent=4)
         self.model_signal.emit(True)
         self.upload_button.setEnabled(False)
-        self.menu.setEnabled(False)
+        self.model_menu.setEnabled(False)
+        self.model_creation_in_progress.emit(True)
+        self.central_display_area.model_creation_in_progress.emit(True)
+
     def enable_disabled_due_to_model_creation(self, signal):
         if signal:
             self.upload_button.setEnabled(True)
-            self.menu.setEnabled(True)
+            self.model_menu.setEnabled(True)
+            self.model_creation_in_progress.emit(False)
+            self.central_display_area.model_creation_in_progress.emit(False)
 
     def open_tour(self):
         self.current_action_index = 0
@@ -1392,6 +1435,9 @@ class NebulaPro(QMainWindow):
 
     def update_suggestions_display(self, _=None):
         if self.suggestions_action.isChecked():
+            self.ai_note_taking_action.setChecked(False)
+            self.ai_note_taking_action.setIcon(self.ai_notes_off_icon)
+            self.suggestions_action.setIcon(QIcon(self.suggestions_off_icon_path))
             self.statusBar().showMessage(
                 "AI suggestions has been activated",
                 6000,
@@ -1459,11 +1505,14 @@ class NebulaPro(QMainWindow):
 
     def ai_note_taking_function(self, checked):
         if checked:
+            self.suggestions_action.setChecked(False)
+            self.suggestions_action.setIcon(QIcon(self.suggestions_off_icon_path))
             self.ai_note_taking_action.setIcon(self.ai_notes_on_icon)
             self.statusBar().showMessage(
                 "AI Note taking has been activated",
                 6000,
             )
+
         else:
             self.ai_note_taking_action.setIcon(self.ai_notes_off_icon)
 
@@ -1522,7 +1571,7 @@ class NebulaPro(QMainWindow):
 
     def populate_file_list(self, _=None):
         try:
-            self.prev_results_list.clear()
+            self.log_side_bar.clear()
             self.CONFIG = self.manager.load_config()
             log_directory = self.CONFIG["LOG_DIRECTORY"]
             if os.path.exists(log_directory):
@@ -1541,7 +1590,7 @@ class NebulaPro(QMainWindow):
                 # Add sorted files to the list
                 for filename, _ in files_sorted_by_mtime:
                     item = QListWidgetItem(filename)
-                    self.prev_results_list.addItem(item)
+                    self.log_side_bar.addItem(item)
             else:
                 raise FileNotFoundError(f"Directory not found: {log_directory}")
 
