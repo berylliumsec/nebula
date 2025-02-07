@@ -941,7 +941,6 @@ class NebulaPro(QMainWindow):
         self.worker_thread = None
         self.size_threshold = 1 * 1024 * 1024
 
-        self.lock = threading.Lock()
         self.image_command_window = ImageCommandWindow(
             return_path("config/dark-stylesheet.css"), self.manager
         )

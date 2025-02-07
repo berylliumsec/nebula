@@ -93,7 +93,6 @@ class HelpWindow(QMainWindow):
         )
         code_analysis = update_utils.return_path("Images_readme/code_analysis.png")
 
-        eclipse = update_utils.return_path("Images_readme/eclipse.png")
         help_content_html = f"""
 <style>
     body {{ background-color: #1e1e1e; color: white; font-family: 'Courier'; }}
@@ -149,7 +148,7 @@ class HelpWindow(QMainWindow):
     <li><strong>Searching and Replacing Content:</strong>  Quickly find and replace specific pieces of text within your notes by using the 'Search and replace' function.<br><img src="{replace_image}" alt="Replacing Content"></li>
     <li><strong>Undoing Actions:</strong> Revert your last action if you make a mistake by clicking 'Undo'.<br><img src="{undo_image}" alt="Undoing Actions"></li>
     <li><strong>Redoing Actions:</strong> Reapply an action you've undone by clicking 'Redo'.<br><img src="{redo_image}" alt="Redoing Actions"></li>
-    <li><strong>Eclipse:</strong>Provides a dedicated space for identifying sensitive information within text<br><img src="{eclipse}" alt="Eclipse"></li>
+
   </ul>
 
     </ul>
