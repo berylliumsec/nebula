@@ -20,11 +20,10 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
                              QPushButton, QRadioButton, QSizePolicy, QToolBar,
                              QToolButton, QToolTip, QVBoxLayout, QWidget)
 
-from . import constants, eclipse, tool_configuration, update_utils, utilities
+from . import constants,tool_configuration, update_utils, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
 from .configuration_manager import ConfigManager
-from .eclipse_window import EclipseWindow
 from .engagement import EngagementWindow
 from .help import HelpWindow
 from .image_command_window import ImageCommandWindow
@@ -468,11 +467,7 @@ class NebulaPro(QMainWindow):
         self.child_windows = (
             []
         )  # Initialize an empty list to keep track of child windows
-        self.eclipse_model_path = os.path.join(
-            self.CONFIG["ECLIPSE_DIRECTORY"], "ner_model_bert"
-        )
-        if not os.path.exists(self.eclipse_model_path):
-            eclipse.ensure_model_folder_exists(self.eclipse_model_path)
+    
         self.log_side_bar = LogSideBar(manager=self.manager)
         self.child_windows.append(self.log_side_bar)
         self.auth = None
@@ -867,25 +862,7 @@ class NebulaPro(QMainWindow):
 
         self.command_input_area.threads_status.connect(self.setThreadStatus)
 
-        self.eclipse_action = QAction(
-            QIcon(), "Click Here to Open the Eclipse Window", self
-        )
-        self.help_actions.append(self.eclipse_action)
-        self.toolbar.addAction(self.eclipse_action)
-
-        self.eclipse_icon = QIcon(return_path("Images/eclipse.png"))
-        self.eclipse_action.triggered.connect(
-            lambda: self.provide_feedback_and_execute(
-                self.eclipse_action,
-                return_path("Images/clicked.png"),
-                return_path("Images/eclipse.png"),
-                self.open_eclipse,
-            )
-        )
-
-        self.eclipse_action.setIcon(self.eclipse_icon)
-        self.eclipse_action.setToolTip("Click Here to Open The Eclipse Window")
-
+    
         self.engagement = QAction(
             QIcon(), "Click Here to Modify Engagement Details", self
         )
@@ -1322,20 +1299,7 @@ class NebulaPro(QMainWindow):
                 f"An error occurred while trying to open the engagement window {e}"
             )
 
-    def open_eclipse(self):
-        try:
-            eclipse_window = EclipseWindow(
-                command_input_area=self.command_input_area, manager=self.manager
-            )
-        except Exception as e:
-            logger.error(f"Unable to open eclipse {e}")
-        try:
-            self.child_windows.append(eclipse_window)
-            eclipse_window.show()
-        except Exception as e:
-            logger.error(
-                f"An error occurred while trying to open the engagement window {e}"
-            )
+   
 
     def open_tools_window(self):
         self.tools_window.show()
