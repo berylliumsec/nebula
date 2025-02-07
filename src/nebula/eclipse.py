@@ -17,31 +17,11 @@ from prompt_toolkit import prompt
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.styles import Style
 from transformers import BertForTokenClassification, BertTokenizerFast
+from .log_config import setup_logging
+from . import constants
 
+logger = setup_logging(log_file=os.path.join(constants.SYSTEM_LOGS_DIR, "eclipse.log"))
 transformers.logging.set_verbosity_error()
-# Configure basic logging
-# This will set the log level to ERROR, meaning only error and critical messages will be logged
-# You can specify a filename to write the logs to a file; otherwise, it will log to stderr
-log_file_path = os.path.join(os.path.expanduser("~"), "eclipse.log")
-
-# Configure basic logging
-# Get the user's home directory from the HOME environment variable
-home_directory = os.getenv("HOME")  # This returns None if 'HOME' is not set
-
-if home_directory:
-    log_file_path = os.path.join(home_directory, "eclipse.log")
-else:
-    # Fallback mechanism or throw an error
-    log_file_path = (
-        "eclipse.log"  # Default to current directory, or handle error as needed
-    )
-
-# Configure basic logging
-logging.basicConfig(
-    filename=log_file_path,
-    level=logging.ERROR,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 
 
 # Test logging at different levels
@@ -66,15 +46,19 @@ class ModelManager:
 
     class __ModelManager:
         def __init__(self, model_path, device):
-            self.device = torch.device(
-                "cuda" if torch.cuda.is_available() and device == "cuda" else "cpu"
-            )
-
+            self.device = torch.device("cuda" if torch.cuda.is_available() and device == "cuda" else "cpu")
+            
+            # Load the pretrained model (ensure this call fully loads the weights)
             self.model = BertForTokenClassification.from_pretrained(model_path)
             self.model.config.id2label = id_to_label
             self.model.config.label2id = label_to_id
-            self.model.to(self.device)
+            
+            # Instead of using .to(), allocate proper memory if the model is on meta.
+            self.model = self.model.to_empty(device=self.device)
+            
             self.model.eval()
+            params = list(self.model.parameters())
+            logger.info(f"verifying parameters: {params}")
             self.tokenizer = BertTokenizerFast.from_pretrained(model_path)
 
     @staticmethod
@@ -366,7 +350,7 @@ def process_text(
 
 
 def process_single_line(
-    line: str, model_manager, device, confidence_threshold: float = 1.0
+    line: str, model_manager, device, confidence_threshold: float = 0.8
 ):
     # Rest of the function remains unchanged
 
