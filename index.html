@@ -9,7 +9,7 @@
       name="description"
       content="Nebula is an advanced, open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking."
     />
-    <!-- SEO Keywords (integrated from previous improvements) -->
+    <!-- SEO Keywords -->
     <meta
       name="keywords"
       content="AI-powered penetration testing, AI penetration testing tools, automated penetration testing, open-source cybersecurity tools, open-source penetration testing, vulnerability assessments, ethical hacking tools, Nebula"
@@ -148,6 +148,21 @@
       .button:focus {
         background-color: #0088cc;
       }
+      /* Releases Section */
+      .release {
+        background-color: #1a1a1a;
+        padding: 1rem;
+        border-radius: 4px;
+        margin-bottom: 2rem;
+      }
+      .badge {
+        background-color: #0088cc;
+        color: #ffffff;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.8rem;
+        margin-left: 0.5rem;
+      }
       /* Footer */
       footer {
         background-color: #101010;
@@ -188,6 +203,7 @@
           <li><a href="#installation">Installation</a></li>
           <li><a href="#running">Running</a></li>
           <li><a href="#features">Key Features</a></li>
+          <li><a href="#releases">Releases</a></li>
           <li><a href="#support">Support</a></li>
         </ul>
       </nav>
@@ -199,7 +215,6 @@
       <p>
         Nebula is an advanced, open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking.
       </p>
-      <!-- Additional SEO-friendly content -->
       <p>
         By combining AI-driven testing with robust open-source cybersecurity tools, Nebula empowers security teams to perform comprehensive vulnerability assessments and uncover hidden threats faster than ever before.
       </p>
@@ -219,15 +234,15 @@
         <strong>Introducing Nebula Pro.</strong> Nebula Pro improves on Nebula 2.0 by adding additional features such as autonomous mode, code analysis and more. 
         <a href="https://www.berylliumsec.com/nebula-pro-overview" target="_blank" rel="noopener">Learn More Here</a>
       </p>
-      
       <h3>Nebula: AI-Powered Penetration Testing Platform</h3>
       <p>
         Nebula integrates advanced open-source AI models like Meta's Llama-3.1-8B-Instruct and Mistralai's Mistral-7B-Instruct-v0.2 into a single, powerful command-line interface. This fusion of AI and open-source cybersecurity tools allows ethical hackers and security professionals to perform detailed vulnerability assessments and improve overall cyber defenses.
       </p>
     </section>
 
-    <!-- Installation Section -->
+    <!-- Main Content -->
     <main>
+      <!-- Installation Section -->
       <section id="installation">
         <h2>Installation</h2>
         <p><strong>System Requirements:</strong></p>
@@ -290,6 +305,21 @@
         </ul>
       </section>
 
+      <!-- Releases Section -->
+      <section id="releases">
+        <h2>Releases</h2>
+        <article class="release">
+          <header>
+            <h3 id="release-tag">
+              Loading release info...
+            </h3>
+          </header>
+          <div id="release-notes">
+            <!-- Release notes will be loaded here from GitHub -->
+          </div>
+        </article>
+      </section>
+
       <!-- Getting Started Section -->
       <section id="getting-started">
         <h2>Getting Started</h2>
@@ -342,5 +372,40 @@
         <a href="https://github.com/berylliumsec" target="_blank" rel="noopener">GitHub</a>
       </p>
     </footer>
+
+    <!-- JavaScript to fetch the latest release from GitHub -->
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        // GitHub API endpoint for the latest release
+        const apiUrl = 'https://api.github.com/repos/berylliumsec/nebula/releases/latest';
+        
+        fetch(apiUrl)
+          .then(response => {
+            if (!response.ok) {
+              throw new Error('Network response was not ok');
+            }
+            return response.json();
+          })
+          .then(release => {
+            // Update the release tag element with the tag name (e.g., "v2.0.0b7")
+            const releaseTag = document.getElementById('release-tag');
+            releaseTag.textContent = release.tag_name;
+            
+            // Create and append a "Latest" badge
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.textContent = 'Latest';
+            releaseTag.appendChild(badge);
+            
+            // Update the release notes; convert newline characters to <br> tags for formatting.
+            const releaseNotes = document.getElementById('release-notes');
+            releaseNotes.innerHTML = release.body.replace(/\n/g, '<br>');
+          })
+          .catch(error => {
+            console.error('Error fetching the latest release:', error);
+            document.getElementById('release-tag').textContent = 'Error loading release info';
+          });
+      });
+    </script>
   </body>
 </html>
