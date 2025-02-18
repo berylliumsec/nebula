@@ -242,7 +242,6 @@ class CentralDisplayAreaInMainWindow(QTextEdit):
         except Exception as e:
             logger.error(f"Error in showContextMenu: {e}")
 
-
     def prepareContextMenu(self):
         if self.free_mode:
             logger.debug("free mode activated, disabling actions")
@@ -251,8 +250,6 @@ class CentralDisplayAreaInMainWindow(QTextEdit):
         else:
             self.send_to_ai_notes_action.setEnabled(True)
             self.send_to_ai_suggestions_action.setEnabled(True)
-
-
 
     def send_to_ai_notes(self, _=None):
         try:

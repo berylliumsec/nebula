@@ -1,4 +1,3 @@
-import json
 import sys
 import warnings
 
@@ -6,9 +5,8 @@ from PyQt6.QtCore import (QObject, QRunnable, Qt, QThread, QThreadPool, QTimer,
                           pyqtSignal)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
     QFont, QIcon)
-from PyQt6.QtWidgets import (QApplication, QDialog, QDialogButtonBox,
-                             QHBoxLayout, QLabel, QMessageBox, QProgressBar,
-                             QPushButton, QScrollArea, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QLabel,
+                             QProgressBar, QVBoxLayout, QWidget)
 
 from . import configuration_manager, constants, utilities
 from .log_config import setup_logging
@@ -71,68 +69,6 @@ class ErrorDialog(QDialog):
         layout.addWidget(buttonBox)
 
         self.setLayout(layout)
-
-
-class DisclaimerDialog(QDialog):
-    def __init__(self):
-        super().__init__()
-
-        self.setWindowTitle("Disclaimer")
-        self.setModal(True)
-        self.setup_ui()
-
-    def setup_ui(self, _=None):
-        layout = QVBoxLayout()
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_widget = QWidget()
-        scroll_layout = QVBoxLayout()
-        label = QLabel(
-            """
-                       
-Software Disclaimer 
-
-1. No Warranty: The Nebula ("Software") is provided "AS IS" and "AS AVAILABLE," without warranty of any kind. Berylliumsec expressly disclaims all warranties, whether express, implied, statutory, or otherwise, including but not limited to any warranties of merchantability, fitness for a particular purpose, and non-infringement. Berylliumsec does not warrant that the Software will meet your requirements, will be uninterrupted, timely, secure, or error-free, or that defects, if any, will be corrected.
-
-2. Limitation of Liability: To the fullest extent permitted by applicable law, in no event shall Berylliumsec, its affiliates, directors, employees, agents, suppliers, or licensors be liable for any indirect, incidental, special, consequential or punitive damages, including without limitation, loss of profits, data, use, goodwill, or other intangible losses, resulting from (i) your access to or use of or inability to access or use the Software; (ii) any conduct or content of any third party on the Software; (iii) any content obtained from the Software; and (iv) unauthorized access, use or alteration of your transmissions or content, whether based on warranty, contract, tort (including negligence) or any other legal theory, whether or not we have been informed of the possibility of such damage, and even if a remedy set forth herein is found to have failed of its essential purpose.
-
-3. Prohibited Use: You agree not to use the Software for any illegal or unauthorized purpose, or to engage in any activity that would violate the rights of Berylliumsec or others. Any unauthorized use of the Software is strictly prohibited and can lead to termination of your access to the Software and may subject you to legal penalties and consequences.
-
-4. Governing Law: This disclaimer shall be governed by and construed in accordance with the laws of UNITED STATES, without regard to its conflict of law provisions.
-
-5. Acknowledgement: By using the Software, you acknowledge that you have read this disclaimer and agree to its terms."""
-        )
-        label.setWordWrap(True)
-        scroll_layout.addWidget(label)
-        scroll_widget.setLayout(scroll_layout)
-        scroll_area.setWidget(scroll_widget)
-        layout.addWidget(scroll_area)
-        button_layout = QHBoxLayout()
-
-        self.agree_button = QPushButton("I Agree")
-        self.agree_button.clicked.connect(self.accept)
-        button_layout.addWidget(self.agree_button)
-
-        self.disagree_button = QPushButton("I Disagree")
-        self.disagree_button.clicked.connect(self.reject)
-        button_layout.addWidget(self.disagree_button)
-
-        layout.addLayout(button_layout)
-
-        self.setLayout(layout)
-        with open(return_path("config/dark-stylesheet.css"), "r") as file:
-            self.setStyleSheet(file.read())
-
-    def exec_(self, _=None):
-        if super().exec() == QDialog.DialogCode.Accepted:
-            return True
-        else:
-            QMessageBox.warning(
-                self,
-                "Disagreement",
-                "You must agree to the disclaimer to use this application.",
-            )
-            return False
 
 
 class WorkerSignals(QObject):
@@ -250,7 +186,6 @@ class MainApplication(QApplication):
             dialog = ErrorDialog()
             dialog.exec()
             sys.exit(0)
-
 
     def start_app_tour(self):
         experienced_user = utilities.check_initial_help()

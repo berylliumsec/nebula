@@ -15,7 +15,6 @@ class SearchReplaceDialog(QDialog):
     def __init__(self, textEdit, parent=None):
         super().__init__(parent)
         self.setObjectName("SearchReplaceDialog")
-        self.current_search_term = ""
         self.textEdit = textEdit
         self.initUI()
 

@@ -509,12 +509,7 @@ class ConfigManager(QObject):
         self.HISTORY_FILE = os.path.join(self.engagement_folder, "history.txt")
         self.SCREENSHOTS_DIR = os.path.join(self.engagement_folder, "screenshots")
         self.AUTONOMOUS_DIRECTORY = os.path.join(self.engagement_folder, "autonomous")
-        self.ECLIPSE_DIRECTORY = os.path.join(constants.NEBULA_DIR, "eclipse")
-        self.CODE_ANALYSIS_DIRECTORY = os.path.join(
-            self.engagement_folder, "code_analysis"
-        )
-        self.NEUTRON_DIRECTORY = os.path.join(constants.NEBULA_DIR, "neutron")
-        self.NEUTRON_DB_DIRECTORY = os.path.join(constants.NEBULA_DIR, "neutron_db")
+
         self.CERTIFICATES_DIRECTORY = os.path.join(
             self.engagement_folder, "certificates"
         )
@@ -527,10 +522,6 @@ class ConfigManager(QObject):
                 self.SUGGESTIONS_NOTES_DIRECTORY,
                 self.PRIVACY_DIR,
                 self.AUTONOMOUS_DIRECTORY,
-                self.ECLIPSE_DIRECTORY,
-                self.CODE_ANALYSIS_DIRECTORY,
-                self.NEUTRON_DIRECTORY,
-                self.NEUTRON_DB_DIRECTORY,
                 self.CERTIFICATES_DIRECTORY,
             ]:
                 self.create_directory(directory)
@@ -546,10 +537,6 @@ class ConfigManager(QObject):
                 "ENGAGEMENT_FOLDER": self.engagement_folder,
                 "SELECTED_TOOLS": self.safe_get_selected_tools(self.CONFIG),
                 "AUTONOMOUS_DIRECTORY": self.AUTONOMOUS_DIRECTORY,
-                "ECLIPSE_DIRECTORY": self.ECLIPSE_DIRECTORY,
-                "CODE_ANALYSIS_DIRECTORY": self.CODE_ANALYSIS_DIRECTORY,
-                "NEUTRON_DIRECTORY": self.NEUTRON_DIRECTORY,
-                "NEUTRON_DB_DIRECTORY": self.NEUTRON_DB_DIRECTORY,
                 "CERTIFICATES_DIRECTORY": self.CERTIFICATES_DIRECTORY,
             }
             if "AVAILABLE_TOOLS" not in self.CONFIG:

@@ -2,7 +2,6 @@ import json
 import os
 import re
 import shutil
-import threading
 import time
 import warnings
 from queue import Queue
@@ -17,10 +16,10 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
                              QDialog, QDialogButtonBox, QFileDialog, QFrame,
                              QHBoxLayout, QInputDialog, QLabel, QListWidget,
                              QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-                             QPushButton, QRadioButton, QSizePolicy, QToolBar,
-                             QToolButton, QToolTip, QVBoxLayout, QWidget)
+                             QPushButton, QRadioButton, QToolBar, QToolButton,
+                             QToolTip, QVBoxLayout, QWidget)
 
-from . import constants,tool_configuration, update_utils, utilities
+from . import constants, tool_configuration, update_utils, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
 from .configuration_manager import ConfigManager
@@ -198,18 +197,13 @@ class FileProcessorWorker(QObject):
                 self.chunks_queue.task_done()
                 return
         else:
-            self.command_input_area.queued_autonomous_items_for_api = 0
+
             logger.debug(
                 f"Finished chunking, sending to API, gateway endpoint is {self.gate_way_endpoint}, the content being sent is {file_contents}"
             )
             self.command_input_area.execute_api_call(
                 file_contents, self.gate_way_endpoint
             )
-
-    def _extract_content(self, chunk: str, start_placeholder: str) -> str:
-        content = chunk.split(start_placeholder)[1].strip()
-        logger.debug(f"Raw content after stripping placeholders: {content}")
-        return content
 
     def process_next_chunk(self):
         try:
@@ -388,14 +382,6 @@ class LogSideBar(QListWidget):
             file_path = os.path.join(self.CONFIG["LOG_DIRECTORY"], file_name)
             self.send_to_ai_suggestions_signal.emit(file_path, "suggestion_files")
 
-    def send_to_autonomous_ai(self, _=None):
-        selected_item = self.currentItem()
-        if selected_item:
-            file_name = selected_item.text()
-            file_path = os.path.join(self.CONFIG["LOG_DIRECTORY"], file_name)
-
-            self.send_to_ai_notes_signal.emit(file_path, "autonomous")
-
     def send_to_ai_notes(self, _=None):
         selected_item = self.currentItem()
         if selected_item:
@@ -437,16 +423,7 @@ class LogSideBar(QListWidget):
                     )
 
 
-class SpacerWidget(QWidget):
-    def __init__(self, _=None):
-        super().__init__()
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-
-
 class Nebula(QMainWindow):
-
-    autonomous_mode_status = pyqtSignal(bool)
-    web_autonomous_mode_status = pyqtSignal(bool)
     model_signal = pyqtSignal(bool)
     main_window_loaded = pyqtSignal(bool)
     model_creation_in_progress = pyqtSignal(bool)
@@ -470,7 +447,6 @@ class Nebula(QMainWindow):
         )  # Initialize an empty list to keep track of child windows
         self.log_side_bar = LogSideBar(manager=self.manager)
         self.child_windows.append(self.log_side_bar)
-        self.auth = None
 
         num_cores = os.cpu_count()
         self.threadPool = QThreadPool()
@@ -496,15 +472,12 @@ class Nebula(QMainWindow):
         self.file_system_watcher = QFileSystemWatcher([self.CONFIG["LOG_DIRECTORY"]])
         self.file_system_watcher.directoryChanged.connect(self.populate_file_list)
 
-        self.dark_mode = True
-
         self.current_font_size = 10
         self.load_stylesheet(return_path("config/dark-stylesheet.css"))
 
         self.main_layout = QHBoxLayout()
         self.v_layout = QVBoxLayout()
 
-        self.command_in_progress = False
         self.suggestions_layout = QHBoxLayout()
         self.suggestions_layout.setContentsMargins(
             0, 0, 0, 0
@@ -941,13 +914,11 @@ class Nebula(QMainWindow):
         self.worker_thread = None
         self.size_threshold = 1 * 1024 * 1024
 
-        self.lock = threading.Lock()
         self.image_command_window = ImageCommandWindow(
             return_path("config/dark-stylesheet.css"), self.manager
         )
         self.child_windows.append(ImageCommandWindow)
         self.worker_threads = {}
-
 
         self.model_selection_button = QToolButton()
         icon = QIcon(return_path("Images/model_selection.png"))
@@ -994,8 +965,6 @@ class Nebula(QMainWindow):
         self.toolbar.addAction(self.agentAction)
         self.autonomous_mode = False
 
-        self.start_up = True
-
         engagement_json = {}
         window_title = "Nebula"
         self.worker = None
@@ -1030,7 +999,6 @@ class Nebula(QMainWindow):
         self.model_creation_in_progress.emit(True)
         self.central_display_area.model_creation_in_progress.emit(True)
         self.model_signal.emit(True)
-        self.model_ready_status = False
         self.model_menu.setEnabled(False)
 
         logger.debug("main window loaded")
@@ -1151,18 +1119,10 @@ class Nebula(QMainWindow):
     def show_message(self, message: str):
         QMessageBox.information(self, "Main ToolBar Tour", message)
 
-    def halt_autonomous_jobs(self):
-        if self.worker:
-            self.worker.halt_processing = True
-
     def reset_terminal(self):
         self.command_input_area.terminal.password_mode.emit(False)
         self.command_input_area.terminal.reset_terminal()
-        self.command_input_area.currentCommandIndex = 0
-        self.command_input_area.commands = []
-        self.command_input_area.number_of_autonomous_commands = 0
-        self.command_input_area.queued_autonomous_items_for_api = 0
-        self.command_input_area.terminal.autonomous_terminal_execution_iteration_is_done.emit()
+
         self.command_input_area.terminal.busy.emit(False)
         self.central_display_area.clear()
 
@@ -1271,7 +1231,6 @@ class Nebula(QMainWindow):
                 f"An error occurred while trying to open the engagement window {e}"
             )
 
-  
     def open_tools_window(self):
         self.tools_window.show()
 
@@ -1312,13 +1271,6 @@ class Nebula(QMainWindow):
         except Exception as e:
             logger.debug(f"Error saving configuration: {e}")
 
-    def show_message_dialog(self, message):
-        message_box = QMessageBox(self)
-        message_box.setWindowTitle("Configuration Error")
-        message_box.setText(message)
-        message_box.setIcon(QMessageBox.Icon.Warning)
-        message_box.exec()
-
     def clear_screen(self, _=None):
         self.command_input_area.terminal.write("reset \n")
 
@@ -1354,9 +1306,6 @@ class Nebula(QMainWindow):
                 "Permission",
                 f"An error occurred while listing {self.CONFIG['LOG_DIRECTORY']}: {e}",
             )
-
-    def show_error_message(self, message):
-        QMessageBox.critical(self, "Error", message)
 
     def on_search_result_selected(self, result):
         self.central_display_area.insertPlainText(result)

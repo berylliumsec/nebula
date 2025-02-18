@@ -4,12 +4,10 @@ import time
 from PyQt6 import QtCore
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence,
-                         QMouseEvent, QTextCharFormat, QTextCursor,
-                         QTextListFormat)
+                         QTextCharFormat, QTextListFormat)
 from PyQt6.QtWidgets import (QApplication, QColorDialog, QDockWidget,
-                             QFileDialog, QInputDialog, QListWidget,
-                             QMainWindow, QMenu, QMessageBox, QToolBar,
-                             QVBoxLayout, QWidget)
+                             QFileDialog, QListWidget,
+                             QMainWindow, QMessageBox, QToolBar)
 
 from . import constants
 from .ai_notes_pop_up_window import AiNotes, CustomTitleBar
@@ -20,112 +18,6 @@ from .update_utils import return_path
 logger = setup_logging(
     log_file=constants.SYSTEM_LOGS_DIR + "/suggestions_pop_out_window.log"
 )
-
-
-class SuggestionsDisplayAreaClickableTextEdit(QWidget):
-    def __init__(
-        self,
-        parent=None,
-        autosave_interval=1000,
-        default_save_path=None,
-        command_input_area=None,
-        manager=None,
-    ):
-        super().__init__(parent)
-        self.manager = manager()
-        container = QWidget(self)
-        layout = QVBoxLayout(container)
-        self.command_input_area = command_input_area
-
-        self.CONFIG = self.manager.load_config()
-        self.text_edit = AiNotes(
-            self.current_notes_file,
-            bookmarks_path=os.path.join(
-                self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"],
-                "suggestions_bookmarks.bookmarks",
-            ),
-            command_input_area=self.command_input_area,
-            file_path=self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"] + "/suggestions.html",
-        )
-
-        self.text_edit.setReadOnly(False)
-
-        layout.addWidget(self.text_edit)
-
-        self.autosave_timer = QTimer(self)
-        self.autosave_timer.timeout.connect(self.autosave_content)
-        self.autosave_timer.start(autosave_interval)
-        self.autosave_path = default_save_path
-        self.load_content()
-
-        main_layout = QVBoxLayout(self)
-        main_layout.addWidget(container)
-        self.setLayout(main_layout)
-        self.isSelectingText = False
-
-    def createContextMenu(self, _=None):
-        context_menu = QMenu(self.text_edit)
-        context_menu.setStyleSheet(
-            """
-            QMenu::item:selected {
-                background-color:#333333; 
-            }
-        """
-        )
-        copy_action = QAction("Copy", self.text_edit)
-        copy_action.triggered.connect(self.copy)
-        context_menu.addAction(copy_action)
-        exclude_action = QAction("Exclude", self)
-        exclude_action.triggered.connect(self.excludeWord)
-        context_menu.addAction(exclude_action)
-        return context_menu
-
-    def excludeWord(self, _=None):
-        cursor = self.textEdit.textCursor()
-        selected_text = cursor.selectedText()
-        if selected_text.strip():
-            self.CONFIG = self.manager.load_config()
-            with open(self.CONFIG["PRIVACY_FILE"], "a") as file:
-                file.write(selected_text + "\n")
-
-    def load_content(self, _=None):
-        try:
-            if os.path.exists(self.autosave_path):
-                with open(self.autosave_path, "r") as file:
-                    self.text_edit.setHtml(file.read())
-                    logger.debug(f"Content loaded from {self.autosave_path}")
-            else:
-                logger.warning(f"Autosave path does not exist: {self.autosave_path}")
-
-        except IOError as e:
-            logger.error(f"Error reading from {self.autosave_path}: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error during loading content: {e}")
-
-    def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.isSelectingText = True
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.isSelectingText = False
-        super().mouseReleaseEvent(event)
-
-    def contextMenuEvent(self, event):
-        if self.textCursor().hasSelection():
-            context_menu = self.createContextMenu()
-            context_menu.exec_(event.globalPos())
-
-    def mouseMoveEvent(self, event: QMouseEvent):
-        if self.text_edit.textCursor().hasSelection():
-            super().mouseMoveEvent(event)
-        else:
-            cursor = self.text_edit.cursorForPosition(event.pos())
-            cursor.select(QTextCursor.SelectionType.LineUnderCursor)
-            self.text_edit.setTextCursor(cursor)
-
-            super().mouseMoveEvent(event)
 
 
 class SuggestionsPopOutWindow(QMainWindow):
@@ -479,10 +371,6 @@ class SuggestionsPopOutWindow(QMainWindow):
     def add_bookmark(self):
         self.textEdit.toggle_bookmark()  # Ensure AiNotes has a method to add the current position as a bookmark
         self.updateBookmarksList()
-
-    def get_input(self, title, label):
-        text, ok = QInputDialog.getText(self, title, label)
-        return text if ok else None
 
     def makeBold(self, _=None):
         cursor = self.textEdit.textCursor()
