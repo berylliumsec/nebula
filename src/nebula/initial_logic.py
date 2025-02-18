@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QDialogButtonBox,
 
 from . import configuration_manager, constants, utilities
 from .log_config import setup_logging
-from .MainWindow import NebulaPro
+from .MainWindow import Nebula
 from .setup_nebula import settings
 from .update_utils import return_path
 
@@ -203,18 +203,6 @@ class MainApplication(QApplication):
         self.setWindowIcon(QIcon(return_path("Images/logo.png")))
         self.show_setup()
 
-    def save_credentials(self, credentials: dict):
-        try:
-            if not isinstance(credentials, dict):
-                logger.debug("Unable to save credentials")
-                raise ValueError("Credentials must be a dictionary")
-
-            with open(constants.CREDENTIALS_FILE, "w") as file:
-                json.dump(credentials, file)
-                logger.debug(f"Credentials saved to {constants.CREDENTIALS_FILE}")
-        except Exception as e:
-            logger.error("Error saving credentials: %s", e)
-
     def show_setup(self):
         self.config = configuration_manager.ConfigManager()
         self.setupWindow = settings()
@@ -249,7 +237,7 @@ class MainApplication(QApplication):
                 self.progressWindow.deleteLater()
 
                 logger.debug("Showing main window")
-                self.mainWindow = NebulaPro(
+                self.mainWindow = Nebula(
                     data["engagement_folder"]
                 )  # Create the main window here
                 self.mainWindow.show()
@@ -263,10 +251,6 @@ class MainApplication(QApplication):
             dialog.exec()
             sys.exit(0)
 
-    def show_error_dialog(self, message):
-        dialog = ErrorDialog(message)
-        dialog.exec()
-        sys.exit(0)
 
     def start_app_tour(self):
         experienced_user = utilities.check_initial_help()

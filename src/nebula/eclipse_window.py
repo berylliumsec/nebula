@@ -46,12 +46,6 @@ class ConfidenceDialog(QDialog):
         return self.confidenceSpinBox.value()
 
 
-class TextProcessor(QObject):
-    # Signals to send processed data and indicate completion
-    processedLine = pyqtSignal(str, str, float, bool)
-    finished = pyqtSignal()
-
-
 class TextProcessingWorker(QObject):
     processedLine = pyqtSignal(str, str, float, bool)
     finished = pyqtSignal()

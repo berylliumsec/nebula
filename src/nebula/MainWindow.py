@@ -20,11 +20,10 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
                              QPushButton, QRadioButton, QSizePolicy, QToolBar,
                              QToolButton, QToolTip, QVBoxLayout, QWidget)
 
-from . import constants, eclipse, tool_configuration, update_utils, utilities
+from . import constants,tool_configuration, update_utils, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
 from .configuration_manager import ConfigManager
-from .eclipse_window import EclipseWindow
 from .engagement import EngagementWindow
 from .help import HelpWindow
 from .image_command_window import ImageCommandWindow
@@ -444,13 +443,14 @@ class SpacerWidget(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
 
-class NebulaPro(QMainWindow):
+class Nebula(QMainWindow):
 
     autonomous_mode_status = pyqtSignal(bool)
     web_autonomous_mode_status = pyqtSignal(bool)
     model_signal = pyqtSignal(bool)
     main_window_loaded = pyqtSignal(bool)
     model_creation_in_progress = pyqtSignal(bool)
+    tools_agent_mode = pyqtSignal(bool)
 
     def __init__(self, engagement_folder=None):
         super().__init__()
@@ -468,11 +468,6 @@ class NebulaPro(QMainWindow):
         self.child_windows = (
             []
         )  # Initialize an empty list to keep track of child windows
-        self.eclipse_model_path = os.path.join(
-            self.CONFIG["ECLIPSE_DIRECTORY"], "ner_model_bert"
-        )
-        if not os.path.exists(self.eclipse_model_path):
-            eclipse.ensure_model_folder_exists(self.eclipse_model_path)
         self.log_side_bar = LogSideBar(manager=self.manager)
         self.child_windows.append(self.log_side_bar)
         self.auth = None
@@ -547,6 +542,7 @@ class NebulaPro(QMainWindow):
         self.suggestions_layout.addWidget(self.suggestions_button, 1)
 
         self.command_input_area = CommandInputArea(manager=self.manager)
+        self.tools_agent_mode.connect(self.command_input_area.set_agent_mode)
         self.command_input_area.model_created.connect(
             self.enable_disabled_due_to_model_creation
         )
@@ -867,25 +863,6 @@ class NebulaPro(QMainWindow):
 
         self.command_input_area.threads_status.connect(self.setThreadStatus)
 
-        self.eclipse_action = QAction(
-            QIcon(), "Click Here to Open the Eclipse Window", self
-        )
-        self.help_actions.append(self.eclipse_action)
-        self.toolbar.addAction(self.eclipse_action)
-
-        self.eclipse_icon = QIcon(return_path("Images/eclipse.png"))
-        self.eclipse_action.triggered.connect(
-            lambda: self.provide_feedback_and_execute(
-                self.eclipse_action,
-                return_path("Images/clicked.png"),
-                return_path("Images/eclipse.png"),
-                self.open_eclipse,
-            )
-        )
-
-        self.eclipse_action.setIcon(self.eclipse_icon)
-        self.eclipse_action.setToolTip("Click Here to Open The Eclipse Window")
-
         self.engagement = QAction(
             QIcon(), "Click Here to Modify Engagement Details", self
         )
@@ -970,17 +947,7 @@ class NebulaPro(QMainWindow):
         )
         self.child_windows.append(ImageCommandWindow)
         self.worker_threads = {}
-        self.updateSearchAction = QAction(
-            QIcon(return_path("Images/search_off.png")),
-            "Click to toggle search on or off",
-            self,
-        )
-        self.toolbar.addAction(self.updateSearchAction)
-        self.help_actions.append(self.updateSearchAction)
-        self.updateSearchAction.setCheckable(True)
-        self.updateSearchAction.toggled.connect(
-            lambda state: self.updatePreference("USE_INTERNET_SEARCH", state)
-        )
+
 
         self.model_selection_button = QToolButton()
         icon = QIcon(return_path("Images/model_selection.png"))
@@ -1014,6 +981,17 @@ class NebulaPro(QMainWindow):
             self.add_new_tool,  # Add callback for adding a new tool
             self,
         )
+        self.agents_off_icon = QIcon(return_path("Images/agent_off.png"))
+        self.agents_on_icon = QIcon(return_path("Images/agent_on.png"))
+        self.agentAction = QAction(
+            self.agents_off_icon,
+            "Click to toggle agents on or off",
+            self,
+        )
+
+        self.agentAction.setCheckable(True)
+        self.agentAction.triggered.connect(self.activate_deactivate_agent)
+        self.toolbar.addAction(self.agentAction)
         self.autonomous_mode = False
 
         self.start_up = True
@@ -1099,35 +1077,6 @@ class NebulaPro(QMainWindow):
             1000,
             lambda: self.highlight_action(self.help_actions[self.current_action_index]),
         )
-
-    def updatePreference(self, preference: str, value: bool):
-        # Load the current configuration.
-        self.CONFIG = self.manager.load_config()
-        self.engagement_folder = self.CONFIG["ENGAGEMENT_FOLDER"]
-
-        # Build the path to the config.json file.
-        self.CONFIG_FILE_PATH = os.path.join(self.engagement_folder, "config.json")
-
-        # Read the existing JSON data from config.json, if it exists.
-        if os.path.exists(self.CONFIG_FILE_PATH):
-            with open(self.CONFIG_FILE_PATH, "r") as file:
-                data = json.load(file)
-        else:
-            data = {}
-
-        # Update the configuration with the new value.
-        data[preference] = value
-        logger.debug(f"Dumping preference data: {data}")
-
-        # Write the updated data back to config.json.
-        with open(self.CONFIG_FILE_PATH, "w") as file:
-            json.dump(data, file, indent=4)
-
-        # Update the icon based on the toggle state.
-        if preference == "USE_INTERNET_SEARCH":
-            icon_file = "Images/search_on.png" if value else "Images/search_off.png"
-            new_icon = QIcon(return_path(icon_file))
-            self.updateSearchAction.setIcon(new_icon)
 
     def enable_all_tools(self):
         self.tools_window.select_all_tools()
@@ -1322,21 +1271,7 @@ class NebulaPro(QMainWindow):
                 f"An error occurred while trying to open the engagement window {e}"
             )
 
-    def open_eclipse(self):
-        try:
-            eclipse_window = EclipseWindow(
-                command_input_area=self.command_input_area, manager=self.manager
-            )
-        except Exception as e:
-            logger.error(f"Unable to open eclipse {e}")
-        try:
-            self.child_windows.append(eclipse_window)
-            eclipse_window.show()
-        except Exception as e:
-            logger.error(
-                f"An error occurred while trying to open the engagement window {e}"
-            )
-
+  
     def open_tools_window(self):
         self.tools_window.show()
 
@@ -1432,6 +1367,16 @@ class NebulaPro(QMainWindow):
 
         else:
             self.eco_mode.setIcon(self.eco_mode_off_icon)
+
+    def activate_deactivate_agent(self):
+
+        if self.agentAction.isChecked():
+            self.tools_agent_mode.emit(True)
+            self.agentAction.setIcon(self.agents_on_icon)
+
+        else:
+            self.agentAction.setIcon(QIcon(self.agents_off_icon))
+            self.tools_agent_mode.emit(False)
 
     def update_suggestions_display(self, _=None):
         if self.suggestions_action.isChecked():

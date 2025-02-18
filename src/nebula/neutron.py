@@ -147,26 +147,26 @@ class InteractiveModel:
             )
         else:
             if "notes" in mode:
-                template = f"""
+                template = """
 As a penetration testing assistant, please take detailed notes based on the outputsprovided. The goal is to record pertinent information that the tester can use to formulate a final report. Your notes should include key findings, actions taken, vulnerabilities found (if any) etc. Do not record anything outside of the output of the tool provided below.
 
-Here is the tool's output: {{question}}
+Here is the tool's output: {question}
 """
             elif "suggestion" in mode:
-                template = f"""
+                template = """
 As a penetration testing assistant, suggest the next steps a penetration tester should take based on the input provided. Your input will be the output of a tool. Your suggestions should include executable terminal commands enclosed in backticks that will guide the penetration tester towards discovering more vulnerabilities or exploiting vulenrabilities you may have observed.
-Here is the tool's output: {{question}}
+Here is the tool's output: {question}
 """
             else:  # "general_question" mode: no additional messaging.
-                template = f"""
+                template = """
 As a penetration testing assistant, provide a response based on your knowledge and the provided contexts.
 Ensure the response is directly relevant to the inputs, focusing on elements common to both contexts.
 If a context is not available, ignore it.
 
 Given contexts:
-- Context: {{context}}
-- Context2: {{context2}}
-Question: {{question}}
+- Context: {context}
+- Context2: {context2}
+Question: {question}
 """
         logger.debug(
             "InteractiveModel: Built prompt template for mode '%s': %s", mode, template

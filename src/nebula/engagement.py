@@ -107,12 +107,6 @@ class EngagementWindow(QMainWindow):
         self.loadJsonData(self.engagement_file)  # Reload data
         self.initUI()  # Reinitialize UI with the new data
 
-    def updateCheckboxState(self, item, state):
-        if "item_states" not in self.data:
-            self.data["item_states"] = {}
-        self.data["item_states"][item] = bool(state)
-        self.saveJsonData()
-
     def autoSaveJsonData(self):
         """Automatically save the JSON data when any changes are made."""
         self.data["engagement_name"] = self.nameEdit.text()

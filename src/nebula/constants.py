@@ -47,4 +47,26 @@ CUSTOM_PROMPT_PATTERN = (
 )
 
 NEBULA_DIR = os.path.join(os.environ["HOME"], ".local", "share", "nebula")
-INDEX_DIR = "file_index"
+AGENT_PROMPT_TEMPLATE = """
+System: You are a helpful assistant. Answer the user's question completely. If you run any tools that write output to files, save them in the following directory:{output_directory}. 
+
+Question: {input}
+Thought: {agent_scratchpad}
+"""
+
+
+# Templates for other use cases.
+NOTES_TEMPLATE = (
+    "As a penetration testing assistant, please take detailed notes. The tool's output is provided below.\n\n"
+    "Output:\n{question}"
+)
+
+SUGGESTION_TEMPLATE = (
+    "As a penetration testing assistant, suggest actionable steps with commands. The tool's output is provided below.\n\n"
+    "Output:\n{question}"
+)
+
+GENERAL_TEMPLATE = (
+    "As a penetration testing assistant, provide a response based on your knowledge and the provided contexts.\n"
+    "Context1: {context}\nContext2: {context2}\nQuestion: {question}"
+)

@@ -10,6 +10,10 @@ import time
 import warnings
 
 import torch
+from langchain.agents import AgentType, initialize_agent
+from langchain.memory import ConversationBufferMemory
+from langchain_community.llms import HuggingFacePipeline
+from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
 from PyQt6 import QtCore
 from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
                           QStringListModel, Qt, QThread, QThreadPool, QTimer,
@@ -21,17 +25,28 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QCompleter, QDialog,
                              QMessageBox, QPushButton, QScrollArea,
                              QSizePolicy, QTextEdit, QToolBar, QVBoxLayout,
                              QWidget)
-
+from transformers import (AutoModelForCausalLM, AutoTokenizer,
+                          BitsAndBytesConfig, pipeline)
 from . import constants, utilities
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
 from .log_config import setup_logging
-from .neutron import InteractiveModel
+from .tools.subprocess_tool import SubprocessTool
 from .update_utils import return_path
+import re
+warnings.filterwarnings("ignore")
+logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/test_agents.log")
+
+MEMORY = ConversationBufferMemory(
+    memory_key="chat_history",  # key used in the prompt to include past messages
+    return_messages=True,  # whether to return messages as a list
+)
+BASH_TOOL = ShellTool(return_direct=True)
+SEARCH_TOOL = DuckDuckGoSearchRun(return_direct=True)
+SUBPROCESS_EXECUTOR = SubprocessTool(return_direct=True)
 
 warnings.filterwarnings("ignore")
 
 logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/terminal_emulator.log")
-
 
 class ModelWorkerSignals(QObject):
     # Signal to emit when the model is created
@@ -54,21 +69,39 @@ class ModelCreationWorker(QRunnable):
             config = self.manager.load_config()
             model_name = config["MODEL"]
             cache_dir = config["CACHE_DIR"]
-            model = InteractiveModel(model_name=model_name, cache_dir=cache_dir)
+            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                model_max_length=32000,
+                low_cpu_mem_usage=True,
+                cache_dir=cache_dir,
+            )
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                low_cpu_mem_usage=True,
+                quantization_config=bnb_config,
+                device_map="auto",
+                cache_dir=cache_dir,
+            )
+            raw_pipe = pipeline(
+                "text-generation",
+                model=self.model,
+                tokenizer=self.tokenizer,
+                max_new_tokens=32000,
+                use_fast=True,
+                return_full_text=False,
+            )
+            self.pipe = HuggingFacePipeline(pipeline=raw_pipe)
         except Exception as e:
-
-            logger.error(f"Could not start model {e}")
-            return  # Early exit; the finally block will still run.
+            logger.error(f"Could not start model: {e}")
+            return  # Early exit; finally block will run.
         finally:
-            # This will always execute, ensuring that the progress signal is updated.
             self.signals.modelCreationInProgress.emit(False)
-
-        # Only emit modelCreated if model creation succeeded.
-        self.signals.modelCreated.emit(model)
+        self.signals.modelCreated.emit(self.pipe)
         self.signals.modelName.emit(model_name)
 
 
-class ModelTaskRunnerSignals(QObject):
+class AgentTaskRunnerSignals(QObject):
     """
     Defines the signals available from a running worker thread.
     Supported signals are:
@@ -81,45 +114,29 @@ class ModelTaskRunnerSignals(QObject):
     error = pyqtSignal(str)
 
 
-class ModelTaskRunner(QRunnable):
+
+
+class AgentTaskRunner(QRunnable):
     """
-    Worker thread
-    Inherits from QRunnable to handler worker thread setup, signals, and wrap-up.
+    Worker thread to run agent queries.
     """
 
-    def __init__(self, model, endpoint, command, manager):
-        super(ModelTaskRunner, self).__init__()
-        self.model = model
+    def __init__(self, agent, query, endpoint):
+        super().__init__()
+        self.agent = agent
+        self.query = query
+        self.signals =AgentTaskRunnerSignals()
         self.endpoint = endpoint
-        self.command = command
-        self.signals = ModelTaskRunnerSignals()
-        self.manager = manager
-
     def run(self):
-        """
-        Retrieve the data in a thread, ensuring that the 'finished' signal is emitted
-        regardless of success or failure.
-        """
         try:
-            logger.debug("Neutron is now retrieving data")
-            config = self.manager.load_config()
-            logger.debug(f"Use search is {config['USE_INTERNET_SEARCH']}")
-            result = self.model.invoke(
-                self.command, self.endpoint, config["USE_INTERNET_SEARCH"]
-            )  # Attempt to retrieve data
-            logger.debug(f"Neutron results are: {result}")
-            self.signals.result.emit(
-                self.endpoint, self.command, result
-            )  # Emit the result signal upon success
+            response = self.agent.run(self.query)
+            self.signals.result.emit(self.endpoint, "ai", response)
         except Exception as e:
-            logger.error(
-                f"An error occurred while retrieving data, the model may not be available yet, check the terminal where you invoked Nebula to see if it has been fully loaded {e}"
-            )  # Log the error
-            self.signals.error.emit(
-                str(e)
-            )  # Optionally, emit an error signal with the error message
+            logger.error(f"Error during agent query: {e}")
+            self.signals.error.emit(str(e))
         finally:
-            self.signals.finished.emit()  # Ensure the 'finished' signal is emitted
+            self.signals.finished.emit()
+
 
 
 class CheckListDialog(QDialog):
@@ -1126,6 +1143,7 @@ class CommandInputArea(QLineEdit):
         self.textChanged.connect(self.fileCompleter.update_model)
         self.autonomous_mode = False
         self.web_mode = False
+        self.tools_agent_mode = False
         self.contextMenu = self.createContextMenu()
         self.history = []
         self.manager = manager
@@ -1177,6 +1195,44 @@ class CommandInputArea(QLineEdit):
             "awk",
             "sed",
         ]
+        self.tools_agent = None
+        self.general_agent = None
+
+    def set_agent_mode(self, mode):
+        if mode:
+            self.tools_agent_mode = True
+        else:
+            self.tools_agent_mode = False
+
+    def create_agent(self, agent_type):
+        if agent_type == "tools_agent":
+            agent_attr, tools, template = "tools_agent", [BASH_TOOL, SEARCH_TOOL], None
+        elif agent_type == "notes_agent":
+            agent_attr, tools, template = "notes_agent", [SEARCH_TOOL], constants.NOTES_TEMPLATE
+        elif agent_type == "suggestions_agent":
+            agent_attr, tools, template = "suggestions_agent", [SEARCH_TOOL], constants.SUGGESTION_TEMPLATE
+        else:
+            agent_attr, tools, template = "general_agent", [SEARCH_TOOL], None
+
+        # Only create the agent if it hasn't been created yet and if self.model is available
+        if not getattr(self, agent_attr) and self.model:
+            try:
+                # If a template is provided, pass it via agent_kwargs (using system_message)
+                agent_kwargs = {"system_message": template} if template else {}
+                agent = initialize_agent(
+                    tools,
+                    self.model,
+                    agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    memory=MEMORY,
+                    agent_kwargs=agent_kwargs,
+                )
+                setattr(self, agent_attr, agent)
+                return agent
+            except Exception as e:
+                logger.error("Error during agent creation: %s", e, exc_info=True)
+                raise
 
     def set_password_mode(self, data: bool):
         """
@@ -1327,9 +1383,8 @@ class CommandInputArea(QLineEdit):
 
         command_input_area = False
         current_text = self.text()  # Get the current text from the widget
-        combined_text = current_text + text  # Combine existing text with the new text
         dialog = utilities.EditCommandDialog(
-            command_text=combined_text,
+            command_text=current_text,
             parent=self,
             command_input_area=command_input_area,
         )
@@ -1602,12 +1657,42 @@ class CommandInputArea(QLineEdit):
 
         self.threads_status.emit("in_progress")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        model_task = ModelTaskRunner(self.model, endpoint, command, self.manager)
-        self.model_busy = True
-        self.model_busy_busy_signal.emit(True)
-        model_task.signals.result.connect(self.onTaskResult)
-        model_task.signals.finished.connect(self.onTaskFinished)  # If needed
-        self.threadpool.start(model_task)
+        if not self.tools_agent_mode:
+            # Determine which agent to use based on the endpoint
+            if "command" in endpoint:
+                if not self.general_agent:
+                    self.general_agent = self.create_agent("general_agent")
+                agent = self.general_agent
+            elif "notes" in endpoint:
+                if not self.notes_agent:
+                    self.notes_agent = self.create_agent("notes_agent")
+                agent = self.notes_agent
+            elif "suggestions" in endpoint:
+                if not self.suggestions_agent:
+                    self.suggestions_agent = self.create_agent("suggestions_agent")
+                agent = self.suggestions_agent
+            else:
+                # Fallback to the general agent if no matching endpoint is found
+                if not self.general_agent:
+                    self.general_agent = self.create_agent("general_agent")
+                agent = self.general_agent
+
+            # Create and start the task with the chosen agent
+            model_task = AgentTaskRunner(agent, command, endpoint)
+            self.model_busy = True
+            self.model_busy_busy_signal.emit(True)
+            model_task.signals.result.connect(self.onTaskResult)
+            model_task.signals.finished.connect(self.onTaskFinished)
+            self.threadpool.start(model_task)
+        else:
+            if not self.tools_agent:
+                self.tools_agent=self.create_agent("tools_agent")
+            model_task = AgentTaskRunner(self.tools_agent, command,endpoint)
+            self.model_busy = True
+            self.model_busy_busy_signal.emit(True)
+            model_task.signals.result.connect(self.onTaskResult)
+            model_task.signals.finished.connect(self.onTaskFinished)  # If needed
+            self.threadpool.start(model_task)
 
     def parse_json(self, data):
         try:
