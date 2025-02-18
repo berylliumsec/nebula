@@ -17,8 +17,8 @@ from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
                           QStringListModel, Qt, QThread, QThreadPool, QTimer,
                           pyqtSignal)
 from PyQt6.QtGui import QAction, QIcon, QMouseEvent, QPixmap, QTextCursor
-from PyQt6.QtWidgets import (QApplication, QCompleter, QFileDialog, QHBoxLayout,
-                             QLineEdit, QMainWindow, QMenu,
+from PyQt6.QtWidgets import (QApplication, QCompleter, QFileDialog,
+                             QHBoxLayout, QLineEdit, QMainWindow, QMenu,
                              QMessageBox, QPushButton, QToolBar, QVBoxLayout,
                              QWidget)
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
@@ -911,8 +911,6 @@ class CommandInputArea(QLineEdit):
 
         else:
             tools = [SEARCH_TOOL]
-
-
 
         try:
 
