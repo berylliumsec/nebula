@@ -126,9 +126,27 @@ class AgentTaskRunner(QRunnable):
     def run(self):
         try:
             if "notes" in self.endpoint:
-                self.query = "As a penetration testing assistant, please take detailed notes: "+ self.query
-            if "suggestion" in self.endpoint:
-                "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities or determine if vulnerabilities found are exploitable in the following tool output: " + self.query
+                self.query = (
+                    "As a penetration testing assistant, please take detailed notes in a report style. "
+                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your notes, "
+                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your response: "
+                ) + self.query
+            elif "suggestion" in self.endpoint:
+                self.query = (
+                    "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities "
+                    "or determine if vulnerabilities found are exploitable based on the following tool output. "
+                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your suggestions, "
+                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                ) + self.query
+            else:
+                self.query = (
+                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your response, "
+                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                    "'Action Input:' (which provides the input or parameters for that tool).The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                ) + self.query
+
             response = self.agent.run(self.query)
             self.signals.result.emit(self.endpoint, "ai", response)
         except Exception as e:
@@ -1314,27 +1332,10 @@ class CommandInputArea(QLineEdit):
         self.threads_status.emit("in_progress")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         if not self.tools_agent_mode:
-            # Determine which agent to use based on the endpoint
-            if "command" in endpoint:
-                if not self.general_agent:
-                    self.general_agent = self.create_agent("general_agent")
-                agent = self.general_agent
-            elif "notes" in endpoint:
-                if not self.notes_agent:
-                    self.notes_agent = self.create_agent("notes_agent")
-                agent = self.notes_agent
-            elif "suggestions" in endpoint:
-                if not self.suggestions_agent:
-                    self.suggestions_agent = self.create_agent("suggestions_agent")
-                agent = self.suggestions_agent
-            else:
-                # Fallback to the general agent if no matching endpoint is found
-                if not self.general_agent:
-                    self.general_agent = self.create_agent("general_agent")
-                agent = self.general_agent
 
+            self.general_agent = self.create_agent("general_agent")
             # Create and start the task with the chosen agent
-            model_task = AgentTaskRunner(agent, command, endpoint)
+            model_task = AgentTaskRunner(self.general_agent, command, endpoint)
             self.model_busy = True
             self.model_busy_busy_signal.emit(True)
             model_task.signals.result.connect(self.onTaskResult)
