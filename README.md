@@ -58,9 +58,10 @@ To interact with the models, begin your input with a `!` for example: `! write a
 
 ## Key Features
 
-- **AI-Powered Internet Search:**  
-  Enhance responses by integrating real-time, internet-sourced context to keep you updated on cybersecurity trends.
-
+- **AI-Powered Internet Search via agentes:**  
+  Enhance responses by integrating real-time, internet-sourced context to keep you updated on cybersecurity trends. "whats in the news on cybersecurity today"
+- **AI Agents:**  
+  AI Agents that execute commands on your local system based..."run an nmap scan against 192.168.1.1 without trigerring firewalls"
 - **AI-Assisted Note-Taking:**  
   Automatically record and categorize security findings.
 
