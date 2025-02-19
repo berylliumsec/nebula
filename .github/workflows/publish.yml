@@ -122,10 +122,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              You can either select note-taking or suggestions, not both
-              AI prompts are now being logged
-              Improved prompt templates
-              Improved error handling
+              - Added agents (Langchain Agents was used, but in the future we will migrate to LangGraph when local hugging face models are supported)
               
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true

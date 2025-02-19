@@ -537,10 +537,6 @@ class UserNoteTaking(QMainWindow):
                 currentTextEdit.gotoBookmark(bookmark["position"])
                 break
 
-    def get_input(self, title, label):
-        text, ok = QInputDialog.getText(self, title, label)
-        return text if ok else None
-
     def on_search_replace_triggered(self, _=None):
         currentTextEdit = self.getCurrentTextEdit()
         dialog = SearchReplaceDialog(currentTextEdit, self)

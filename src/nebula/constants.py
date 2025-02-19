@@ -47,4 +47,3 @@ CUSTOM_PROMPT_PATTERN = (
 )
 
 NEBULA_DIR = os.path.join(os.environ["HOME"], ".local", "share", "nebula")
-INDEX_DIR = "file_index"

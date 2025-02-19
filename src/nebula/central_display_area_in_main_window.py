@@ -25,7 +25,6 @@ CUSTOM_PROMPT_PATTERN = (
 class CentralDisplayAreaInMainWindow(QTextEdit):
     suggestions_signal_from_central_display_area = pyqtSignal(str, str)
     notes_signal_from_central_display_area = pyqtSignal(str, str)
-    commandEntered = pyqtSignal(str)
     model_creation_in_progress = pyqtSignal(bool)
 
     def __init__(self, parent=None, manager=None, command_input_area=None):
@@ -243,14 +242,6 @@ class CentralDisplayAreaInMainWindow(QTextEdit):
         except Exception as e:
             logger.error(f"Error in showContextMenu: {e}")
 
-    def set_free_mode(self, data):
-        if data:
-            logger.debug("Free mode activated")
-            self.free_mode = True
-        else:
-            logger.debug("Free mode not activated")
-            self.free_mode = False
-
     def prepareContextMenu(self):
         if self.free_mode:
             logger.debug("free mode activated, disabling actions")
@@ -259,12 +250,6 @@ class CentralDisplayAreaInMainWindow(QTextEdit):
         else:
             self.send_to_ai_notes_action.setEnabled(True)
             self.send_to_ai_suggestions_action.setEnabled(True)
-
-    def set_incognito_mode(self, data):
-        if data:
-            self.incognito_mode = True
-        else:
-            self.incognito_mode = False
 
     def send_to_ai_notes(self, _=None):
         try:
@@ -370,9 +355,6 @@ class CentralDisplayAreaInMainWindow(QTextEdit):
                 self.append("")  # Move to the next line
             return
         super().keyPressEvent(event)
-
-    def append_result(self, result_text):
-        self.append(result_text)
 
     def edit_and_run_python(self, _=None):
         # Use the existing text cursor, which reflects the current selection

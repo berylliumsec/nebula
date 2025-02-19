@@ -54,6 +54,7 @@ bitsandbytes = "*"
 duckduckgo-search = "*"
 toml = "*"
 setuptools = "*"
+langchain-experimental = "*"
 
 [tool.poetry.extras]
 flash = [ "flash-attn",]

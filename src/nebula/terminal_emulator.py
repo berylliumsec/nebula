@@ -1,32 +1,44 @@
-import json
 import os
 import pty
 import re
 import select
 import shutil
 import signal
-import threading
 import time
 import warnings
 
 import torch
+from langchain.agents import AgentType, initialize_agent
+from langchain.memory import ConversationBufferMemory
+from langchain_community.llms import HuggingFacePipeline
+from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
 from PyQt6 import QtCore
 from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
                           QStringListModel, Qt, QThread, QThreadPool, QTimer,
                           pyqtSignal)
 from PyQt6.QtGui import QAction, QIcon, QMouseEvent, QPixmap, QTextCursor
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QCompleter, QDialog,
-                             QDialogButtonBox, QFileDialog, QHBoxLayout,
-                             QLabel, QLineEdit, QMainWindow, QMenu,
-                             QMessageBox, QPushButton, QScrollArea,
-                             QSizePolicy, QTextEdit, QToolBar, QVBoxLayout,
+from PyQt6.QtWidgets import (QApplication, QCompleter, QFileDialog,
+                             QHBoxLayout, QLineEdit, QMainWindow, QMenu,
+                             QMessageBox, QPushButton, QToolBar, QVBoxLayout,
                              QWidget)
+from transformers import (AutoModelForCausalLM, AutoTokenizer,
+                          BitsAndBytesConfig, pipeline)
 
 from . import constants, utilities
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
 from .log_config import setup_logging
-from .neutron import InteractiveModel
 from .update_utils import return_path
+
+warnings.filterwarnings("ignore")
+logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/test_agents.log")
+
+MEMORY = ConversationBufferMemory(
+    memory_key="chat_history",  # key used in the prompt to include past messages
+    return_messages=True,  # whether to return messages as a list
+)
+BASH_TOOL = ShellTool(return_direct=True)
+SEARCH_TOOL = DuckDuckGoSearchRun(return_direct=True)
+
 
 warnings.filterwarnings("ignore")
 
@@ -54,21 +66,39 @@ class ModelCreationWorker(QRunnable):
             config = self.manager.load_config()
             model_name = config["MODEL"]
             cache_dir = config["CACHE_DIR"]
-            model = InteractiveModel(model_name=model_name, cache_dir=cache_dir)
+            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                model_max_length=32000,
+                low_cpu_mem_usage=True,
+                cache_dir=cache_dir,
+            )
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                low_cpu_mem_usage=True,
+                quantization_config=bnb_config,
+                device_map="auto",
+                cache_dir=cache_dir,
+            )
+            raw_pipe = pipeline(
+                "text-generation",
+                model=self.model,
+                tokenizer=self.tokenizer,
+                max_new_tokens=32000,
+                use_fast=True,
+                return_full_text=False,
+            )
+            self.pipe = HuggingFacePipeline(pipeline=raw_pipe)
         except Exception as e:
-
-            logger.error(f"Could not start model {e}")
-            return  # Early exit; the finally block will still run.
+            logger.error(f"Could not start model: {e}")
+            return  # Early exit; finally block will run.
         finally:
-            # This will always execute, ensuring that the progress signal is updated.
             self.signals.modelCreationInProgress.emit(False)
-
-        # Only emit modelCreated if model creation succeeded.
-        self.signals.modelCreated.emit(model)
+        self.signals.modelCreated.emit(self.pipe)
         self.signals.modelName.emit(model_name)
 
 
-class ModelTaskRunnerSignals(QObject):
+class AgentTaskRunnerSignals(QObject):
     """
     Defines the signals available from a running worker thread.
     Supported signals are:
@@ -81,281 +111,49 @@ class ModelTaskRunnerSignals(QObject):
     error = pyqtSignal(str)
 
 
-class ModelTaskRunner(QRunnable):
+class AgentTaskRunner(QRunnable):
     """
-    Worker thread
-    Inherits from QRunnable to handler worker thread setup, signals, and wrap-up.
+    Worker thread to run agent queries.
     """
 
-    def __init__(self, model, endpoint, command, manager):
-        super(ModelTaskRunner, self).__init__()
-        self.model = model
+    def __init__(self, agent, query, endpoint):
+        super().__init__()
+        self.agent = agent
+        self.query = query
+        self.signals = AgentTaskRunnerSignals()
         self.endpoint = endpoint
-        self.command = command
-        self.signals = ModelTaskRunnerSignals()
-        self.manager = manager
 
     def run(self):
-        """
-        Retrieve the data in a thread, ensuring that the 'finished' signal is emitted
-        regardless of success or failure.
-        """
         try:
-            logger.debug("Neutron is now retrieving data")
-            config = self.manager.load_config()
-            logger.debug(f"Use search is {config['USE_INTERNET_SEARCH']}")
-            result = self.model.invoke(
-                self.command, self.endpoint, config["USE_INTERNET_SEARCH"]
-            )  # Attempt to retrieve data
-            logger.debug(f"Neutron results are: {result}")
-            self.signals.result.emit(
-                self.endpoint, self.command, result
-            )  # Emit the result signal upon success
+            if "notes" in self.endpoint:
+                self.query = (
+                    "As a penetration testing assistant, please take detailed notes in a report style. "
+                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your notes, "
+                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your response: "
+                ) + self.query
+            elif "suggestion" in self.endpoint:
+                self.query = (
+                    "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities "
+                    "or determine if vulnerabilities found are exploitable based on the following tool output. "
+                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your suggestions, "
+                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                ) + self.query
+            else:
+                self.query = (
+                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your response, "
+                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                    "'Action Input:' (which provides the input or parameters for that tool).The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                ) + self.query
+
+            response = self.agent.run(self.query)
+            self.signals.result.emit(self.endpoint, "ai", response)
         except Exception as e:
-            logger.error(
-                f"An error occurred while retrieving data, the model may not be available yet, check the terminal where you invoked Nebula to see if it has been fully loaded {e}"
-            )  # Log the error
-            self.signals.error.emit(
-                str(e)
-            )  # Optionally, emit an error signal with the error message
+            logger.error(f"Error during agent query: {e}")
+            self.signals.error.emit(str(e))
         finally:
-            self.signals.finished.emit()  # Ensure the 'finished' signal is emitted
-
-
-class CheckListDialog(QDialog):
-    def __init__(
-        self,
-        commands_to_run=None,
-        information_text=None,
-        text_edit_content="Please ensure that you have the relevant tools installed on your system. Check/uncheck the commands to run and edit them as needed",
-        vulnerabilities_confirmed="",
-        evidence="",
-        parent=None,
-        manager=None,
-    ):
-        super().__init__(parent)
-        self.setWindowTitle("Suggested Commands")
-        self.setStyleSheet(
-            """
-            QDialog {
-                background-color: #1e1e1e;
-                color: white;
-            }
-            QLabel, QCheckBox, QTextEdit, QLineEdit {
-                font-family: 'Courier';
-                font-size: 10pt;
-            }
-            QPushButton {
-                background-color: #1e1e1e;
-                color: #FFFFFF;
-                border-radius: 5px;
-                padding: 5px;
-                font-weight: bold;
-                font-size: 10pt;
-            }
-            QPushButton:hover {
-                background-color: #333333;
-            }
-            QTextEdit, QLineEdit {
-                background-color: #1E1E1E;
-                color: white;
-                border: 1px solid #333333;
-                border-radius: 5px;
-                padding: 5px;
-            }
-            
-            QScrollBar:vertical {
-                border: none;
-                background: #2e2e2e;
-                width: 10px;
-                margin: 15px 0 15px 0;
-                border-radius: 4px;
-            }
-            
-             QScrollBar::handle:vertical {
-                background-color: #555555;
-            }
-        """
-        )
-        self.resize(1000, 600)
-        sizePolicy = QSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        self.setSizePolicy(sizePolicy)
-        mainLayout = QVBoxLayout()
-        mainLayout.addStretch(1)
-        self.setLayout(mainLayout)
-
-        modified_information_text = self.modify_information_text(information_text)
-        self.informationTextEdit = QTextEdit()
-        self.informationTextEdit.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        self.informationTextEdit.setText(modified_information_text)
-        self.informationTextEdit.setReadOnly(True)
-        mainLayout.addWidget(self.informationTextEdit)
-
-        # Vulnerabilities Found Text Edit
-        self.vulnerabilitiesContentLabel = QLabel("Vulnerabilities Discovered")
-        self.vulnerabilitiesContentLabel.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        self.vulnerabilitiesContentLabel.setStyleSheet("QLabel { color : white; }")
-        self.vulnerabilitiesContentLabel.setWordWrap(True)
-        mainLayout.addWidget(self.vulnerabilitiesContentLabel)
-
-        self.vulnerabilitiesTextEdit = QTextEdit()
-        self.vulnerabilitiesTextEdit.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        self.vulnerabilitiesTextEdit.setText(vulnerabilities_confirmed)
-        self.vulnerabilitiesTextEdit.setReadOnly(
-            True
-        )  # Set to False if you want it to be editable
-        mainLayout.addWidget(self.vulnerabilitiesTextEdit)
-
-        self.evidenceContentLabel = QLabel("Evidence")
-        self.evidenceContentLabel.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        self.evidenceContentLabel.setWordWrap(True)
-        self.evidenceContentLabel.setStyleSheet("QLabel { color : white; }")
-        mainLayout.addWidget(self.evidenceContentLabel)
-        self.evidenceTextEdit = QTextEdit()
-        self.evidenceTextEdit.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        self.evidenceTextEdit.setText(evidence)
-        self.evidenceTextEdit.setReadOnly(
-            True
-        )  # Set to False if you want it to be editable
-        mainLayout.addWidget(self.evidenceTextEdit)
-        # Text Edit Content Label
-        self.textEditContentLabel = QLabel(text_edit_content)
-        self.textEditContentLabel.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        self.textEditContentLabel.setStyleSheet("QLabel { color : white; }")
-        self.textEditContentLabel.setWordWrap(True)
-        self.manager = manager
-        self.config = self.manager.load_config()
-
-        self.save_file = os.path.join(
-            self.config["AUTONOMOUS_DIRECTORY"], "last_job.json"
-        )
-        mainLayout.addWidget(self.textEditContentLabel)
-        # Checkboxes for Items with QLineEdit for editable text
-        self.editableChecklistItems = []
-        scrollArea = QScrollArea()
-        scrollArea.setWidgetResizable(True)
-        scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        scrollArea.verticalScrollBar().setStyleSheet("")
-        containerWidget = QWidget()
-        containerWidget.setStyleSheet("background-color: #1e1e1e;")
-        layout = QVBoxLayout(containerWidget)
-        for item in commands_to_run:
-            itemLayout = QHBoxLayout()
-            checkBox = QCheckBox()
-            checkBox.setChecked(True)
-            lineEdit = QTextEdit(item)
-            lineEdit.setLineWrapMode(
-                QTextEdit.LineWrapMode.WidgetWidth
-            )  # Correct enumeration for line wrapping
-
-            lineEdit.setVerticalScrollBarPolicy(
-                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-            )  # Hide vertical scroll bar
-            lineEdit.setHorizontalScrollBarPolicy(
-                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-            )  # Hide horizontal scroll bar
-            lineEdit.setFixedHeight(50)  # Adjust height to look similar to a line edit
-
-            # Create a copy button and connect its clicked signal to the copy_to_clipboard function
-            copyButton = QPushButton("Copy")
-            copyButton.setStyleSheet(
-                """
-            QPushButton:hover {
-                background-color: #333333;  /* Blue background when hovered */
-            }
-        """
-            )
-            copyButton.clicked.connect(
-                lambda checked, text=lineEdit.toPlainText(): self.copy_to_clipboard(
-                    text
-                )
-            )
-
-            # Update the itemLayout to include the copy button
-            itemLayout.addWidget(checkBox)
-            itemLayout.addWidget(lineEdit)
-            itemLayout.addWidget(copyButton)  # Add the copy button to the mainLayout
-
-            self.editableChecklistItems.append((checkBox, lineEdit))
-            layout.addLayout(itemLayout)
-
-        scrollArea.setWidget(containerWidget)
-        mainLayout.addWidget(scrollArea)
-        # Button Box
-        self.buttonBox = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        okButton = self.buttonBox.button(QDialogButtonBox.StandardButton.Ok)
-        okButton.setText("Run")
-        self.saveButton = QPushButton("Save")
-        self.saveButton.clicked.connect(self.save_to_file)
-        self.buttonBox.accepted.connect(self.accept)
-        self.buttonBox.rejected.connect(self.reject)
-        mainLayout.addWidget(self.saveButton)
-        mainLayout.addWidget(self.buttonBox)
-        mainLayout.addStretch(1)
-
-    def save_to_file(self):
-        # Pre-determined file path and name
-
-        data = {
-            "information_text": self.informationTextEdit.toPlainText(),
-            "vulnerabilities_confirmed": self.vulnerabilitiesTextEdit.toPlainText(),
-            "evidence": self.evidenceTextEdit.toPlainText(),
-            "commands_to_run": [
-                lineEdit.toPlainText() for _, lineEdit in self.editableChecklistItems
-            ],
-            "checked_states": [
-                checkBox.isChecked() for checkBox, _ in self.editableChecklistItems
-            ],
-        }
-        try:
-            with open(self.save_file, "w") as f:
-                json.dump(data, f, indent=4)
-            # Show a message box to inform the user
-            QMessageBox.information(
-                self,
-                "Save Successful",
-                f"Data has been successfully saved to {self.save_file}",
-            )
-        except Exception as e:
-            # Show a message box if there was an error during save
-            utilities.show_message(f"An error occurred while saving: {e}")
-
-    def checkedItems(self):
-        # Return the text of checked items that are checked
-        return [
-            lineEdit.toPlainText()
-            for checkBox, lineEdit in self.editableChecklistItems
-            if checkBox.isChecked()
-        ]
-
-    def modify_information_text(self, text):
-        # Ensure the text is a string
-        if text is None:
-            text = ""  # Convert None to an empty string
-        elif not isinstance(text, str):
-            text = str(text)  # Convert other types to string
-        # Replace periods with a newline, except when followed by a digit (list markers)
-        return re.sub(r"\. (?!\d)", ".\n", text)
-
-    def copy_to_clipboard(self, text):
-        clipboard = QApplication.clipboard()
-        clipboard.setText(text)
+            self.signals.finished.emit()
 
 
 class TerminalEmulatorWindow(QMainWindow):
@@ -446,7 +244,6 @@ class TerminalEmulatorWindow(QMainWindow):
         decrease_font_action.setIcon(decrease_font_icon)
         self.toolbar.addAction(increase_font_action)
         self.toolbar.addAction(decrease_font_action)
-        self.lock = threading.Lock()
 
         increase_font_action.triggered.connect(
             lambda: self.provide_feedback_and_execute(
@@ -586,13 +383,6 @@ class TerminalEmulatorWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error taking screenshot: {e}")
 
-    def set_incognito_mode(self, data):
-        logger.debug("setting incognito mode")
-        if data:
-            self.incognito_mode = True
-        else:
-            self.incognito_mode = False
-
     def update_terminal_output(self, data):
         logger.debug("received data to update terminal with")
 
@@ -710,31 +500,6 @@ class TerminalEmulator(QThread):
 
         except Exception as e:
             logger.error(f"Error setting up pseudo-terminal: {e}")
-
-    def update_number_of_autonomous_commands(self, data):
-        logger.debug(f"number of autonomous_jobs = {data}")
-        self.number_of_autonomous_commands = data
-
-    def set_incognito_mode(self, data):
-        logger.debug("setting incognito mode")
-        if data:
-            self.incognito_mode = True
-        else:
-            self.incognito_mode = False
-
-    def set_web_mode(self, data):
-        logger.debug("setting web mode")
-        if data:
-            self.web_mode = True
-        else:
-            self.web_mode = False
-
-    def set_autonomous_mode(self, data):
-        logger.debug("setting autonomous mode")
-        if data:
-            self.autonomous_mode = True
-        else:
-            self.autonomous_mode = False
 
     def check_for_prompt(self, data):
         self.CONFIG = self.manager.load_config()
@@ -905,7 +670,7 @@ class TerminalEmulator(QThread):
                 continue  # Depending on the error, you may choose not to continue
 
     def reset_terminal(self):
-        self.queued_autonomous_items_for_api = 0
+
         self.number_of_autonomous_commands = 0
         self.current_command = ""
         self.busy.emit(False)
@@ -999,30 +764,6 @@ class TerminalEmulator(QThread):
             self.current_command = command + "-" + self.current_command
 
 
-class CustomCompleter(QCompleter):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.command = None
-
-    def disable_completer(self, _=None):
-        self.lineEdit.setCompleter(None)
-
-    def splitPath(self, path):
-        self.command, path = self.parse_input(path)
-        return [path]
-
-    def pathFromIndex(self, index):
-        path = super().pathFromIndex(index)
-        return f"{self.command} {path}"
-
-    def parse_input(self, input_text):
-        match = re.match(r"(\S+)\s+(.*)$", input_text)
-        if match:
-            return match.group(1), match.group(2)
-        else:
-            return "", input_text
-
-
 class DynamicCompleter(QCompleter):
     def __init__(self, parent=None):
         super(DynamicCompleter, self).__init__(parent)
@@ -1075,12 +816,6 @@ class DynamicCompleter(QCompleter):
             logger.error(f"Error returning paths: {e}")
             return []
 
-    def splitPath(self, path):
-        parts = path.split(" ", 1)
-        if len(parts) > 1 and parts[0] in self.commands:
-            return [parts[1]]
-        return [path]
-
     def pathFromIndex(self, index):
         text = super().pathFromIndex(index)
         currentText = self.widget().text()
@@ -1094,27 +829,15 @@ class CommandInputArea(QLineEdit):
     updateCentralDisplayArea = pyqtSignal(str)
     updateCentralDisplayAreaForApi = pyqtSignal(str)
     update_ai_notes = pyqtSignal(str)
-    update_code_analysis = pyqtSignal(str)
     update_suggestions_notes = pyqtSignal(str)
-    indexing_completed = pyqtSignal()
-    report_submitted_successfully = pyqtSignal()
-    report_not_submitted_successfully = pyqtSignal()
-    feedback_submitted_successfully = pyqtSignal()
     api_call_execution_finished = pyqtSignal()
     threads_status = pyqtSignal(str)
-    number_of_autonomous_commands_signal = pyqtSignal(int)
-    halt_autonomous_jobs = pyqtSignal()
-    update_store = pyqtSignal(str)
-    update_data = pyqtSignal(str)
-    update_data_error = pyqtSignal(str)
     model_created = pyqtSignal(bool)
     model_busy_busy_signal = pyqtSignal(bool)
 
     def __init__(self, parent=None, manager=None):
         super().__init__(parent)
 
-        self.apiCallThread = None
-        self.start_up = False
         self.isSelectingText = False
         self.setToolTip("Enter a command, start your command with ! for API calls")
         self.api_tasks = 0
@@ -1126,6 +849,7 @@ class CommandInputArea(QLineEdit):
         self.textChanged.connect(self.fileCompleter.update_model)
         self.autonomous_mode = False
         self.web_mode = False
+        self.tools_agent_mode = False
         self.contextMenu = self.createContextMenu()
         self.history = []
         self.manager = manager
@@ -1135,27 +859,22 @@ class CommandInputArea(QLineEdit):
         self.history_watcher = QFileSystemWatcher([self.CONFIG["HISTORY_FILE"]])
         self.history_watcher.fileChanged.connect(self.load_command_history)
         self.commands = []
-        self.currentCommandIndex = 0
+
         self.history_index = -1
         self.returnPressed.connect(lambda: self.execute_command(self.text()))
-        self.number_of_autonomous_commands = 0
+
         self.terminal = TerminalEmulator(manager=self.manager)
         self.terminal.password_mode.connect(self.set_password_mode)
         self.password_mode = False
-        self.number_of_autonomous_commands_signal.connect(
-            self.terminal.update_number_of_autonomous_commands
-        )
+
         self.threadpool = QThreadPool()
         self.model = None
         self.terminal.start()
         self.terminal.data_ready.connect(self.update_terminal_output)
         self.terminal.busy.connect(self.set_style_sheet)
-        self.unique_commands_to_run = set()
-        self.unique_information = set()
-        self.unique_vulnerabilities_confirmed = set()
-        self.unique_evidence = set()
+
         self.incognito_mode = False
-        self.queued_autonomous_items_for_api = 0
+
         self.model_busy = False
         num_cores = os.cpu_count()
 
@@ -1177,6 +896,36 @@ class CommandInputArea(QLineEdit):
             "awk",
             "sed",
         ]
+        self.tools_agent = None
+        self.general_agent = None
+
+    def set_agent_mode(self, mode):
+        if mode:
+            self.tools_agent_mode = True
+        else:
+            self.tools_agent_mode = False
+
+    def create_agent(self, agent_type):
+        if agent_type == "tools_agent":
+            tools = [BASH_TOOL, SEARCH_TOOL]
+
+        else:
+            tools = [SEARCH_TOOL]
+
+        try:
+
+            created_agent = initialize_agent(
+                tools,
+                self.model,
+                agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+                verbose=True,
+                handle_parsing_errors=True,
+                memory=MEMORY,
+            )
+            return created_agent
+        except Exception as e:
+            logger.error("Error during agent creation: %s", e, exc_info=True)
+            raise
 
     def set_password_mode(self, data: bool):
         """
@@ -1218,13 +967,6 @@ class CommandInputArea(QLineEdit):
     def on_current_directory_changed(self, current_directory):
         self.current_directory = current_directory
 
-    def set_incognito_mode(self, data):
-        logger.debug("setting incognito mode")
-        if data:
-            self.incognito_mode = True
-        else:
-            self.incognito_mode = False
-
     def update_terminal_output(self, data):
         data = utilities.process_output(data)
         # logger.debug(
@@ -1239,9 +981,6 @@ class CommandInputArea(QLineEdit):
         if self.api_tasks <= 0:
             self.threads_status.emit("completed")
         self.updateCentralDisplayAreaForApi.emit(data)
-
-    def update_model_status_in_autonomous_mode(self):
-        self.threads_status.emit("completed")
 
     def keyPressEvent(self, event):
         try:
@@ -1267,14 +1006,9 @@ class CommandInputArea(QLineEdit):
                 and event.modifiers() & Qt.KeyboardModifier.ControlModifier
             ):
                 self.terminal.write("<Ctrl-C>")
-                if self.autonomous_mode:
-                    self.halt_autonomous_jobs.emit()
 
-                self.currentCommandIndex = 0
                 self.commands = []
-                self.number_of_autonomous_commands = 0
-                self.queued_autonomous_items_for_api = 0
-                self.terminal.autonomous_terminal_execution_iteration_is_done.emit()
+
                 self.terminal.busy.emit(False)
 
             elif (
@@ -1282,13 +1016,7 @@ class CommandInputArea(QLineEdit):
                 and event.modifiers() & Qt.KeyboardModifier.ControlModifier
             ):
                 self.terminal.write("<Ctrl-\\>")
-                if self.autonomous_mode:
-                    self.halt_autonomous_jobs.emit()
-                self.currentCommandIndex = 0
                 self.commands = []
-                self.number_of_autonomous_commands = 0
-                self.queued_autonomous_items_for_api = 0
-                self.terminal.autonomous_terminal_execution_iteration_is_done.emit()
                 self.terminal.busy.emit(False)
 
             # Handling paste operation with Ctrl+V
@@ -1327,9 +1055,8 @@ class CommandInputArea(QLineEdit):
 
         command_input_area = False
         current_text = self.text()  # Get the current text from the widget
-        combined_text = current_text + text  # Combine existing text with the new text
         dialog = utilities.EditCommandDialog(
-            command_text=combined_text,
+            command_text=current_text,
             parent=self,
             command_input_area=command_input_area,
         )
@@ -1602,32 +1329,25 @@ class CommandInputArea(QLineEdit):
 
         self.threads_status.emit("in_progress")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        model_task = ModelTaskRunner(self.model, endpoint, command, self.manager)
-        self.model_busy = True
-        self.model_busy_busy_signal.emit(True)
-        model_task.signals.result.connect(self.onTaskResult)
-        model_task.signals.finished.connect(self.onTaskFinished)  # If needed
-        self.threadpool.start(model_task)
+        if not self.tools_agent_mode:
 
-    def parse_json(self, data):
-        try:
-            # Check the data type
-            if isinstance(data, list):
-                # Directly parse the first element of the list as JSON
-                return json.loads(data[0])
-            else:
-                # If data is a string, load it directly
-                return json.loads(data)
-        except Exception as e:
-            logger.error(f"error while parsing json: {e}")
-            return None  # You might want to return None or handle the error differently
-
-    def tell_main_window_file_processing_that_api_call_execution_is_ready(self):
-        self.api_call_execution_finished.emit()
-
-    def tell_user_that_feedback_has_been_submitted(self, _=None):
-        self.threads_status.emit("completed")
-        self.feedback_submitted_successfully.emit()
+            self.general_agent = self.create_agent("general_agent")
+            # Create and start the task with the chosen agent
+            model_task = AgentTaskRunner(self.general_agent, command, endpoint)
+            self.model_busy = True
+            self.model_busy_busy_signal.emit(True)
+            model_task.signals.result.connect(self.onTaskResult)
+            model_task.signals.finished.connect(self.onTaskFinished)
+            self.threadpool.start(model_task)
+        else:
+            if not self.tools_agent:
+                self.tools_agent = self.create_agent("tools_agent")
+            model_task = AgentTaskRunner(self.tools_agent, command, endpoint)
+            self.model_busy = True
+            self.model_busy_busy_signal.emit(True)
+            model_task.signals.result.connect(self.onTaskResult)
+            model_task.signals.finished.connect(self.onTaskFinished)  # If needed
+            self.threadpool.start(model_task)
 
     def update_suggestion_notes_function(self, command, data):
         self.api_tasks -= 1
@@ -1647,48 +1367,6 @@ class CommandInputArea(QLineEdit):
         end_time = time.time()
         duration = end_time - start_time
         logger.debug(f"Updating AI Notes function took {duration} seconds.")
-
-    def update_store_function(self, data):
-        self.api_tasks -= 1
-        if self.api_tasks <= 0:
-            self.threads_status.emit("completed")
-        start_time = time.time()
-
-        self.update_store.emit(data)
-
-        end_time = time.time()
-        duration = end_time - start_time
-        logger.debug(f"Updating store function took {duration} seconds.")
-
-    def update_data_function(self, data):
-        self.api_tasks -= 1
-        if self.api_tasks <= 0:
-            self.threads_status.emit("completed")
-        start_time = time.time()
-
-        if "error" in data:
-            self.update_data_error.emit(data)
-        else:
-            logger.debug(f"updating data {data}")
-            self.update_data.emit(data)
-        end_time = time.time()
-        duration = end_time - start_time
-        logger.debug(f"Updating decoy function took {duration} seconds.")
-
-    def update_code_analysis_function(self, command, data):
-        self.api_tasks -= 1
-        if self.api_tasks <= 0:
-            self.threads_status.emit("completed")
-        start_time = time.time()
-
-        self.update_code_analysis.emit(data)
-
-        end_time = time.time()
-        duration = end_time - start_time
-        logger.debug(f"Updating code analysis function took {duration} seconds.")
-
-    def disable_completer(self, _=None):
-        self.setCompleter(None)
 
     def createContextMenu(self, _=None):
         context_menu = QMenu(self)
@@ -1732,6 +1410,3 @@ class CommandInputArea(QLineEdit):
         if self.isSelectingText and self.selectedText():
             self.contextMenu.exec(event.globalPosition().toPoint())
         self.isSelectingText = False
-
-    def on_indexing_completed(self, _=None):
-        self.indexing_completed.emit()
