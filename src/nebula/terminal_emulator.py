@@ -171,6 +171,7 @@ class AgentTaskRunner(QRunnable):
         Generate a response using Ollama. This method prepends the proper instructions based on the endpoint,
         calls the ollama.generate function, and returns the trimmed response.
         """
+        # this logic needs to be eventually adjusted 
         if "mistral" in model:
             model = "mistral"
         if "llama" in model:

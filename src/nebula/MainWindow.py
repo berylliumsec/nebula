@@ -929,6 +929,7 @@ class Nebula(QMainWindow):
             QToolButton.ToolButtonPopupMode.MenuButtonPopup
         )
         self.model_menu = QMenu(self.model_selection_button)
+        # this needs to be adjusted eventually to be more robust, maybe allow the user to enter their model name
         self.model_menu.addAction(
             "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
             lambda: self.on_model_selected("deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
