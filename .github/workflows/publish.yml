@@ -122,7 +122,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Added agents (Langchain Agents was used, but in the future we will migrate to LangGraph when local hugging face models are supported)
+              - Added Ollama so users can now run models without GPU(s)!
               
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true

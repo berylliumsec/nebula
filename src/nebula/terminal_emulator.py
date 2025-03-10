@@ -6,7 +6,7 @@ import shutil
 import signal
 import time
 import warnings
-
+import ollama
 import torch
 from langchain.agents import AgentType, initialize_agent
 from langchain.memory import ConversationBufferMemory
@@ -116,44 +116,89 @@ class AgentTaskRunner(QRunnable):
     Worker thread to run agent queries.
     """
 
-    def __init__(self, agent, query, endpoint):
+    def __init__(self, agent, query, endpoint, use_ollama=False, ollama_model='mistral'):
         super().__init__()
         self.agent = agent
         self.query = query
-        self.signals = AgentTaskRunnerSignals()
         self.endpoint = endpoint
+        self.use_ollama = use_ollama
+        self.ollama_model = ollama_model
+        self.signals = AgentTaskRunnerSignals()
 
     def run(self):
         try:
-            if "notes" in self.endpoint:
-                self.query = (
-                    "As a penetration testing assistant, please take detailed notes in a report style. "
-                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your notes, "
-                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
-                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your response: "
-                ) + self.query
-            elif "suggestion" in self.endpoint:
-                self.query = (
-                    "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities "
-                    "or determine if vulnerabilities found are exploitable based on the following tool output. "
-                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your suggestions, "
-                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
-                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
-                ) + self.query
+            # If using Ollama, delegate prompt preparation and generation to query_ollama.
+            if self.use_ollama:
+                response = self.query_ollama(self.query, self.endpoint, model=self.ollama_model)
             else:
-                self.query = (
-                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your response, "
-                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
-                    "'Action Input:' (which provides the input or parameters for that tool).The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
-                ) + self.query
+                # Prepend instructions based on the endpoint for agent-based queries.
+                if "notes" in self.endpoint:
+                    instructions = (
+                        "As a penetration testing assistant, please take detailed notes in a report style. "
+                        "Either return your answer with a single JSON key called 'Final Answer' whose value is your notes, "
+                        "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                        "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your response: "
+                    )
+                    prompt = instructions + self.query
+                elif "suggestion" in self.endpoint:
+                    instructions = (
+                        "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities "
+                        "or determine if vulnerabilities found are exploitable based on the following tool output. "
+                        "Either return your answer with a single JSON key called 'Final Answer' whose value is your suggestions, "
+                        "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                        "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                    )
+                    prompt = instructions + self.query
+                else:
+                    instructions = (
+                        "Either return your answer with a single JSON key called 'Final Answer' whose value is your response, "
+                        "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                        "'Action Input:' (which provides the input or parameters for that tool).The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                    )
+                    prompt = instructions + self.query
 
-            response = self.agent.run(self.query)
+                response = self.agent.run(prompt)
+
             self.signals.result.emit(self.endpoint, "ai", response)
         except Exception as e:
             logger.error(f"Error during agent query: {e}")
             self.signals.error.emit(str(e))
         finally:
             self.signals.finished.emit()
+
+    def query_ollama(self, query: str, endpoint: str, model: str = 'mistral') -> str:
+        """
+        Generate a response using Ollama. This method prepends the proper instructions based on the endpoint,
+        calls the ollama.generate function, and returns the trimmed response.
+        """
+        # this logic needs to be eventually adjusted 
+        if "mistral" in model:
+            model = "mistral"
+        if "llama" in model:
+            model = "llama3.2"
+        if "deepseek" in model:
+            model = "deepseek-r1"
+        if "notes" in endpoint:
+            instructions = (
+                "As a penetration testing assistant, please take detailed notes in a report style. "
+            )
+            prompt = instructions + query
+        elif "suggestion" in endpoint:
+            instructions = (
+                "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities "
+                "or determine if vulnerabilities found are exploitable based on the following tool output. "
+            )
+            prompt = instructions + query
+        else:
+            instructions = (
+                "You are a penetration testing assistant.  "
+            )
+            prompt = instructions + query
+
+        response = ollama.generate(model=model, prompt=prompt)
+        logger.info("response received")
+        return response['response'].strip()
+
 
 
 class TerminalEmulatorWindow(QMainWindow):
@@ -1312,14 +1357,14 @@ class CommandInputArea(QLineEdit):
             )
             return
         logger.debug(f"Starting execute_api_call to endpoint: {endpoint} in free mode")
-
-        if not self.model:
-            logger.error("No loaded model")
-            utilities.show_message(
-                "No model loaded",
-                "An error may have occurred while loading the selected model during Nebula's startup, also, the models can only be used from the central display area",
-            )
-            return
+        if not self.CONFIG["OLLAMA"]:
+            if not self.model:
+                logger.error("No loaded model")
+                utilities.show_message(
+                    "No model loaded",
+                    "An error may have occurred while loading the selected model during Nebula's startup, also, the models can only be used from the central display area",
+                )
+                return
         if self.model_busy:
             utilities.show_message(
                 "Model is busy",
@@ -1329,26 +1374,62 @@ class CommandInputArea(QLineEdit):
 
         self.threads_status.emit("in_progress")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        if not self.tools_agent_mode:
+        if not self.CONFIG["OLLAMA"]:
+            if not self.tools_agent_mode:
 
-            self.general_agent = self.create_agent("general_agent")
-            # Create and start the task with the chosen agent
-            model_task = AgentTaskRunner(self.general_agent, command, endpoint)
+                self.general_agent = self.create_agent("general_agent")
+                # Create and start the task with the chosen agent
+                model_task = AgentTaskRunner(agent=self.general_agent, query=command, endpoint=endpoint)
+                self.model_busy = True
+                self.model_busy_busy_signal.emit(True)
+                model_task.signals.result.connect(self.onTaskResult)
+                model_task.signals.finished.connect(self.onTaskFinished)
+                self.threadpool.start(model_task)
+            else:
+                if not self.tools_agent:
+                    self.tools_agent = self.create_agent("tools_agent")
+                model_task = AgentTaskRunner(self.tools_agent, command, endpoint)
+                self.model_busy = True
+                self.model_busy_busy_signal.emit(True)
+                model_task.signals.result.connect(self.onTaskResult)
+                model_task.signals.finished.connect(self.onTaskFinished)  # If needed
+                self.threadpool.start(model_task)
+        else:
+            model_task = AgentTaskRunner(agent=self.general_agent, query=command, endpoint=endpoint, use_ollama=True)
             self.model_busy = True
             self.model_busy_busy_signal.emit(True)
             model_task.signals.result.connect(self.onTaskResult)
             model_task.signals.finished.connect(self.onTaskFinished)
             self.threadpool.start(model_task)
-        else:
-            if not self.tools_agent:
-                self.tools_agent = self.create_agent("tools_agent")
-            model_task = AgentTaskRunner(self.tools_agent, command, endpoint)
-            self.model_busy = True
-            self.model_busy_busy_signal.emit(True)
-            model_task.signals.result.connect(self.onTaskResult)
-            model_task.signals.finished.connect(self.onTaskFinished)  # If needed
-            self.threadpool.start(model_task)
+    def query_ollama(self, query:str, endpoint: str, model: str = 'mistral') -> str:
 
+            if "notes" in endpoint:
+                query = (
+                    "As a penetration testing assistant, please take detailed notes in a report style. "
+                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your notes, "
+                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your response: "
+                ) + query
+            elif "suggestion" in endpoint:
+                self.query = (
+                    "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities "
+                    "or determine if vulnerabilities found are exploitable based on the following tool output. "
+                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your suggestions, "
+                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                ) + query
+            else:
+                query = (
+                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your response, "
+                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
+                    "'Action Input:' (which provides the input or parameters for that tool).The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                ) + query
+
+
+            response = ollama.generate(model=model, prompt=query)
+            logger.info("response received")
+
+            return response['response'].strip()
     def update_suggestion_notes_function(self, command, data):
         self.api_tasks -= 1
         if self.api_tasks <= 0:

@@ -30,7 +30,6 @@ boto3 = "*"
 beautifulsoup4 = "*"
 opencv-python = "*"
 Faker = "*"
-mitmproxy = "*"
 numpy = "*"
 prompt_toolkit = "*"
 psutil = "*"
@@ -55,6 +54,6 @@ duckduckgo-search = "*"
 toml = "*"
 setuptools = "*"
 langchain-experimental = "*"
-
+ollama = "*"
 [tool.poetry.extras]
 flash = [ "flash-attn",]

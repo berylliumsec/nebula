@@ -515,6 +515,8 @@ class Nebula(QMainWindow):
         self.suggestions_layout.addWidget(self.suggestions_button, 1)
 
         self.command_input_area = CommandInputArea(manager=self.manager)
+        
+        
         self.tools_agent_mode.connect(self.command_input_area.set_agent_mode)
         self.command_input_area.model_created.connect(
             self.enable_disabled_due_to_model_creation
@@ -927,6 +929,7 @@ class Nebula(QMainWindow):
             QToolButton.ToolButtonPopupMode.MenuButtonPopup
         )
         self.model_menu = QMenu(self.model_selection_button)
+        # this needs to be adjusted eventually to be more robust, maybe allow the user to enter their model name
         self.model_menu.addAction(
             "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
             lambda: self.on_model_selected("deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
@@ -959,21 +962,22 @@ class Nebula(QMainWindow):
             "Click to toggle agents on or off",
             self,
         )
-
+        if self.CONFIG["OLLAMA"]:
+            self.agentAction.setEnabled(False)
         self.agentAction.setCheckable(True)
         self.agentAction.triggered.connect(self.activate_deactivate_agent)
         self.toolbar.addAction(self.agentAction)
         self.autonomous_mode = False
 
-        engagement_json = {}
+        self.engagement_json = {}
         window_title = "Nebula"
         self.worker = None
         try:
-            engagement_json = self.loadJsonData(self.engagement_details_file)
+            self.engagement_json = self.loadJsonData(self.engagement_details_file)
         except Exception as e:
             logger.error(f"unable to load engagement details {e}")
-        if engagement_json:
-            window_title = window_title + " - " + engagement_json["engagement_name"]
+        if self.engagement_json:
+            window_title = window_title + " - " + self.engagement_json["engagement_name"]
 
         self.setWindowTitle(window_title)
 
@@ -996,10 +1000,11 @@ class Nebula(QMainWindow):
         self.model_creation_in_progress.connect(
             self.log_side_bar.enable_or_disable_due_to_model_creation
         )
-        self.model_creation_in_progress.emit(True)
-        self.central_display_area.model_creation_in_progress.emit(True)
-        self.model_signal.emit(True)
-        self.model_menu.setEnabled(False)
+        if not self.CONFIG["OLLAMA"]:
+            self.model_creation_in_progress.emit(True)
+            self.central_display_area.model_creation_in_progress.emit(True)
+            self.model_signal.emit(True)
+            self.model_menu.setEnabled(False)
 
         logger.debug("main window loaded")
 
@@ -1025,11 +1030,12 @@ class Nebula(QMainWindow):
         # Write the updated data back to config.json.
         with open(self.CONFIG_FILE_PATH, "w") as file:
             json.dump(data, file, indent=4)
-        self.model_signal.emit(True)
-        self.upload_button.setEnabled(False)
-        self.model_menu.setEnabled(False)
-        self.model_creation_in_progress.emit(True)
-        self.central_display_area.model_creation_in_progress.emit(True)
+        if not self.CONFIG["OLLAMA"]:
+            self.model_signal.emit(True)
+            self.upload_button.setEnabled(False)
+            self.model_menu.setEnabled(False)
+            self.model_creation_in_progress.emit(True)
+            self.central_display_area.model_creation_in_progress.emit(True)
 
     def enable_disabled_due_to_model_creation(self, signal):
         if signal:

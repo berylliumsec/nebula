@@ -553,6 +553,9 @@ class ConfigManager(QObject):
                 updated_config["MODEL"] = details.get(
                     "model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
                 )
+                updated_config["OLLAMA"] = details.get(
+                    "ollama", False
+                )
                 updated_config["CACHE_DIR"] = details.get(
                     "cache_dir",
                     os.getenv(
