@@ -7,7 +7,7 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QTextEdit,
-                             QVBoxLayout, QWidget)
+                             QVBoxLayout, QWidget, QCheckBox)  # Added QCheckBox
 
 from . import constants, utilities
 from .log_config import setup_logging
@@ -28,9 +28,7 @@ class settings(QWidget):
         # Set default cache directory: use the TRANSFORMERS_CACHE env variable if available, otherwise fallback
         self.defaultCacheDir = os.getenv(
             "TRANSFORMERS_CACHE",
-            os.path.join(
-                os.path.expanduser("~"), ".cache", "huggingface", "transformers"
-            ),
+            os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "transformers"),
         )
         self.cacheDir = self.defaultCacheDir
         # Flag to indicate whether the user has updated the cache directory in this session
@@ -95,13 +93,9 @@ class settings(QWidget):
         self.urlsInput = QTextEdit()
         self.lookoutInput = QTextEdit()
 
-        self.ipAddressesInput.setPlaceholderText(
-            "Enter IP addresses (one per line) (Optional)"
-        )
+        self.ipAddressesInput.setPlaceholderText("Enter IP addresses (one per line) (Optional)")
         self.urlsInput.setPlaceholderText("Enter URLs (one per line) (Optional)")
-        self.lookoutInput.setPlaceholderText(
-            "Enter things to lookout for (one per line) (Optional)"
-        )
+        self.lookoutInput.setPlaceholderText("Enter things to lookout for (one per line) (Optional)")
 
         for inputWidget in [self.ipAddressesInput, self.urlsInput, self.lookoutInput]:
             inputWidget.setFont(QFont("Arial", 10))
@@ -120,12 +114,21 @@ class settings(QWidget):
         self.modelComboBox.addItem("mistralai/Mistral-7B-Instruct-v0.2")
         self.modelComboBox.addItem("deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
         self.modelComboBox.addItem("meta-llama/Llama-3.1-8B-Instruct")
-
         self.modelComboBox.currentTextChanged.connect(self.onModelChanged)
-        self.onModelChanged(self.modelComboBox.currentText())
         modelLayout = QHBoxLayout()
         modelLayout.addWidget(self.modelComboBox)
         layout.addLayout(modelLayout)
+
+        # --- Ollama Checkbox ---
+        # This checkbox indicates that the model choice is Ollama.
+        # If checked, downstream code should skip model creation and use Ollama.
+        self.ollamaCheckbox = QCheckBox("Use Ollama")
+        self.ollamaCheckbox.setFont(QFont("Arial", 10))
+        self.ollamaCheckbox.setStyleSheet("color: white;")
+        layout.addWidget(self.ollamaCheckbox)
+
+        # Now that the checkbox exists, update the model change state.
+        self.onModelChanged(self.modelComboBox.currentText())
 
         # --- Cache Directory Selection ---
         cacheDirTitleLabel = QLabel("Cache Directory")
@@ -179,6 +182,7 @@ class settings(QWidget):
         self.urlsInput.setEnabled(enabled)
         self.lookoutInput.setEnabled(enabled)
         self.modelComboBox.setEnabled(enabled)
+        self.ollamaCheckbox.setEnabled(enabled)  # Enable/disable the checkbox as well
         self.cacheDirLineEdit.setEnabled(enabled)
         self.cacheDirBtn.setEnabled(enabled)
         self.saveBtn.setEnabled(enabled)
@@ -186,8 +190,9 @@ class settings(QWidget):
     def onModelChanged(self, text):
         self.model_name = text
         logger.debug(f"Model selected: {text}")
-
-        if not torch.cuda.is_available():
+        
+        # If using Ollama, bypass GPU/model-creation checks.
+        if not self.ollamaCheckbox.isChecked() and not torch.cuda.is_available():
             utilities.show_systems_requirements_message(
                 "Important information",
                 "No GPU(s) available. You will not be able to use any models",
@@ -203,9 +208,7 @@ class settings(QWidget):
 
     def selectFolder(self):
         try:
-            folder_path = QFileDialog.getExistingDirectory(
-                self, "Select Engagement Folder"
-            )
+            folder_path = QFileDialog.getExistingDirectory(self, "Select Engagement Folder")
             if folder_path:
                 # Optionally warn if switching folders might overwrite unsaved changes.
                 self.engagementFolder = folder_path
@@ -221,14 +224,10 @@ class settings(QWidget):
 
     def selectCacheDir(self):
         try:
-            selected_dir = QFileDialog.getExistingDirectory(
-                self, "Select Cache Directory"
-            )
+            selected_dir = QFileDialog.getExistingDirectory(self, "Select Cache Directory")
             if selected_dir:
                 self.cacheDir = selected_dir
-                self.cache_dir_updated = (
-                    True  # Mark that the cache directory has been updated by the user
-                )
+                self.cache_dir_updated = True  # Mark that the cache directory has been updated by the user
                 self.cacheDirLineEdit.setText(selected_dir)
                 logger.info(f"Cache directory updated to: {selected_dir}")
         except Exception as e:
@@ -247,15 +246,17 @@ class settings(QWidget):
         try:
             with open(file_path, "r") as file:
                 details = json.load(file)
-                self.ipAddressesInput.setText(
-                    "\n".join(details.get("ip_addresses", []))
-                )
+                self.ipAddressesInput.setText("\n".join(details.get("ip_addresses", [])))
                 self.urlsInput.setText("\n".join(details.get("urls", [])))
                 self.lookoutInput.setText("\n".join(details.get("lookout_items", [])))
-                self.model_name = details.get(
-                    "model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
-                )
+                self.model_name = details.get("model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
                 self.modelComboBox.setCurrentText(self.model_name)
+                
+                # If the config has an "ollama" flag, update the checkbox state accordingly.
+                if details.get("ollama", False):
+                    self.ollamaCheckbox.setChecked(True)
+                else:
+                    self.ollamaCheckbox.setChecked(False)
 
                 # Only update the cache directory if the user has not already changed it
                 if not self.cache_dir_updated:
@@ -280,21 +281,9 @@ class settings(QWidget):
 
         try:
             # Directly read the current values from the UI.
-            ip_addresses = [
-                ip.strip()
-                for ip in self.ipAddressesInput.toPlainText().splitlines()
-                if ip.strip()
-            ]
-            urls = [
-                url.strip()
-                for url in self.urlsInput.toPlainText().splitlines()
-                if url.strip()
-            ]
-            lookout_items = [
-                item.strip()
-                for item in self.lookoutInput.toPlainText().splitlines()
-                if item.strip()
-            ]
+            ip_addresses = [ip.strip() for ip in self.ipAddressesInput.toPlainText().splitlines() if ip.strip()]
+            urls = [url.strip() for url in self.urlsInput.toPlainText().splitlines() if url.strip()]
+            lookout_items = [item.strip() for item in self.lookoutInput.toPlainText().splitlines() if item.strip()]
             # Capture the current model selection
             self.model_name = self.modelComboBox.currentText()
             cache_dir = self.cacheDirLineEdit.text()
@@ -307,6 +296,7 @@ class settings(QWidget):
                 "lookout_items": lookout_items,
                 "model": self.model_name,
                 "cache_dir": cache_dir,
+                "ollama": self.ollamaCheckbox.isChecked()  # Save the state of the Ollama checkbox
             }
 
             # Save the settings to the file.
@@ -314,12 +304,8 @@ class settings(QWidget):
             with open(file_path, "w") as file:
                 json.dump(current_engagement_settings, file, indent=4)
 
-            self.folderPathLabel.setText(
-                f"Engagement details saved in {self.engagementFolder}"
-            )
-            logger.info(
-                f"Engagement details saved successfully in {self.engagementFolder}."
-            )
+            self.folderPathLabel.setText(f"Engagement details saved in {self.engagementFolder}")
+            logger.info(f"Engagement details saved successfully in {self.engagementFolder}.")
             self.setupCompleted.emit(self.engagementFolder)
             # Reset the flag after saving.
             self.cache_dir_updated = False
