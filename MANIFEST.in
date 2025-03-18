@@ -1,0 +1,11 @@
+include LICENSE.md
+include README.md
+include MANUAL.md
+include requirements.txt
+include pyproject.toml
+include poetry.lock
+
+recursive-include src/nebula/images *
+recursive-include src/nebula/Images_readme *
+recursive-include src/nebula/command_search_index *
+recursive-include src/nebula/config *
