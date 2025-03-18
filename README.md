@@ -35,23 +35,66 @@ For CPU-Based Inference(Ollama)(Note that Ollama Supports GPU too):
 - Python 3.11 or higher
 - [Ollama](https://ollama.com/)
 
-**Installation Command:**
+### Installation Methods
+
+#### Quick Installation (recommended)
+
+**For Linux/macOS**:
+```bash
+# Clone the repository
+git clone https://github.com/berylliumsec/nebula.git
+cd nebula
+
+# Run the installation script
+chmod +x install_linux.sh
+./install_linux.sh
+```
+
+**For Windows**:
+```powershell
+# Clone the repository
+git clone https://github.com/berylliumsec/nebula.git
+cd nebula
+
+# Run the installation script (in PowerShell)
+.\install_windows.ps1
+```
+
+#### Manual Installation
+
+**Using pip**:
 ```bash
 python -m pip install nebula-ai --upgrade
 ```
 
+**From Source**:
+```bash
+# Clone the repository
+git clone https://github.com/berylliumsec/nebula.git
+cd nebula
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Install Nebula
+pip install -e .
+```
 
 ## Running Nebula
 
 **Important:** 
 
 **Hugging Face Local Model Based Usage** 
-On your first run, you’ll be prompted to select a cache directory where Nebula will download your chosen AI model. Follow these steps:
+On your first run, you'll be prompted to select a cache directory where Nebula will download your chosen AI model. Follow these steps:
 
 1. Create a free [Hugging Face Account](https://huggingface.co/), agree to the terms, and generate an access token.
 2. Export your token to the CLI:
    ```bash
+   # Linux/macOS
    export HF_TOKEN=YourTokenHere
+   
+   # Windows (PowerShell)
+   $env:HF_TOKEN="YourTokenHere"
    ```
 3. Launch Nebula and monitor the download progress on the CLI.
 
@@ -108,8 +151,29 @@ For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula
 
 Logs are located at `/home/[your_username]/.local/share/nebula/logs`. You would most likely find the reason for the error in one of those logs
 
+On Windows, logs are at `C:\Users\[your_username]\.local\share\nebula\logs`.
+
+#### Testing Your Installation
+
+To verify that your installation is working correctly, you can run the test script:
+
+**For Linux/macOS**:
+```bash
+python test_installation.py
+```
+
+**For Windows**:
+```powershell
+python test_installation_windows.py
+```
+
+These scripts will check:
+- Python version compatibility
+- Required modules installation
+- Existence of necessary directories
+- Availability of the Nebula command
+
 ## Get More Support
 
 - Have questions or need help? [Open an Issue](https://github.com/berylliumsec/nebula/issues) on GitHub.
 - For comprehensive guides, check out our [Video Guide](https://www.berylliumsec.com/nebula-pro-feature-guide) and [User Manual](/MANUAL.md).
-
