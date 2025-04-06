@@ -5,9 +5,9 @@ import warnings
 import torch
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QHBoxLayout,
-                             QLabel, QLineEdit, QPushButton, QTextEdit,
-                             QVBoxLayout, QWidget, QCheckBox)  # Added QCheckBox
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
+                             QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                             QPushButton, QTextEdit, QVBoxLayout, QWidget)
 
 from . import constants, utilities
 from .log_config import setup_logging
@@ -28,9 +28,11 @@ class settings(QWidget):
         # Set default cache directory: use the TRANSFORMERS_CACHE env variable if available, otherwise fallback
         self.defaultCacheDir = os.getenv(
             "TRANSFORMERS_CACHE",
-            os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "transformers"),
+            os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "transformers")
         )
         self.cacheDir = self.defaultCacheDir
+        # Initialize default ChromaDB directory to empty (it is required to be set by the user)
+        self.chromadbDir = ""
         # Flag to indicate whether the user has updated the cache directory in this session
         self.cache_dir_updated = False
         self.initUI()
@@ -114,20 +116,17 @@ class settings(QWidget):
         self.modelComboBox.addItem("mistralai/Mistral-7B-Instruct-v0.2")
         self.modelComboBox.addItem("deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
         self.modelComboBox.addItem("meta-llama/Llama-3.1-8B-Instruct")
+        self.modelComboBox.addItem("qwen2.5-coder:32b")
         self.modelComboBox.currentTextChanged.connect(self.onModelChanged)
         modelLayout = QHBoxLayout()
         modelLayout.addWidget(self.modelComboBox)
         layout.addLayout(modelLayout)
 
         # --- Ollama Checkbox ---
-        # This checkbox indicates that the model choice is Ollama.
-        # If checked, downstream code should skip model creation and use Ollama.
         self.ollamaCheckbox = QCheckBox("Use Ollama")
         self.ollamaCheckbox.setFont(QFont("Arial", 10))
         self.ollamaCheckbox.setStyleSheet("color: white;")
         layout.addWidget(self.ollamaCheckbox)
-
-        # Now that the checkbox exists, update the model change state.
         self.onModelChanged(self.modelComboBox.currentText())
 
         # --- Cache Directory Selection ---
@@ -140,7 +139,6 @@ class settings(QWidget):
         self.cacheDirLineEdit = QLineEdit()
         self.cacheDirLineEdit.setFont(QFont("Arial", 10))
         self.cacheDirLineEdit.setText(self.cacheDir)
-        # Read-only because we want users to use the "Browse" button
         self.cacheDirLineEdit.setReadOnly(True)
         self.cacheDirBtn = QPushButton("Browse...")
         self.cacheDirBtn.setFont(QFont("Arial", 10))
@@ -148,6 +146,23 @@ class settings(QWidget):
         cacheLayout.addWidget(self.cacheDirLineEdit)
         cacheLayout.addWidget(self.cacheDirBtn)
         layout.addLayout(cacheLayout)
+
+        # --- ChromaDB Directory Selection (Required) ---
+        chromadbDirTitleLabel = QLabel("ChromaDB Directory (Required)")
+        chromadbDirTitleLabel.setFont(QFont("Arial", 10))
+        chromadbDirTitleLabel.setStyleSheet("color: white;")
+        layout.addWidget(chromadbDirTitleLabel)
+
+        chromadbLayout = QHBoxLayout()
+        self.chromadbDirLineEdit = QLineEdit()
+        self.chromadbDirLineEdit.setFont(QFont("Arial", 10))
+        self.chromadbDirLineEdit.setReadOnly(True)
+        self.chromadbDirBtn = QPushButton("Browse...")
+        self.chromadbDirBtn.setFont(QFont("Arial", 10))
+        self.chromadbDirBtn.clicked.connect(self.selectChromaDBDir)
+        chromadbLayout.addWidget(self.chromadbDirLineEdit)
+        chromadbLayout.addWidget(self.chromadbDirBtn)
+        layout.addLayout(chromadbLayout)
 
         # --- Save Button ---
         self.saveBtn = QPushButton("Save Engagement")
@@ -182,16 +197,16 @@ class settings(QWidget):
         self.urlsInput.setEnabled(enabled)
         self.lookoutInput.setEnabled(enabled)
         self.modelComboBox.setEnabled(enabled)
-        self.ollamaCheckbox.setEnabled(enabled)  # Enable/disable the checkbox as well
+        self.ollamaCheckbox.setEnabled(enabled)
         self.cacheDirLineEdit.setEnabled(enabled)
         self.cacheDirBtn.setEnabled(enabled)
+        self.chromadbDirLineEdit.setEnabled(enabled)
+        self.chromadbDirBtn.setEnabled(enabled)
         self.saveBtn.setEnabled(enabled)
 
     def onModelChanged(self, text):
         self.model_name = text
         logger.debug(f"Model selected: {text}")
-        
-        # If using Ollama, bypass GPU/model-creation checks.
         if not self.ollamaCheckbox.isChecked() and not torch.cuda.is_available():
             utilities.show_systems_requirements_message(
                 "Important information",
@@ -210,13 +225,11 @@ class settings(QWidget):
         try:
             folder_path = QFileDialog.getExistingDirectory(self, "Select Engagement Folder")
             if folder_path:
-                # Optionally warn if switching folders might overwrite unsaved changes.
                 self.engagementFolder = folder_path
                 self.engagementName = os.path.basename(folder_path)
                 self.folderPathLabel.setText(self.engagementName)
                 logger.info(f"Engagement folder set to: {folder_path}")
                 self.loadEngagementDetails()
-                # Enable settings now that an engagement folder is selected.
                 self.enableSettings(True)
         except Exception as e:
             logger.error(f"Error selecting folder: {e}")
@@ -227,11 +240,21 @@ class settings(QWidget):
             selected_dir = QFileDialog.getExistingDirectory(self, "Select Cache Directory")
             if selected_dir:
                 self.cacheDir = selected_dir
-                self.cache_dir_updated = True  # Mark that the cache directory has been updated by the user
+                self.cache_dir_updated = True
                 self.cacheDirLineEdit.setText(selected_dir)
                 logger.info(f"Cache directory updated to: {selected_dir}")
         except Exception as e:
             logger.error(f"Error selecting cache directory: {e}")
+
+    def selectChromaDBDir(self):
+        try:
+            selected_dir = QFileDialog.getExistingDirectory(self, "Select ChromaDB Directory")
+            if selected_dir:
+                self.chromadbDir = selected_dir
+                self.chromadbDirLineEdit.setText(selected_dir)
+                logger.info(f"ChromaDB directory updated to: {selected_dir}")
+        except Exception as e:
+            logger.error(f"Error selecting ChromaDB directory: {e}")
 
     def loadEngagementDetails(self):
         if not self.engagementFolder:
@@ -251,18 +274,16 @@ class settings(QWidget):
                 self.lookoutInput.setText("\n".join(details.get("lookout_items", [])))
                 self.model_name = details.get("model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
                 self.modelComboBox.setCurrentText(self.model_name)
-                
-                # If the config has an "ollama" flag, update the checkbox state accordingly.
                 if details.get("ollama", False):
                     self.ollamaCheckbox.setChecked(True)
                 else:
                     self.ollamaCheckbox.setChecked(False)
-
-                # Only update the cache directory if the user has not already changed it
                 if not self.cache_dir_updated:
                     self.cacheDir = details.get("cache_dir", self.defaultCacheDir)
                     self.cacheDirLineEdit.setText(self.cacheDir)
-
+                # Load the ChromaDB directory from details if available.
+                self.chromadbDir = details.get("chromadb_dir", "")
+                self.chromadbDirLineEdit.setText(self.chromadbDir)
                 return details
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error in loadEngagementDetails: {e}")
@@ -280,15 +301,15 @@ class settings(QWidget):
             return
 
         try:
-            # Directly read the current values from the UI.
             ip_addresses = [ip.strip() for ip in self.ipAddressesInput.toPlainText().splitlines() if ip.strip()]
             urls = [url.strip() for url in self.urlsInput.toPlainText().splitlines() if url.strip()]
             lookout_items = [item.strip() for item in self.lookoutInput.toPlainText().splitlines() if item.strip()]
-            # Capture the current model selection
             self.model_name = self.modelComboBox.currentText()
             cache_dir = self.cacheDirLineEdit.text()
-
-            # Build the settings dictionary using the current UI values.
+            chromadb_dir = self.chromadbDirLineEdit.text().strip()
+            if not chromadb_dir:
+                QMessageBox.warning(self, "Input Error", "Please select a ChromaDB directory.")
+                return
             current_engagement_settings = {
                 "engagement_name": self.engagementName,
                 "ip_addresses": ip_addresses,
@@ -296,20 +317,16 @@ class settings(QWidget):
                 "lookout_items": lookout_items,
                 "model": self.model_name,
                 "cache_dir": cache_dir,
-                "ollama": self.ollamaCheckbox.isChecked()  # Save the state of the Ollama checkbox
+                "chromadb_dir": chromadb_dir,
+                "ollama": self.ollamaCheckbox.isChecked(),
             }
-
-            # Save the settings to the file.
             file_path = os.path.join(self.engagementFolder, "engagement_details.json")
             with open(file_path, "w") as file:
                 json.dump(current_engagement_settings, file, indent=4)
-
             self.folderPathLabel.setText(f"Engagement details saved in {self.engagementFolder}")
             logger.info(f"Engagement details saved successfully in {self.engagementFolder}.")
             self.setupCompleted.emit(self.engagementFolder)
-            # Reset the flag after saving.
             self.cache_dir_updated = False
-
         except Exception as e:
             self.folderPathLabel.setText("Error saving engagement details.")
             logger.error(f"Error saving engagement details: {e}")

@@ -13,7 +13,7 @@ from .log_config import setup_logging
 from .MainWindow import Nebula
 from .setup_nebula import settings
 from .update_utils import return_path
-
+import qdarkstyle
 logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/InitialLogic.log")
 warnings.filterwarnings("ignore")
 
@@ -207,5 +207,6 @@ class MainApplication(QApplication):
 
 if __name__ == "__main__":
     app = MainApplication(sys.argv)
+    app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api='pyqt6'))
     app.start()
     sys.exit(app.exec())
