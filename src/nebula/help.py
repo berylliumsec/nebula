@@ -123,7 +123,7 @@ class HelpWindow(QMainWindow):
     <li><strong>Model Status:</strong> Indicates the operational status of the models. The busy icon will turn red while any of the models are busy.<br><br><img src="{busy_image}" alt="Model Status"></li>
     
     <li><strong>Taking Screenshots:</strong> Click the screenshot icon to capture the current screen.<br><br><img src="{take_screenshot_image}" alt="Taking Screenshots"></li>
-    <li><strong>Command Search:</strong> Use the command search area to look for specific commands based on service names or protocols.<br><br><img src="{search_area_image}" alt="Command Search"></li>
+    <li><strong>Command Search:</strong> Use the command search area to look to retrieve AI augmented results from data that you have stored in the vector store<br><br><img src="{search_area_image}" alt="Command Search"></li>
     <li><strong>Manual Note-Taking:</strong> Click the note-taking icon to jot down your own notes. Notes are auto-saved.<br><br><img src="{take_notes_image}" alt="Manual Note-Taking"></li>
   <li><strong>Opening a New Terminal:</strong> Click the terminal icon to start a new terminal session.<br><img src="{terminal_image}" alt="Opening a New Terminal"></li>
     <li><strong>Eco Mode:</strong> Reduce data usage and credit consumption by activating Eco Mode when analyzing XML files. This feature is currently limited to Nessus, Nikto, NMAP and ZAP XML files.<br><br><img src="{eco_mode_image}" alt="Eco Mode"></li>
