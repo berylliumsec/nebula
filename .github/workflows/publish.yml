@@ -122,7 +122,15 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Added Ollama so users can now run models without GPU(s)!
+              - Added memory for regular conversations, notes, suggestions up to 10,000 tokens
+              - Added RAG based search
+              - Added option to index any document from pdfs, urls, text files and directories into a vector store
+              - Search is now only compatible with ollama
+              - Switched the fonts to a more modern font
+              - Fixed a bug where clearing the screen creates a file
+              - Agents only work in non-ollama mode
+              - Non-ollama mode may be deprecated in the future
+              - Added searchsploit as a tool so that the AI models can search for vulnerable software
               
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true

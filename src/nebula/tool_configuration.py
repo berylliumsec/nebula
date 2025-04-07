@@ -28,7 +28,7 @@ class ToolsWindow(QMainWindow):
             """
             QMainWindow {
                 background-color: #1E1E1E; 
-                font-family: Courier
+                font-family: Source Code Pro
             }
             QPushButton:hover {
         border: 2px solid#333333; /* Highlight border on hover with VSCode blue */
@@ -42,7 +42,7 @@ class ToolsWindow(QMainWindow):
                 padding: 6px 12px; /* Adjust padding */
                 margin: 4px;
                 text-align: left; /* Align text to left like VSCode buttons */
-                font-family: Courier
+                font-family: Source Code Pro
             }
             QPushButton:checked {
                 background-color:#007ACC; /* VSCode selection color */
@@ -61,7 +61,7 @@ class ToolsWindow(QMainWindow):
                 border-radius: 4px; /* Consistent border radius */
                 color: #D4D4D4; /* Light grey text */
                 background-color: #333333; /* Matching the button background */
-                font-family: Courier
+                font-family: Source Code Pro
             }
             QScrollArea {
                 border: none; /* Remove border from scroll areas if present */
@@ -85,7 +85,7 @@ class ToolsWindow(QMainWindow):
         add_tool_layout = QHBoxLayout()
         self.tool_name_input = QLineEdit()
         self.tool_name_input.setPlaceholderText("Enter new tool name...")
-        font = QFont("Courier", 12)  # Specify the font name and font size
+        font = QFont("Source Code Pro", 12)  # Specify the font name and font size
         self.tool_name_input.setFont(font)
         self.tool_name_input.setFixedHeight(40)  # Width = 200, Height = 40
         self.search_field.setFont(font)

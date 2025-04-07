@@ -1,6 +1,7 @@
 import sys
 import warnings
 
+import qdarkstyle
 from PyQt6.QtCore import (QObject, QRunnable, Qt, QThread, QThreadPool, QTimer,
                           pyqtSignal)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
@@ -23,7 +24,7 @@ class ErrorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Error")
         self.setGeometry(100, 100, 400, 100)
-        self.setFont(QFont("Courier", 10))
+        self.setFont(QFont("Source Code Pro", 10))
 
         # Set dark theme styles
         self.setStyleSheet(
@@ -207,5 +208,6 @@ class MainApplication(QApplication):
 
 if __name__ == "__main__":
     app = MainApplication(sys.argv)
+    app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyqt6"))
     app.start()
     sys.exit(app.exec())

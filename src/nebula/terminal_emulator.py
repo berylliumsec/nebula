@@ -1,3 +1,4 @@
+import logging
 import os
 import pty
 import re
@@ -6,12 +7,12 @@ import shutil
 import signal
 import time
 import warnings
-import ollama
+
 import torch
 from langchain.agents import AgentType, initialize_agent
-from langchain.memory import ConversationBufferMemory
 from langchain_community.llms import HuggingFacePipeline
 from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
+from langchain_ollama import ChatOllama
 from PyQt6 import QtCore
 from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
                           QStringListModel, Qt, QThread, QThreadPool, QTimer,
@@ -26,23 +27,20 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
 
 from . import constants, utilities
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
+from .conversation_memory import ConversationMemory
 from .log_config import setup_logging
+from .tools.searchsploit import searchsploit
 from .update_utils import return_path
 
-warnings.filterwarnings("ignore")
-logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/test_agents.log")
-
-MEMORY = ConversationBufferMemory(
-    memory_key="chat_history",  # key used in the prompt to include past messages
-    return_messages=True,  # whether to return messages as a list
-)
 BASH_TOOL = ShellTool(return_direct=True)
 SEARCH_TOOL = DuckDuckGoSearchRun(return_direct=True)
 
 
 warnings.filterwarnings("ignore")
 
-logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/terminal_emulator.log")
+logger = setup_logging(
+    log_file=constants.SYSTEM_LOGS_DIR + "/terminal_emulator.log", level=logging.INFO
+)
 
 
 class ModelWorkerSignals(QObject):
@@ -116,7 +114,17 @@ class AgentTaskRunner(QRunnable):
     Worker thread to run agent queries.
     """
 
-    def __init__(self, agent, query, endpoint, use_ollama=False, ollama_model='mistral'):
+    def __init__(
+        self,
+        agent: str = "",
+        query: str = "",
+        endpoint: str = "",
+        use_ollama: bool = False,
+        ollama_model: str = "mistral",
+        notes_memory: str = "",
+        suggestions_memory: str = "",
+        conversation_memory: str = "",
+    ):
         super().__init__()
         self.agent = agent
         self.query = query
@@ -124,81 +132,224 @@ class AgentTaskRunner(QRunnable):
         self.use_ollama = use_ollama
         self.ollama_model = ollama_model
         self.signals = AgentTaskRunnerSignals()
+        self.notes_memory = notes_memory
+        self.suggestions_memory = suggestions_memory
+        self.conversation_memory = conversation_memory
+        self.tools = [BASH_TOOL, SEARCH_TOOL, searchsploit]
+        logger.info(
+            f"Initialized AgentTaskRunner with endpoint: {self.endpoint}, use_ollama: {self.use_ollama}"
+        )
 
     def run(self):
+        logger.info("AgentTaskRunner started execution.")
+        logger.debug(f"Initial query: {self.query}")
         try:
-            # If using Ollama, delegate prompt preparation and generation to query_ollama.
             if self.use_ollama:
-                response = self.query_ollama(self.query, self.endpoint, model=self.ollama_model)
+                logger.info("Using Ollama for query generation.")
+                response = self.query_ollama(
+                    self.query, self.endpoint, model=self.ollama_model
+                )
             else:
-                # Prepend instructions based on the endpoint for agent-based queries.
+                # Build the prompt based on the endpoint
                 if "notes" in self.endpoint:
+                    logger.info("Processing 'notes' endpoint.")
                     instructions = (
                         "As a penetration testing assistant, please take detailed notes in a report style. "
                         "Either return your answer with a single JSON key called 'Final Answer' whose value is your notes, "
                         "or return a JSON with 'Action:' (which indicates which tool should be called) and "
-                        "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your response: "
+                        "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your response. You must always return valid JSON fenced by a markdown code block.: "
                     )
-                    prompt = instructions + self.query
+                    self.query = instructions + ":" + self.query
+                    if self.notes_memory is not None:
+                        conversation_context = "\n".join(
+                            f"{msg['role']}: {msg['content']}"
+                            for msg in self.notes_memory.history
+                        )
+                        logger.debug(f"Notes memory context: {conversation_context}")
+                    else:
+                        conversation_context = ""
+                        logger.warning(
+                            "No notes_memory provided; conversation context will be empty."
+                        )
+                    prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
+                    logger.debug(f"Generated prompt for 'notes': {prompt}")
                 elif "suggestion" in self.endpoint:
+                    logger.info("Processing 'suggestion' endpoint.")
                     instructions = (
                         "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities "
                         "or determine if vulnerabilities found are exploitable based on the following tool output. "
                         "Either return your answer with a single JSON key called 'Final Answer' whose value is your suggestions, "
                         "or return a JSON with 'Action:' (which indicates which tool should be called) and "
-                        "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                        "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your json response. You must always return valid JSON fenced by a markdown code block.: "
                     )
-                    prompt = instructions + self.query
+                    self.query = instructions + ":" + self.query
+                    if self.suggestions_memory is not None:
+                        conversation_context = "\n".join(
+                            f"{msg['role']}: {msg['content']}"
+                            for msg in self.suggestions_memory.history
+                        )
+                        logger.debug(
+                            f"Suggestions memory context: {conversation_context}"
+                        )
+                    else:
+                        conversation_context = ""
+                        logger.warning(
+                            "No suggestions_memory provided; conversation context will be empty."
+                        )
+                    prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
+                    logger.debug(f"Generated prompt for 'suggestion': {prompt}")
                 else:
+                    logger.info("Processing default endpoint.")
                     instructions = (
                         "Either return your answer with a single JSON key called 'Final Answer' whose value is your response, "
                         "or return a JSON with 'Action:' (which indicates which tool should be called) and "
-                        "'Action Input:' (which provides the input or parameters for that tool).The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
+                        "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your json response. You must always return valid JSON fenced by a markdown code block.: "
                     )
-                    prompt = instructions + self.query
+                    self.query = instructions + ":" + self.query
+                    if self.conversation_memory is not None:
+                        conversation_context = "\n".join(
+                            f"{msg['role']}: {msg['content']}"
+                            for msg in self.conversation_memory.history
+                        )
+                        logger.debug(
+                            f"Conversation memory context: {conversation_context}"
+                        )
+                    else:
+                        conversation_context = ""
+                        logger.warning(
+                            "No conversation_memory provided; conversation context will be empty."
+                        )
+                    prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
+                    logger.debug(f"Generated prompt for default endpoint: {prompt}")
 
+                logger.info("Sending prompt to the agent.")
                 response = self.agent.run(prompt)
+                logger.info("Received response from agent.")
 
             self.signals.result.emit(self.endpoint, "ai", response)
+            logger.info("AgentTaskRunner completed successfully.")
         except Exception as e:
             logger.error(f"Error during agent query: {e}")
             self.signals.error.emit(str(e))
         finally:
             self.signals.finished.emit()
+            logger.info("AgentTaskRunner finished execution.")
 
-    def query_ollama(self, query: str, endpoint: str, model: str = 'mistral') -> str:
+    def query_ollama(self, query: str, endpoint: str, model: str = "mistral") -> str:
         """
-        Generate a response using Ollama. This method prepends the proper instructions based on the endpoint,
-        calls the ollama.generate function, and returns the trimmed response.
+        Generate a response using Ollama, executing tool calls if needed.
         """
-        # this logic needs to be eventually adjusted 
+        logger.info(
+            f"Starting query_ollama with endpoint: {endpoint} and model: {model}"
+        )
+        # Model selection logic
         if "mistral" in model:
             model = "mistral"
-        if "llama" in model:
+        elif "llama" in model:
             model = "llama3.2"
-        if "deepseek" in model:
+        elif "deepseek" in model:
             model = "deepseek-r1"
+        elif "qwen2.5-coder:32b" in model:
+            model = "qwen2.5-coder:32b"
+        logger.debug(f"Selected model: {model}")
+        llm = ChatOllama(model=model)
+        # Prompt generation logic
         if "notes" in endpoint:
-            instructions = (
-                "As a penetration testing assistant, please take detailed notes in a report style. "
-            )
-            prompt = instructions + query
+            logger.info("Building prompt for 'notes' endpoint in query_ollama.")
+            instructions = "As a penetration testing assistant, please take detailed notes in a report style. "
+            self.query = instructions + ":" + query
+            if self.notes_memory is not None:
+                conversation_context = "\n".join(
+                    f"{msg['role']}: {msg['content']}"
+                    for msg in self.notes_memory.history
+                )
+                logger.debug(f"Notes memory context: {conversation_context}")
+            else:
+                conversation_context = ""
+                logger.warning(
+                    "No notes_memory provided; conversation context will be empty."
+                )
+            prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
         elif "suggestion" in endpoint:
+            logger.info("Building prompt for 'suggestion' endpoint in query_ollama.")
             instructions = (
-                "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities "
-                "or determine if vulnerabilities found are exploitable based on the following tool output. "
+                "As a penetration testing assistant, suggest actionable steps with commands to find "
+                "vulnerabilities or determine if vulnerabilities found are exploitable based on the following tool output. "
             )
-            prompt = instructions + query
+            self.query = instructions + ":" + query
+            if self.suggestions_memory is not None:
+                conversation_context = "\n".join(
+                    f"{msg['role']}: {msg['content']}"
+                    for msg in self.suggestions_memory.history
+                )
+                logger.debug(f"Suggestions memory context: {conversation_context}")
+            else:
+                conversation_context = ""
+                logger.warning(
+                    "No suggestions_memory provided; conversation context will be empty."
+                )
+            prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
         else:
-            instructions = (
-                "You are a penetration testing assistant.  "
+
+            llm = ChatOllama(model=model).bind_tools(self.tools)
+            logger.info("Building prompt for default endpoint in query_ollama.")
+            instructions = "You are a penetration testing assistant. "
+            self.query = instructions + ":" + query
+            if self.conversation_memory is not None:
+                conversation_context = "\n".join(
+                    f"{msg['role']}: {msg['content']}"
+                    for msg in self.conversation_memory.history
+                )
+                logger.debug(f"Conversation memory context: {conversation_context}")
+            else:
+                conversation_context = ""
+                logger.warning(
+                    "No conversation_memory provided; conversation context will be empty."
+                )
+            prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
+        logger.debug(f"Generated prompt for Ollama: {prompt}")
+
+        response = llm.invoke(prompt)
+        logger.info(f"Ollama initial response: {response}")
+        max_iterations = 5
+        iteration = 0
+
+        while (
+            response.content.strip() == ""
+            and response.tool_calls
+            and iteration < max_iterations
+        ):
+            logger.info(f"Iteration {iteration} in tool call resolution loop.")
+            for tool_call in response.tool_calls:
+                tool_result = None
+                for tool in self.tools:
+                    if tool.name == tool_call.get("name", ""):
+                        tool_result = tool.invoke(tool_call.get("args", {}))
+                        logger.debug(
+                            f"Invoked tool {tool.name} with result: {tool_result}"
+                        )
+                        break
+                if tool_result is None:
+                    tool_result = f"Tool {tool_call.get('name')} not found."
+                    logger.warning(tool_result)
+                prompt += f"\n[Tool {tool_call.get('name')} output]: {tool_result}"
+            response = llm.invoke(prompt)
+            logger.info(f"Response after iteration {iteration}: {response}")
+            iteration += 1
+
+        # Update conversation memory if available
+        if self.conversation_memory is not None:
+            self.conversation_memory.add_message("user", self.query)
+            self.conversation_memory.add_message("assistant", response.content)
+            logger.info("Updated conversation memory with Ollama query and response.")
+            logger.debug(
+                "Current Memory: "
+                + ", ".join(str(msg) for msg in self.conversation_memory.history)
             )
-            prompt = instructions + query
+        else:
+            logger.warning("No conversation_memory provided; skipping memory update.")
 
-        response = ollama.generate(model=model, prompt=prompt)
-        logger.info("response received")
-        return response['response'].strip()
-
+        return response.content
 
 
 class TerminalEmulatorWindow(QMainWindow):
@@ -547,20 +698,44 @@ class TerminalEmulator(QThread):
             logger.error(f"Error setting up pseudo-terminal: {e}")
 
     def check_for_prompt(self, data):
+        logger.info("check_for_prompt: Starting to process incoming data.")
         self.CONFIG = self.manager.load_config()
+        logger.debug("Configuration loaded: %s", self.CONFIG)
+
         try:
+            # Handle the "pwd" command early
             if self.current_command == "pwd":
+                logger.info("Received 'pwd' command. Extracting current directory.")
                 pwd_output = self.extract_current_directory(data)
                 if pwd_output:
+                    logger.debug("Extracted directory: %s", pwd_output)
                     self.current_directory_changed.emit(pwd_output)
+                    logger.info(
+                        "Emitted current directory change signal with: %s", pwd_output
+                    )
                     self.current_command = ""
+                    logger.debug("Reset current command after processing 'pwd'.")
+
+            # Clean and decode data
             non_printable_pattern = b"[^\x20-\x7E\t\n]"
+            logger.debug("Cleaning raw data using non-printable pattern.")
             cleaned_data = re.sub(non_printable_pattern, b"", data)
+            logger.debug("Cleaned data length: %d", len(cleaned_data))
             decoded_data = cleaned_data.decode("utf-8")
-            # logger.debug(f"Raw decoded data: {decoded_data}")
+            logger.debug(
+                "Decoded data length: %d, preview: %s",
+                len(decoded_data),
+                decoded_data[:100],
+            )
+
             formatted_decoded_data = utilities.process_output(decoded_data)
-            # logger.debug(f"Formatted data: {formatted_decoded_data}")
+            logger.debug(
+                "Processed formatted data, preview: %s", formatted_decoded_data[:100]
+            )
+
+            # Check for the custom prompt pattern
             if re.search(constants.CUSTOM_PROMPT_PATTERN, decoded_data):
+                logger.info("Custom prompt detected in decoded data.")
 
                 if self.incognito_mode:
                     logger.debug(
@@ -569,49 +744,98 @@ class TerminalEmulator(QThread):
                     self.current_command = utilities.run_hooks(
                         self.current_command, self.CONFIG["PRIVACY_FILE"]
                     )
+                    logger.debug(
+                        "Command after hooks in incognito mode: %s",
+                        self.current_command,
+                    )
 
-                logger.debug(f"Autonomous state: {self.autonomous_mode}")
-                if not self.autonomous_mode and utilities.is_included_command(
-                    self.current_command, self.CONFIG
+                logger.debug("Autonomous mode state: %s", self.autonomous_mode)
+                # Non-autonomous mode: log command if it's included and doesn't contain "reset"
+                if (
+                    not self.autonomous_mode
+                    and utilities.is_included_command(self.current_command, self.CONFIG)
+                    and "reset" not in self.current_command
                 ):
+
+                    logger.info(
+                        "Non-autonomous mode with included command. Logging command output."
+                    )
                     utilities.log_command_output(
                         self.current_command,
                         self.current_command_output,
                         self.CONFIG,
                     )
-                    self.busy.emit(False)
+                    self.current_command = ""
                     self.current_command_output = ""
+                    logger.debug(
+                        "Logged command: %s, output length: %d",
+                        self.current_command,
+                        len(self.current_command_output),
+                    )
+                    self.busy.emit(False)
+                    logger.debug("Busy signal emitted: False")
+                    self.current_command_output = ""
+                    logger.debug("Reset current command output.")
+
+                # Autonomous mode with autonomous jobs > 0
                 elif (
                     self.autonomous_mode
                     and "reset" not in self.current_command
                     and self.number_of_autonomous_commands > 0
                 ):
-                    logger.debug(
-                        f"autonomous mode has been activated and the number of autonomous jobs is {self.number_of_autonomous_commands}"
+
+                    logger.info(
+                        "Autonomous mode active with %d autonomous job(s).",
+                        self.number_of_autonomous_commands,
                     )
                     self.current_command_concatenated_in_autonomous_mode += (
                         f" {self.current_command}"
                     )
+                    logger.debug(
+                        "Concatenated command updated to: %s",
+                        self.current_command_concatenated_in_autonomous_mode,
+                    )
                     self.current_command_output += formatted_decoded_data
+                    logger.debug(
+                        "Appended formatted decoded data to current command output; new length: %d",
+                        len(self.current_command_output),
+                    )
                     self.autonomous_terminal_execution_iteration_is_done.emit()
+                    logger.debug(
+                        "Emitted autonomous terminal execution iteration done signal."
+                    )
                     self.busy.emit(True)
+                    logger.debug("Busy signal emitted: True")
+
+                # Autonomous mode with autonomous jobs == 0 and included command
                 elif (
                     self.autonomous_mode
                     and "reset" not in self.current_command
                     and self.number_of_autonomous_commands == 0
                     and utilities.is_included_command(self.current_command, self.CONFIG)
                 ):
-                    logger.debug(
-                        f"autonomous mode has been activated and the number of autonomous jobs is {self.number_of_autonomous_commands}"
+
+                    logger.info(
+                        "Autonomous mode active with 0 autonomous jobs and command is included."
                     )
                     self.current_command_concatenated_in_autonomous_mode += (
                         f" {self.current_command}"
                     )
+                    logger.debug(
+                        "Concatenated command for autonomous mode updated: %s",
+                        self.current_command_concatenated_in_autonomous_mode,
+                    )
 
                     if self.web_mode:
-
+                        logger.debug(
+                            "Web mode is active. Extracting web data from current command output."
+                        )
                         self.current_command_output = utilities.extract_data_for_web(
                             self.current_command_output
+                        )
+                        logger.debug(
+                            "Extracted web data from command output; new length: %d",
+                            len(self.current_command_output),
                         )
 
                     utilities.log_command_output(
@@ -619,24 +843,50 @@ class TerminalEmulator(QThread):
                         self.current_command_output,
                         self.CONFIG,
                     )
-                    self.autonomous_terminal_execution_iteration_is_done.emit()
-                    self.busy.emit(False)
-
-                else:
+                    self.current_command = ""
                     self.current_command_output = ""
+                    logger.info("Logged autonomous command output.")
+                    self.autonomous_terminal_execution_iteration_is_done.emit()
+                    logger.debug(
+                        "Emitted autonomous terminal execution iteration done signal."
+                    )
+                    self.busy.emit(False)
+                    logger.debug("Busy signal emitted: False")
 
+                # Default branch: clear current command output and emit signals as needed
+                else:
+                    logger.info(
+                        "No valid prompt handling branch matched; resetting command output."
+                    )
+                    self.current_command = ""
+                    self.current_command_output = ""
                     if self.autonomous_mode:
                         self.autonomous_terminal_execution_iteration_is_done.emit()
+                        logger.debug(
+                            "Emitted autonomous terminal execution iteration done signal due to autonomous mode."
+                        )
                     self.busy.emit(False)
+                    logger.debug("Busy signal emitted: False")
 
+            # No prompt detected: Append the formatted data to the current output
             else:
+                logger.debug(
+                    "No custom prompt detected. Appending formatted data to current command output."
+                )
                 self.current_command_output += formatted_decoded_data
+                logger.debug(
+                    "Updated current command output length: %d",
+                    len(self.current_command_output),
+                )
+
         except UnicodeDecodeError as e:
-            logger.error(f"Error decoding data: {e}")
+            logger.error("Error decoding data: %s", e)
         except re.error as e:
-            logger.error(f"Error in regex search: {e}")
+            logger.error("Error in regex search: %s", e)
         except Exception as e:
-            logger.error(f"Unexpected error in check_for_prompt: {e}")
+            logger.error("Unexpected error in check_for_prompt: %s", e)
+
+        logger.info("check_for_prompt: Finished processing data.")
 
     def extract_current_directory(self, data):
         pattern = r"^(.+)\nnebula\$"
@@ -944,6 +1194,20 @@ class CommandInputArea(QLineEdit):
         self.tools_agent = None
         self.general_agent = None
 
+        self.conversation_memory = ConversationMemory(
+            file_path=os.path.join(
+                self.CONFIG["MEMORY_DIRECTORY"], "conversation_memory.json"
+            )
+        )
+        self.suggestions_memory = ConversationMemory(
+            file_path=os.path.join(
+                self.CONFIG["MEMORY_DIRECTORY"], "suggestions_memory.json"
+            )
+        )
+        self.notes_memory = ConversationMemory(
+            file_path=os.path.join(self.CONFIG["MEMORY_DIRECTORY"], "notes_memory.json")
+        )
+
     def set_agent_mode(self, mode):
         if mode:
             self.tools_agent_mode = True
@@ -952,7 +1216,7 @@ class CommandInputArea(QLineEdit):
 
     def create_agent(self, agent_type):
         if agent_type == "tools_agent":
-            tools = [BASH_TOOL, SEARCH_TOOL]
+            tools = [BASH_TOOL, SEARCH_TOOL, searchsploit]
 
         else:
             tools = [SEARCH_TOOL]
@@ -965,7 +1229,6 @@ class CommandInputArea(QLineEdit):
                 agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
                 verbose=True,
                 handle_parsing_errors=True,
-                memory=MEMORY,
             )
             return created_agent
         except Exception as e:
@@ -1348,88 +1611,111 @@ class CommandInputArea(QLineEdit):
 
     def execute_api_call(self, command=None, endpoint=None):
         logger.debug(
+            f"Entering execute_api_call with command: {command}, endpoint: {endpoint}"
+        )
+        logger.debug(
             f"Model Creation Progress is {self.free_model_creation_in_progress}"
         )
+
         if self.free_model_creation_in_progress:
+            logger.info(
+                "Free model creation in progress; notifying user and exiting API call."
+            )
             utilities.show_message(
                 "Model Creation In Progress",
                 "The Model is still being downloaded or loaded, please wait. You can check the progress in the terminal where you launched Nebula",
             )
             return
+
         logger.debug(f"Starting execute_api_call to endpoint: {endpoint} in free mode")
+
         if not self.CONFIG["OLLAMA"]:
             if not self.model:
-                logger.error("No loaded model")
+                logger.error("No loaded model found; exiting execute_api_call.")
                 utilities.show_message(
                     "No model loaded",
                     "An error may have occurred while loading the selected model during Nebula's startup, also, the models can only be used from the central display area",
                 )
                 return
+
         if self.model_busy:
+            logger.warning(
+                "Model is busy; user notified and API call aborted until current inference completes."
+            )
             utilities.show_message(
                 "Model is busy",
-                "The model is busy, please wait untill the current inference is completed",
+                "The model is busy, please wait until the current inference is completed",
             )
             return
 
+        logger.debug("Emitting 'in_progress' status and setting wait cursor.")
         self.threads_status.emit("in_progress")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
         if not self.CONFIG["OLLAMA"]:
             if not self.tools_agent_mode:
-
+                logger.debug("Not in tools agent mode; creating general_agent.")
                 self.general_agent = self.create_agent("general_agent")
                 # Create and start the task with the chosen agent
-                model_task = AgentTaskRunner(agent=self.general_agent, query=command, endpoint=endpoint)
+                model_task = AgentTaskRunner(
+                    agent=self.general_agent,
+                    query=command,
+                    endpoint=endpoint,
+                    conversation_memory=self.conversation_memory,
+                    notes_memory=self.notes_memory,
+                    suggestions_memory=self.suggestions_memory,
+                )
                 self.model_busy = True
+                logger.debug(
+                    "General agent created; setting model_busy flag and emitting busy signal."
+                )
                 self.model_busy_busy_signal.emit(True)
                 model_task.signals.result.connect(self.onTaskResult)
                 model_task.signals.finished.connect(self.onTaskFinished)
+                logger.debug("Starting model_task for general agent.")
                 self.threadpool.start(model_task)
             else:
+                logger.debug("In tools agent mode.")
                 if not self.tools_agent:
+                    logger.debug("No tools_agent found; creating tools_agent.")
                     self.tools_agent = self.create_agent("tools_agent")
-                model_task = AgentTaskRunner(self.tools_agent, command, endpoint)
+                model_task = AgentTaskRunner(
+                    agent=self.tools_agent,
+                    query=command,
+                    endpoint=endpoint,
+                    conversation_memory=self.conversation_memory,
+                    notes_memory=self.notes_memory,
+                    suggestions_memory=self.suggestions_memory,
+                )
                 self.model_busy = True
+                logger.debug(
+                    "Tools agent created; setting model_busy flag and emitting busy signal."
+                )
                 self.model_busy_busy_signal.emit(True)
                 model_task.signals.result.connect(self.onTaskResult)
                 model_task.signals.finished.connect(self.onTaskFinished)  # If needed
+                logger.debug("Starting model_task for tools agent.")
                 self.threadpool.start(model_task)
         else:
-            model_task = AgentTaskRunner(agent=self.general_agent, query=command, endpoint=endpoint, use_ollama=True)
+            logger.debug("OLLAMA configuration detected; using OLLAMA mode.")
+            model_task = AgentTaskRunner(
+                query=command,
+                endpoint=endpoint,
+                conversation_memory=self.conversation_memory,
+                notes_memory=self.notes_memory,
+                suggestions_memory=self.suggestions_memory,
+                use_ollama=True,
+            )
             self.model_busy = True
+            logger.debug(
+                "Setting model_busy flag for OLLAMA mode and emitting busy signal."
+            )
             self.model_busy_busy_signal.emit(True)
             model_task.signals.result.connect(self.onTaskResult)
             model_task.signals.finished.connect(self.onTaskFinished)
+            logger.debug("Starting model_task for OLLAMA mode.")
             self.threadpool.start(model_task)
-    def query_ollama(self, query:str, endpoint: str, model: str = 'mistral') -> str:
 
-            if "notes" in endpoint:
-                query = (
-                    "As a penetration testing assistant, please take detailed notes in a report style. "
-                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your notes, "
-                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
-                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your response: "
-                ) + query
-            elif "suggestion" in endpoint:
-                self.query = (
-                    "As a penetration testing assistant, suggest actionable steps with commands to find vulnerabilities "
-                    "or determine if vulnerabilities found are exploitable based on the following tool output. "
-                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your suggestions, "
-                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
-                    "'Action Input:' (which provides the input or parameters for that tool). The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
-                ) + query
-            else:
-                query = (
-                    "Either return your answer with a single JSON key called 'Final Answer' whose value is your response, "
-                    "or return a JSON with 'Action:' (which indicates which tool should be called) and "
-                    "'Action Input:' (which provides the input or parameters for that tool).The final answer must always be in the 'Final Answer' key and it must be the only key in your json response: "
-                ) + query
-
-
-            response = ollama.generate(model=model, prompt=query)
-            logger.info("response received")
-
-            return response['response'].strip()
     def update_suggestion_notes_function(self, command, data):
         self.api_tasks -= 1
         if self.api_tasks <= 0:

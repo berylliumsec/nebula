@@ -509,7 +509,7 @@ class ConfigManager(QObject):
         self.HISTORY_FILE = os.path.join(self.engagement_folder, "history.txt")
         self.SCREENSHOTS_DIR = os.path.join(self.engagement_folder, "screenshots")
         self.AUTONOMOUS_DIRECTORY = os.path.join(self.engagement_folder, "autonomous")
-
+        self.MEMORY_DIRECTORY = os.path.join(self.engagement_folder, "memory")
         self.CERTIFICATES_DIRECTORY = os.path.join(
             self.engagement_folder, "certificates"
         )
@@ -523,6 +523,7 @@ class ConfigManager(QObject):
                 self.PRIVACY_DIR,
                 self.AUTONOMOUS_DIRECTORY,
                 self.CERTIFICATES_DIRECTORY,
+                self.MEMORY_DIRECTORY,
             ]:
                 self.create_directory(directory)
 
@@ -538,6 +539,7 @@ class ConfigManager(QObject):
                 "SELECTED_TOOLS": self.safe_get_selected_tools(self.CONFIG),
                 "AUTONOMOUS_DIRECTORY": self.AUTONOMOUS_DIRECTORY,
                 "CERTIFICATES_DIRECTORY": self.CERTIFICATES_DIRECTORY,
+                "MEMORY_DIRECTORY": self.MEMORY_DIRECTORY,
             }
             if "AVAILABLE_TOOLS" not in self.CONFIG:
                 updated_config["AVAILABLE_TOOLS"] = self.AVAILABLE_TOOLS
@@ -553,9 +555,8 @@ class ConfigManager(QObject):
                 updated_config["MODEL"] = details.get(
                     "model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
                 )
-                updated_config["OLLAMA"] = details.get(
-                    "ollama", False
-                )
+                updated_config["CHROMA_DB_PATH"] = details.get("chromadb_dir", "")
+                updated_config["OLLAMA"] = details.get("ollama", False)
                 updated_config["CACHE_DIR"] = details.get(
                     "cache_dir",
                     os.getenv(

@@ -22,7 +22,9 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
 from . import constants, tool_configuration, update_utils, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
+from .chroma_manager import ChromaManager
 from .configuration_manager import ConfigManager
+from .document_loader import DocumentLoaderDialog
 from .engagement import EngagementWindow
 from .help import HelpWindow
 from .image_command_window import ImageCommandWindow
@@ -483,12 +485,14 @@ class Nebula(QMainWindow):
             0, 0, 0, 0
         )  # Reduce the top margin to bring the label closer to the toolbar
 
-        self.search_area = CustomSearchLineEdit()
+        self.search_area = CustomSearchLineEdit(manager=self.manager)
         self.search_area.setFixedHeight(40)
         self.search_area.setPlaceholderText("Search")
         self.search_area.setObjectName("searchArea")
-        self.search_area.setToolTip("Search for commands")
+        self.search_area.setToolTip("Search using RAG")
         self.search_area.resultSelected.connect(self.on_search_result_selected)
+        if not self.CONFIG["OLLAMA"]:
+            self.search_area.setEnabled(False)
         self.suggestions_layout.addWidget(self.search_area, 9)
 
         self.suggestions_button = QPushButton(self)
@@ -515,8 +519,7 @@ class Nebula(QMainWindow):
         self.suggestions_layout.addWidget(self.suggestions_button, 1)
 
         self.command_input_area = CommandInputArea(manager=self.manager)
-        
-        
+
         self.tools_agent_mode.connect(self.command_input_area.set_agent_mode)
         self.command_input_area.model_created.connect(
             self.enable_disabled_due_to_model_creation
@@ -595,7 +598,7 @@ class Nebula(QMainWindow):
         disclaimer_text = "AI can make mistakes. Consider cross-checking suggestions."
         disclaimer_label = QLabel(disclaimer_text)
         disclaimer_label.setStyleSheet(
-            "color: white; font-size: 10px; font-family: Courier;border: none; background-color: None"
+            "color: white; font-size: 10px; font-family: Source Code Pro;border: none; background-color: None"
         )
 
         # Add the disclaimer label to the layout with horizontal centering
@@ -935,6 +938,11 @@ class Nebula(QMainWindow):
             lambda: self.on_model_selected("deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
         )
         self.model_menu.addAction(
+            "qwen2.5-coder:32b",
+            lambda: self.on_model_selected("qwen2.5-coder:32b"),
+        )
+
+        self.model_menu.addAction(
             "meta-llama/Llama-3.1-8B-Instruct",
             lambda: self.on_model_selected("mistralai/Mistral-7B-Instruct-v0.2"),
         )
@@ -962,6 +970,7 @@ class Nebula(QMainWindow):
             "Click to toggle agents on or off",
             self,
         )
+        self.add_document_icon = QIcon(return_path("Images/vector.svg"))
         if self.CONFIG["OLLAMA"]:
             self.agentAction.setEnabled(False)
         self.agentAction.setCheckable(True)
@@ -977,7 +986,9 @@ class Nebula(QMainWindow):
         except Exception as e:
             logger.error(f"unable to load engagement details {e}")
         if self.engagement_json:
-            window_title = window_title + " - " + self.engagement_json["engagement_name"]
+            window_title = (
+                window_title + " - " + self.engagement_json["engagement_name"]
+            )
 
         self.setWindowTitle(window_title)
 
@@ -1007,6 +1018,26 @@ class Nebula(QMainWindow):
             self.model_menu.setEnabled(False)
 
         logger.debug("main window loaded")
+        self.vector_db = ChromaManager(
+            collection_name="nebula_collection",
+            persist_directory=self.CONFIG["CHROMA_DB_PATH"],
+        )
+        self.init_toolbar()
+
+    def init_toolbar(self):
+
+        # Create an action with an icon (adjust the icon path as needed).
+        loader_action = QAction(self.add_document_icon, "Load Document", self)
+        loader_action.triggered.connect(self.show_loader_dialog)
+        self.toolbar.addAction(loader_action)
+
+    def show_loader_dialog(self):
+        # Create and show the pop-out dialog.
+        dialog = DocumentLoaderDialog(self.vector_db, self)
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.resize(800, 600)  # Set default size to 800x600 pixels
+        dialog.show()
+
 
     def on_model_selected(self, model):
         # Load the current configuration.

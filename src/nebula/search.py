@@ -1,169 +1,171 @@
-from typing import List
-
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import ChatOllama
 from PyQt6.QtCore import (QObject, QRunnable, QStringListModel, Qt,
                           QThreadPool, pyqtSignal, pyqtSlot)
-from PyQt6.QtWidgets import QCompleter, QLineEdit, QMessageBox
-from whoosh import scoring
-from whoosh.fields import ID, TEXT, Schema
-from whoosh.index import create_in, exists_in, open_dir
-from whoosh.qparser import MultifieldParser, OrGroup
-from whoosh.writing import AsyncWriter
+from PyQt6.QtWidgets import QCompleter, QLineEdit
 
-from . import constants, update_utils
+from . import constants
+from .chroma_manager import ChromaManager
 from .log_config import setup_logging
 
 logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/search.log")
 
+embeddings_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L12-v2")
+
 
 class WorkerSignals(QObject):
-    finished = pyqtSignal()
+    finished = pyqtSignal(object)  # Signal to send the search results back.
 
 
-class IndexingWorker(QRunnable):
-    def __init__(self, text: str, indexdir: str, search_window):
+class SearchWorker(QRunnable):
+    def __init__(self, query: str, llm, max_results: int = 2, rag=None):
         super().__init__()
-        self.text = text
-        self.indexdir = indexdir
-        self.search_window = search_window
+        self.query = query
+        self.llm = llm
+        self.max_results = max_results
+        self.rag = rag
         self.signals = WorkerSignals()
 
     @pyqtSlot()
     def run(self):
-        logger.info("Indexing worker started")
-        self.search_window.add_to_index(self.text, self.indexdir)
-        self.signals.finished.emit()
-        logger.info("Indexing worker finished")
+        logger.info(
+            f"[Worker] Starting search for query: {self.query} with max_results={self.max_results}"
+        )
+        try:
+            if not self.rag:
+                raise ValueError("ChromaManager (rag) is not initialized.")
+            logger.info("[Worker] Querying the ChromaDB index...")
+            docs = self.rag.query(self.query, k=1)
+            formatted_results = [doc.page_content.strip() for doc in docs]
+            logger.info(
+                f"[Worker] Retrieved {len(formatted_results)} documents from the index"
+            )
+            prompt = (
+                f"Answer this question: {self.query} based on the context, "
+                f"if the context does not contain the answer to the question, simply respond with 'Answers not found', "
+                f"context: {formatted_results}."
+            )
+            logger.info(f"[Worker] Invoking LLM with prompt: {prompt}")
+            response = self.llm.invoke(prompt)
+            # If response is an object with a 'content' attribute, use that; otherwise, use the raw response.
+            output = response.content if hasattr(response, "content") else response
+            logger.info("[Worker] LLM response obtained.")
+        except Exception as e:
+            logger.error(f"[Worker] Error during search: {e}")
+            output = None
+        # Emit the result back to the main thread.
+        self.signals.finished.emit(output)
 
 
 class CustomSearchLineEdit(QLineEdit):
     resultSelected = pyqtSignal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, manager=None):
         super().__init__(parent)
+        # Set up completer for the search suggestions.
         self.completer = QCompleter(self)
         self.completer.setModel(QStringListModel())
         self.completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         self.completer.activated.connect(self.onResultSelected)
         self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
         self.setCompleter(self.completer)
-        self.textChanged.connect(self.onTextChanged)
-        self.returnPressed.connect(self.onResultSelected)
-        self.thread_pool = QThreadPool()
+        self.manager = manager
+        self.CONFIG = self.manager.load_config()
+
+        # Initialize ChatOllama LLM.
+        try:
+            logger.info("[Main] Initializing ChatOllama with model")
+            self.llm = ChatOllama(model=self.CONFIG["MODEL"])
+            logger.info("[Main] ChatOllama initialized successfully.")
+        except Exception as e:
+            logger.error(f"[Main] Failed to initialize ChatOllama: {e}")
+            self.llm = None
+
+        self.returnPressed.connect(self.onReturnPressed)
+        self.threadpool = QThreadPool.globalInstance()
+
+        # Initialize ChromaManager for ChromaDB.
+        try:
+            logger.info(
+                f"[Main] Initializing ChromaManager for collection at {self.CONFIG['CHROMA_DB_PATH']}"
+            )
+            self.rag = ChromaManager(
+                collection_name="nebula_collection",
+                persist_directory=self.CONFIG["CHROMA_DB_PATH"],
+            )
+            logger.info("[Main] ChromaManager initialized successfully.")
+        except Exception as e:
+            logger.error(f"[Main] Failed to initialize ChromaManager: {e}")
+            self.rag = None
+
+        # One-time check for number of items in the ChromaDB.
+        if self.rag:
+            try:
+                if hasattr(self.rag, "vector_store") and hasattr(
+                    self.rag.vector_store, "_collection"
+                ):
+                    num_items = self.rag.vector_store._collection.count()
+                    logger.info(f"[Main] ChromaDB contains {num_items} items.")
+                else:
+                    logger.info(
+                        "[Main] Cannot determine item count; 'vector_store' does not expose '_collection'."
+                    )
+            except Exception as e:
+                logger.error(f"[Main] Failed to check ChromaDB item count: {e}")
 
     def contextMenuEvent(self, event):
         menu = self.createStandardContextMenu()
         menu.addSeparator()
         menu.exec(event.globalPos())
 
-    def onTextChanged(self, text):
-        if len(text) > 3:
-            self.perform_search(text)
+    def onReturnPressed(self):
+        query = self.text()
+        logger.info(f"[Main] Return pressed. Query received: '{query}'")
+        if len(query) > 3:
+            if self.llm is None or self.rag is None:
+                logger.error(
+                    "[Main] LLM or ChromaManager is not available. Aborting search."
+                )
+                self.resultSelected.emit(
+                    "Search functionality is currently unavailable."
+                )
+                return
 
-    def perform_search(self, text):
-        logger.info(f"Text changed: {text}")
-        results = self.search_index(
-            text, update_utils.return_path("command_search_index"), max_results=100
+            logger.info(
+                "[Main] Query length sufficient. Disabling input and starting search worker."
+            )
+            self.setStyleSheet("border: 2px solid orange;")
+            self.setEnabled(False)
+            self.clear()
+            worker = SearchWorker(query, self.llm, max_results=2, rag=self.rag)
+            worker.signals.finished.connect(self.onSearchCompleted)
+            self.threadpool.start(worker)
+        else:
+            logger.info(
+                "[Main] Query too short. Emitting resultSelected without search."
+            )
+            self.resultSelected.emit(query)
+            self.clear()
+
+    @pyqtSlot(object)
+    def onSearchCompleted(self, response):
+        logger.info(
+            "[Main] Search worker completed. Re-enabling input and resetting style."
         )
-        logger.info(f"Search results: {results}")
-        self.completer.model().setStringList(results)
-        self.completer.complete()
+        self.setEnabled(True)
+        self.setStyleSheet("")
+        if response:
+            logger.info(f"[Main] Search results received: {response}")
+            self.completer.model().setStringList([response])
+            self.resultSelected.emit(response)
+            self.completer.complete()
+        else:
+            logger.info("[Main] No results returned from search worker.")
+            self.resultSelected.emit("No results returned from search worker.")
+        self.clear()
 
     def onResultSelected(self, _=None):
         text = self.text()
-        parts = text.split(":", 1)
-        if len(parts) > 1:
-            text_after_colon = parts[1].strip()
-            self.resultSelected.emit(text_after_colon)
-        else:
-            self.resultSelected.emit(self.text())
+        logger.info(f"[Main] Result selected: '{text}'")
+        self.resultSelected.emit(text)
         self.clear()
-
-    def add_to_index(self, text: str, indexdir: str):
-        logger.info(f"Adding text to index: {text}")
-        try:
-            if not exists_in(indexdir):
-                schema = Schema(id=ID(stored=True), content=TEXT(stored=True))
-                ix = create_in(indexdir, schema)
-            else:
-                ix = open_dir(indexdir)
-
-            writer = AsyncWriter(ix)
-            writer.add_document(content=text)
-            writer.commit()
-            logger.info(f"Successfully added entry to index: {text}")
-        except Exception as e:
-            logger.error(f"Error occurred while adding entry {text} to index: {e}")
-
-    def search_index(
-        self, query: str, indexdir: str, max_results: int = 100
-    ) -> List[str]:
-        """
-        Search the index for the given query and sort results by relevance.
-
-        Args:
-            query (str): The search query.
-            indexdir (str): The directory where the index is stored.
-            max_results (int): The maximum number of results to return.
-
-        Returns:
-            List[str]: A list of search results.
-        """
-        logger.info(f"Searching index for query: {query}")
-        try:
-            ix = open_dir(indexdir)
-        except Exception as e:
-            logger.error(f"Error occurred while opening index directory: {e}")
-            return []
-
-        formatted_results = []
-
-        with ix.searcher(weighting=scoring.BM25F()) as searcher:
-            query_parser = MultifieldParser(
-                ["content"], schema=ix.schema, group=OrGroup
-            )
-            parsed_query = query_parser.parse(query)
-            logger.info(f"Parsed query: {parsed_query}")
-
-            try:
-                results = searcher.search(parsed_query, limit=max_results)
-                for res in results:
-                    content = res["content"]
-                    lines = content.splitlines()
-                    for line in lines:
-                        if query.lower() in line.lower():
-                            formatted_results.append(line.strip())
-                            if len(formatted_results) >= max_results:
-                                break
-            except Exception as e:
-                logger.error(f"Error occurred while searching for query {query}: {e}")
-
-        # Log the final results for debugging
-        logger.info(f"Formatted search results: {formatted_results}")
-
-        return formatted_results
-
-    def index_file(self, file_path: str):
-        """Index the file for search by reading its content and processing each line."""
-        logger.info(f"Indexing file for search: {file_path}")
-        try:
-            with open(file_path, "r") as file:
-                lines = file.readlines()
-                for line in lines:
-                    worker = IndexingWorker(
-                        line.strip(),
-                        update_utils.return_path("command_search_index"),
-                        self,
-                    )
-                    worker.signals.finished.connect(self.show_indexing_complete_message)
-                    self.thread_pool.start(worker)
-        except Exception as e:
-            logger.error(f"Failed to index file: {e}")
-
-    def show_indexing_complete_message(self):
-        """Show a message indicating that indexing is complete."""
-        logger.info("Indexing complete")
-        QMessageBox.information(
-            self,
-            "Indexing Complete",
-            "The file has been successfully indexed for search.",
-        )

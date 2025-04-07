@@ -1,13 +1,13 @@
 /* stylesheet.css */
 QMainWindow {
     background-color: #1E1E1E; /* Dark background, akin to  */
-    font-family: Courier;
+    font-family: Source Code Pro;
     font-size: 10pt;
 }
 
 QDialog {
     background-color: #1E1E1E;
-    font-family: Courier; 
+    font-family: Source Code Pro; 
     font-size: 10pt;
 }
 
@@ -15,7 +15,7 @@ QFrame {
 
     background-color: #1E1E1E; /* Slightly lighter than main background */
     border-radius: 5px; /* Rounded corners for modern feel */
-    font-family: Courier; 
+    font-family: Source Code Pro; 
     font-size: 10pt;
 }
 
@@ -26,7 +26,7 @@ QFrame {
     border-radius: 4px;
     padding: 6px;
     font-size: 10pt;
-    font-family: Courier; 
+    font-family: Source Code Pro; 
 }
 
 #searchArea {
@@ -35,7 +35,7 @@ QFrame {
     color: white; /* Light text for readability */
     border-radius: 4px;
     font-size: 10pt;
-    font-family: Courier; 
+    font-family: Source Code Pro; 
 }
 #centralDisplayArea {
     border: 1px solid #333333; /* Removing border for a cleaner look */
@@ -44,7 +44,7 @@ QFrame {
     border-radius: 4px;
     padding: 6px;
     font-size: 10pt;
-    font-family: Courier; 
+    font-family: Source Code Pro; 
 }
 #generalButton, #bulbButton {
     border: none;
@@ -54,14 +54,14 @@ QFrame {
     border-radius: 4px;
     text-align: center;
     
-    font-family: Courier; 
+    font-family: Source Code Pro; 
     font-size: 10pt;
 }
 
 #generalButton:hover, #bulbButton:hover {
     background-color: #333333; /* Highlight color on hover */
     color: white;
-    font-family: Courier; 
+    font-family: Source Code Pro; 
     font-size: 10pt;
 }
 QToolBar QToolButton:hover {
@@ -74,7 +74,7 @@ QToolBar QToolButton:hover {
     color: white;
     border-radius: 5px;
     padding: 10px;
-    font-family: Courier; 
+    font-family: Source Code Pro; 
     font-size: 10pt;
 }
 
@@ -103,19 +103,19 @@ QListWidget::item#prevResultsList {
     color: white;
     padding: 5px;
     border-radius: 4px;
-    font-family: Courier; 
+    font-family: Source Code Pro; 
     font-size: 10pt;;
 }
 
 QListWidget::item:selected#prevResultsList, QListWidget::item:hover#prevResultsList {
     background-color: #333333; /* Highlight color for selection/hover */
     color: white;
-    font-family: Courier; 
+    font-family: Source Code Pro; 
     border: none;
 }
 
 #notesTextEdit {
-    font-family: Courier; 
+    font-family: Source Code Pro; 
     font-size: 10pt;
     color: white; /* Font color */
     
@@ -235,12 +235,12 @@ QComboBox {
 QLabel {
     color: white;
     padding: 2px;
-    font: Courier
+    font: Source Code Pro
 }
 
 QLabel#forgotPasswordLabel {
     color: white;
-    font: Courier;
+    font: Source Code Pro;
     border: none;
 }
 
@@ -343,13 +343,13 @@ QScrollArea#configWindow {
 #EditCommandDialog {
     color: white;
     background-color: #2C2C2C;
-    font-family: 'Courier', monospace;
+    font-family: 'Source Code Pro', monospace;
 }
 
 QDialog#loginDialog {
     color: white;
     background-color: #1E1E1E;
-    font-family: 'Courier', monospace;
+    font-family: 'Source Code Pro', monospace;
 }
 
 #EditCommandDialog QLineEdit,
