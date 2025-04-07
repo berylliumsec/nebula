@@ -122,6 +122,7 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
+              - Added memory for regular conversations, notes, suggestions up to 10,000 tokens
               - Added RAG based search
               - Added option to index any document from pdfs, urls, text files and directories into a vector store
               - Search is now only compatible with ollama

@@ -1035,7 +1035,9 @@ class Nebula(QMainWindow):
         # Create and show the pop-out dialog.
         dialog = DocumentLoaderDialog(self.vector_db, self)
         dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.resize(800, 600)  # Set default size to 800x600 pixels
         dialog.show()
+
 
     def on_model_selected(self, model):
         # Load the current configuration.
