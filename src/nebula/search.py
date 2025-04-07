@@ -1,10 +1,17 @@
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import ChatOllama
-from PyQt6.QtCore import (QObject, QRunnable, QStringListModel, Qt,
-                          QThreadPool, pyqtSignal, pyqtSlot)
+from PyQt6.QtCore import (
+    QObject,
+    QRunnable,
+    QStringListModel,
+    Qt,
+    QThreadPool,
+    pyqtSignal,
+    pyqtSlot,
+)
 from PyQt6.QtWidgets import QCompleter, QLineEdit
 
-from . import constants, update_utils
+from . import constants
 from .chroma_manager import ChromaManager
 from .log_config import setup_logging
 
@@ -28,7 +35,9 @@ class SearchWorker(QRunnable):
 
     @pyqtSlot()
     def run(self):
-        logger.info(f"[Worker] Starting search for query: {self.query} with max_results={self.max_results}")
+        logger.info(
+            f"[Worker] Starting search for query: {self.query} with max_results={self.max_results}"
+        )
         try:
             if not self.rag:
                 raise ValueError("ChromaManager (rag) is not initialized.")
@@ -46,8 +55,8 @@ class SearchWorker(QRunnable):
             logger.info(f"[Worker] Invoking LLM with prompt: {prompt}")
             response = self.llm.invoke(prompt)
             # If response is an object with a 'content' attribute, use that; otherwise, use the raw response.
-            output = response.content if hasattr(response, 'content') else response
-            logger.info(f"[Worker] LLM response obtained.")
+            output = response.content if hasattr(response, "content") else response
+            logger.info("[Worker] LLM response obtained.")
         except Exception as e:
             logger.error(f"[Worker] Error during search: {e}")
             output = None
@@ -84,7 +93,9 @@ class CustomSearchLineEdit(QLineEdit):
 
         # Initialize ChromaManager for ChromaDB.
         try:
-            logger.info(f"[Main] Initializing ChromaManager for collection at {self.CONFIG['CHROMA_DB_PATH']}")
+            logger.info(
+                f"[Main] Initializing ChromaManager for collection at {self.CONFIG['CHROMA_DB_PATH']}"
+            )
             self.rag = ChromaManager(
                 collection_name="nebula_collection",
                 persist_directory=self.CONFIG["CHROMA_DB_PATH"],
@@ -97,11 +108,15 @@ class CustomSearchLineEdit(QLineEdit):
         # One-time check for number of items in the ChromaDB.
         if self.rag:
             try:
-                if hasattr(self.rag, "vector_store") and hasattr(self.rag.vector_store, "_collection"):
+                if hasattr(self.rag, "vector_store") and hasattr(
+                    self.rag.vector_store, "_collection"
+                ):
                     num_items = self.rag.vector_store._collection.count()
                     logger.info(f"[Main] ChromaDB contains {num_items} items.")
                 else:
-                    logger.info("[Main] Cannot determine item count; 'vector_store' does not expose '_collection'.")
+                    logger.info(
+                        "[Main] Cannot determine item count; 'vector_store' does not expose '_collection'."
+                    )
             except Exception as e:
                 logger.error(f"[Main] Failed to check ChromaDB item count: {e}")
 
@@ -115,11 +130,17 @@ class CustomSearchLineEdit(QLineEdit):
         logger.info(f"[Main] Return pressed. Query received: '{query}'")
         if len(query) > 3:
             if self.llm is None or self.rag is None:
-                logger.error("[Main] LLM or ChromaManager is not available. Aborting search.")
-                self.resultSelected.emit("Search functionality is currently unavailable.")
+                logger.error(
+                    "[Main] LLM or ChromaManager is not available. Aborting search."
+                )
+                self.resultSelected.emit(
+                    "Search functionality is currently unavailable."
+                )
                 return
 
-            logger.info("[Main] Query length sufficient. Disabling input and starting search worker.")
+            logger.info(
+                "[Main] Query length sufficient. Disabling input and starting search worker."
+            )
             self.setStyleSheet("border: 2px solid orange;")
             self.setEnabled(False)
             self.clear()
@@ -127,13 +148,17 @@ class CustomSearchLineEdit(QLineEdit):
             worker.signals.finished.connect(self.onSearchCompleted)
             self.threadpool.start(worker)
         else:
-            logger.info("[Main] Query too short. Emitting resultSelected without search.")
+            logger.info(
+                "[Main] Query too short. Emitting resultSelected without search."
+            )
             self.resultSelected.emit(query)
             self.clear()
 
     @pyqtSlot(object)
     def onSearchCompleted(self, response):
-        logger.info("[Main] Search worker completed. Re-enabling input and resetting style.")
+        logger.info(
+            "[Main] Search worker completed. Re-enabling input and resetting style."
+        )
         self.setEnabled(True)
         self.setStyleSheet("")
         if response:

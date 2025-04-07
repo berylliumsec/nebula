@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 import json
 import os
+
 from langchain.schema import Document
 from langchain_chroma import Chroma
-from langchain_community.document_loaders import (CSVLoader, DirectoryLoader,
-                                                  JSONLoader, PyPDFLoader,
-                                                  TextLoader,
-                                                  UnstructuredFileLoader,
-                                                  UnstructuredURLLoader)
+from langchain_community.document_loaders import (
+    CSVLoader,
+    DirectoryLoader,
+    JSONLoader,
+    PyPDFLoader,
+    TextLoader,
+    UnstructuredFileLoader,
+    UnstructuredURLLoader,
+)
 from langchain_huggingface import HuggingFaceEmbeddings
 
 # PyQt imports for QRunnable and signals.
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot
 
 
 class ChromaManager:
@@ -20,7 +25,9 @@ class ChromaManager:
     Provides a unified interface for loading documents from multiple sources.
     """
 
-    def __init__(self, collection_name="example_collection", persist_directory="./chroma_db"):
+    def __init__(
+        self, collection_name="example_collection", persist_directory="./chroma_db"
+    ):
         self.collection_name = collection_name
         self.persist_directory = persist_directory
 
@@ -46,7 +53,9 @@ class ChromaManager:
             embedding_function=self.embedding_model,
             persist_directory=self.persist_directory,
         )
-        print(f"Vector store '{self.collection_name}' created/loaded from {self.persist_directory}.")
+        print(
+            f"Vector store '{self.collection_name}' created/loaded from {self.persist_directory}."
+        )
         return vector_store
 
     def _load_jsonl(self, source, **kwargs):
@@ -87,7 +96,9 @@ class ChromaManager:
             if source.startswith("http://") or source.startswith("https://"):
                 loader = UnstructuredURLLoader(urls=[source], **kwargs)
             elif os.path.isdir(source):
-                loader = DirectoryLoader(source, glob="**/*.*", loader_cls=UnstructuredFileLoader, **kwargs)
+                loader = DirectoryLoader(
+                    source, glob="**/*.*", loader_cls=UnstructuredFileLoader, **kwargs
+                )
             else:
                 ext = os.path.splitext(source)[1].lower()
                 if ext == ".pdf":
@@ -122,11 +133,15 @@ class ChromaManager:
             try:
                 self.vector_store.add_documents(batch)
             except EOFError as e:
-                print(f"EOFError while adding batch {i // batch_size + 1}: {e}. "
-                      "Reinitializing vector store and retrying batch.")
+                print(
+                    f"EOFError while adding batch {i // batch_size + 1}: {e}. "
+                    "Reinitializing vector store and retrying batch."
+                )
                 self.vector_store = self._create_vector_store()
                 self.vector_store.add_documents(batch)
-            print(f"Added batch {i // batch_size + 1} with {len(batch)} document(s) to the vector store.")
+            print(
+                f"Added batch {i // batch_size + 1} with {len(batch)} document(s) to the vector store."
+            )
 
     def query(self, query_text, k=2):
         results = self.vector_store.similarity_search(query_text, k=k)
@@ -162,5 +177,3 @@ class AddDocumentsWorker(QRunnable):
             progress_value = int((i + len(batch)) / total_docs * 100)
             self.signals.progress.emit(progress_value)
         self.signals.finished.emit()
-
-

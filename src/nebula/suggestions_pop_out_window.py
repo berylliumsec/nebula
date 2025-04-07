@@ -3,11 +3,25 @@ import time
 
 from PyQt6 import QtCore
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence,
-                         QTextCharFormat, QTextListFormat)
-from PyQt6.QtWidgets import (QApplication, QColorDialog, QDockWidget,
-                             QFileDialog, QListWidget, QMainWindow,
-                             QMessageBox, QToolBar)
+from PyQt6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QTextCharFormat,
+    QTextListFormat,
+)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QColorDialog,
+    QDockWidget,
+    QFileDialog,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QToolBar,
+)
 
 from . import constants
 from .ai_notes_pop_up_window import AiNotes, CustomTitleBar

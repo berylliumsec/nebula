@@ -4,9 +4,17 @@ import cv2
 from PyQt6 import QtCore
 from PyQt6.QtCore import QFileSystemWatcher, QPoint, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QIcon, QImage, QPainter, QPixmap
-from PyQt6.QtWidgets import (QApplication, QColorDialog, QDialog, QFileDialog,
-                             QHBoxLayout, QInputDialog, QListWidget, QToolBar,
-                             QVBoxLayout)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QColorDialog,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QListWidget,
+    QToolBar,
+    QVBoxLayout,
+)
 
 from . import constants
 from .image_display_label import ImageDisplayLabel

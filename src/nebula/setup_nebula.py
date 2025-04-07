@@ -3,11 +3,22 @@ import os
 import warnings
 
 import torch
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QSettings, pyqtSignal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
-                             QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                             QPushButton, QTextEdit, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import constants, utilities
 from .log_config import setup_logging
@@ -22,13 +33,16 @@ class settings(QWidget):
 
     def __init__(self):
         super().__init__()
+        self.settings = QSettings("Beryllium Security", "Nebula")
         self.engagementFolder = None
         self.engagementName = None
 
         # Set default cache directory: use the TRANSFORMERS_CACHE env variable if available, otherwise fallback
         self.defaultCacheDir = os.getenv(
             "TRANSFORMERS_CACHE",
-            os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "transformers")
+            os.path.join(
+                os.path.expanduser("~"), ".cache", "huggingface", "transformers"
+            ),
         )
         self.cacheDir = self.defaultCacheDir
         # Initialize default ChromaDB directory to empty (it is required to be set by the user)
@@ -95,9 +109,13 @@ class settings(QWidget):
         self.urlsInput = QTextEdit()
         self.lookoutInput = QTextEdit()
 
-        self.ipAddressesInput.setPlaceholderText("Enter IP addresses (one per line) (Optional)")
+        self.ipAddressesInput.setPlaceholderText(
+            "Enter IP addresses (one per line) (Optional)"
+        )
         self.urlsInput.setPlaceholderText("Enter URLs (one per line) (Optional)")
-        self.lookoutInput.setPlaceholderText("Enter things to lookout for (one per line) (Optional)")
+        self.lookoutInput.setPlaceholderText(
+            "Enter things to lookout for (one per line) (Optional)"
+        )
 
         for inputWidget in [self.ipAddressesInput, self.urlsInput, self.lookoutInput]:
             inputWidget.setFont(QFont("Arial", 10))
@@ -223,8 +241,17 @@ class settings(QWidget):
 
     def selectFolder(self):
         try:
-            folder_path = QFileDialog.getExistingDirectory(self, "Select Engagement Folder")
+            # Retrieve last used directory or default to the user's home directory.
+            last_directory = self.settings.value(
+                "last_directory", os.path.expanduser("~")
+            )
+            folder_path = QFileDialog.getExistingDirectory(
+                self, "Select Engagement Folder", last_directory
+            )
             if folder_path:
+                # Save the chosen directory for next time.
+                self.settings.setValue("last_directory", folder_path)
+
                 self.engagementFolder = folder_path
                 self.engagementName = os.path.basename(folder_path)
                 self.folderPathLabel.setText(self.engagementName)
@@ -237,7 +264,9 @@ class settings(QWidget):
 
     def selectCacheDir(self):
         try:
-            selected_dir = QFileDialog.getExistingDirectory(self, "Select Cache Directory")
+            selected_dir = QFileDialog.getExistingDirectory(
+                self, "Select Cache Directory"
+            )
             if selected_dir:
                 self.cacheDir = selected_dir
                 self.cache_dir_updated = True
@@ -248,7 +277,9 @@ class settings(QWidget):
 
     def selectChromaDBDir(self):
         try:
-            selected_dir = QFileDialog.getExistingDirectory(self, "Select ChromaDB Directory")
+            selected_dir = QFileDialog.getExistingDirectory(
+                self, "Select ChromaDB Directory"
+            )
             if selected_dir:
                 self.chromadbDir = selected_dir
                 self.chromadbDirLineEdit.setText(selected_dir)
@@ -269,10 +300,14 @@ class settings(QWidget):
         try:
             with open(file_path, "r") as file:
                 details = json.load(file)
-                self.ipAddressesInput.setText("\n".join(details.get("ip_addresses", [])))
+                self.ipAddressesInput.setText(
+                    "\n".join(details.get("ip_addresses", []))
+                )
                 self.urlsInput.setText("\n".join(details.get("urls", [])))
                 self.lookoutInput.setText("\n".join(details.get("lookout_items", [])))
-                self.model_name = details.get("model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
+                self.model_name = details.get(
+                    "model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+                )
                 self.modelComboBox.setCurrentText(self.model_name)
                 if details.get("ollama", False):
                     self.ollamaCheckbox.setChecked(True)
@@ -301,14 +336,28 @@ class settings(QWidget):
             return
 
         try:
-            ip_addresses = [ip.strip() for ip in self.ipAddressesInput.toPlainText().splitlines() if ip.strip()]
-            urls = [url.strip() for url in self.urlsInput.toPlainText().splitlines() if url.strip()]
-            lookout_items = [item.strip() for item in self.lookoutInput.toPlainText().splitlines() if item.strip()]
+            ip_addresses = [
+                ip.strip()
+                for ip in self.ipAddressesInput.toPlainText().splitlines()
+                if ip.strip()
+            ]
+            urls = [
+                url.strip()
+                for url in self.urlsInput.toPlainText().splitlines()
+                if url.strip()
+            ]
+            lookout_items = [
+                item.strip()
+                for item in self.lookoutInput.toPlainText().splitlines()
+                if item.strip()
+            ]
             self.model_name = self.modelComboBox.currentText()
             cache_dir = self.cacheDirLineEdit.text()
             chromadb_dir = self.chromadbDirLineEdit.text().strip()
             if not chromadb_dir:
-                QMessageBox.warning(self, "Input Error", "Please select a ChromaDB directory.")
+                QMessageBox.warning(
+                    self, "Input Error", "Please select a ChromaDB directory."
+                )
                 return
             current_engagement_settings = {
                 "engagement_name": self.engagementName,
@@ -323,8 +372,12 @@ class settings(QWidget):
             file_path = os.path.join(self.engagementFolder, "engagement_details.json")
             with open(file_path, "w") as file:
                 json.dump(current_engagement_settings, file, indent=4)
-            self.folderPathLabel.setText(f"Engagement details saved in {self.engagementFolder}")
-            logger.info(f"Engagement details saved successfully in {self.engagementFolder}.")
+            self.folderPathLabel.setText(
+                f"Engagement details saved in {self.engagementFolder}"
+            )
+            logger.info(
+                f"Engagement details saved successfully in {self.engagementFolder}."
+            )
             self.setupCompleted.emit(self.engagementFolder)
             self.cache_dir_updated = False
         except Exception as e:

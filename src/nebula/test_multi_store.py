@@ -1,9 +1,9 @@
-
 from chroma_manager import ChromaManager
 
 # Initialize the manager (with your desired collection name and persist directory)
 manager = ChromaManager(
-    collection_name="nebula_collection", persist_directory="/home/agent/nebula/my_chroma_db"
+    collection_name="nebula_collection",
+    persist_directory="/home/agent/nebula/my_chroma_db",
 )
 
 # Load documents from a JSON file (or any other supported source)

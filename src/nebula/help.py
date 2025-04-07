@@ -1,8 +1,12 @@
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QTextBrowser,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
-from . import \
-    update_utils  # Assuming update_utils is a module in the same package
+from . import update_utils  # Assuming update_utils is a module in the same package
 
 
 class HelpWindow(QMainWindow):
@@ -25,7 +29,7 @@ class HelpWindow(QMainWindow):
         main_layout = QVBoxLayout(main_widget)
         text_browser = QTextBrowser(main_widget)
         text_browser.setStyleSheet(
-            "background-color: #1e1e1e; color: white; font-family: 'Courier';"
+            "background-color: #1e1e1e; color: white; font-family: 'Source Code Pro';"
         )  # VSCode theme colors and font
         text_browser.setReadOnly(True)
         text_browser.setHtml(self.get_help_content())
@@ -96,7 +100,7 @@ class HelpWindow(QMainWindow):
         eclipse = update_utils.return_path("Images_readme/eclipse.png")
         help_content_html = f"""
 <style>
-    body {{ background-color: #1e1e1e; color: white; font-family: 'Courier'; }}
+    body {{ background-color: #1e1e1e; color: white; font-family: 'Source Code Pro'; }}
     h1, h2, h3, h4, h5, h6 {{ color: white; }}
     a {{ color: white; }}
     .note {{ background-color: #252526; margin: 10px 0; padding: 10px; border-left: 5px solid #4ec9b0; }}

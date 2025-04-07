@@ -7,17 +7,50 @@ import warnings
 from queue import Queue
 
 from PyQt6 import QtCore
-from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QPoint,
-                          QRunnable, QSize, Qt, QThread, QThreadPool, QTimer,
-                          pyqtSignal)
+from PyQt6.QtCore import (
+    QFile,
+    QFileSystemWatcher,
+    QObject,
+    QPoint,
+    QRunnable,
+    QSize,
+    Qt,
+    QThread,
+    QThreadPool,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
-    QAction, QGuiApplication, QIcon, QPixmap, QTextCursor)
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
-                             QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
-                             QLabel, QListWidget, QListWidgetItem,
-                             QMainWindow, QMenu, QMessageBox, QPushButton,
-                             QRadioButton, QToolBar, QToolButton, QToolTip,
-                             QVBoxLayout, QWidget)
+    QAction,
+    QGuiApplication,
+    QIcon,
+    QPixmap,
+    QTextCursor,
+)
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QButtonGroup,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QToolBar,
+    QToolButton,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import constants, tool_configuration, update_utils, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
@@ -596,7 +629,7 @@ class Nebula(QMainWindow):
         disclaimer_text = "AI can make mistakes. Consider cross-checking suggestions."
         disclaimer_label = QLabel(disclaimer_text)
         disclaimer_label.setStyleSheet(
-            "color: white; font-size: 10px; font-family: Courier;border: none; background-color: None"
+            "color: white; font-size: 10px; font-family: Source Code Pro;border: none; background-color: None"
         )
 
         # Add the disclaimer label to the layout with horizontal centering
@@ -1014,10 +1047,11 @@ class Nebula(QMainWindow):
             self.central_display_area.model_creation_in_progress.emit(True)
             self.model_signal.emit(True)
             self.model_menu.setEnabled(False)
-        
+
         logger.debug("main window loaded")
         self.vector_db = ChromaManager(
-            collection_name="nebula_collection", persist_directory=self.CONFIG["CHROMA_DB_PATH"]
+            collection_name="nebula_collection",
+            persist_directory=self.CONFIG["CHROMA_DB_PATH"],
         )
         self.init_toolbar()
 
