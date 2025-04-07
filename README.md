@@ -103,6 +103,7 @@ For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula
 ### Roadmap
 
 - Support more models
+- Add file processing when using ollama
 
 ### Troubleshooting
 
