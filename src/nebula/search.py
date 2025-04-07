@@ -81,8 +81,8 @@ class CustomSearchLineEdit(QLineEdit):
 
         # Initialize ChatOllama LLM.
         try:
-            logger.info("[Main] Initializing ChatOllama with model 'qwen2.5-coder:32b'")
-            self.llm = ChatOllama(model="qwen2.5-coder:32b")
+            logger.info("[Main] Initializing ChatOllama with model")
+            self.llm = ChatOllama(model=self.CONFIG["MODEL"])
             logger.info("[Main] ChatOllama initialized successfully.")
         except Exception as e:
             logger.error(f"[Main] Failed to initialize ChatOllama: {e}")

@@ -522,8 +522,10 @@ class Nebula(QMainWindow):
         self.search_area.setFixedHeight(40)
         self.search_area.setPlaceholderText("Search")
         self.search_area.setObjectName("searchArea")
-        self.search_area.setToolTip("Search for commands")
+        self.search_area.setToolTip("Search using RAG")
         self.search_area.resultSelected.connect(self.on_search_result_selected)
+        if not self.CONFIG["OLLAMA"]:
+            self.search_area.setEnabled(False)
         self.suggestions_layout.addWidget(self.search_area, 9)
 
         self.suggestions_button = QPushButton(self)

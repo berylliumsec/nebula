@@ -17,7 +17,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 # PyQt imports for QRunnable and signals.
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot
-
+from .log_config import setup_logging
+from .  import constants
+logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/chrome_manager.log")
 
 class ChromaManager:
     """
@@ -53,7 +55,7 @@ class ChromaManager:
             embedding_function=self.embedding_model,
             persist_directory=self.persist_directory,
         )
-        print(
+        logger.info(
             f"Vector store '{self.collection_name}' created/loaded from {self.persist_directory}."
         )
         return vector_store
@@ -69,7 +71,7 @@ class ChromaManager:
                         page_content = data.get("text", str(data))
                         docs.append(Document(page_content=page_content, metadata=data))
                     except json.JSONDecodeError as e:
-                        print(f"Error decoding line: {line}\nError: {e}")
+                        logger.info(f"Error decoding line: {line}\nError: {e}")
         return docs
 
     def load_documents(self, source, source_type=None, **kwargs):
@@ -79,7 +81,7 @@ class ChromaManager:
         if source_type:
             if source_type == "jsonl":
                 docs = self._load_jsonl(source, **kwargs)
-                print(f"Loaded {len(docs)} document(s) from {source} (jsonl).")
+                logger.info(f"Loaded {len(docs)} document(s) from {source} (jsonl).")
                 return docs
             elif source_type in self.loader_mapping:
                 LoaderClass = self.loader_mapping[source_type]
@@ -109,7 +111,7 @@ class ChromaManager:
                     loader = CSVLoader(source, **kwargs)
                 elif ext == ".jsonl":
                     docs = self._load_jsonl(source, **kwargs)
-                    print(f"Loaded {len(docs)} document(s) from {source} (jsonl).")
+                    logger.info(f"Loaded {len(docs)} document(s) from {source} (jsonl).")
                     return docs
                 elif ext == ".json":
                     jq_schema = kwargs.get("jq_schema", ".")
@@ -118,7 +120,7 @@ class ChromaManager:
                     loader = UnstructuredFileLoader(source, **kwargs)
 
         docs = loader.load()
-        print(f"Loaded {len(docs)} document(s) from {source}.")
+        logger.info(f"Loaded {len(docs)} document(s) from {source}.")
         return docs
 
     def add_documents(self, docs, batch_size=100):
@@ -133,13 +135,13 @@ class ChromaManager:
             try:
                 self.vector_store.add_documents(batch)
             except EOFError as e:
-                print(
+                logger.info(
                     f"EOFError while adding batch {i // batch_size + 1}: {e}. "
                     "Reinitializing vector store and retrying batch."
                 )
                 self.vector_store = self._create_vector_store()
                 self.vector_store.add_documents(batch)
-            print(
+            logger.info(
                 f"Added batch {i // batch_size + 1} with {len(batch)} document(s) to the vector store."
             )
 
