@@ -7,50 +7,17 @@ import warnings
 from queue import Queue
 
 from PyQt6 import QtCore
-from PyQt6.QtCore import (
-    QFile,
-    QFileSystemWatcher,
-    QObject,
-    QPoint,
-    QRunnable,
-    QSize,
-    Qt,
-    QThread,
-    QThreadPool,
-    QTimer,
-    pyqtSignal,
-)
+from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QPoint,
+                          QRunnable, QSize, Qt, QThread, QThreadPool, QTimer,
+                          pyqtSignal)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
-    QAction,
-    QGuiApplication,
-    QIcon,
-    QPixmap,
-    QTextCursor,
-)
-from PyQt6.QtWidgets import (
-    QAbstractItemView,
-    QApplication,
-    QButtonGroup,
-    QDialog,
-    QDialogButtonBox,
-    QFileDialog,
-    QFrame,
-    QHBoxLayout,
-    QInputDialog,
-    QLabel,
-    QListWidget,
-    QListWidgetItem,
-    QMainWindow,
-    QMenu,
-    QMessageBox,
-    QPushButton,
-    QRadioButton,
-    QToolBar,
-    QToolButton,
-    QToolTip,
-    QVBoxLayout,
-    QWidget,
-)
+    QAction, QGuiApplication, QIcon, QPixmap, QTextCursor)
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
+                             QDialog, QDialogButtonBox, QFileDialog, QFrame,
+                             QHBoxLayout, QInputDialog, QLabel, QListWidget,
+                             QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+                             QPushButton, QRadioButton, QToolBar, QToolButton,
+                             QToolTip, QVBoxLayout, QWidget)
 
 from . import constants, tool_configuration, update_utils, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow

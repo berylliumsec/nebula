@@ -3,16 +3,8 @@ import sys
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QIcon
-from PyQt6.QtWidgets import (
-    QApplication,
-    QGridLayout,
-    QLabel,
-    QLineEdit,
-    QMainWindow,
-    QTextEdit,
-    QToolBar,
-    QWidget,
-)
+from PyQt6.QtWidgets import (QApplication, QGridLayout, QLabel, QLineEdit,
+                             QMainWindow, QTextEdit, QToolBar, QWidget)
 
 # Assuming these are set up correctly in your project
 from . import constants

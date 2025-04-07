@@ -5,20 +5,9 @@ import warnings
 import torch
 from PyQt6.QtCore import QSettings, pyqtSignal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import (
-    QApplication,
-    QCheckBox,
-    QComboBox,
-    QFileDialog,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QPushButton,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
+                             QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                             QPushButton, QTextEdit, QVBoxLayout, QWidget)
 
 from . import constants, utilities
 from .log_config import setup_logging

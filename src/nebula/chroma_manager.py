@@ -4,22 +4,20 @@ import os
 
 from langchain.schema import Document
 from langchain_chroma import Chroma
-from langchain_community.document_loaders import (
-    CSVLoader,
-    DirectoryLoader,
-    JSONLoader,
-    PyPDFLoader,
-    TextLoader,
-    UnstructuredFileLoader,
-    UnstructuredURLLoader,
-)
+from langchain_community.document_loaders import (CSVLoader, DirectoryLoader,
+                                                  JSONLoader, PyPDFLoader,
+                                                  TextLoader,
+                                                  UnstructuredFileLoader,
+                                                  UnstructuredURLLoader)
 from langchain_huggingface import HuggingFaceEmbeddings
-
 # PyQt imports for QRunnable and signals.
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot
+
+from . import constants
 from .log_config import setup_logging
-from .  import constants
+
 logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/chrome_manager.log")
+
 
 class ChromaManager:
     """
@@ -111,7 +109,9 @@ class ChromaManager:
                     loader = CSVLoader(source, **kwargs)
                 elif ext == ".jsonl":
                     docs = self._load_jsonl(source, **kwargs)
-                    logger.info(f"Loaded {len(docs)} document(s) from {source} (jsonl).")
+                    logger.info(
+                        f"Loaded {len(docs)} document(s) from {source} (jsonl)."
+                    )
                     return docs
                 elif ext == ".json":
                     jq_schema = kwargs.get("jq_schema", ".")

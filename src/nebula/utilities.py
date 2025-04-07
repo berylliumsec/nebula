@@ -13,16 +13,8 @@ import xml.etree.ElementTree as ET
 import tiktoken
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import (
-    QApplication,
-    QDialog,
-    QHBoxLayout,
-    QMessageBox,
-    QPushButton,
-    QScrollArea,
-    QTextEdit,
-    QVBoxLayout,
-)
+from PyQt6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QMessageBox,
+                             QPushButton, QScrollArea, QTextEdit, QVBoxLayout)
 
 from . import constants
 from .log_config import setup_logging

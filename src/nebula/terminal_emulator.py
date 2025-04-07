@@ -14,39 +14,16 @@ from langchain_community.llms import HuggingFacePipeline
 from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
 from langchain_ollama import ChatOllama
 from PyQt6 import QtCore
-from PyQt6.QtCore import (
-    QFile,
-    QFileSystemWatcher,
-    QObject,
-    QRunnable,
-    QStringListModel,
-    Qt,
-    QThread,
-    QThreadPool,
-    QTimer,
-    pyqtSignal,
-)
+from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
+                          QStringListModel, Qt, QThread, QThreadPool, QTimer,
+                          pyqtSignal)
 from PyQt6.QtGui import QAction, QIcon, QMouseEvent, QPixmap, QTextCursor
-from PyQt6.QtWidgets import (
-    QApplication,
-    QCompleter,
-    QFileDialog,
-    QHBoxLayout,
-    QLineEdit,
-    QMainWindow,
-    QMenu,
-    QMessageBox,
-    QPushButton,
-    QToolBar,
-    QVBoxLayout,
-    QWidget,
-)
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    pipeline,
-)
+from PyQt6.QtWidgets import (QApplication, QCompleter, QFileDialog,
+                             QHBoxLayout, QLineEdit, QMainWindow, QMenu,
+                             QMessageBox, QPushButton, QToolBar, QVBoxLayout,
+                             QWidget)
+from transformers import (AutoModelForCausalLM, AutoTokenizer,
+                          BitsAndBytesConfig, pipeline)
 
 from . import constants, utilities
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
