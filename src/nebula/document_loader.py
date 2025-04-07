@@ -24,12 +24,16 @@ class DocumentLoaderDialog(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        logger.debug("Initializing UI components for DocumentLoaderDialog")
         layout = QVBoxLayout()
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(12)
 
-        # Row: ComboBox and Browse Button
+        # Top row: ComboBox and Browse Button.
         top_layout = QHBoxLayout()
+        top_layout.setSpacing(10)
+
         self.type_combo = QComboBox()
+        self.type_combo.setMinimumWidth(120)
         self.type_combo.addItems(
             ["url", "pdf", "text", "csv", "json", "jsonl", "directory"]
         )
@@ -37,24 +41,37 @@ class DocumentLoaderDialog(QDialog):
         top_layout.addWidget(self.type_combo)
 
         self.browse_button = QPushButton("Browse")
+        self.browse_button.setMinimumWidth(80)
         self.browse_button.clicked.connect(self.browse)
         top_layout.addWidget(self.browse_button)
 
+        top_layout.addStretch()
         layout.addLayout(top_layout)
 
         # Line Edit for URL or file/folder path.
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Enter URL or file/folder path")
+        self.input_field.setMinimumWidth(300)
         layout.addWidget(self.input_field)
 
-        # Load Document Button.
+        # Load Document Button (centered and smaller).
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
         self.load_button = QPushButton("Load Document")
+        self.load_button.setMaximumWidth(150)  # Limits button width to 150px
+        self.load_button.setMinimumHeight(35)  # Slightly taller for aesthetics
         self.load_button.clicked.connect(self.load_document)
-        layout.addWidget(self.load_button)
+        button_layout.addWidget(self.load_button)
+
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
 
         self.setLayout(layout)
-        logger.debug("UI components set up successfully")
+        self.resize(500, 200)
         self.on_type_change(self.type_combo.currentText())
+
+
 
     def on_type_change(self, type_str):
         logger.debug("Type changed to: %s", type_str)
