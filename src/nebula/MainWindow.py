@@ -35,7 +35,7 @@ from .terminal_emulator import CommandInputArea, TerminalEmulatorWindow
 from .update_utils import return_path
 from .user_note_taking import UserNoteTaking
 from .utilities import encoding_getter, token_counter, tokenizer
-
+from .status_update_feed_manager import statusFeedManager
 warnings.filterwarnings("ignore")
 
 
@@ -785,39 +785,111 @@ class Nebula(QMainWindow):
             )
         )
 
-        self.notes_top_layout = QHBoxLayout()
-        self.notes_top_layout.addWidget(
-            self.pop_out_button,
-            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+        # --- Notes Pop-out Button (reuse existing) ---
+        self.notes_pop_out_button = QPushButton()
+        self.notes_pop_out_button.setIcon(QIcon(self.pop_out_button_icon_path))
+        self.notes_pop_out_button.setToolTip("Expand Notes")
+        self.notes_pop_out_button.setFixedSize(30, 30)
+        self.notes_pop_out_button.clicked.connect(
+            lambda: self.provide_feedback_and_execute(
+                self.notes_pop_out_button,
+                return_path("Images/clicked.png"),
+                return_path("Images/pop_out.png"),
+                self.pop_out_notes,
+            )
         )
 
+        # --- Notes Top Layout with title ---
+        self.notes_top_layout = QHBoxLayout()
+        self.notes_label = QLabel("AI Notes")
+        self.notes_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        self.notes_top_layout.addWidget(self.notes_label)
+        self.notes_top_layout.addStretch()
+        self.notes_top_layout.addWidget(self.notes_pop_out_button)
+
+        # --- Notes Frame ---
         self.notes_frame = QFrame()
         self.notes_frame_layout = QVBoxLayout(self.notes_frame)
+        self.notes_frame_layout.setContentsMargins(0, 0, 0, 0)
+        self.notes_frame_layout.setSpacing(2)
         self.notes_frame_layout.addLayout(self.notes_top_layout)
         self.notes_frame_layout.addWidget(self.ai_notes)
+
+       # --- status Feed Pop-out Button ---
+        self.status_feed_pop_out_button = QPushButton()
+        self.status_feed_pop_out_button.setIcon(QIcon(self.pop_out_button_icon_path))
+        self.status_feed_pop_out_button.setToolTip("Expand status Feed")
+        self.status_feed_pop_out_button.setFixedSize(30, 30)
+
+        self.status_feed_pop_out_button.clicked.connect(
+            lambda: self.provide_feedback_and_execute(
+                self.status_feed_pop_out_button,
+                return_path("Images/clicked.png"),
+                return_path("Images/pop_out.png"),
+                self.pop_out_status_feed,  # Define this function separately
+            )
+        )
+
+        # --- status Feed Top Layout ---
+        self.status_feed_top_layout = QHBoxLayout()
+        self.status_feed_label = QLabel("Live status Feed")
+        self.status_feed_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        self.status_feed_top_layout.addWidget(self.status_feed_label)
+        self.status_feed_top_layout.addStretch()
+        self.status_feed_top_layout.addWidget(self.status_feed_pop_out_button)
+
+        # --- status Feed List Widget ---
+        self.status_feed_list = QListWidget()
+        self.status_feed_list.setObjectName("statusFeedList")
+        self.status_feed_list.setSpacing(4)
+        self.status_feed_list.model().rowsInserted.connect(
+            lambda: self.status_feed_list.scrollToBottom()
+        )
+
+        # --- status Feed Frame ---
+        self.status_feed_frame = QFrame()
+        status_feed_layout = QVBoxLayout(self.status_feed_frame)
+        status_feed_layout.setContentsMargins(0, 0, 0, 0)
+        status_feed_layout.setSpacing(2)
+        status_feed_layout.addLayout(self.status_feed_top_layout)
+        status_feed_layout.addWidget(self.status_feed_list)
+
+
+
+        # Right-side horizontal layout (notes + status feed)
+        self.right_side_layout = QHBoxLayout()
+        self.right_side_layout.setContentsMargins(0, 0, 0, 0)
+        self.right_side_layout.setSpacing(0)
+        self.right_side_layout.addWidget(self.notes_frame)
+        self.right_side_layout.addWidget(self.status_feed_frame)
+
+        # Equal stretch factors
+        self.right_side_layout.setStretch(0, 1)  # Notes
+        self.right_side_layout.setStretch(1, 1)  # status Feed
+
+
+        # Central layout (main content area)
         self.v_layout.addWidget(self.middle_frame)
         self.v_layout.addWidget(self.input_frame)
-        self.v_layout_two = QVBoxLayout()
-        self.v_layout_two.addWidget(self.notes_frame)
 
-        self.v_layout_two.setStretch(0, 1)
-        self.v_layout_two.setStretch(1, 1)
-
+        # Main layout setup
+        self.main_layout = QHBoxLayout()
         self.main_layout.addWidget(self.log_side_bar)
         self.main_layout.addLayout(self.v_layout)
-        self.main_layout.addLayout(self.v_layout_two)
+        self.main_layout.addLayout(self.right_side_layout)
 
-        self.main_layout.setStretch(0, 1)  # Stretch factor for the prev_results_list
-        self.main_layout.setStretch(
-            1, 3
-        )  # Stretch factor for the v_layout (main content area)
-        self.main_layout.setStretch(
-            2, 1
-        )  # Stretch factor for the v_layout_two (notes area)
+        # Corrected main layout stretch factors
+        self.main_layout.setStretch(0, 1)  # Sidebar (log_side_bar)
+        self.main_layout.setStretch(1, 4)  # Central main content (middle_frame + input_frame)
+        self.main_layout.setStretch(2, 2)  # Right side (notes + status feed)
 
+        # Set the main layout
         self.central_widget = QWidget()
         self.central_widget.setLayout(self.main_layout)
         self.setCentralWidget(self.central_widget)
+
         self.resize(1320, 700)
         self.ai_file_watcher = QFileSystemWatcher([self.CONFIG["LOG_DIRECTORY"]])
         self.ai_file_watcher.directoryChanged.connect(self.on_directory_changed)
@@ -977,7 +1049,14 @@ class Nebula(QMainWindow):
         self.agentAction.triggered.connect(self.activate_deactivate_agent)
         self.toolbar.addAction(self.agentAction)
         self.autonomous_mode = False
+        self.status_feed_manager = statusFeedManager(manager=self.manager, update_ui_callback=self.update_status_feed_ui)
+        # Do an initial update of the status feed
+        self.status_feed_manager.update_status_feed()
 
+        # Create a QTimer to update the status feed every 15 minutes (900,000 ms)
+        self.status_feed_timer = QTimer(self)
+        self.status_feed_timer.timeout.connect(self.status_feed_manager.update_status_feed)
+        self.status_feed_timer.start(900000)  # 15 minutes
         self.engagement_json = {}
         window_title = "Nebula"
         self.worker = None
@@ -1024,14 +1103,32 @@ class Nebula(QMainWindow):
         )
         self.init_toolbar()
 
+    def pop_out_status_feed(self):
+        # Create or reuse a separate window for the status feed pop-out
+        self.status_feed_window = QMainWindow(self)
+        self.status_feed_window.setWindowTitle("Live status Feed")
+
+        status_feed_widget = QListWidget()
+        status_feed_widget.setStyleSheet("border: none;")
+        status_feed_widget.addItems([self.status_feed_list.item(i).text() for i in range(self.status_feed_list.count())])
+
+        self.status_feed_window.setCentralWidget(status_feed_widget)
+        self.status_feed_window.resize(500, 700)
+        self.status_feed_window.show()
+
+    def update_status_feed_ui(self,status_feed_data):
+
+        self.status_feed_list.clear()
+
+        self.status_feed_list.addItem(status_feed_data)
     def init_toolbar(self):
 
         # Create an action with an icon (adjust the icon path as needed).
         loader_action = QAction(self.add_document_icon, "Load Document", self)
-        loader_action.triggered.connect(self.show_loader_dialog)
+        loader_action.triggered.connect(self.show_document_loader_dialog)
         self.toolbar.addAction(loader_action)
 
-    def show_loader_dialog(self):
+    def show_document_loader_dialog(self):
         # Create and show the pop-out dialog.
         dialog = DocumentLoaderDialog(self.vector_db, self)
         dialog.setWindowModality(Qt.WindowModality.NonModal)
@@ -1656,11 +1753,13 @@ class Nebula(QMainWindow):
 
                     logger.debug(f"Processing file: {file}")
                     if self.suggestions_action.isChecked():
-                        self.process_new_file_with_ai(file, "suggestion_files")
-                        logger.debug(f"File processed for suggestions: {file}")
+                        if not file.endswith(".ai"):
+                            self.process_new_file_with_ai(file, "suggestion_files")
+                            logger.debug(f"File processed for suggestions: {file}")
                     if self.ai_note_taking_action.isChecked():
-                        self.process_new_file_with_ai(file, "notes_files")
-                        logger.debug(f"File processed for AI note-taking: {file}")
+                        if not file.endswith(".ai"):
+                            self.process_new_file_with_ai(file, "notes_files")
+                            logger.debug(f"File processed for AI note-taking: {file}")
 
             else:
                 logger.debug("No new files found.")

@@ -556,6 +556,7 @@ class ConfigManager(QObject):
                     "model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
                 )
                 updated_config["CHROMA_DB_PATH"] = details.get("chromadb_dir", "")
+                updated_config["THREAT_DB_PATH"] = details.get("threatdb_dir", "")
                 updated_config["OLLAMA"] = details.get("ollama", False)
                 updated_config["CACHE_DIR"] = details.get(
                     "cache_dir",

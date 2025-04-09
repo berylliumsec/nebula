@@ -171,6 +171,23 @@ class settings(QWidget):
         chromadbLayout.addWidget(self.chromadbDirBtn)
         layout.addLayout(chromadbLayout)
 
+        # --- threatDB Directory Selection (Required) ---
+        threatdbDirTitleLabel = QLabel("ThreatDB Directory (Required)")
+        threatdbDirTitleLabel.setFont(QFont("Arial", 10))
+        threatdbDirTitleLabel.setStyleSheet("color: white;")
+        layout.addWidget(threatdbDirTitleLabel)
+
+        threatdbLayout = QHBoxLayout()
+        self.threatdbDirLineEdit = QLineEdit()
+        self.threatdbDirLineEdit.setFont(QFont("Arial", 10))
+        self.threatdbDirLineEdit.setReadOnly(True)
+        self.threatdbDirBtn = QPushButton("Browse...")
+        self.threatdbDirBtn.setFont(QFont("Arial", 10))
+        self.threatdbDirBtn.clicked.connect(self.selectthreatDBDir)
+        threatdbLayout.addWidget(self.threatdbDirLineEdit)
+        threatdbLayout.addWidget(self.threatdbDirBtn)
+        layout.addLayout(threatdbLayout)
+
         # --- Save Button ---
         self.saveBtn = QPushButton("Save Engagement")
         self.saveBtn.setFont(QFont("Arial", 10))
@@ -276,6 +293,18 @@ class settings(QWidget):
         except Exception as e:
             logger.error(f"Error selecting ChromaDB directory: {e}")
 
+    def selectthreatDBDir(self):
+        try:
+            selected_dir = QFileDialog.getExistingDirectory(
+                self, "Select threatDB Directory"
+            )
+            if selected_dir:
+                self.threatdbDir = selected_dir
+                self.threatdbDirLineEdit.setText(selected_dir)
+                logger.info(f"threatDB directory updated to: {selected_dir}")
+        except Exception as e:
+            logger.error(f"Error selecting threatDB directory: {e}")
+
     def loadEngagementDetails(self):
         if not self.engagementFolder:
             logger.debug("No engagement folder set.")
@@ -308,6 +337,8 @@ class settings(QWidget):
                 # Load the ChromaDB directory from details if available.
                 self.chromadbDir = details.get("chromadb_dir", "")
                 self.chromadbDirLineEdit.setText(self.chromadbDir)
+                self.threatdbDir = details.get("threatdb_dir", "")
+                self.threatdbDirLineEdit.setText(self.threatdbDir)
                 return details
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error in loadEngagementDetails: {e}")
@@ -343,9 +374,15 @@ class settings(QWidget):
             self.model_name = self.modelComboBox.currentText()
             cache_dir = self.cacheDirLineEdit.text()
             chromadb_dir = self.chromadbDirLineEdit.text().strip()
+            threatdb_dir = self.chromadbDirLineEdit.text().strip()
             if not chromadb_dir:
                 QMessageBox.warning(
                     self, "Input Error", "Please select a ChromaDB directory."
+                )
+                return
+            if not threatdb_dir:
+                QMessageBox.warning(
+                    self, "Input Error", "Please select a threatDB directory."
                 )
                 return
             current_engagement_settings = {
@@ -356,6 +393,7 @@ class settings(QWidget):
                 "model": self.model_name,
                 "cache_dir": cache_dir,
                 "chromadb_dir": chromadb_dir,
+                "threatdb_dir": threatdb_dir,
                 "ollama": self.ollamaCheckbox.isChecked(),
             }
             file_path = os.path.join(self.engagementFolder, "engagement_details.json")

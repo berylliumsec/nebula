@@ -225,7 +225,16 @@ class AgentTaskRunner(QRunnable):
                 logger.info("Sending prompt to the agent.")
                 response = self.agent.run(prompt)
                 logger.info("Received response from agent.")
-
+            if "notes" in self.endpoint:
+                self.notes_memory.add_messsage(role="User", content=self.query)
+                self.notes_memory.add_messsage(role="Assistant", content=response)
+            elif "suggestion" in self.endpoint:
+                 self.suggestions_memory.add_messsage(role="User", content=self.query)
+                 self.suggestions_memory.add_messsage(role="Assistant", content=response)
+                   
+            else:
+                self.conversation_memory.add_messsage(role="User", content=self.query)
+                self.conversation_memory.add_messsage(role="Assistant", content=response)
             self.signals.result.emit(self.endpoint, "ai", response)
             logger.info("AgentTaskRunner completed successfully.")
         except Exception as e:
