@@ -53,7 +53,7 @@ class settings(QWidget):
         layout.addWidget(self.folderBtn)
         logger.info("Setup folder button")
 
-        self.folderPathLabel = QLabel("No engagement folder selected (Required)")
+        self.folderPathLabel = QLabel("You must select an Engagement Folder before any other option")
         layout.addWidget(self.folderPathLabel)
         logger.info("Setup folder label")
 

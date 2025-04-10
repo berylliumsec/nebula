@@ -28,16 +28,8 @@ COPY . /app
 RUN poetry lock && poetry install
 
 # Install pip-only package
-RUN pip install nebula-ai
+RUN pip install nebula-ai --upgrade
 
-# Build your C++ module
-WORKDIR /app/dap_agents/tools/modules/cpp/build
-RUN cmake .. && make && cp -f clean_lines.so ../
-WORKDIR /app
-
-# Setup entrypoint
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Final Entrypoint
 ENTRYPOINT ["nebula"]

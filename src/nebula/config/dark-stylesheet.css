@@ -412,35 +412,73 @@ QTextEdit:focus {
     border: 1px solid #03A9F4;
 }
 
-/* Scoped styling: only apply these rules within the EngagementSettings widget */
+/* --- Scoped Styling for EngagementSettings Window --- */
+QWidget#EngagementSettings {
+    background-color: #1E1E1E;
+    color: #FFFFFF;
+}
 
-/* Modern, sleek style for QLineEdit and QTextEdit within EngagementSettings */
+/* --- LABELS: Remove borders and use a clean, modern style --- */
+QWidget#EngagementSettings QLabel {
+    border: none;
+    background-color: rgba(3, 169, 244, 0.1);
+    color: #CCCCCC;
+    font-size: 10pt;
+    font-family: "Source Code Pro", monospace;
+    font-weight: bold;
+    padding: 4px;
+    border-bottom: 1px solid #03A9F4;
+    margin-bottom: 6px;
+}
+
+
+/* --- INPUT FIELDS (Interactive) --- */
+/* These get an accentuated, rounded border and a slightly different background */
 QWidget#EngagementSettings QLineEdit,
 QWidget#EngagementSettings QTextEdit {
-    border: 2px solid #03A9F4;     /* Accent colored border for modern effect */
-    border-radius: 6px;            /* Rounded corners for a sleek look */
-    background-color: #2C2C2C;     /* A slightly lighter/darker tone than the main background */
-    padding: 6px;                  /* Adequate padding for comfortable interaction */
-    color: #FFFFFF;                /* Clear, crisp white text */
+    border: 2px solid #444444;   /* Subtle border by default */
+    border-radius: 6px;
+    background-color: #2E2E2E;   /* Distinct background tone */
+    padding: 6px;
+    color: #FFFFFF;
     font-family: "Source Code Pro", monospace;
     font-size: 10pt;
+    margin-top: 6px;
+    margin-bottom: 6px;
 }
 
-/* Hover effect for interactive feedback */
+/* Hover state for inputs */
 QWidget#EngagementSettings QLineEdit:hover,
 QWidget#EngagementSettings QTextEdit:hover {
-    border: 2px solid #05BFF4;     /* Slightly different blue to indicate hover */
+    border: 2px solid #666666;   /* Slightly brighter on hover */
 }
 
-/* Focus effect to clearly indicate the active field */
+/* Focus state for inputs */
 QWidget#EngagementSettings QLineEdit:focus,
 QWidget#EngagementSettings QTextEdit:focus {
-    border: 2px solid #03A9F4;
-    background-color: #343434;     /* A touch lighter or darker to signal focus */
+    border: 2px solid #03A9F4;   /* Accent color on focus */
+    background-color: #3A3A3A;    /* A subtle change in background on focus */
 }
 
-/* Optional: Styling placeholder text, if needed */
-QWidget#EngagementSettings QLineEdit::placeholder,
-QWidget#EngagementSettings QTextEdit::placeholder {
-    color: #8A8A8A;               /* A subtle, modern placeholder color */
+/* --- BUTTONS: Keep a modern accented border --- */
+QWidget#EngagementSettings QPushButton {
+    border: 2px solid #03A9F4;
+    border-radius: 6px;
+    padding: 6px 10px;
+    background-color: #1E1E1E;
+    color: #FFFFFF;
+    font-family: "Source Code Pro", monospace;
+    font-size: 10pt;
+    margin-top: 6px;
+    margin-bottom: 6px;
+}
+
+/* Optional: Hover and pressed states for buttons */
+QWidget#EngagementSettings QPushButton:hover {
+    background-color: #03A9F4;
+    color: #FFFFFF;
+}
+
+QWidget#EngagementSettings QPushButton:pressed {
+    background-color: #0288D1;
 }
