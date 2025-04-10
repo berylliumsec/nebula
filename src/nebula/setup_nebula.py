@@ -3,9 +3,9 @@ import os
 import warnings
 
 from PyQt6.QtCore import QFile, QSettings, pyqtSignal
-from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog,
-                             QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                             QPushButton, QTextEdit, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
+                             QLineEdit, QMessageBox, QPushButton, QTextEdit,
+                             QVBoxLayout, QWidget)
 
 from . import constants
 from .log_config import setup_logging
@@ -77,20 +77,17 @@ class settings(QWidget):
 
         # --- Model Selection ---
         self.model_name = ""
-        self.modelLabel = QLabel("Select a model")
+        self.modelLabel = QLabel("Enter model name e.g: deepseek-r1:32b ")
         layout.addWidget(self.modelLabel)
 
-        self.modelComboBox = QComboBox()
-        self.modelComboBox.addItem("mistralai/Mistral-7B-Instruct-v0.2")
-        self.modelComboBox.addItem("deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
-        self.modelComboBox.addItem("meta-llama/Llama-3.1-8B-Instruct")
-        self.modelComboBox.addItem("qwen2.5-coder:32b")
-        self.modelComboBox.currentTextChanged.connect(self.onModelChanged)
+        self.modelLineEdit = QLineEdit()
+        self.modelLineEdit.setPlaceholderText("deepseek-r1:32b")
+        self.modelLineEdit.textChanged.connect(self.onModelChanged)
         modelLayout = QHBoxLayout()
-        modelLayout.addWidget(self.modelComboBox)
+        modelLayout.addWidget(self.modelLineEdit)
         layout.addLayout(modelLayout)
 
-        self.onModelChanged(self.modelComboBox.currentText())
+        self.onModelChanged(self.modelLineEdit.text())
 
         # --- ChromaDB Directory Selection (Required) ---
         ollamaTitleLabel = QLabel(
@@ -149,7 +146,7 @@ class settings(QWidget):
         self.ipAddressesInput.setEnabled(enabled)
         self.urlsInput.setEnabled(enabled)
         self.lookoutInput.setEnabled(enabled)
-        self.modelComboBox.setEnabled(enabled)
+        self.modelLineEdit.setEnabled(enabled)
         self.chromadbDirLineEdit.setEnabled(enabled)
         self.chromadbDirBtn.setEnabled(enabled)
         self.saveBtn.setEnabled(enabled)
@@ -230,16 +227,16 @@ class settings(QWidget):
                 )
                 self.urlsInput.setText("\n".join(details.get("urls", [])))
                 self.lookoutInput.setText("\n".join(details.get("lookout_items", [])))
-                self.model_name = details.get(
-                    "model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
-                )
-                self.modelComboBox.setCurrentText(self.model_name)
+                self.model_name = details.get("model")
+                self.ollama_url = details.get("ollama_url", "")
+                self.modelLineEdit.setText(self.model_name)
 
                 # Load the ChromaDB directory from details if available.
                 self.chromadbDir = details.get("chromadb_dir", "")
                 self.chromadbDirLineEdit.setText(self.chromadbDir)
                 self.threatdbDir = details.get("threatdb_dir", "")
                 self.threatdbDirLineEdit.setText(self.threatdbDir)
+                self.ollamaLineEdit.setText(self.ollama_url)
                 return details
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error in loadEngagementDetails: {e}")
@@ -272,9 +269,10 @@ class settings(QWidget):
                 for item in self.lookoutInput.toPlainText().splitlines()
                 if item.strip()
             ]
-            self.model_name = self.modelComboBox.currentText()
+
             chromadb_dir = self.chromadbDirLineEdit.text().strip()
-            threatdb_dir = self.chromadbDirLineEdit.text().strip()
+            threatdb_dir = self.threatdbDirLineEdit.text().strip()
+            self.model_name = self.modelLineEdit.text().strip()
             if not chromadb_dir:
                 QMessageBox.warning(
                     self, "Input Error", "Please select a ChromaDB directory."
@@ -284,6 +282,10 @@ class settings(QWidget):
                 QMessageBox.warning(
                     self, "Input Error", "Please select a threatDB directory."
                 )
+                return
+
+            if not self.model_name:
+                QMessageBox.warning(self, "Input Error", "Please enter an ollama_model")
                 return
             ollama_url = self.ollamaLineEdit.text().strip()
             current_engagement_settings = {

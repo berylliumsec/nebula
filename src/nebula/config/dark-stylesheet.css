@@ -155,7 +155,8 @@ QToolBar {
     padding-top: 20px;
     padding-right: 5px;
     padding-left: 5px;
-    border-bottom: 1px solid #444444;
+    border-top: 1px solid #333333;
+    border-bottom: 1px solid #333333;
     border-radius: 10px
 }
 QToolBar QAction {
@@ -504,4 +505,34 @@ QWidget#EngagementSettings QPushButton:hover {
 
 QWidget#EngagementSettings QPushButton:pressed {
     background-color: #3A3A3A;
+}
+
+/* Modern styling for the progress window */
+QWidget#ModernProgressWindow {
+    background-color: #1E1E1E;
+    border: 1px solid #444444;
+    border-radius: 8px;
+}
+
+/* Style for the progress bar (container) */
+QWidget#ModernProgressWindow QProgressBar {
+    border: 1px solid #444444;
+    border-radius: 8px;
+    background-color: #2E2E2E;
+    text-align: center;
+    color: white;
+    font-family: Source Code Pro;
+    font-size: 10pt;
+}
+
+/* Styling for the progress bar chunk (the moving part) */
+QWidget#ModernProgressWindow QProgressBar::chunk {
+    border-radius: 8px;
+    background-color: #03A9F4;
+}
+
+/* Optionally, add a hover or focus effect for the progress bar if needed */
+QWidget#ModernProgressWindow QProgressBar:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
 }

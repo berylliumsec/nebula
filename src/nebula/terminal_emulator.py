@@ -122,10 +122,10 @@ class AgentTaskRunner(QRunnable):
         notes_memory: str = "",
         suggestions_memory: str = "",
         conversation_memory: str = "",
-        ollama_url: str = "",
+        manager: str = "",
     ):
         super().__init__()
-        self.ollama_url = ollama_url
+        self.manager = manager
         self.query = query
         self.endpoint = endpoint
         self.ollama_model = ollama_model
@@ -139,11 +139,20 @@ class AgentTaskRunner(QRunnable):
         logger.info("AgentTaskRunner started execution.")
         logger.debug(f"Initial query: {self.query}")
         try:
-
-            response = self.query_ollama(
-                self.query, self.endpoint, model=self.ollama_model
-            )
-
+            self.CONFIG = self.manager.load_config()
+            ollama_url = self.CONFIG["OLLAMA_URL"]
+            try:
+                response = self.query_ollama(
+                    self.query,
+                    self.endpoint,
+                    model=self.ollama_model,
+                    ollama_url=ollama_url,
+                )
+            except Exception:
+                self.signals.error.emit(
+                    "Error Loading Ollama, please check the url in engagement settings."
+                )
+                return
             if "notes" in self.endpoint:
                 self.notes_memory.add_message(role="User", content=self.query)
                 self.notes_memory.add_message(role="Assistant", content=response)
@@ -165,30 +174,28 @@ class AgentTaskRunner(QRunnable):
             self.signals.finished.emit()
             logger.info("AgentTaskRunner finished execution.")
 
-    def query_ollama(self, query: str, endpoint: str, model: str = "mistral") -> str:
+    def query_ollama(
+        self, query: str, endpoint: str, model: str = "mistral", ollama_url: str = ""
+    ) -> str:
         """
         Generate a response using Ollama, executing tool calls if needed.
         """
         logger.info(
             f"Starting query_ollama with endpoint: {endpoint} and model: {model}"
         )
-        # Model selection logic
-        if "mistral" in model:
-            model = "mistral"
-        elif "llama" in model:
-            model = "llama3.2"
-        elif "deepseek" in model:
-            model = "deepseek-r1"
-        elif "qwen2.5-coder:32b" in model:
-            model = "qwen2.5-coder:32b"
-        logger.debug(f"Selected model: {model}")
+
         try:
-            if self.ollama_url:
-                llm = ChatOllama(model=model, base_url=self.ollama_url)
+            if ollama_url:
+                llm = ChatOllama(model=model, base_url=ollama_url)
             else:
                 llm = ChatOllama(model=model)
         except Exception as e:
-            utilities.show_message("Error Loading Ollama",e)
+            utilities.show_message(
+                "Error Loading Ollama",
+                "Ollama could not be loaded, please check the url in engagement settings and try again",
+            )
+
+            logger.error("Error Loading Ollama", e)
         # Prompt generation logic
         if "notes" in endpoint:
             logger.info("Building prompt for 'notes' endpoint in query_ollama.")
@@ -228,8 +235,17 @@ class AgentTaskRunner(QRunnable):
         else:
             try:
                 llm = ChatOllama(model=model).bind_tools(self.tools)
+
+                if ollama_url:
+                    llm = ChatOllama(model=model, base_url=ollama_url).bind_tools(
+                        self.tools
+                    )
+                else:
+                    self.llm = ChatOllama(model=model).bind_tools(self.tools)
             except Exception as e:
-                utilities.show_message("Error Loading Ollama",e)
+
+                logger.error(e)
+                raise e
             logger.info("Building prompt for default endpoint in query_ollama.")
             instructions = "You are a penetration testing assistant. "
             self.query = instructions + ":" + query
@@ -1505,6 +1521,16 @@ class CommandInputArea(QLineEdit):
         self.model_busy_busy_signal.emit(False)
         self.model_busy = False
 
+    def onModelError(self):
+        utilities.show_message(
+            "Error Loading Ollama",
+            "Ollama could not be loaded, please check the url in engagement settings and try again",
+        )
+        self.threads_status.emit("completed")
+        QApplication.restoreOverrideCursor()
+        self.model_busy_busy_signal.emit(False)
+        self.model_busy = False
+
     def execute_api_call(self, command=None, endpoint=None):
         logger.debug(
             f"Entering execute_api_call with command: {command}, endpoint: {endpoint}"
@@ -1512,7 +1538,6 @@ class CommandInputArea(QLineEdit):
         logger.debug(
             f"Model Creation Progress is {self.free_model_creation_in_progress}"
         )
-
 
         logger.debug("Emitting 'in_progress' status and setting wait cursor.")
         self.threads_status.emit("in_progress")
@@ -1526,7 +1551,7 @@ class CommandInputArea(QLineEdit):
             conversation_memory=self.conversation_memory,
             notes_memory=self.notes_memory,
             suggestions_memory=self.suggestions_memory,
-            ollama_url=self.CONFIG["OLLAMA_URL"],
+            manager=self.manager,
         )
         self.model_busy = True
         logger.debug(
@@ -1535,6 +1560,7 @@ class CommandInputArea(QLineEdit):
         self.model_busy_busy_signal.emit(True)
         model_task.signals.result.connect(self.onTaskResult)
         model_task.signals.finished.connect(self.onTaskFinished)
+        model_task.signals.error.connect(self.onModelError)
         logger.debug("Starting model_task for OLLAMA mode.")
         self.threadpool.start(model_task)
 

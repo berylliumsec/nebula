@@ -553,7 +553,7 @@ class ConfigManager(QObject):
                 with open(engagement_details_path, "r") as f:
                     details = json.load(f)
                 updated_config["MODEL"] = details.get(
-                    "model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+                    "model",
                 )
                 updated_config["CHROMA_DB_PATH"] = details.get("chromadb_dir", "")
                 updated_config["THREAT_DB_PATH"] = details.get("threatdb_dir", "")

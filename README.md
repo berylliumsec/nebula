@@ -60,9 +60,10 @@ First allow local connections to your X server:
 ```bash
 xhost +local:docker
 ```
- ```bash
-  docker run -it   -e DISPLAY=$DISPLAY   -v /home/agent/.local/share/nebula/logs:/root/.local/share/nebula/logs -v /home/agent/engagement:/engagements -v /tmp/.X11-unix:/tmp/.X11-unix   berylliumsec/nebula:latest
-  ```
+
+```bash
+docker run --rm -it   -e DISPLAY=$DISPLAY   -v /home/agent/.local/share/nebula/logs:/root/.local/share/nebula/logs -v YOUR_ENGAGEMENT_FOLDER_ON_HOST_MACHINE:/engagements -v /tmp/.X11-unix:/tmp/.X11-unix   berylliumsec/nebula:latest
+```
 ### Interacting with the models. 
 
 To interact with the models, begin your input with a `!` for example: `! write a python script to scan the ports of a remote system`
@@ -71,8 +72,7 @@ To interact with the models, begin your input with a `!` for example: `! write a
 
 - **AI-Powered Internet Search via agentes:**  
   Enhance responses by integrating real-time, internet-sourced context to keep you updated on cybersecurity trends. "whats in the news on cybersecurity today"
-- **AI Agents:**  
-  AI Agents that execute commands on your local system based..."run an nmap scan against 192.168.1.1 without trigerring firewalls"
+  
 - **AI-Assisted Note-Taking:**  
   Automatically record and categorize security findings.
 
@@ -97,8 +97,7 @@ For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula
 
 ### Roadmap
 
-- Support more models
-- Add file processing when using ollama
+- Create custom models that are more useful for penetration testing
 
 ### Troubleshooting
 
