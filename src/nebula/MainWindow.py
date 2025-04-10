@@ -30,12 +30,13 @@ from .help import HelpWindow
 from .image_command_window import ImageCommandWindow
 from .log_config import setup_logging
 from .search import CustomSearchLineEdit
+from .status_update_feed_manager import statusFeedManager
 from .suggestions_pop_out_window import SuggestionsPopOutWindow
 from .terminal_emulator import CommandInputArea, TerminalEmulatorWindow
 from .update_utils import return_path
 from .user_note_taking import UserNoteTaking
 from .utilities import encoding_getter, token_counter, tokenizer
-from .status_update_feed_manager import statusFeedManager
+
 warnings.filterwarnings("ignore")
 
 
@@ -521,9 +522,6 @@ class Nebula(QMainWindow):
         self.command_input_area = CommandInputArea(manager=self.manager)
 
         self.tools_agent_mode.connect(self.command_input_area.set_agent_mode)
-        self.command_input_area.model_created.connect(
-            self.enable_disabled_due_to_model_creation
-        )
         self.command_input_area.setFixedHeight(50)
         self.command_input_area.setObjectName("commandInputArea")
         self.command_input_area.setToolTip(
@@ -577,7 +575,6 @@ class Nebula(QMainWindow):
 
         self.clear_button.setIcon(QIcon(self.clear_button_icon_path))
         self.upload_button = QPushButton()
-        self.upload_button.setEnabled(False)  # This disables the button.
         self.upload_button.setFixedHeight(50)
         self.upload_button.setObjectName("uploadButton")
         self.upload_button.setToolTip("Upload a file for analysis")
@@ -762,7 +759,6 @@ class Nebula(QMainWindow):
             search_window=self.search_area,
         )
 
-        self.ai_notes.setObjectName("notesBox")
         if not self.ai_notes.toHtml():
             self.ai_notes.setHtml("AI notes will be displayed here")
 
@@ -802,7 +798,9 @@ class Nebula(QMainWindow):
         # --- Notes Top Layout with title ---
         self.notes_top_layout = QHBoxLayout()
         self.notes_label = QLabel("AI Notes")
-        self.notes_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.notes_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
         self.notes_top_layout.addWidget(self.notes_label)
         self.notes_top_layout.addStretch()
@@ -816,7 +814,7 @@ class Nebula(QMainWindow):
         self.notes_frame_layout.addLayout(self.notes_top_layout)
         self.notes_frame_layout.addWidget(self.ai_notes)
 
-       # --- status Feed Pop-out Button ---
+        # --- status Feed Pop-out Button ---
         self.status_feed_pop_out_button = QPushButton()
         self.status_feed_pop_out_button.setIcon(QIcon(self.pop_out_button_icon_path))
         self.status_feed_pop_out_button.setToolTip("Expand status Feed")
@@ -834,7 +832,9 @@ class Nebula(QMainWindow):
         # --- status Feed Top Layout ---
         self.status_feed_top_layout = QHBoxLayout()
         self.status_feed_label = QLabel("Live status Feed")
-        self.status_feed_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.status_feed_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
         self.status_feed_top_layout.addWidget(self.status_feed_label)
         self.status_feed_top_layout.addStretch()
@@ -856,8 +856,6 @@ class Nebula(QMainWindow):
         status_feed_layout.addLayout(self.status_feed_top_layout)
         status_feed_layout.addWidget(self.status_feed_list)
 
-
-
         # Right-side horizontal layout (notes + status feed)
         self.right_side_layout = QHBoxLayout()
         self.right_side_layout.setContentsMargins(0, 0, 0, 0)
@@ -868,7 +866,6 @@ class Nebula(QMainWindow):
         # Equal stretch factors
         self.right_side_layout.setStretch(0, 1)  # Notes
         self.right_side_layout.setStretch(1, 1)  # status Feed
-
 
         # Central layout (main content area)
         self.v_layout.addWidget(self.middle_frame)
@@ -882,7 +879,9 @@ class Nebula(QMainWindow):
 
         # Corrected main layout stretch factors
         self.main_layout.setStretch(0, 1)  # Sidebar (log_side_bar)
-        self.main_layout.setStretch(1, 4)  # Central main content (middle_frame + input_frame)
+        self.main_layout.setStretch(
+            1, 4
+        )  # Central main content (middle_frame + input_frame)
         self.main_layout.setStretch(2, 2)  # Right side (notes + status feed)
 
         # Set the main layout
@@ -976,7 +975,7 @@ class Nebula(QMainWindow):
                 self.open_tour,
             )
         )
-
+        self.add_document_icon = QIcon(return_path("Images/vector.svg"))
         self.tour.setIcon(self.tour_icon)
         self.tour.setToolTip("tour")
         self.toolbar.addAction(self.tour)
@@ -1035,27 +1034,18 @@ class Nebula(QMainWindow):
             self.add_new_tool,  # Add callback for adding a new tool
             self,
         )
-        self.agents_off_icon = QIcon(return_path("Images/agent_off.png"))
-        self.agents_on_icon = QIcon(return_path("Images/agent_on.png"))
-        self.agentAction = QAction(
-            self.agents_off_icon,
-            "Click to toggle agents on or off",
-            self,
-        )
-        self.add_document_icon = QIcon(return_path("Images/vector.svg"))
-        if self.CONFIG["OLLAMA"]:
-            self.agentAction.setEnabled(False)
-        self.agentAction.setCheckable(True)
-        self.agentAction.triggered.connect(self.activate_deactivate_agent)
-        self.toolbar.addAction(self.agentAction)
         self.autonomous_mode = False
-        self.status_feed_manager = statusFeedManager(manager=self.manager, update_ui_callback=self.update_status_feed_ui)
+        self.status_feed_manager = statusFeedManager(
+            manager=self.manager, update_ui_callback=self.update_status_feed_ui
+        )
         # Do an initial update of the status feed
         self.status_feed_manager.update_status_feed()
 
         # Create a QTimer to update the status feed every 15 minutes (900,000 ms)
         self.status_feed_timer = QTimer(self)
-        self.status_feed_timer.timeout.connect(self.status_feed_manager.update_status_feed)
+        self.status_feed_timer.timeout.connect(
+            self.status_feed_manager.update_status_feed
+        )
         self.status_feed_timer.start(900000)  # 15 minutes
         self.engagement_json = {}
         window_title = "Nebula"
@@ -1080,7 +1070,7 @@ class Nebula(QMainWindow):
         logger.debug("Starting tour")
         self.tour_timer.timeout.connect(self.next_step)
         self.main_window_loaded.emit(True)
-        self.model_signal.connect(self.command_input_area.create_model)
+
         self.command_input_area.model_busy_busy_signal.connect(
             self.central_display_area.enable_or_disable_due_to_model_creation
         )
@@ -1110,17 +1100,23 @@ class Nebula(QMainWindow):
 
         status_feed_widget = QListWidget()
         status_feed_widget.setStyleSheet("border: none;")
-        status_feed_widget.addItems([self.status_feed_list.item(i).text() for i in range(self.status_feed_list.count())])
+        status_feed_widget.addItems(
+            [
+                self.status_feed_list.item(i).text()
+                for i in range(self.status_feed_list.count())
+            ]
+        )
 
         self.status_feed_window.setCentralWidget(status_feed_widget)
         self.status_feed_window.resize(500, 700)
         self.status_feed_window.show()
 
-    def update_status_feed_ui(self,status_feed_data):
+    def update_status_feed_ui(self, status_feed_data):
 
         self.status_feed_list.clear()
+        for item in status_feed_data:
+            self.status_feed_list.addItem(item)
 
-        self.status_feed_list.addItem(status_feed_data)
     def init_toolbar(self):
 
         # Create an action with an icon (adjust the icon path as needed).
@@ -1134,7 +1130,6 @@ class Nebula(QMainWindow):
         dialog.setWindowModality(Qt.WindowModality.NonModal)
         dialog.resize(800, 600)  # Set default size to 800x600 pixels
         dialog.show()
-
 
     def on_model_selected(self, model):
         # Load the current configuration.
@@ -1158,19 +1153,8 @@ class Nebula(QMainWindow):
         # Write the updated data back to config.json.
         with open(self.CONFIG_FILE_PATH, "w") as file:
             json.dump(data, file, indent=4)
-        if not self.CONFIG["OLLAMA"]:
-            self.model_signal.emit(True)
-            self.upload_button.setEnabled(False)
-            self.model_menu.setEnabled(False)
-            self.model_creation_in_progress.emit(True)
-            self.central_display_area.model_creation_in_progress.emit(True)
 
-    def enable_disabled_due_to_model_creation(self, signal):
-        if signal:
-            self.upload_button.setEnabled(True)
-            self.model_menu.setEnabled(True)
-            self.model_creation_in_progress.emit(False)
-            self.central_display_area.model_creation_in_progress.emit(False)
+
 
     def open_tour(self):
         self.current_action_index = 0
@@ -1451,20 +1435,10 @@ class Nebula(QMainWindow):
         else:
             self.eco_mode.setIcon(self.eco_mode_off_icon)
 
-    def activate_deactivate_agent(self):
 
-        if self.agentAction.isChecked():
-            self.tools_agent_mode.emit(True)
-            self.agentAction.setIcon(self.agents_on_icon)
-
-        else:
-            self.agentAction.setIcon(QIcon(self.agents_off_icon))
-            self.tools_agent_mode.emit(False)
 
     def update_suggestions_display(self, _=None):
         if self.suggestions_action.isChecked():
-            self.ai_note_taking_action.setChecked(False)
-            self.ai_note_taking_action.setIcon(self.ai_notes_off_icon)
             self.suggestions_action.setIcon(QIcon(self.suggestions_off_icon_path))
             self.statusBar().showMessage(
                 "AI suggestions has been activated",
@@ -1509,7 +1483,7 @@ class Nebula(QMainWindow):
             manager=self.manager,
             terminal_emulator_number=self.terminal_emulator_number,
         )
-        self.model_signal.connect(self.terminalWindow.command_input_area.create_model)
+
         self.child_windows.append(self.terminalWindow)
 
         self.terminalWindow.command_input_area.update_ai_notes.connect(
@@ -1533,8 +1507,6 @@ class Nebula(QMainWindow):
 
     def ai_note_taking_function(self, checked):
         if checked:
-            self.suggestions_action.setChecked(False)
-            self.suggestions_action.setIcon(QIcon(self.suggestions_off_icon_path))
             self.ai_note_taking_action.setIcon(self.ai_notes_on_icon)
             self.statusBar().showMessage(
                 "AI Note taking has been activated",
@@ -1628,50 +1600,15 @@ class Nebula(QMainWindow):
     def upload_file(self, _=None):
         """Initiate the file upload process and handle the user's choice."""
         try:
-            choice = self.get_user_choice()
-            if choice:
+
                 file_path = self.get_file_path()
-                if file_path:
-                    if choice == "AI Processing":
-                        self.process_file(file_path)
-                    elif choice == "Index for Search":
-                        self.index_file(file_path)
+         
+                self.process_file(file_path)
+
         except Exception as e:
             logger.error(f"An error occurred: {e}")
 
-    def get_user_choice(self) -> str:
-        """Present a dialog to the user to choose between AI processing and indexing for search."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Select Action")
 
-        layout = QVBoxLayout()
-
-        ai_radio = QRadioButton("AI Processing")
-        index_radio = QRadioButton("Index for Search")
-        ai_radio.setChecked(True)  # Default selection
-
-        button_group = QButtonGroup(dialog)
-        button_group.addButton(ai_radio)
-        button_group.addButton(index_radio)
-
-        layout.addWidget(ai_radio)
-        layout.addWidget(index_radio)
-
-        button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        layout.addWidget(button_box)
-
-        dialog.setLayout(layout)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            if ai_radio.isChecked():
-                return "AI Processing"
-            elif index_radio.isChecked():
-                return "Index for Search"
-        return None
 
     def get_file_path(self) -> str:
         """Prompt the user to select a file from the Downloads folder."""
@@ -1753,11 +1690,11 @@ class Nebula(QMainWindow):
 
                     logger.debug(f"Processing file: {file}")
                     if self.suggestions_action.isChecked():
-                        if not file.endswith(".ai"):
+                        if not file.startswith("ai"):
                             self.process_new_file_with_ai(file, "suggestion_files")
                             logger.debug(f"File processed for suggestions: {file}")
                     if self.ai_note_taking_action.isChecked():
-                        if not file.endswith(".ai"):
+                        if not file.startswith("ai"):
                             self.process_new_file_with_ai(file, "notes_files")
                             logger.debug(f"File processed for AI note-taking: {file}")
 

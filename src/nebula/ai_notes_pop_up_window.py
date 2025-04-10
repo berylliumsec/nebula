@@ -6,7 +6,7 @@ from pygments import highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name, guess_lexer
 from PyQt6 import QtCore
-from PyQt6.QtCore import (QFileSystemWatcher, QObject, QRect, QRunnable,
+from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRect, QRunnable,
                           QStringListModel, Qt, QThreadPool, QTimer, QUrl,
                           pyqtSignal)
 from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence,
@@ -124,12 +124,17 @@ class AiNotes(QTextEdit):
         self.bookmarks = []
         self.command_input_area = command_input_area
         self.bookmark_changed_callback = None  # Callback attribute
-        with open(return_path("config/dark-stylesheet.css"), "r") as file:
-            self.setStyleSheet(file.read())
+        self.load_stylesheet(return_path("config/dark-stylesheet.css"))
 
         self.load_notes()
         self.load_bookmarks()
         self.search_window = search_window
+
+    def load_stylesheet(self, filename):
+        style_file = QFile(filename)
+        style_file.open(QFile.OpenModeFlag.ReadOnly | QFile.OpenModeFlag.Text)
+        self.original_stylesheet = style_file.readAll().data().decode("utf-8")
+        self.setStyleSheet(self.original_stylesheet)
 
     def setCompleter(self, completer):
         completer.setWidget(self)
@@ -618,11 +623,16 @@ class AiNotesPopupWindow(QMainWindow):
         self.manager = manager
         self.command_input_area = command_input_area
         self.initUI()
+        self.load_stylesheet(return_path("config/dark-stylesheet.css"))
 
-        with open(return_path("config/dark-stylesheet.css"), "r") as file:
-            self.setStyleSheet(file.read())
         self.resize(1200, 600)
         self.center()
+
+    def load_stylesheet(self, filename):
+        style_file = QFile(filename)
+        style_file.open(QFile.OpenModeFlag.ReadOnly | QFile.OpenModeFlag.Text)
+        self.original_stylesheet = style_file.readAll().data().decode("utf-8")
+        self.setStyleSheet(self.original_stylesheet)
 
     def center(self):
         screen = QApplication.primaryScreen()

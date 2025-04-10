@@ -3,14 +3,14 @@ import os
 import warnings
 
 import torch
-from PyQt6.QtCore import QSettings, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QFile, QSettings, pyqtSignal
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
                              QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                              QPushButton, QTextEdit, QVBoxLayout, QWidget)
 
 from . import constants, utilities
 from .log_config import setup_logging
+from .update_utils import return_path
 
 warnings.filterwarnings("ignore")
 
@@ -26,70 +26,34 @@ class settings(QWidget):
         self.engagementFolder = None
         self.engagementName = None
 
-        # Set default cache directory: use the TRANSFORMERS_CACHE env variable if available, otherwise fallback
-        self.defaultCacheDir = os.getenv(
-            "TRANSFORMERS_CACHE",
-            os.path.join(
-                os.path.expanduser("~"), ".cache", "huggingface", "transformers"
-            ),
-        )
-        self.cacheDir = self.defaultCacheDir
+        self.setObjectName("EngagementSettings")
+
         # Initialize default ChromaDB directory to empty (it is required to be set by the user)
         self.chromadbDir = ""
-        # Flag to indicate whether the user has updated the cache directory in this session
-        self.cache_dir_updated = False
+
         self.initUI()
 
+    def load_stylesheet(self, filename):
+        style_file = QFile(filename)
+        style_file.open(QFile.OpenModeFlag.ReadOnly | QFile.OpenModeFlag.Text)
+        self.original_stylesheet = style_file.readAll().data().decode("utf-8")
+        self.setStyleSheet(self.original_stylesheet)
+
     def initUI(self):
+        self.load_stylesheet(return_path("config/dark-stylesheet.css"))
         self.setWindowTitle("Engagement Settings")
         self.setObjectName("EngagementSettings")
         self.setGeometry(100, 100, 400, 500)
-        self.setStyleSheet(
-            """QWidget {
-                border: 1px solid #333333;
-                background-color: #1e1e1e;
-                color: #c5c5c5;
-            }
-            QPushButton, QRadioButton {
-                border: 1px solid #333333;
-                background-color: #1e1e1e;
-                border: none;
-                padding: 5px;
-                border-radius: 2px;
-                color: white;
-            }
-            QRadioButton::indicator:checked {
-                background-color: #add8e6;
-                border: 1px solid white;
-            }
-            QPushButton:hover, QRadioButton:hover {
-                background-color: #333333;
-            }
-            QTextEdit {
-                border: 1px solid #333333;
-                border-radius: 2px;
-                padding: 5px;
-                background-color: #1e1e1e;
-                color: white;
-            }
-            QLabel {
-                color: #1e1e1e;
-                border: none;
-            }"""
-        )
 
         layout = QVBoxLayout()
 
         # --- Engagement Folder ---
         self.folderBtn = QPushButton("Select Engagement Folder")
-        self.folderBtn.setFont(QFont("Arial", 10))
         self.folderBtn.clicked.connect(self.selectFolder)
         layout.addWidget(self.folderBtn)
         logger.info("Setup folder button")
 
         self.folderPathLabel = QLabel("No engagement folder selected (Required)")
-        self.folderPathLabel.setFont(QFont("Arial", 10))
-        self.folderPathLabel.setStyleSheet("color: #add8e6;")
         layout.addWidget(self.folderPathLabel)
         logger.info("Setup folder label")
 
@@ -107,19 +71,15 @@ class settings(QWidget):
         )
 
         for inputWidget in [self.ipAddressesInput, self.urlsInput, self.lookoutInput]:
-            inputWidget.setFont(QFont("Arial", 10))
             layout.addWidget(inputWidget)
         logger.info("Setup IP addresses, URLs and lookout items inputs")
 
         # --- Model Selection ---
         self.model_name = ""
         self.modelLabel = QLabel("Select a model")
-        self.modelLabel.setFont(QFont("Arial", 10))
-        self.modelLabel.setStyleSheet("color: white;")
         layout.addWidget(self.modelLabel)
 
         self.modelComboBox = QComboBox()
-        self.modelComboBox.setFont(QFont("Arial", 10))
         self.modelComboBox.addItem("mistralai/Mistral-7B-Instruct-v0.2")
         self.modelComboBox.addItem("deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
         self.modelComboBox.addItem("meta-llama/Llama-3.1-8B-Instruct")
@@ -129,43 +89,28 @@ class settings(QWidget):
         modelLayout.addWidget(self.modelComboBox)
         layout.addLayout(modelLayout)
 
-        # --- Ollama Checkbox ---
-        self.ollamaCheckbox = QCheckBox("Use Ollama")
-        self.ollamaCheckbox.setFont(QFont("Arial", 10))
-        self.ollamaCheckbox.setStyleSheet("color: white;")
-        layout.addWidget(self.ollamaCheckbox)
+
         self.onModelChanged(self.modelComboBox.currentText())
 
-        # --- Cache Directory Selection ---
-        cacheDirTitleLabel = QLabel("Cache Directory")
-        cacheDirTitleLabel.setFont(QFont("Arial", 10))
-        cacheDirTitleLabel.setStyleSheet("color: white;")
-        layout.addWidget(cacheDirTitleLabel)
+        # --- ChromaDB Directory Selection (Required) ---
+        ollamaTitleLabel = QLabel("Ollama URL (Optional, will use the default if not provided)")
+        layout.addWidget(ollamaTitleLabel)
 
-        cacheLayout = QHBoxLayout()
-        self.cacheDirLineEdit = QLineEdit()
-        self.cacheDirLineEdit.setFont(QFont("Arial", 10))
-        self.cacheDirLineEdit.setText(self.cacheDir)
-        self.cacheDirLineEdit.setReadOnly(True)
-        self.cacheDirBtn = QPushButton("Browse...")
-        self.cacheDirBtn.setFont(QFont("Arial", 10))
-        self.cacheDirBtn.clicked.connect(self.selectCacheDir)
-        cacheLayout.addWidget(self.cacheDirLineEdit)
-        cacheLayout.addWidget(self.cacheDirBtn)
-        layout.addLayout(cacheLayout)
+        # Create an editable QLineEdit with placeholder text
+        self.ollamaLineEdit = QLineEdit()
+        self.ollamaLineEdit.setPlaceholderText("https://your-ollama-server:port")
+        layout.addWidget(self.ollamaLineEdit)
+
 
         # --- ChromaDB Directory Selection (Required) ---
         chromadbDirTitleLabel = QLabel("ChromaDB Directory (Required)")
-        chromadbDirTitleLabel.setFont(QFont("Arial", 10))
-        chromadbDirTitleLabel.setStyleSheet("color: white;")
         layout.addWidget(chromadbDirTitleLabel)
 
         chromadbLayout = QHBoxLayout()
         self.chromadbDirLineEdit = QLineEdit()
-        self.chromadbDirLineEdit.setFont(QFont("Arial", 10))
+
         self.chromadbDirLineEdit.setReadOnly(True)
         self.chromadbDirBtn = QPushButton("Browse...")
-        self.chromadbDirBtn.setFont(QFont("Arial", 10))
         self.chromadbDirBtn.clicked.connect(self.selectChromaDBDir)
         chromadbLayout.addWidget(self.chromadbDirLineEdit)
         chromadbLayout.addWidget(self.chromadbDirBtn)
@@ -173,16 +118,13 @@ class settings(QWidget):
 
         # --- threatDB Directory Selection (Required) ---
         threatdbDirTitleLabel = QLabel("ThreatDB Directory (Required)")
-        threatdbDirTitleLabel.setFont(QFont("Arial", 10))
-        threatdbDirTitleLabel.setStyleSheet("color: white;")
+
         layout.addWidget(threatdbDirTitleLabel)
 
         threatdbLayout = QHBoxLayout()
         self.threatdbDirLineEdit = QLineEdit()
-        self.threatdbDirLineEdit.setFont(QFont("Arial", 10))
         self.threatdbDirLineEdit.setReadOnly(True)
         self.threatdbDirBtn = QPushButton("Browse...")
-        self.threatdbDirBtn.setFont(QFont("Arial", 10))
         self.threatdbDirBtn.clicked.connect(self.selectthreatDBDir)
         threatdbLayout.addWidget(self.threatdbDirLineEdit)
         threatdbLayout.addWidget(self.threatdbDirBtn)
@@ -190,21 +132,7 @@ class settings(QWidget):
 
         # --- Save Button ---
         self.saveBtn = QPushButton("Save Engagement")
-        self.saveBtn.setFont(QFont("Arial", 10))
-        self.saveBtn.setStyleSheet(
-            """
-            QPushButton {
-                border: none;
-                background-color: #1e1e1e;
-                padding: 5px;
-                border-radius: 2px;
-                color: white;
-            }
-            QPushButton:hover {
-                background-color: #333333;
-            }
-            """
-        )
+
         self.saveBtn.clicked.connect(self.saveEngagement)
         layout.addWidget(self.saveBtn)
 
@@ -221,9 +149,6 @@ class settings(QWidget):
         self.urlsInput.setEnabled(enabled)
         self.lookoutInput.setEnabled(enabled)
         self.modelComboBox.setEnabled(enabled)
-        self.ollamaCheckbox.setEnabled(enabled)
-        self.cacheDirLineEdit.setEnabled(enabled)
-        self.cacheDirBtn.setEnabled(enabled)
         self.chromadbDirLineEdit.setEnabled(enabled)
         self.chromadbDirBtn.setEnabled(enabled)
         self.saveBtn.setEnabled(enabled)
@@ -231,12 +156,6 @@ class settings(QWidget):
     def onModelChanged(self, text):
         self.model_name = text
         logger.debug(f"Model selected: {text}")
-        if not self.ollamaCheckbox.isChecked() and not torch.cuda.is_available():
-            utilities.show_systems_requirements_message(
-                "Important information",
-                "No GPU(s) available. You will not be able to use any models",
-            )
-            return
 
     def center(self):
         screen = QApplication.primaryScreen()
@@ -268,18 +187,6 @@ class settings(QWidget):
             logger.error(f"Error selecting folder: {e}")
             logger.debug("Failed in selectFolder")
 
-    def selectCacheDir(self):
-        try:
-            selected_dir = QFileDialog.getExistingDirectory(
-                self, "Select Cache Directory"
-            )
-            if selected_dir:
-                self.cacheDir = selected_dir
-                self.cache_dir_updated = True
-                self.cacheDirLineEdit.setText(selected_dir)
-                logger.info(f"Cache directory updated to: {selected_dir}")
-        except Exception as e:
-            logger.error(f"Error selecting cache directory: {e}")
 
     def selectChromaDBDir(self):
         try:
@@ -327,13 +234,8 @@ class settings(QWidget):
                     "model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
                 )
                 self.modelComboBox.setCurrentText(self.model_name)
-                if details.get("ollama", False):
-                    self.ollamaCheckbox.setChecked(True)
-                else:
-                    self.ollamaCheckbox.setChecked(False)
-                if not self.cache_dir_updated:
-                    self.cacheDir = details.get("cache_dir", self.defaultCacheDir)
-                    self.cacheDirLineEdit.setText(self.cacheDir)
+                
+               
                 # Load the ChromaDB directory from details if available.
                 self.chromadbDir = details.get("chromadb_dir", "")
                 self.chromadbDirLineEdit.setText(self.chromadbDir)
@@ -372,7 +274,6 @@ class settings(QWidget):
                 if item.strip()
             ]
             self.model_name = self.modelComboBox.currentText()
-            cache_dir = self.cacheDirLineEdit.text()
             chromadb_dir = self.chromadbDirLineEdit.text().strip()
             threatdb_dir = self.chromadbDirLineEdit.text().strip()
             if not chromadb_dir:
@@ -385,16 +286,17 @@ class settings(QWidget):
                     self, "Input Error", "Please select a threatDB directory."
                 )
                 return
+            ollama_url = self.ollamaLineEdit.text().strip()
             current_engagement_settings = {
                 "engagement_name": self.engagementName,
                 "ip_addresses": ip_addresses,
                 "urls": urls,
                 "lookout_items": lookout_items,
                 "model": self.model_name,
-                "cache_dir": cache_dir,
                 "chromadb_dir": chromadb_dir,
                 "threatdb_dir": threatdb_dir,
-                "ollama": self.ollamaCheckbox.isChecked(),
+                "ollama_url": ollama_url
+
             }
             file_path = os.path.join(self.engagementFolder, "engagement_details.json")
             with open(file_path, "w") as file:
@@ -406,7 +308,7 @@ class settings(QWidget):
                 f"Engagement details saved successfully in {self.engagementFolder}."
             )
             self.setupCompleted.emit(self.engagementFolder)
-            self.cache_dir_updated = False
+
         except Exception as e:
             self.folderPathLabel.setText("Error saving engagement details.")
             logger.error(f"Error saving engagement details: {e}")

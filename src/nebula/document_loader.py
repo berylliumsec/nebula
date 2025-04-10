@@ -71,8 +71,6 @@ class DocumentLoaderDialog(QDialog):
         self.resize(500, 200)
         self.on_type_change(self.type_combo.currentText())
 
-
-
     def on_type_change(self, type_str):
         logger.debug("Type changed to: %s", type_str)
         if type_str == "url":

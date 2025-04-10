@@ -558,18 +558,7 @@ class ConfigManager(QObject):
                 updated_config["CHROMA_DB_PATH"] = details.get("chromadb_dir", "")
                 updated_config["THREAT_DB_PATH"] = details.get("threatdb_dir", "")
                 updated_config["OLLAMA"] = details.get("ollama", False)
-                updated_config["CACHE_DIR"] = details.get(
-                    "cache_dir",
-                    os.getenv(
-                        "TRANSFORMERS_CACHE",
-                        os.path.join(
-                            os.path.expanduser("~"),
-                            ".cache",
-                            "huggingface",
-                            "transformers",
-                        ),
-                    ),
-                )
+                updated_config["OLLAMA_URL"] = details.get("ollama_url", False)
                 updated_config["USE_INTERNET_SEARCH"] = details.get(
                     "use_internet_search", False
                 )
