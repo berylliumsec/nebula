@@ -25,11 +25,6 @@ Nebula is a cutting-edge, AI-powered penetration testing tool designed for cyber
 
 **System Requirements:**
 
-For GPU-Based Inference (huggingface):
-
-- At least 8GB of GPU memory (tested with 12GB)
-- Python 3.11 or higher
-
 For CPU-Based Inference(Ollama)(Note that Ollama Supports GPU too):
 - At least 16GB of RAM 
 - Python 3.11 or higher
@@ -45,21 +40,6 @@ python -m pip install nebula-ai --upgrade
 
 **Important:** 
 
-**Hugging Face Local Model Based Usage** 
-On your first run, you’ll be prompted to select a cache directory where Nebula will download your chosen AI model. Follow these steps:
-
-1. Create a free [Hugging Face Account](https://huggingface.co/), agree to the terms, and generate an access token.
-2. Export your token to the CLI:
-   ```bash
-   export HF_TOKEN=YourTokenHere
-   ```
-3. Launch Nebula and monitor the download progress on the CLI.
-
-   ```bash
-   nebula
-   ```
-
-This step only needs to be completed once. Monitor the command line interface where you invoked `nebula` from to monitor the download progress.
 
 **Ollama Local Model Based Usage**
 
@@ -94,6 +74,8 @@ To interact with the models, begin your input with a `!` for example: `! write a
 
 - **Manual Note-Taking & Automatic Command Logging:**  
   Maintain a detailed log of your actions and findings with both automated and manual note-taking features.
+- **Status feed:**  
+  This panel displays your most recent penetration testing activities, it refreshes every five minutes
 
 
 ## Getting Started

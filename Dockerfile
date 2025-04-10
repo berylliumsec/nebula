@@ -1,35 +1,83 @@
-FROM continuumio/miniconda3:latest
+# -----------------------------------------------------------------------------
+# Base Image and Environment Variables
+# -----------------------------------------------------------------------------
+FROM ubuntu:jammy
 ENV DEBIAN_FRONTEND=noninteractive
-# Install only essential system packages for building native extensions
-RUN apt-get update && apt-get install -y \
-        build-essential \
-        cmake \
-        git \
-        tzdata \
-    && ln -fs /usr/share/zoneinfo/America/New_York /etc/localtime \
-    && dpkg-reconfigure --frontend noninteractive tzdata \
-    && apt-get clean && rm -rf /var/lib/apt/lists/
+# -----------------------------------------------------------------------------
+# Install System Dependencies and Configure Timezone
+# -----------------------------------------------------------------------------
+    RUN apt-get update && apt-get install -y \
+    build-essential \
+    libssl-dev \
+    zlib1g-dev \
+    libbz2-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    wget \
+    curl \
+    llvm \
+    libncurses5-dev \
+    libncursesw5-dev \
+    xz-utils \
+    tk-dev \
+    libffi-dev \
+    liblzma-dev \
+    python3-openssl \
+    git \
+    python3-opencv \
+    python3-pip \
+    python3-pyqt6* \
+    pyqt6* \
+    libxcb-cursor0 \
+    zip
 
 
-# Set working directory
-WORKDIR /app
 
-# Use conda to install packages (e.g., cupy, python, pybind11)
+# -----------------------------------------------------------------------------
+# Install Miniconda and Configure Shell Environment
+# -----------------------------------------------------------------------------
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
+    bash /tmp/miniconda.sh -b -p /opt/conda && \
+    rm /tmp/miniconda.sh
+
+# Add conda to the PATH
+ENV PATH="/opt/conda/bin:${PATH}"
+
+# Set shell to bash with --login for proper Conda activation
+SHELL ["/bin/bash", "--login", "-c"]
+
+# -----------------------------------------------------------------------------
+# Install Conda Packages 
+# -----------------------------------------------------------------------------
 RUN conda install -c conda-forge cupy python=3.11.11 pybind11 -y
 
-# Upgrade pip and install Poetry
-RUN pip install --upgrade pip && pip install poetry --upgrade && \
-    poetry config virtualenvs.create false
+# -----------------------------------------------------------------------------
+# Set Working Directory and Prepare Application Dependencies
+# -----------------------------------------------------------------------------
+WORKDIR /app
 
-# Copy your application code
+# Upgrade pip and install Python packages (qiling, angr, openai, poetry)
+RUN /opt/conda/bin/python3.11 -m pip install --upgrade pip && \
+    /opt/conda/bin/python3.11 -m pip install poetry --upgrade
+
+# -----------------------------------------------------------------------------
+# Disable Poetry Virtual Environment Creation
+# -----------------------------------------------------------------------------
+RUN /opt/conda/bin/python3.11 -m poetry config virtualenvs.create false
+
+# -----------------------------------------------------------------------------
+# Copy Application Code
+# -----------------------------------------------------------------------------
 COPY . /app
+# -----------------------------------------------------------------------------
+# Install Application Dependencies with Poetry
+# -----------------------------------------------------------------------------
+RUN /opt/conda/bin/python3.11 -m poetry lock && /opt/conda/bin/python3.11 -m poetry install
 
-# Install application dependencies via Poetry
-RUN poetry lock && poetry install
-
-# Install pip-only package
 RUN pip install nebula-ai --upgrade
 
-
-# Final Entrypoint
+WORKDIR /app
+# --------------------------
+# Set Container Entrypoint
+# -----------------------------------------------------------------------------
 ENTRYPOINT ["nebula"]

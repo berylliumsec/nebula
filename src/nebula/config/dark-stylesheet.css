@@ -65,6 +65,10 @@ QFrame {
     font-family: Source Code Pro;
 }
 
+#centralDisplayArea:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
+}
 /* General and Bulb Buttons */
 #generalButton, #bulbButton {
     border: none;
@@ -82,10 +86,8 @@ QFrame {
     color: white;
 }
 
-/* Toolbar Buttons Hover */
-QToolBar QToolButton:hover {
-    background-color: #03A9F4;
-}
+
+
 
 /* Note, Result, Settings, and List Boxes */
 #notesBox, #notesPopUpBox, #resultBox, #settings, #listBox {
@@ -142,35 +144,59 @@ QListWidget::item:selected#prevResultsList, QListWidget::item:hover#prevResultsL
     color: white;
 }
 
+/* Toolbar Buttons Hover */
+QToolBar QToolButton:hover {
+    background-color: #03A9F4;
+}
 /* Toolbar */
 QToolBar {
     background-color: #1E1E1E;
-    border: none;
     spacing: 20px;
     padding-top: 20px;
     padding-right: 5px;
     padding-left: 5px;
+    border-bottom: 1px solid #444444;
+    border-radius: 10px
 }
 QToolBar QAction {
     color: white;
+    border-bottom: 1px solid #03A9F4;
 }
-
+QToolBar QToolButton {
+    border-bottom: 1px solid #03A9F4;
+}
 /* Engagement Label Within a Container */
 #engagement QLabel {
-    background-color: #1E1E1E;
+    background-color: transparent;
     color: white;
     border: none;
+    padding: 2px 0;
+    font-family: Source Code Pro;
+    font-size: 10pt;
+    border-bottom: 1px solid #03A9F4;
     selection-background-color: #333333;
     selection-color: white;
 }
 
 /* Common Text Elements */
-QLabel, QTextEdit, QListWidget {
+/* Separate QLabel styling from QTextEdit and QListWidget to remove label borders */
+QTextEdit, QListWidget {
     background-color: #1E1E1E;
     color: white;
     border: 1px solid #444444;
     selection-background-color: #333333;
     selection-color: white;
+}
+
+/* Enhanced Standard Label Styling */
+QLabel {
+    border: none;
+    background-color: transparent;
+    color: white;
+    padding: 2px;
+    font-family: Source Code Pro;
+    font-size: 10pt;
+    border-bottom: 1px solid #03A9F4;
 }
 
 /* Username Label */
@@ -179,6 +205,7 @@ QLabel, QTextEdit, QListWidget {
     color: white;
     border: none;
     font-weight: bold;
+    border-bottom: 1px solid #03A9F4;
 }
 
 /* Status Bar */
@@ -247,18 +274,14 @@ QComboBox:focus {
     transition: border-color 0.3s;
 }
 
-/* Standard Labels */
-QLabel {
-    color: white;
-    padding: 2px;
-    font-family: Source Code Pro;
-}
-
+/* Enhanced Standard Label Styling for Specific Cases */
 /* Forgot Password Label */
 QLabel#forgotPasswordLabel {
+    border: none;
+    background-color: transparent;
     color: white;
     font-family: Source Code Pro;
-    border: none;
+    border-bottom: 1px solid #03A9F4;
 }
 
 /* Line Edits */
@@ -305,7 +328,7 @@ QListWidget#bookmarksListWidget {
     font-size: 14px;
 }
 QListWidget#bookmarksListWidget::item {
-    border-bottom: 1px solid #444444;
+    border-bottom: 1px solid #03A9F4;
     padding: 2.5px;
     margin: 2.5px;
 }
@@ -381,6 +404,14 @@ QScrollArea#configWindow {
     background-color: #1C1C1C;
     color: white;
 }
+/* Enhanced Label Styling within Edit Command Dialog */
+#EditCommandDialog QLabel {
+    border: none;
+    background-color: transparent;
+    color: white;
+    font-family: Source Code Pro;
+    border-bottom: 1px solid #03A9F4;
+}
 #EditCommandDialog QPushButton:pressed {
     background-color: #03A9F4;
 }
@@ -394,7 +425,6 @@ QTextEdit:focus {
     transition: border-color 0.3s;
 }
 
-
 QWidget#EngagementSettings {
     background-color: #1E1E1E;
     color: white;
@@ -407,21 +437,14 @@ QTextEdit {
     color: white;
     background-color: #1E1E1E;
 }
-
 QTextEdit:focus {
     border: 1px solid #03A9F4;
 }
 
-/* --- Scoped Styling for EngagementSettings Window --- */
-QWidget#EngagementSettings {
-    background-color: #1E1E1E;
-    color: #FFFFFF;
-}
 
 /* --- LABELS: Remove borders and use a clean, modern style --- */
 QWidget#EngagementSettings QLabel {
     border: none;
-    background-color: rgba(3, 169, 244, 0.1);
     color: #CCCCCC;
     font-size: 10pt;
     font-family: "Source Code Pro", monospace;
@@ -480,5 +503,5 @@ QWidget#EngagementSettings QPushButton:hover {
 }
 
 QWidget#EngagementSettings QPushButton:pressed {
-    background-color: #0288D1;
+    background-color: #3A3A3A;
 }

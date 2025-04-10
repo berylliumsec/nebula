@@ -208,6 +208,5 @@ class MainApplication(QApplication):
 
 if __name__ == "__main__":
     app = MainApplication(sys.argv)
-    app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyqt6"))
     app.start()
     sys.exit(app.exec())

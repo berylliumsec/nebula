@@ -277,14 +277,6 @@ class LogSideBar(QListWidget):
     def contextMenuEvent(self, event):
         self.lastHoverPos = event.pos()
 
-        self.context_menu.setStyleSheet(
-            """
-            QMenu::item:selected {
-                background-color:#333333; 
-            }
-        """
-        )
-
         self.context_menu.addAction(self.send_to_ai_notes_action)
 
         self.context_menu.addAction(self.send_to_ai_suggestions_action)
@@ -492,8 +484,6 @@ class Nebula(QMainWindow):
         self.search_area.setObjectName("searchArea")
         self.search_area.setToolTip("Search using RAG")
         self.search_area.resultSelected.connect(self.on_search_result_selected)
-        if not self.CONFIG["OLLAMA"]:
-            self.search_area.setEnabled(False)
         self.suggestions_layout.addWidget(self.search_area, 9)
 
         self.suggestions_button = QPushButton(self)
@@ -842,7 +832,6 @@ class Nebula(QMainWindow):
 
         # --- status Feed List Widget ---
         self.status_feed_list = QListWidget()
-        self.status_feed_list.setObjectName("statusFeedList")
         self.status_feed_list.setSpacing(4)
         self.status_feed_list.model().rowsInserted.connect(
             lambda: self.status_feed_list.scrollToBottom()
@@ -1046,7 +1035,7 @@ class Nebula(QMainWindow):
         self.status_feed_timer.timeout.connect(
             self.status_feed_manager.update_status_feed
         )
-        self.status_feed_timer.start(900000)  # 15 minutes
+        self.status_feed_timer.start(300000)  # 5 minutes
         self.engagement_json = {}
         window_title = "Nebula"
         self.worker = None
@@ -1635,19 +1624,7 @@ class Nebula(QMainWindow):
 
         logger.debug(f"File copied to: {destination_path}")
 
-    def index_file(self, file_path: str):
-        """Index the file for search by reading its content and processing each line."""
-        task = IndexFileTask(file_path, self.index_line)
-        self.threadPool.start(task)
 
-    def index_line(self, line: str):
-        """Index a single line of text."""
-        try:
-            indexdir = update_utils.return_path("command_search_index")
-            self.search_area.add_to_index(line, indexdir)
-            logger.info(f"Indexed line: {line}")
-        except Exception as e:
-            logger.error(f"Failed to index line: {line} - {e}")
 
     def pop_out_notes(self, _=None):
         self.CONFIG = self.manager.load_config()
