@@ -155,7 +155,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t $berylliumsec/nebula:latest .
+          docker build -t berylliumsec/nebula:latest .
 
       - name: Push Docker image
         run: |
