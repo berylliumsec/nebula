@@ -51,10 +51,13 @@ Install Ollama and download the three supported models (you can also download on
  ollama pull llama3.1
  ```
 
+ Run nebula
+
  ```
  nebula
  ```
 
+** Using docker **
 First allow local connections to your X server:
 
 ```bash
@@ -62,7 +65,7 @@ xhost +local:docker
 ```
 
 ```bash
-docker run --rm -it   -e DISPLAY=$DISPLAY   -v /home/agent/.local/share/nebula/logs:/root/.local/share/nebula/logs -v YOUR_ENGAGEMENT_FOLDER_ON_HOST_MACHINE:/engagements -v /tmp/.X11-unix:/tmp/.X11-unix   berylliumsec/nebula:latest
+docker run --rm -it   -e DISPLAY=$DISPLAY   -v /home/YOUR_HOST_NAME/.local/share/nebula/logs:/root/.local/share/nebula/logs -v YOUR_ENGAGEMENT_FOLDER_ON_HOST_MACHINE:/engagements -v /tmp/.X11-unix:/tmp/.X11-unix   berylliumsec/nebula:latest
 ```
 ### Interacting with the models. 
 
