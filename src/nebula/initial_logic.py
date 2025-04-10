@@ -1,7 +1,6 @@
 import sys
 import warnings
 
-import qdarkstyle
 from PyQt6.QtCore import (QObject, QRunnable, Qt, QThread, QThreadPool, QTimer,
                           pyqtSignal)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser

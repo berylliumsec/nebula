@@ -8,7 +8,6 @@ import signal
 import time
 import warnings
 
-import torch
 from langchain.agents import AgentType, initialize_agent
 from langchain_community.llms import HuggingFacePipeline
 from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
@@ -123,7 +122,7 @@ class AgentTaskRunner(QRunnable):
         notes_memory: str = "",
         suggestions_memory: str = "",
         conversation_memory: str = "",
-        ollama_url: str = ""
+        ollama_url: str = "",
     ):
         super().__init__()
         self.ollama_url = ollama_url
@@ -208,7 +207,7 @@ class AgentTaskRunner(QRunnable):
             logger.info("Building prompt for 'suggestion' endpoint in query_ollama.")
             instructions = (
                 "As a penetration testing assistant, suggest actionable steps with commands to find "
-                "vulnerabilities or determine if vulnerabilities found are exploitable based on the following tool output. "
+                "vulnerabilities and/or exploit vulnerabilities that have been found, based on the following tool output. Prioritize suggesting open-source, free tools as opposed to paid tools. When suggesting tools, be sure to include the exact commands to run "
             )
             self.query = instructions + ":" + query
             if self.suggestions_memory is not None:
@@ -587,7 +586,7 @@ class TerminalEmulator(QThread):
             "In [1]:",  # IPython prompt
             "(config)#",  # Cisco Global Configuration mode
         ]
-        self.CONFIG =  self.manager.load_config()
+        self.CONFIG = self.manager.load_config()
         self.commands_memory = ConversationMemory(
             file_path=os.path.join(
                 self.CONFIG["MEMORY_DIRECTORY"], "commands_memory.json"
@@ -1452,12 +1451,8 @@ class CommandInputArea(QLineEdit):
         msg.setStyleSheet("QMessageBox { background-color: #333; color: white; }")
         msg.exec()
 
-
-
-
     def setModelName(self, model_name):
         self.model_name = model_name
-
 
     def onTaskResult(self, endpoint, command, result):
         if not any(sub in endpoint for sub in ["suggestion", "notes"]):
@@ -1513,42 +1508,20 @@ class CommandInputArea(QLineEdit):
             f"Model Creation Progress is {self.free_model_creation_in_progress}"
         )
 
-        if self.free_model_creation_in_progress:
-            logger.info(
-                "Free model creation in progress; notifying user and exiting API call."
-            )
-            utilities.show_message(
-                "Model Creation In Progress",
-                "The Model is still being downloaded or loaded, please wait. You can check the progress in the terminal where you launched Nebula",
-            )
-            return
-
-        logger.debug(f"Starting execute_api_call to endpoint: {endpoint} in free mode")
-
-        if self.model_busy:
-            logger.warning(
-                "Model is busy; user notified and API call aborted until current inference completes."
-            )
-            utilities.show_message(
-                "Model is busy",
-                "The model is busy, please wait until the current inference is completed",
-            )
-            return
 
         logger.debug("Emitting 'in_progress' status and setting wait cursor.")
         self.threads_status.emit("in_progress")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
-       
         logger.debug("OLLAMA configuration detected; using OLLAMA mode.")
-        
+
         model_task = AgentTaskRunner(
             query=command,
             endpoint=endpoint,
             conversation_memory=self.conversation_memory,
             notes_memory=self.notes_memory,
             suggestions_memory=self.suggestions_memory,
-            ollama_url=self.CONFIG["OLLAMA_URL"]
+            ollama_url=self.CONFIG["OLLAMA_URL"],
         )
         self.model_busy = True
         logger.debug(

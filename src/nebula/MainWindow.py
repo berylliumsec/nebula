@@ -12,14 +12,13 @@ from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QPoint,
                           pyqtSignal)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
     QAction, QGuiApplication, QIcon, QPixmap, QTextCursor)
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
-                             QDialog, QDialogButtonBox, QFileDialog, QFrame,
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog, QFrame,
                              QHBoxLayout, QInputDialog, QLabel, QListWidget,
                              QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-                             QPushButton, QRadioButton, QToolBar, QToolButton,
-                             QToolTip, QVBoxLayout, QWidget)
+                             QPushButton, QSizePolicy, QToolBar,
+                             QToolButton, QToolTip, QVBoxLayout, QWidget)
 
-from . import constants, tool_configuration, update_utils, utilities
+from . import constants, tool_configuration, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
 from .chroma_manager import ChromaManager
@@ -1085,16 +1084,33 @@ class Nebula(QMainWindow):
     def pop_out_status_feed(self):
         # Create or reuse a separate window for the status feed pop-out
         self.status_feed_window = QMainWindow(self)
-        self.status_feed_window.setWindowTitle("Live status Feed")
+        self.status_feed_window.setWindowTitle("Live Status Feed")
 
         status_feed_widget = QListWidget()
-        status_feed_widget.setStyleSheet("border: none;")
-        status_feed_widget.addItems(
-            [
-                self.status_feed_list.item(i).text()
-                for i in range(self.status_feed_list.count())
-            ]
-        )
+        status_feed_widget.setSpacing(4)
+        self.load_stylesheet(return_path("config/dark-stylesheet.css"))
+
+        # Recreate wrapped items from existing widgets
+        for i in range(self.status_feed_list.count()):
+            item_widget = self.status_feed_list.itemWidget(
+                self.status_feed_list.item(i)
+            )
+
+            if isinstance(item_widget, QLabel):
+                text = item_widget.text()
+
+                item = QListWidgetItem()
+                label = QLabel(text)
+                label.setWordWrap(True)
+                label.setContentsMargins(4, 4, 4, 4)
+                label.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+                )
+                label.adjustSize()
+
+                item.setSizeHint(label.sizeHint())
+                status_feed_widget.addItem(item)
+                status_feed_widget.setItemWidget(item, label)
 
         self.status_feed_window.setCentralWidget(status_feed_widget)
         self.status_feed_window.resize(500, 700)
@@ -1103,8 +1119,22 @@ class Nebula(QMainWindow):
     def update_status_feed_ui(self, status_feed_data):
 
         self.status_feed_list.clear()
-        for item in status_feed_data:
+
+        for text in status_feed_data:
+            item = QListWidgetItem()
+            label = QLabel(text)
+            label.setWordWrap(True)
+            label.setContentsMargins(4, 4, 4, 4)
+            label.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            label.adjustSize()
+
+            item.setSizeHint(label.sizeHint())
             self.status_feed_list.addItem(item)
+            self.status_feed_list.setItemWidget(item, label)
+
+        self.status_feed_list.scrollToBottom()
 
     def init_toolbar(self):
 
@@ -1142,8 +1172,6 @@ class Nebula(QMainWindow):
         # Write the updated data back to config.json.
         with open(self.CONFIG_FILE_PATH, "w") as file:
             json.dump(data, file, indent=4)
-
-
 
     def open_tour(self):
         self.current_action_index = 0
@@ -1424,8 +1452,6 @@ class Nebula(QMainWindow):
         else:
             self.eco_mode.setIcon(self.eco_mode_off_icon)
 
-
-
     def update_suggestions_display(self, _=None):
         if self.suggestions_action.isChecked():
             self.suggestions_action.setIcon(QIcon(self.suggestions_off_icon_path))
@@ -1590,14 +1616,12 @@ class Nebula(QMainWindow):
         """Initiate the file upload process and handle the user's choice."""
         try:
 
-                file_path = self.get_file_path()
-         
-                self.process_file(file_path)
+            file_path = self.get_file_path()
+
+            self.process_file(file_path)
 
         except Exception as e:
             logger.error(f"An error occurred: {e}")
-
-
 
     def get_file_path(self) -> str:
         """Prompt the user to select a file from the Downloads folder."""
@@ -1623,8 +1647,6 @@ class Nebula(QMainWindow):
             logger.debug(f"File already exists: {destination_path}")
 
         logger.debug(f"File copied to: {destination_path}")
-
-
 
     def pop_out_notes(self, _=None):
         self.CONFIG = self.manager.load_config()

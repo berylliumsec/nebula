@@ -1,10 +1,11 @@
-import json
 import os
+from typing import List
 
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_ollama import ChatOllama
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
 from pydantic import BaseModel
+from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
+
 from . import constants
 from .conversation_memory import ConversationMemory
 from .log_config import setup_logging
@@ -15,11 +16,18 @@ logger = setup_logging(
     log_file=os.path.join(constants.SYSTEM_LOGS_DIR, "status_feed.log")
 )
 
+
 ########################################################################
 # Worker Signals & status Feed Worker
 ########################################################################
-class statusFeed(BaseModel):
-    status_feed: list
+class Status(BaseModel):
+    status: str
+
+
+class StatusFeed(BaseModel):
+    # Each item in the list must be a SomeStatus instance.
+    status_feed: List[Status]
+
 
 class WorkerSignals(QObject):
     # Signal to send the status feed result back to the caller
@@ -35,7 +43,6 @@ class statusFeedWorker(QRunnable):
         self,
         query: str,
         llm,
-        max_results: int = 2,
     ):
         super().__init__()
         self.query = query
@@ -47,30 +54,26 @@ class statusFeedWorker(QRunnable):
     def run(self):
         max_retries = 3
         attempt = 0
-        output = None
+        status_feed = []
 
         while attempt < max_retries:
             try:
-                # Invoke the LLM with the structured output configuration
-                results = self.llm.with_structured_output(statusFeed, method="json_schema").invoke(self.query)
-                logger.info(f"[statusFeedWorker] LLM response obtained: {results.content}")
+                # Invoke the LLM with the structured output configuration.
+                response = self.llm.with_structured_output(
+                    StatusFeed, method="json_schema"
+                ).invoke(self.query)
+                logger.info(f"[statusFeedWorker] LLM response obtained: {status_feed}")
 
-                # Check if the response is empty before processing it
-                if not results.content.strip():
-                    raise ValueError("LLM response is empty")
+                # Extract the status strings, handling both Status objects and tuples.
+                status_list = [status.status for status in response.status_feed]
 
-                # Parse the response using the new Pydantic method for JSON input
-                structured_data = statusFeed.model_validate_json(results.content)
-                # Extract the list from the model
-                output = structured_data.status_feed
-
-                # Verify the extracted output is indeed a list
-                if not isinstance(output, list):
+                # Check that status_list is a list.
+                if not isinstance(status_list, list):
                     raise ValueError("Extracted status_feed is not a list")
-                
+
                 break  # Successfully parsed
 
-            except (json.JSONDecodeError, ValueError) as error:
+            except Exception as error:
                 attempt += 1
                 logger.error(
                     f"Error on attempt {attempt}: {error}",
@@ -81,22 +84,8 @@ class statusFeedWorker(QRunnable):
                 else:
                     raise
 
-            except Exception as inner_exception:
-                attempt += 1
-                logger.error(
-                    f"Error processing LLM response on attempt {attempt}: {inner_exception}",
-                    exc_info=True,
-                )
-                if attempt < max_retries:
-                    logger.info("Retrying LLM invocation...")
-                else:
-                    raise
-
-        if output is None:
-            raise ValueError("Failed to process a valid response after all retries")
-
-        # Emit the extracted list back to the main thread (or caller)
-        self.signals.finished.emit(output)
+        # Emit the extracted list back to the main thread (or caller).
+        self.signals.finished.emit(status_list)
 
 
 ########################################################################
@@ -183,22 +172,7 @@ class statusFeedManager:
         )
 
         # Construct the query string based on conversation context.
-        query = (
-            "Generate a status feed based on the following conversation context. "
-            "Your response must be a valid JSON object that strictly adheres to the following format:\n\n"
-            "{\n"
-            '  "status_feed": [\n'
-            '    "A self-contained summary of status 1",\n'
-            '    "A self-contained summary of status 2",\n'
-            "    ...\n"
-            "  ]\n"
-            "}\n\n"
-            "Do not include any additional text, explanations, or comments outside of this JSON object. "
-            "Each summary should be a complete and independent description of one status.\n\n"
-            f"{conversation_context}"
-        )
-
-
+        query = f"Generate a status feed based on the following conversation context:{conversation_context}"
 
         logger.info(f"[statusFeedManager] Constructed status feed query: {query}")
 
@@ -206,7 +180,7 @@ class statusFeedManager:
         try:
             logger.info("[statusFeedManager] Initializing ChatOllama LLM...")
             self.llm = ChatOllama(model=self.CONFIG["MODEL"])
-            
+
             logger.info("[statusFeedManager] ChatOllama LLM initialized successfully.")
         except Exception as e:
             logger.error(f"[statusFeedManager] Failed to initialize ChatOllama: {e}")

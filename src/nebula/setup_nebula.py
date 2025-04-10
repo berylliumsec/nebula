@@ -2,13 +2,12 @@ import json
 import os
 import warnings
 
-import torch
 from PyQt6.QtCore import QFile, QSettings, pyqtSignal
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
+from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog,
                              QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                              QPushButton, QTextEdit, QVBoxLayout, QWidget)
 
-from . import constants, utilities
+from . import constants
 from .log_config import setup_logging
 from .update_utils import return_path
 
@@ -53,7 +52,9 @@ class settings(QWidget):
         layout.addWidget(self.folderBtn)
         logger.info("Setup folder button")
 
-        self.folderPathLabel = QLabel("You must select an Engagement Folder before any other option")
+        self.folderPathLabel = QLabel(
+            "You must select an Engagement Folder before any other option"
+        )
         layout.addWidget(self.folderPathLabel)
         logger.info("Setup folder label")
 
@@ -89,18 +90,18 @@ class settings(QWidget):
         modelLayout.addWidget(self.modelComboBox)
         layout.addLayout(modelLayout)
 
-
         self.onModelChanged(self.modelComboBox.currentText())
 
         # --- ChromaDB Directory Selection (Required) ---
-        ollamaTitleLabel = QLabel("Ollama URL (Optional, will use the default if not provided)")
+        ollamaTitleLabel = QLabel(
+            "Ollama URL (Optional, will use the default if not provided)"
+        )
         layout.addWidget(ollamaTitleLabel)
 
         # Create an editable QLineEdit with placeholder text
         self.ollamaLineEdit = QLineEdit()
         self.ollamaLineEdit.setPlaceholderText("https://your-ollama-server:port")
         layout.addWidget(self.ollamaLineEdit)
-
 
         # --- ChromaDB Directory Selection (Required) ---
         chromadbDirTitleLabel = QLabel("ChromaDB Directory (Required)")
@@ -187,7 +188,6 @@ class settings(QWidget):
             logger.error(f"Error selecting folder: {e}")
             logger.debug("Failed in selectFolder")
 
-
     def selectChromaDBDir(self):
         try:
             selected_dir = QFileDialog.getExistingDirectory(
@@ -234,8 +234,7 @@ class settings(QWidget):
                     "model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
                 )
                 self.modelComboBox.setCurrentText(self.model_name)
-                
-               
+
                 # Load the ChromaDB directory from details if available.
                 self.chromadbDir = details.get("chromadb_dir", "")
                 self.chromadbDirLineEdit.setText(self.chromadbDir)
@@ -295,8 +294,7 @@ class settings(QWidget):
                 "model": self.model_name,
                 "chromadb_dir": chromadb_dir,
                 "threatdb_dir": threatdb_dir,
-                "ollama_url": ollama_url
-
+                "ollama_url": ollama_url,
             }
             file_path = os.path.join(self.engagementFolder, "engagement_details.json")
             with open(file_path, "w") as file:
