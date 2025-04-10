@@ -57,7 +57,8 @@ Install Ollama and download the three supported models (you can also download on
  nebula
  ```
 
-** Using docker **
+**Using docker**
+
 First allow local connections to your X server:
 
 ```bash
