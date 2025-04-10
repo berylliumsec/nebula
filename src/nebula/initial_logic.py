@@ -1,9 +1,8 @@
 import sys
 import warnings
 
-import qdarkstyle
-from PyQt6.QtCore import (QObject, QRunnable, Qt, QThread, QThreadPool, QTimer,
-                          pyqtSignal)
+from PyQt6.QtCore import (QFile, QObject, QRunnable, Qt, QThread, QThreadPool,
+                          QTimer, pyqtSignal)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
     QFont, QIcon)
 from PyQt6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QLabel,
@@ -97,20 +96,28 @@ class Worker(QRunnable):
 class ProgressWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Loading..Please wait")
+        self.setObjectName("ModernProgressWindow")
+        self.setWindowTitle("Loading.. Please wait")
         self.setFixedSize(300, 100)
 
         self.progressBar = QProgressBar(self)
+        self.progressBar.setObjectName("ModernProgressBar")
         self.progressBar.setGeometry(50, 40, 200, 25)
         self.progressBar.setRange(0, 0)  # Indeterminate mode
 
         layout = QVBoxLayout()
         layout.addWidget(self.progressBar)
         self.setLayout(layout)
-        self.setStyleSheet("background-color: #2e2e2e; color: white;")
+        self.load_stylesheet(return_path("config/dark-stylesheet.css"))
 
         self.center()
         self.show()
+
+    def load_stylesheet(self, filename):
+        style_file = QFile(filename)
+        style_file.open(QFile.OpenModeFlag.ReadOnly | QFile.OpenModeFlag.Text)
+        self.original_stylesheet = style_file.readAll().data().decode("utf-8")
+        self.setStyleSheet(self.original_stylesheet)
 
     def center(self):
         screen = QApplication.primaryScreen()
@@ -208,6 +215,5 @@ class MainApplication(QApplication):
 
 if __name__ == "__main__":
     app = MainApplication(sys.argv)
-    app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyqt6"))
     app.start()
     sys.exit(app.exec())

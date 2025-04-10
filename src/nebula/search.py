@@ -4,7 +4,7 @@ from PyQt6.QtCore import (QObject, QRunnable, QStringListModel, Qt,
                           QThreadPool, pyqtSignal, pyqtSlot)
 from PyQt6.QtWidgets import QCompleter, QLineEdit
 
-from . import constants
+from . import constants, utilities
 from .chroma_manager import ChromaManager
 from .log_config import setup_logging
 
@@ -75,10 +75,20 @@ class CustomSearchLineEdit(QLineEdit):
         # Initialize ChatOllama LLM.
         try:
             logger.info("[Main] Initializing ChatOllama with model")
-            self.llm = ChatOllama(model=self.CONFIG["MODEL"])
+            if self.CONFIG["OLLAMA_URL"]:
+                self.llm = ChatOllama(
+                    model=self.CONFIG["MODEL"], base_url=self.CONFIG["OLLAMA_URL"]
+                )
+            else:
+                self.llm = ChatOllama(model=self.CONFIG["MODEL"])
             logger.info("[Main] ChatOllama initialized successfully.")
         except Exception as e:
             logger.error(f"[Main] Failed to initialize ChatOllama: {e}")
+            utilities.show_message(
+                "Error Loading Ollama",
+                "Ollama could not be loaded, please check the url in engagement settings and try again",
+            )
+
             self.llm = None
 
         self.returnPressed.connect(self.onReturnPressed)

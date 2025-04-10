@@ -1,202 +1,237 @@
-/* stylesheet.css */
+/* Modern Dark Theme with Light Blue Accents and Enhanced Borders */
+/* Accent Color: #03A9F4 */
+/* Default Border Color: #444444 */
+
+/* Main Window */
 QMainWindow {
-    background-color: #1E1E1E; /* Dark background, akin to  */
+    background-color: #1E1E1E;
     font-family: Source Code Pro;
     font-size: 10pt;
 }
 
+/* Dialogs */
 QDialog {
     background-color: #1E1E1E;
-    font-family: Source Code Pro; 
+    color: white;
+    font-family: Source Code Pro;
     font-size: 10pt;
 }
 
+/* Frames */
 QFrame {
-
-    background-color: #1E1E1E; /* Slightly lighter than main background */
-    border-radius: 5px; /* Rounded corners for modern feel */
-    font-family: Source Code Pro; 
+    background-color: #1E1E1E;
+    border-radius: 5px;
+    font-family: Source Code Pro;
     font-size: 10pt;
 }
 
+/* Command Input Area */
 #commandInputArea {
-    border: 1px solid #333333; /* Removing border for a cleaner look */
-    background-color: #1E1E1E; /* Dark input fields */
-    color: white; /* Light text for readability */
+    border: 1px solid #444444;
+    background-color: #1E1E1E;
+    color: white;
     border-radius: 4px;
     padding: 6px;
     font-size: 10pt;
-    font-family: Source Code Pro; 
+    font-family: Source Code Pro;
+}
+#commandInputArea:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
 }
 
+/* Search Area */
 #searchArea {
-    border: 1px solid #333333; /* Removing border for a cleaner look */
-    background-color: #1E1E1E; /* Dark input fields */
-    color: white; /* Light text for readability */
+    border: 1px solid #444444;
+    background-color: #1E1E1E;
+    color: white;
     border-radius: 4px;
     font-size: 10pt;
-    font-family: Source Code Pro; 
+    font-family: Source Code Pro;
 }
+#searchArea:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
+}
+
+/* Central Display Area */
 #centralDisplayArea {
-    border: 1px solid #333333; /* Removing border for a cleaner look */
-    background-color: #1e1e1e; /* Dark input fields */
-    color: white; /* Light text for readability */
+    border: 1px solid #444444;
+    background-color: #1E1E1E;
+    color: white;
     border-radius: 4px;
     padding: 6px;
     font-size: 10pt;
-    font-family: Source Code Pro; 
+    font-family: Source Code Pro;
 }
+
+#centralDisplayArea:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
+}
+/* General and Bulb Buttons */
 #generalButton, #bulbButton {
     border: none;
-    background-color: #1e1e1e; /* Slightly different than input fields for contrast */
+    background-color: #1E1E1E;
     color: white;
     padding: 6px;
     border-radius: 4px;
     text-align: center;
-    
-    font-family: Source Code Pro; 
+    font-family: Source Code Pro;
     font-size: 10pt;
+    transition: background-color 0.3s;
 }
-
 #generalButton:hover, #bulbButton:hover {
-    background-color: #333333; /* Highlight color on hover */
+    background-color: #03A9F4;
     color: white;
-    font-family: Source Code Pro; 
-    font-size: 10pt;
-}
-QToolBar QToolButton:hover {
-    background-color: #333333; /* Change to your desired hover background color */
 }
 
+
+
+
+/* Note, Result, Settings, and List Boxes */
 #notesBox, #notesPopUpBox, #resultBox, #settings, #listBox {
-    border: 1px solid #333333; /* Removing border for a cleaner look */
-    background-color: #1e1e1e; /* Dark gray background */
+    border: 1px solid #444444;
+    background-color: #1E1E1E;
     color: white;
     border-radius: 5px;
     padding: 10px;
-    font-family: Source Code Pro; 
+    font-family: Source Code Pro;
     font-size: 10pt;
 }
 
+/* Vertical Scrollbar */
 QScrollBar:vertical {
     background: transparent;
     width: 8px;
 }
-
 QScrollBar:vertical:hover {
-    background-color: #333333
+    background-color: #333333;
 }
-
 QScrollBar::handle:vertical {
-    background-color: #1e1e1e; /* Dark gray background */; /* Scrollbar handle color */
+    background-color: #1E1E1E;
     min-height: 20px;
     border-radius: 4px;
 }
-
+QScrollBar::handle:vertical:hover {
+    background-color: #03A9F4;
+}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0; /* Remove up/down buttons for a cleaner look */
+    height: 0;
 }
 
+/* Previous Results List in QListWidget */
 QListWidget::item#prevResultsList {
     border: none;
     background-color: #1E1E1E;
     color: white;
     padding: 5px;
     border-radius: 4px;
-    font-family: Source Code Pro; 
-    font-size: 10pt;;
+    font-family: Source Code Pro;
+    font-size: 10pt;
 }
-
 QListWidget::item:selected#prevResultsList, QListWidget::item:hover#prevResultsList {
-    background-color: #333333; /* Highlight color for selection/hover */
+    background-color: #03A9F4;
     color: white;
-    font-family: Source Code Pro; 
+    font-family: Source Code Pro;
     border: none;
 }
 
+/* Notes Text Edit */
 #notesTextEdit {
-    font-family: Source Code Pro; 
+    font-family: Source Code Pro;
     font-size: 10pt;
-    color: white; /* Font color */
-    
-}
-
-QDialog {
-    background-color: #2B2B2B;
-}
-
-
-QDialog {
-    background-color: #2b2b2b;
     color: white;
 }
 
+/* Toolbar Buttons Hover */
+QToolBar QToolButton:hover {
+    background-color: #03A9F4;
+}
+/* Toolbar */
 QToolBar {
-    background-color: #1e1e1e; /* Dark gray background */
-    border: none; /* Remove any border */
-    spacing: 5px; /* Space between toolbar items */
-   
-    /* You can also add padding on other sides if needed */
+    background-color: #1E1E1E;
+    spacing: 20px;
     padding-top: 20px;
     padding-right: 5px;
     padding-left: 5px;
+    border-top: 1px solid #333333;
+    border-bottom: 1px solid #333333;
+    border-radius: 10px
 }
-
-
 QToolBar QAction {
     color: white;
+    border-bottom: 1px solid #03A9F4;
 }
-
+QToolBar QToolButton {
+    border-bottom: 1px solid #03A9F4;
+}
+/* Engagement Label Within a Container */
 #engagement QLabel {
-    background-color: #1e1e1e;
+    background-color: transparent;
     color: white;
     border: none;
-    selection-background-color:#333333; 
-    selection-color: white; 
-
+    padding: 2px 0;
+    font-family: Source Code Pro;
+    font-size: 10pt;
+    border-bottom: 1px solid #03A9F4;
+    selection-background-color: #333333;
+    selection-color: white;
 }
 
-
-
-QLabel, QTextEdit, QListWidget {
-    background-color: #1e1e1e;
+/* Common Text Elements */
+/* Separate QLabel styling from QTextEdit and QListWidget to remove label borders */
+QTextEdit, QListWidget {
+    background-color: #1E1E1E;
     color: white;
-    border: 1px solid #333333; /* Removing border for a cleaner look */
-    selection-background-color:#333333; 
-    selection-color: white; 
-
+    border: 1px solid #444444;
+    selection-background-color: #333333;
+    selection-color: white;
 }
 
+/* Enhanced Standard Label Styling */
+QLabel {
+    border: none;
+    background-color: transparent;
+    color: white;
+    padding: 2px;
+    font-family: Source Code Pro;
+    font-size: 10pt;
+    border-bottom: 1px solid #03A9F4;
+}
 
+/* Username Label */
 #usernameLabel {
-    background-color: None;
+    background-color: transparent;
     color: white;
-    border: None;
+    border: none;
     font-weight: bold;
-
+    border-bottom: 1px solid #03A9F4;
 }
 
+/* Status Bar */
 QStatusBar {
+    color: white;
+}
 
-    color: white;   
-
-} 
+/* Disabled Push Buttons */
 QPushButton:disabled {
     background-color: #CCC;
     color: #666;
 }
 
-QToolBar {spacing: 20px;}
-
+/* Store Button */
 QPushButton#storeButton {
-    border:None; /* Removing border for a cleaner look */
-    background-color: None;
+    border: none;
+    background-color: transparent;
     color: white;
     border-radius: 5px;
-    
-
+}
+QPushButton#storeButton:hover {
+    border: 1px solid #03A9F4;
 }
 
+/* Login Button */
 QPushButton#loginButton {
     border: none;
     background-color: #1E1E1E;
@@ -204,165 +239,300 @@ QPushButton#loginButton {
     border-radius: 1px;
     padding: 5px 10px;
 }
+QPushButton#loginButton:hover {
+    background-color: #03A9F4;
+}
+
+/* General Push Buttons */
 QPushButton {
-    border: 1px solid #333333; /* Removing border for a cleaner look */
+    border: 1px solid #444444;
     background-color: #1E1E1E;
     color: white;
     border-radius: 5px;
     padding: 5px 10px;
-}
-
-QPushButton#loginButton:hover {
-    background-color: #333333;
+    transition: background-color 0.3s, border-color 0.3s;
 }
 QPushButton:hover {
-    background-color: #333333;
+    background-color: #03A9F4;
+    border-color: #03A9F4;
 }
 
-/* style.css */
+/* Additional Dialog Styling (Style.css Section) */
 QDialog {
     background-color: #1E1E1E;
     color: white;
 }
 
+/* Combo Boxes */
 QComboBox {
     background-color: #1E1E1E;
     color: white;
+    border: 1px solid #444444;
+    padding: 5px;
+}
+QComboBox:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
 }
 
-
-
-QLabel {
-    color: white;
-    padding: 2px;
-    font: Source Code Pro
-}
-
+/* Enhanced Standard Label Styling for Specific Cases */
+/* Forgot Password Label */
 QLabel#forgotPasswordLabel {
-    color: white;
-    font: Source Code Pro;
     border: none;
+    background-color: transparent;
+    color: white;
+    font-family: Source Code Pro;
+    border-bottom: 1px solid #03A9F4;
 }
 
+/* Line Edits */
 QLineEdit {
-    border: 1px solid #333333;
+    border: 1px solid #444444;
     padding: 5px;
     background-color: #1E1E1E;
     color: white;
 }
+QLineEdit:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
+}
+
+/* (Repeat) PushButton styles for consistency */
 QPushButton {
     background-color: #1E1E1E;
-    border: 1px solid #333333;
+    border: 1px solid #444444;
     padding: 5px;
     color: white;
 }
 QPushButton:hover {
-    background-color: #333333;
+    background-color: #03A9F4;
+    border-color: #03A9F4;
 }
 
+/* Dock Widget for Bookmarks */
 QDockWidget#bookmarksListWidget::title {
-    text-align: left; /* Align title text to the left */
-    background: white; /*  sidebar background color */
-    padding: 2.5px; /* Add some padding around the text */
-    color: white; /* Light grey text color, similar to  */
-    font-weight: bold; /* Make the title bold */
+    text-align: left;
+    background: #1E1E1E;
+    padding: 2.5px;
+    color: #03A9F4;
+    font-weight: bold;
 }
-
-/* Style the dock widget background */
 QDockWidget#bookmarksListWidget {
-    border: 1px solid #CCCCCC; /* Slight border for the dock widget */
-    /* titlebar-close-icon: url(path/to/close-icon.png);
-    titlebar-normal-icon: url(path/to/float-icon.png); */
+    border: 1px solid #444444;
 }
 
-/* Style the QListWidget inside the dock widget */
+/* Bookmarks List Widget */
 QListWidget#bookmarksListWidget {
-    background: #252526; /* Darker background for the list, similar to  */
-    border: none; /* Remove the border for a cleaner look */
-    color: white; /* Light grey text color for the items */
-    font-size: 14px; /* Slightly larger font size for readability */
+    background: #252526;
+    border: none;
+    color: white;
+    font-size: 14px;
 }
-
-/* Style the QListWidget items */
 QListWidget#bookmarksListWidget::item {
-    border-bottom: 1px solid #333; /* Subtle separator between items */
-    padding: 2.5px; /* Padding inside each item */
-    margin: 2.5px; /* Spacing between items */
+    border-bottom: 1px solid #03A9F4;
+    padding: 2.5px;
+    margin: 2.5px;
 }
-
 QListWidget#bookmarksListWidget::item:selected {
-    background-color: #333333; /*  */
-    color: white; /* White text for selected item */
+    background-color: #03A9F4;
+    color: white;
 }
 
-
+/* Hyperlinks */
 a { 
-    color: #f9f871; /* Pale yellow color for links */
-    text-decoration: none; /* No underline */
+    color: #03A9F4;
+    text-decoration: none;
 }
 
+/* Config Window Main */
 QMainWindow#configWindow {
-    background-color: #1E1E1E; /* Dark background similar to VSCode */
-    border: 1px solid #333333; /* Removing border for a cleaner look */
-}
-QPushButton#configWindow :hover {
-border: 2px solid #333333; /* Highlight border on hover with VSCode blue */
-}
-QPushButton#configWindow  {
-    color: white; /* Light grey text */
-    font-size: 14px; /* Slightly smaller font */
-    background-color: #1E1E1E; /* Darker button background */
-    border: 1px solid #333333; /* Removing border for a cleaner look */
-    border-radius: 4px; /* Less rounded corners */
-    padding: 6px 12px; /* Adjust padding */
-    margin: 4px;
-    text-align: left; /* Align text to left like VSCode buttons */
-}
-QPushButton#configWindow:checked {
-    background-color: #333333; /* VSCode selection color */
-    color: white; /* White text for checked state */
+    background-color: #1E1E1E;
+    border: 1px solid #444444;
 }
 QPushButton#configWindow:hover {
-    border: 1px solid#333333; /* Highlight border on hover */
+    border: 2px solid #03A9F4;
+}
+QPushButton#configWindow {
+    color: white;
+    font-size: 14px;
+    background-color: #1E1E1E;
+    border: 1px solid #444444;
+    border-radius: 4px;
+    padding: 6px 12px;
+    margin: 4px;
+    text-align: left;
+    transition: background-color 0.3s, border 0.3s;
+}
+QPushButton#configWindow:checked {
+    background-color: #03A9F4;
+    color: white;
+}
+QPushButton#configWindow:hover {
+    border: 1px solid #03A9F4;
 }
 QPushButton#configWindow:pressed {
-    background-color: #333333; /* Darker shade when pressed */
+    background-color: #03A9F4;
 }
+
+/* Config Window Line Edit */
 QLineEdit#configWindow {
     padding: 5px;
     margin: 5px;
-    border: 1px solid #333333; /* Removing border for a cleaner look */
-    border-radius: 4px; /* Consistent border radius */
-    color: white; /* Light grey text */
-    background-color: #1E1E1E; /* Matching the button background */
+    border: 1px solid #444444;
+    border-radius: 4px;
+    color: white;
+    background-color: #1E1E1E;
 }
-QScrollArea#configWindow {
-    border: none; /* Remove border from scroll areas if present */
+QLineEdit#configWindow:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
 }
 
+/* Config Window Scroll Area */
+QScrollArea#configWindow {
+    border: none;
+}
+
+/* Edit Command Dialog */
 #EditCommandDialog {
     color: white;
     background-color: #2C2C2C;
     font-family: 'Source Code Pro', monospace;
 }
-
-QDialog#loginDialog {
-    color: white;
-    background-color: #1E1E1E;
-    font-family: 'Source Code Pro', monospace;
-}
-
 #EditCommandDialog QLineEdit,
 #EditCommandDialog QPushButton,
 #EditCommandDialog QLabel {
     background-color: #1C1C1C;
     color: white;
 }
-
+/* Enhanced Label Styling within Edit Command Dialog */
+#EditCommandDialog QLabel {
+    border: none;
+    background-color: transparent;
+    color: white;
+    font-family: Source Code Pro;
+    border-bottom: 1px solid #03A9F4;
+}
 #EditCommandDialog QPushButton:pressed {
-    background-color:#333333;
+    background-color: #03A9F4;
 }
 
+/* Edit Command Dialog Text Edit Selection */
 QTextEdit#EditCommandDialogTextEdit::selection {
-    background-color: #1e1e1e; /* Dark gray background */; /* Adjust the color as needed */
+    background-color: #03A9F4;
+}
+QTextEdit:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
+}
+
+QWidget#EngagementSettings {
+    background-color: #1E1E1E;
+    color: white;
+}
+
+/* If you want the same border for all textedits */
+QTextEdit {
+    border: 1px solid #444444;
+    border-radius: 4px;
+    color: white;
+    background-color: #1E1E1E;
+}
+QTextEdit:focus {
+    border: 1px solid #03A9F4;
+}
+
+
+/* --- LABELS: Remove borders and use a clean, modern style --- */
+QWidget#EngagementSettings QLabel {
+    border: none;
+    color: #CCCCCC;
+    font-size: 10pt;
+    font-family: "Source Code Pro", monospace;
+    font-weight: bold;
+    padding: 4px;
+    border-bottom: 1px solid #03A9F4;
+    margin-bottom: 6px;
+}
+
+
+/* --- INPUT FIELDS (Interactive) --- */
+/* These get an accentuated, rounded border and a slightly different background */
+QWidget#EngagementSettings QLineEdit,
+QWidget#EngagementSettings QTextEdit {
+    border: 2px solid #444444;   /* Subtle border by default */
+    border-radius: 6px;
+    background-color: #2E2E2E;   /* Distinct background tone */
+    padding: 6px;
+    color: #FFFFFF;
+    font-family: "Source Code Pro", monospace;
+    font-size: 10pt;
+    margin-top: 6px;
+    margin-bottom: 6px;
+}
+
+/* Hover state for inputs */
+QWidget#EngagementSettings QLineEdit:hover,
+QWidget#EngagementSettings QTextEdit:hover {
+    border: 2px solid #666666;   /* Slightly brighter on hover */
+}
+
+/* Focus state for inputs */
+QWidget#EngagementSettings QLineEdit:focus,
+QWidget#EngagementSettings QTextEdit:focus {
+    border: 2px solid #03A9F4;   /* Accent color on focus */
+    background-color: #3A3A3A;    /* A subtle change in background on focus */
+}
+
+/* --- BUTTONS: Keep a modern accented border --- */
+QWidget#EngagementSettings QPushButton {
+    border: 2px solid #03A9F4;
+    border-radius: 6px;
+    padding: 6px 10px;
+    background-color: #1E1E1E;
+    color: #FFFFFF;
+    font-family: "Source Code Pro", monospace;
+    font-size: 10pt;
+    margin-top: 6px;
+    margin-bottom: 6px;
+}
+
+/* Optional: Hover and pressed states for buttons */
+QWidget#EngagementSettings QPushButton:hover {
+    background-color: #03A9F4;
+    color: #FFFFFF;
+}
+
+QWidget#EngagementSettings QPushButton:pressed {
+    background-color: #3A3A3A;
+}
+
+/* Modern styling for the progress window */
+QWidget#ModernProgressWindow {
+    background-color: #1E1E1E;
+    border: 1px solid #444444;
+    border-radius: 8px;
+}
+
+/* Style for the progress bar (container) */
+QWidget#ModernProgressWindow QProgressBar {
+    border: 1px solid #444444;
+    border-radius: 8px;
+    background-color: #2E2E2E;
+    text-align: center;
+    color: white;
+    font-family: Source Code Pro;
+    font-size: 10pt;
+}
+
+/* Styling for the progress bar chunk (the moving part) */
+QWidget#ModernProgressWindow QProgressBar::chunk {
+    border-radius: 8px;
+    background-color: #03A9F4;
+}
+
+/* Optionally, add a hover or focus effect for the progress bar if needed */
+QWidget#ModernProgressWindow QProgressBar:focus {
+    border: 1px solid #03A9F4;
+    transition: border-color 0.3s;
 }

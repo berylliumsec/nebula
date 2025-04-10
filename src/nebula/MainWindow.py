@@ -12,24 +12,24 @@ from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QPoint,
                           pyqtSignal)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
     QAction, QGuiApplication, QIcon, QPixmap, QTextCursor)
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup,
-                             QDialog, QDialogButtonBox, QFileDialog, QFrame,
-                             QHBoxLayout, QInputDialog, QLabel, QListWidget,
-                             QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-                             QPushButton, QRadioButton, QToolBar, QToolButton,
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog,
+                             QFrame, QHBoxLayout, QInputDialog, QLabel,
+                             QListWidget, QListWidgetItem, QMainWindow, QMenu,
+                             QMessageBox, QPushButton, QSizePolicy, QToolBar,
                              QToolTip, QVBoxLayout, QWidget)
 
-from . import constants, tool_configuration, update_utils, utilities
+from . import constants, tool_configuration, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
 from .chroma_manager import ChromaManager
 from .configuration_manager import ConfigManager
 from .document_loader import DocumentLoaderDialog
-from .engagement import EngagementWindow
 from .help import HelpWindow
 from .image_command_window import ImageCommandWindow
 from .log_config import setup_logging
 from .search import CustomSearchLineEdit
+from .setup_nebula import settings
+from .status_update_feed_manager import statusFeedManager
 from .suggestions_pop_out_window import SuggestionsPopOutWindow
 from .terminal_emulator import CommandInputArea, TerminalEmulatorWindow
 from .update_utils import return_path
@@ -276,14 +276,6 @@ class LogSideBar(QListWidget):
     def contextMenuEvent(self, event):
         self.lastHoverPos = event.pos()
 
-        self.context_menu.setStyleSheet(
-            """
-            QMenu::item:selected {
-                background-color:#333333; 
-            }
-        """
-        )
-
         self.context_menu.addAction(self.send_to_ai_notes_action)
 
         self.context_menu.addAction(self.send_to_ai_suggestions_action)
@@ -457,7 +449,7 @@ class Nebula(QMainWindow):
         self.log_side_bar.send_to_autonomous_ai_signal.connect(
             self.process_new_file_with_ai
         )
-
+        self.setupWindow = settings()
         self.log_side_bar.send_to_ai_suggestions_signal.connect(
             self.process_new_file_with_ai
         )
@@ -491,8 +483,6 @@ class Nebula(QMainWindow):
         self.search_area.setObjectName("searchArea")
         self.search_area.setToolTip("Search using RAG")
         self.search_area.resultSelected.connect(self.on_search_result_selected)
-        if not self.CONFIG["OLLAMA"]:
-            self.search_area.setEnabled(False)
         self.suggestions_layout.addWidget(self.search_area, 9)
 
         self.suggestions_button = QPushButton(self)
@@ -521,9 +511,6 @@ class Nebula(QMainWindow):
         self.command_input_area = CommandInputArea(manager=self.manager)
 
         self.tools_agent_mode.connect(self.command_input_area.set_agent_mode)
-        self.command_input_area.model_created.connect(
-            self.enable_disabled_due_to_model_creation
-        )
         self.command_input_area.setFixedHeight(50)
         self.command_input_area.setObjectName("commandInputArea")
         self.command_input_area.setToolTip(
@@ -577,7 +564,6 @@ class Nebula(QMainWindow):
 
         self.clear_button.setIcon(QIcon(self.clear_button_icon_path))
         self.upload_button = QPushButton()
-        self.upload_button.setEnabled(False)  # This disables the button.
         self.upload_button.setFixedHeight(50)
         self.upload_button.setObjectName("uploadButton")
         self.upload_button.setToolTip("Upload a file for analysis")
@@ -762,7 +748,6 @@ class Nebula(QMainWindow):
             search_window=self.search_area,
         )
 
-        self.ai_notes.setObjectName("notesBox")
         if not self.ai_notes.toHtml():
             self.ai_notes.setHtml("AI notes will be displayed here")
 
@@ -785,39 +770,113 @@ class Nebula(QMainWindow):
             )
         )
 
-        self.notes_top_layout = QHBoxLayout()
-        self.notes_top_layout.addWidget(
-            self.pop_out_button,
-            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+        # --- Notes Pop-out Button (reuse existing) ---
+        self.notes_pop_out_button = QPushButton()
+        self.notes_pop_out_button.setIcon(QIcon(self.pop_out_button_icon_path))
+        self.notes_pop_out_button.setToolTip("Expand Notes")
+        self.notes_pop_out_button.setFixedSize(30, 30)
+        self.notes_pop_out_button.clicked.connect(
+            lambda: self.provide_feedback_and_execute(
+                self.notes_pop_out_button,
+                return_path("Images/clicked.png"),
+                return_path("Images/pop_out.png"),
+                self.pop_out_notes,
+            )
         )
 
+        # --- Notes Top Layout with title ---
+        self.notes_top_layout = QHBoxLayout()
+        self.notes_label = QLabel("AI Notes")
+        self.notes_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.notes_top_layout.addWidget(self.notes_label)
+        self.notes_top_layout.addStretch()
+        self.notes_top_layout.addWidget(self.notes_pop_out_button)
+
+        # --- Notes Frame ---
         self.notes_frame = QFrame()
         self.notes_frame_layout = QVBoxLayout(self.notes_frame)
+        self.notes_frame_layout.setContentsMargins(0, 0, 0, 0)
+        self.notes_frame_layout.setSpacing(2)
         self.notes_frame_layout.addLayout(self.notes_top_layout)
         self.notes_frame_layout.addWidget(self.ai_notes)
+
+        # --- status Feed Pop-out Button ---
+        self.status_feed_pop_out_button = QPushButton()
+        self.status_feed_pop_out_button.setIcon(QIcon(self.pop_out_button_icon_path))
+        self.status_feed_pop_out_button.setToolTip("Expand status Feed")
+        self.status_feed_pop_out_button.setFixedSize(30, 30)
+
+        self.status_feed_pop_out_button.clicked.connect(
+            lambda: self.provide_feedback_and_execute(
+                self.status_feed_pop_out_button,
+                return_path("Images/clicked.png"),
+                return_path("Images/pop_out.png"),
+                self.pop_out_status_feed,  # Define this function separately
+            )
+        )
+
+        # --- status Feed Top Layout ---
+        self.status_feed_top_layout = QHBoxLayout()
+        self.status_feed_label = QLabel("Live status Feed")
+        self.status_feed_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.status_feed_top_layout.addWidget(self.status_feed_label)
+        self.status_feed_top_layout.addStretch()
+        self.status_feed_top_layout.addWidget(self.status_feed_pop_out_button)
+
+        # --- status Feed List Widget ---
+        self.status_feed_list = QListWidget()
+        self.status_feed_list.setSpacing(4)
+        self.status_feed_list.model().rowsInserted.connect(
+            lambda: self.status_feed_list.scrollToBottom()
+        )
+
+        # --- status Feed Frame ---
+        self.status_feed_frame = QFrame()
+        status_feed_layout = QVBoxLayout(self.status_feed_frame)
+        status_feed_layout.setContentsMargins(0, 0, 0, 0)
+        status_feed_layout.setSpacing(2)
+        status_feed_layout.addLayout(self.status_feed_top_layout)
+        status_feed_layout.addWidget(self.status_feed_list)
+
+        # Right-side horizontal layout (notes + status feed)
+        self.right_side_layout = QHBoxLayout()
+        self.right_side_layout.setContentsMargins(0, 0, 0, 0)
+        self.right_side_layout.setSpacing(0)
+        self.right_side_layout.addWidget(self.notes_frame)
+        self.right_side_layout.addWidget(self.status_feed_frame)
+
+        # Equal stretch factors
+        self.right_side_layout.setStretch(0, 1)  # Notes
+        self.right_side_layout.setStretch(1, 1)  # status Feed
+
+        # Central layout (main content area)
         self.v_layout.addWidget(self.middle_frame)
         self.v_layout.addWidget(self.input_frame)
-        self.v_layout_two = QVBoxLayout()
-        self.v_layout_two.addWidget(self.notes_frame)
 
-        self.v_layout_two.setStretch(0, 1)
-        self.v_layout_two.setStretch(1, 1)
-
+        # Main layout setup
+        self.main_layout = QHBoxLayout()
         self.main_layout.addWidget(self.log_side_bar)
         self.main_layout.addLayout(self.v_layout)
-        self.main_layout.addLayout(self.v_layout_two)
+        self.main_layout.addLayout(self.right_side_layout)
 
-        self.main_layout.setStretch(0, 1)  # Stretch factor for the prev_results_list
+        # Corrected main layout stretch factors
+        self.main_layout.setStretch(0, 1)  # Sidebar (log_side_bar)
         self.main_layout.setStretch(
-            1, 3
-        )  # Stretch factor for the v_layout (main content area)
-        self.main_layout.setStretch(
-            2, 1
-        )  # Stretch factor for the v_layout_two (notes area)
+            1, 4
+        )  # Central main content (middle_frame + input_frame)
+        self.main_layout.setStretch(2, 2)  # Right side (notes + status feed)
 
+        # Set the main layout
         self.central_widget = QWidget()
         self.central_widget.setLayout(self.main_layout)
         self.setCentralWidget(self.central_widget)
+
         self.resize(1320, 700)
         self.ai_file_watcher = QFileSystemWatcher([self.CONFIG["LOG_DIRECTORY"]])
         self.ai_file_watcher.directoryChanged.connect(self.on_directory_changed)
@@ -904,7 +963,12 @@ class Nebula(QMainWindow):
                 self.open_tour,
             )
         )
-
+        self.add_document_icon = QIcon(return_path("Images/vector.svg"))
+        # Create an action with an icon (adjust the icon path as needed).
+        self.loader_action = QAction(self.add_document_icon, "Load Document", self)
+        self.help_actions.append(self.loader_action)
+        self.loader_action.triggered.connect(self.show_document_loader_dialog)
+        self.toolbar.addAction(self.loader_action)
         self.tour.setIcon(self.tour_icon)
         self.tour.setToolTip("tour")
         self.toolbar.addAction(self.tour)
@@ -925,35 +989,6 @@ class Nebula(QMainWindow):
         self.child_windows.append(ImageCommandWindow)
         self.worker_threads = {}
 
-        self.model_selection_button = QToolButton()
-        icon = QIcon(return_path("Images/model_selection.png"))
-        self.model_selection_button.setIcon(icon)
-        self.model_selection_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.MenuButtonPopup
-        )
-        self.model_menu = QMenu(self.model_selection_button)
-        # this needs to be adjusted eventually to be more robust, maybe allow the user to enter their model name
-        self.model_menu.addAction(
-            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-            lambda: self.on_model_selected("deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
-        )
-        self.model_menu.addAction(
-            "qwen2.5-coder:32b",
-            lambda: self.on_model_selected("qwen2.5-coder:32b"),
-        )
-
-        self.model_menu.addAction(
-            "meta-llama/Llama-3.1-8B-Instruct",
-            lambda: self.on_model_selected("mistralai/Mistral-7B-Instruct-v0.2"),
-        )
-        self.model_menu.addAction(
-            "mistralai/Mistral-7B-Instruct-v0.2",
-            lambda: self.on_model_selected("mistralai/Mistral-7B-Instruct-v0.2"),
-        )
-        self.model_selection_button.setMenu(self.model_menu)
-
-        # Add the button to the toolbar
-        self.toolbar.addWidget(self.model_selection_button)
         self.icons_path = "path/to/tools/icons"  # Adjust to your icons path
         self.tools_window = tool_configuration.ToolsWindow(
             self.CONFIG.get("AVAILABLE_TOOLS", []),
@@ -963,21 +998,19 @@ class Nebula(QMainWindow):
             self.add_new_tool,  # Add callback for adding a new tool
             self,
         )
-        self.agents_off_icon = QIcon(return_path("Images/agent_off.png"))
-        self.agents_on_icon = QIcon(return_path("Images/agent_on.png"))
-        self.agentAction = QAction(
-            self.agents_off_icon,
-            "Click to toggle agents on or off",
-            self,
-        )
-        self.add_document_icon = QIcon(return_path("Images/vector.svg"))
-        if self.CONFIG["OLLAMA"]:
-            self.agentAction.setEnabled(False)
-        self.agentAction.setCheckable(True)
-        self.agentAction.triggered.connect(self.activate_deactivate_agent)
-        self.toolbar.addAction(self.agentAction)
         self.autonomous_mode = False
+        self.status_feed_manager = statusFeedManager(
+            manager=self.manager, update_ui_callback=self.update_status_feed_ui
+        )
+        # Do an initial update of the status feed
+        self.status_feed_manager.update_status_feed()
 
+        # Create a QTimer to update the status feed every 15 minutes (900,000 ms)
+        self.status_feed_timer = QTimer(self)
+        self.status_feed_timer.timeout.connect(
+            self.status_feed_manager.update_status_feed
+        )
+        self.status_feed_timer.start(300000)  # 5 minutes
         self.engagement_json = {}
         window_title = "Nebula"
         self.worker = None
@@ -1001,7 +1034,7 @@ class Nebula(QMainWindow):
         logger.debug("Starting tour")
         self.tour_timer.timeout.connect(self.next_step)
         self.main_window_loaded.emit(True)
-        self.model_signal.connect(self.command_input_area.create_model)
+
         self.command_input_area.model_busy_busy_signal.connect(
             self.central_display_area.enable_or_disable_due_to_model_creation
         )
@@ -1011,69 +1044,80 @@ class Nebula(QMainWindow):
         self.model_creation_in_progress.connect(
             self.log_side_bar.enable_or_disable_due_to_model_creation
         )
-        if not self.CONFIG["OLLAMA"]:
-            self.model_creation_in_progress.emit(True)
-            self.central_display_area.model_creation_in_progress.emit(True)
-            self.model_signal.emit(True)
-            self.model_menu.setEnabled(False)
 
         logger.debug("main window loaded")
         self.vector_db = ChromaManager(
             collection_name="nebula_collection",
             persist_directory=self.CONFIG["CHROMA_DB_PATH"],
         )
-        self.init_toolbar()
 
-    def init_toolbar(self):
+    def pop_out_status_feed(self):
+        try:
+            # Create or reuse a separate window for the status feed pop-out
+            self.status_feed_window = QMainWindow(self)
+            self.status_feed_window.setWindowTitle("Live Status Feed")
 
-        # Create an action with an icon (adjust the icon path as needed).
-        loader_action = QAction(self.add_document_icon, "Load Document", self)
-        loader_action.triggered.connect(self.show_loader_dialog)
-        self.toolbar.addAction(loader_action)
+            status_feed_widget = QListWidget()
+            status_feed_widget.setSpacing(4)
+            self.load_stylesheet(return_path("config/dark-stylesheet.css"))
 
-    def show_loader_dialog(self):
-        # Create and show the pop-out dialog.
-        dialog = DocumentLoaderDialog(self.vector_db, self)
-        dialog.setWindowModality(Qt.WindowModality.NonModal)
-        dialog.resize(800, 600)  # Set default size to 800x600 pixels
-        dialog.show()
+            # Recreate wrapped items from existing widgets
+            for i in range(self.status_feed_list.count()):
+                item_widget = self.status_feed_list.itemWidget(
+                    self.status_feed_list.item(i)
+                )
 
+                if isinstance(item_widget, QLabel):
+                    text = item_widget.text()
 
-    def on_model_selected(self, model):
-        # Load the current configuration.
-        self.CONFIG = self.manager.load_config()
-        self.engagement_folder = self.CONFIG["ENGAGEMENT_FOLDER"]
+                    item = QListWidgetItem()
+                    label = QLabel(text)
+                    label.setWordWrap(True)
+                    label.setContentsMargins(4, 4, 4, 4)
+                    label.setSizePolicy(
+                        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+                    )
+                    label.adjustSize()
 
-        # Build the path to the config.json file.
-        self.CONFIG_FILE_PATH = os.path.join(self.engagement_folder, "config.json")
+                    item.setSizeHint(label.sizeHint())
+                    status_feed_widget.addItem(item)
+                    status_feed_widget.setItemWidget(item, label)
 
-        # Read the existing JSON data from config.json, if it exists.
-        if os.path.exists(self.CONFIG_FILE_PATH):
-            with open(self.CONFIG_FILE_PATH, "r") as file:
-                data = json.load(file)
-        else:
-            data = {}
+            self.status_feed_window.setCentralWidget(status_feed_widget)
+            self.status_feed_window.resize(500, 700)
+            self.status_feed_window.show()
+        except Exception as e:
+            logger.error(f"{e}")
 
-        # Update the configuration with the new value.
-        data["MODEL"] = model
-        logger.debug(f"Dumping model preference data: {data}")
+    def update_status_feed_ui(self, status_feed_data):
 
-        # Write the updated data back to config.json.
-        with open(self.CONFIG_FILE_PATH, "w") as file:
-            json.dump(data, file, indent=4)
-        if not self.CONFIG["OLLAMA"]:
-            self.model_signal.emit(True)
-            self.upload_button.setEnabled(False)
-            self.model_menu.setEnabled(False)
-            self.model_creation_in_progress.emit(True)
-            self.central_display_area.model_creation_in_progress.emit(True)
+        self.status_feed_list.clear()
 
-    def enable_disabled_due_to_model_creation(self, signal):
-        if signal:
-            self.upload_button.setEnabled(True)
-            self.model_menu.setEnabled(True)
-            self.model_creation_in_progress.emit(False)
-            self.central_display_area.model_creation_in_progress.emit(False)
+        for text in status_feed_data:
+            item = QListWidgetItem()
+            label = QLabel(text)
+            label.setWordWrap(True)
+            label.setContentsMargins(4, 4, 4, 4)
+            label.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            label.adjustSize()
+
+            item.setSizeHint(label.sizeHint())
+            self.status_feed_list.addItem(item)
+            self.status_feed_list.setItemWidget(item, label)
+
+        self.status_feed_list.scrollToBottom()
+
+    def show_document_loader_dialog(self):
+        try:
+            # Create and show the pop-out dialog.
+            dialog = DocumentLoaderDialog(self.vector_db, self)
+            dialog.setWindowModality(Qt.WindowModality.NonModal)
+            dialog.resize(800, 600)  # Set default size to 800x600 pixels
+            dialog.show()
+        except Exception as e:
+            logger.error(f"{e}")
 
     def open_tour(self):
         self.current_action_index = 0
@@ -1173,6 +1217,7 @@ class Nebula(QMainWindow):
                 logger.debug(f"Error bringing window to front: {e}")
                 # Optionally, remove the window from the list if it's no longer valid
                 self.child_windows.remove(window)
+                logger.error(f"{e}")
 
     def update_clear_button_state(self, is_busy):
         if is_busy:
@@ -1250,23 +1295,18 @@ class Nebula(QMainWindow):
                 QIcon(return_path("Images/work_complete.png"))
             )
 
+    def update_engagement_folder(self, text: str):
+        logger.debug(f"Updating engagement folder as {text}")
+        self.engagement_folder = text
+        self.manager.setengagement_folder(text)
+
     def open_engagement(self):
-        engagement_window = None
         try:
-            engagement_window = EngagementWindow(
-                engagement_file=self.engagement_details_file
-            )
+            self.setupWindow = settings()
+            self.setupWindow.setupCompleted.connect(self.update_engagement_folder)
+            self.setupWindow.show()
         except Exception as e:
-            logger.error(
-                f"Engagement file not found :{e}, file is {self.engagement_details_file}"
-            )
-        try:
-            self.child_windows.append(engagement_window)
-            engagement_window.show()
-        except Exception as e:
-            logger.error(
-                f"An error occurred while trying to open the engagement window {e}"
-            )
+            logger.error(f"{e}")
 
     def open_tools_window(self):
         self.tools_window.show()
@@ -1312,9 +1352,20 @@ class Nebula(QMainWindow):
         self.command_input_area.terminal.write("reset \n")
 
     def open_help(self, _=None):
-        self.help_window = HelpWindow()
-        self.child_windows.append(self.help_window)
-        self.help_window.show()
+        try:
+            # If the help window already exists and is visible, bring it to the front.
+            if self.help_window is not None:
+                if self.help_window.isVisible():
+                    self.help_window.raise_()
+                    self.help_window.activateWindow()
+                    return
+
+            # Otherwise, create a new instance of the HelpWindow.
+            self.help_window = HelpWindow()
+            self.child_windows.append(self.help_window)
+            self.help_window.show()
+        except Exception as e:
+            logger.error(f"{e}")
 
     def closeEvent(self, event):
         # Close all child windows first
@@ -1354,20 +1405,8 @@ class Nebula(QMainWindow):
         else:
             self.eco_mode.setIcon(self.eco_mode_off_icon)
 
-    def activate_deactivate_agent(self):
-
-        if self.agentAction.isChecked():
-            self.tools_agent_mode.emit(True)
-            self.agentAction.setIcon(self.agents_on_icon)
-
-        else:
-            self.agentAction.setIcon(QIcon(self.agents_off_icon))
-            self.tools_agent_mode.emit(False)
-
     def update_suggestions_display(self, _=None):
         if self.suggestions_action.isChecked():
-            self.ai_note_taking_action.setChecked(False)
-            self.ai_note_taking_action.setIcon(self.ai_notes_off_icon)
             self.suggestions_action.setIcon(QIcon(self.suggestions_off_icon_path))
             self.statusBar().showMessage(
                 "AI suggestions has been activated",
@@ -1403,41 +1442,66 @@ class Nebula(QMainWindow):
         self.central_display_area.insertPlainText(data)
 
     def open_note_taking(self, _=None):
-        self.textEditor.show()
+        try:
+            if self.textEditor.isVisible():
+                self.textEditor.raise_()
+                self.textEditor.activateWindow()
+            else:
+                self.textEditor.show()
+        except Exception as e:
+            logger.error(f"{e}")
 
     def openTerminalEmulator(self, _=None):
-        self.terminal_emulator_number += 1
-        self.terminalWindow = TerminalEmulatorWindow(
-            self,
-            manager=self.manager,
-            terminal_emulator_number=self.terminal_emulator_number,
-        )
-        self.model_signal.connect(self.terminalWindow.command_input_area.create_model)
-        self.child_windows.append(self.terminalWindow)
+        try:
+            self.terminal_emulator_number += 1
+            self.terminalWindow = TerminalEmulatorWindow(
+                self,
+                manager=self.manager,
+                terminal_emulator_number=self.terminal_emulator_number,
+            )
 
-        self.terminalWindow.command_input_area.update_ai_notes.connect(
-            self.update_ai_notes
-        )
-        self.terminalWindow.command_input_area.update_suggestions_notes.connect(
-            self.update_suggestions_notes
-        )
+            self.child_windows.append(self.terminalWindow)
 
-        self.terminalWindow.command_input_area.threads_status.connect(
-            self.setThreadStatus
-        )
-        self.terminalWindow.show()
+            self.terminalWindow.command_input_area.update_ai_notes.connect(
+                self.update_ai_notes
+            )
+            self.terminalWindow.command_input_area.update_suggestions_notes.connect(
+                self.update_suggestions_notes
+            )
+
+            self.terminalWindow.command_input_area.threads_status.connect(
+                self.setThreadStatus
+            )
+            self.terminalWindow.show()
+        except Exception as e:
+            logger.error(f"{e}")
 
     def open_suggestions_pop_out_window(self, _=None):
-        self.suggestions_button.setIcon(QIcon(self.suggestions_not_available_icon_path))
-        self.suggestions_pop_out_window.show()
+        try:
+            self.suggestions_button.setIcon(
+                QIcon(self.suggestions_not_available_icon_path)
+            )
+
+            # Check if the window is already visible.
+            if self.suggestions_pop_out_window.isVisible():
+                self.suggestions_pop_out_window.activateWindow()
+            else:
+                self.suggestions_pop_out_window.show()
+        except Exception as e:
+            logger.error(f"{e}")
 
     def open_image_command_window(self, _=None):
-        self.image_command_window.show()
+        try:
+            if self.image_command_window.isVisible():
+                self.image_command_window.raise_()
+                self.image_command_window.activateWindow()
+            else:
+                self.image_command_window.show()
+        except Exception as e:
+            logger.error(f"{e}")
 
     def ai_note_taking_function(self, checked):
         if checked:
-            self.suggestions_action.setChecked(False)
-            self.suggestions_action.setIcon(QIcon(self.suggestions_off_icon_path))
             self.ai_note_taking_action.setIcon(self.ai_notes_on_icon)
             self.statusBar().showMessage(
                 "AI Note taking has been activated",
@@ -1531,50 +1595,13 @@ class Nebula(QMainWindow):
     def upload_file(self, _=None):
         """Initiate the file upload process and handle the user's choice."""
         try:
-            choice = self.get_user_choice()
-            if choice:
-                file_path = self.get_file_path()
-                if file_path:
-                    if choice == "AI Processing":
-                        self.process_file(file_path)
-                    elif choice == "Index for Search":
-                        self.index_file(file_path)
+
+            file_path = self.get_file_path()
+
+            self.process_file(file_path)
+
         except Exception as e:
             logger.error(f"An error occurred: {e}")
-
-    def get_user_choice(self) -> str:
-        """Present a dialog to the user to choose between AI processing and indexing for search."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Select Action")
-
-        layout = QVBoxLayout()
-
-        ai_radio = QRadioButton("AI Processing")
-        index_radio = QRadioButton("Index for Search")
-        ai_radio.setChecked(True)  # Default selection
-
-        button_group = QButtonGroup(dialog)
-        button_group.addButton(ai_radio)
-        button_group.addButton(index_radio)
-
-        layout.addWidget(ai_radio)
-        layout.addWidget(index_radio)
-
-        button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        layout.addWidget(button_box)
-
-        dialog.setLayout(layout)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            if ai_radio.isChecked():
-                return "AI Processing"
-            elif index_radio.isChecked():
-                return "Index for Search"
-        return None
 
     def get_file_path(self) -> str:
         """Prompt the user to select a file from the Downloads folder."""
@@ -1601,32 +1628,28 @@ class Nebula(QMainWindow):
 
         logger.debug(f"File copied to: {destination_path}")
 
-    def index_file(self, file_path: str):
-        """Index the file for search by reading its content and processing each line."""
-        task = IndexFileTask(file_path, self.index_line)
-        self.threadPool.start(task)
-
-    def index_line(self, line: str):
-        """Index a single line of text."""
-        try:
-            indexdir = update_utils.return_path("command_search_index")
-            self.search_area.add_to_index(line, indexdir)
-            logger.info(f"Indexed line: {line}")
-        except Exception as e:
-            logger.error(f"Failed to index line: {line} - {e}")
-
     def pop_out_notes(self, _=None):
-        self.CONFIG = self.manager.load_config()
-        self.pop_out_window = AiNotesPopupWindow(
-            notes_file_path=os.path.join(
-                self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"], "/ai_notes.html"
-            ),
-            manager=self.manager,
-            command_input_area=self.command_input_area,
-        )
-        self.pop_out_window.setTextInTextEdit(self.ai_notes.toHtml())
-        self.pop_out_window.textUpdated.connect(self.update_main_notes)
-        self.pop_out_window.show()
+        try:
+            # If the pop-out window already exists and is visible, bring it to the front.
+            if self.pop_out_window.isVisible():
+                self.pop_out_window.raise_()
+                self.pop_out_window.activateWindow()
+                return
+
+            # Otherwise, create a new notes popup window.
+            self.CONFIG = self.manager.load_config()
+            self.pop_out_window = AiNotesPopupWindow(
+                notes_file_path=os.path.join(
+                    self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"], "ai_notes.html"
+                ),
+                manager=self.manager,
+                command_input_area=self.command_input_area,
+            )
+            self.pop_out_window.setTextInTextEdit(self.ai_notes.toHtml())
+            self.pop_out_window.textUpdated.connect(self.update_main_notes)
+            self.pop_out_window.show()
+        except Exception as e:
+            logger.error(f"{e}")
 
     def update_main_notes(self, text):
         self.ai_notes.setHtml(text)
@@ -1656,11 +1679,13 @@ class Nebula(QMainWindow):
 
                     logger.debug(f"Processing file: {file}")
                     if self.suggestions_action.isChecked():
-                        self.process_new_file_with_ai(file, "suggestion_files")
-                        logger.debug(f"File processed for suggestions: {file}")
+                        if not file.startswith("ai"):
+                            self.process_new_file_with_ai(file, "suggestion_files")
+                            logger.debug(f"File processed for suggestions: {file}")
                     if self.ai_note_taking_action.isChecked():
-                        self.process_new_file_with_ai(file, "notes_files")
-                        logger.debug(f"File processed for AI note-taking: {file}")
+                        if not file.startswith("ai"):
+                            self.process_new_file_with_ai(file, "notes_files")
+                            logger.debug(f"File processed for AI note-taking: {file}")
 
             else:
                 logger.debug("No new files found.")
