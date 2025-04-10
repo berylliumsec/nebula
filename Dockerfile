@@ -3,10 +3,11 @@
 # -----------------------------------------------------------------------------
 FROM ubuntu:jammy
 ENV DEBIAN_FRONTEND=noninteractive
+
 # -----------------------------------------------------------------------------
 # Install System Dependencies and Configure Timezone
 # -----------------------------------------------------------------------------
-    RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y \
     build-essential \
     libssl-dev \
     zlib1g-dev \
@@ -31,8 +32,6 @@ ENV DEBIAN_FRONTEND=noninteractive
     libxcb-cursor0 \
     zip
 
-
-
 # -----------------------------------------------------------------------------
 # Install Miniconda and Configure Shell Environment
 # -----------------------------------------------------------------------------
@@ -56,7 +55,7 @@ RUN conda install -c conda-forge cupy python=3.11.11 pybind11 -y
 # -----------------------------------------------------------------------------
 WORKDIR /app
 
-# Upgrade pip and install Python packages (qiling, angr, openai, poetry)
+# Upgrade pip and install Poetry
 RUN /opt/conda/bin/python3.11 -m pip install --upgrade pip && \
     /opt/conda/bin/python3.11 -m pip install poetry --upgrade
 
@@ -69,15 +68,19 @@ RUN /opt/conda/bin/python3.11 -m poetry config virtualenvs.create false
 # Copy Application Code
 # -----------------------------------------------------------------------------
 COPY . /app
-# -----------------------------------------------------------------------------
-# Install Application Dependencies with Poetry
-# -----------------------------------------------------------------------------
-RUN /opt/conda/bin/python3.11 -m poetry lock && /opt/conda/bin/python3.11 -m poetry install
 
-RUN pip install nebula-ai --upgrade
+# -----------------------------------------------------------------------------
+# Build and Install Application Using Poetry
+# -----------------------------------------------------------------------------
+# First, lock and install dependencies along with the local project
+RUN /opt/conda/bin/python3.11 -m poetry lock && \
+    /opt/conda/bin/python3.11 -m poetry install
 
-WORKDIR /app
-# --------------------------
+# Build the project into a distributable wheel, then install that wheel
+RUN /opt/conda/bin/python3.11 -m poetry build && \
+    pip install dist/nebula_ai-*.whl
+
+# -----------------------------------------------------------------------------
 # Set Container Entrypoint
 # -----------------------------------------------------------------------------
 ENTRYPOINT ["nebula"]

@@ -5,7 +5,7 @@ from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
-
+from . import utilities
 from . import constants
 from .conversation_memory import ConversationMemory
 from .log_config import setup_logging
@@ -184,6 +184,7 @@ class statusFeedManager:
             logger.info("[statusFeedManager] ChatOllama LLM initialized successfully.")
         except Exception as e:
             logger.error(f"[statusFeedManager] Failed to initialize ChatOllama: {e}")
+            utilities.show_message("Error Loading Ollama",e)
             self.llm = None
             return
 

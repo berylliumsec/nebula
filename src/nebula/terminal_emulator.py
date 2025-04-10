@@ -182,10 +182,13 @@ class AgentTaskRunner(QRunnable):
         elif "qwen2.5-coder:32b" in model:
             model = "qwen2.5-coder:32b"
         logger.debug(f"Selected model: {model}")
-        if self.ollama_url:
-            llm = ChatOllama(model=model, base_url=self.ollama_url)
-        else:
-            llm = ChatOllama(model=model)
+        try:
+            if self.ollama_url:
+                llm = ChatOllama(model=model, base_url=self.ollama_url)
+            else:
+                llm = ChatOllama(model=model)
+        except Exception as e:
+            utilities.show_message("Error Loading Ollama",e)
         # Prompt generation logic
         if "notes" in endpoint:
             logger.info("Building prompt for 'notes' endpoint in query_ollama.")
@@ -223,8 +226,10 @@ class AgentTaskRunner(QRunnable):
                 )
             prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
         else:
-
-            llm = ChatOllama(model=model).bind_tools(self.tools)
+            try:
+                llm = ChatOllama(model=model).bind_tools(self.tools)
+            except Exception as e:
+                utilities.show_message("Error Loading Ollama",e)
             logger.info("Building prompt for default endpoint in query_ollama.")
             instructions = "You are a penetration testing assistant. "
             self.query = instructions + ":" + query

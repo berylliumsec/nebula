@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import QCompleter, QLineEdit
 from . import constants
 from .chroma_manager import ChromaManager
 from .log_config import setup_logging
-
+from . import utilities
 logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/search.log")
 
 embeddings_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L12-v2")
@@ -79,6 +79,7 @@ class CustomSearchLineEdit(QLineEdit):
             logger.info("[Main] ChatOllama initialized successfully.")
         except Exception as e:
             logger.error(f"[Main] Failed to initialize ChatOllama: {e}")
+            utilities.show_message("Error Loading Ollama",e)
             self.llm = None
 
         self.returnPressed.connect(self.onReturnPressed)

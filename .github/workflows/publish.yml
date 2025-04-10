@@ -10,7 +10,6 @@ on:
 jobs:
   release-build:
     runs-on: ubuntu-latest
-    # Define an output that later jobs can use.
     outputs:
       new_version: ${{ steps.get_bumped_version.outputs.new_version }}
     steps:
@@ -122,16 +121,11 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Added memory for regular conversations, notes, suggestions up to 10,000 tokens
-              - Added RAG based search
-              - Added option to index any document from pdfs, urls, text files and directories into a vector store
-              - Search is now only compatible with ollama
-              - Switched the fonts to a more modern font
-              - Fixed a bug where clearing the screen creates a file
-              - Agents only work in non-ollama mode
-              - Non-ollama mode may be deprecated in the future
-              - Added searchsploit as a tool so that the AI models can search for vulnerable software
-              
+              - Ollama is now the sole source of LLM inference
+              - Added a thread feed that summarizes penetration testing efforts every five minutes
+              - Minor style changes
+              - Added docker image for quick setup
+
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true
         run: |
@@ -140,3 +134,29 @@ jobs:
           done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-publish:
+    
+    runs-on: ubuntu-latest
+    environment: nebula-pro-dev
+    needs: release-build
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          docker build -t $berylliumsec/nebula:latest .
+
+      - name: Push Docker image
+        run: |
+          docker push berylliumsec/nebula:latest

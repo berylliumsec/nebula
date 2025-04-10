@@ -50,6 +50,19 @@ Install Ollama and download the three supported models (you can also download on
  ollama pull deepseek-r1
  ollama pull llama3.1
  ```
+
+ ```
+ nebula
+ ```
+
+First allow local connections to your X server:
+
+```bash
+xhost +local:docker
+```
+ ```bash
+  docker run -it   -e DISPLAY=$DISPLAY   -v /home/agent/.local/share/nebula/logs:/root/.local/share/nebula/logs -v /home/agent/engagement:/engagements -v /tmp/.X11-unix:/tmp/.X11-unix   berylliumsec/nebula:latest
+  ```
 ### Interacting with the models. 
 
 To interact with the models, begin your input with a `!` for example: `! write a python script to scan the ports of a remote system`
