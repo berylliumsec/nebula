@@ -134,29 +134,3 @@ jobs:
           done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  docker-publish:
-    
-    runs-on: ubuntu-latest
-    environment: nebula
-    needs: release-build
-    if: github.event.pull_request.merged == true
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-      - name: Build Docker image
-        run: |
-          docker build -t berylliumsec/nebula:latest .
-
-      - name: Push Docker image
-        run: |
-          docker push berylliumsec/nebula:latest
