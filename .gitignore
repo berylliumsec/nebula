@@ -7,3 +7,7 @@ config.json
 suggestions_notes/1.html
 suggestions_notes/ai_notes.html
 suggestions_notes/suggestions.html
+.DS_Store
+poetry.lock
+src/.DS_Store
+nmap_output

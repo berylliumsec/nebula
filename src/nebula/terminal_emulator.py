@@ -30,7 +30,7 @@ from .conversation_memory import ConversationMemory
 from .log_config import setup_logging
 from .tools.searchsploit import searchsploit
 from .update_utils import return_path
-
+from langchain.agents import initialize_agent, AgentType
 BASH_TOOL = ShellTool(return_direct=True)
 SEARCH_TOOL = DuckDuckGoSearchRun(return_direct=True)
 
@@ -115,7 +115,6 @@ class AgentTaskRunner(QRunnable):
 
     def __init__(
         self,
-        agent: str = "",
         query: str = "",
         endpoint: str = "",
         ollama_model: str = "mistral",
@@ -148,9 +147,10 @@ class AgentTaskRunner(QRunnable):
                     model=self.ollama_model,
                     ollama_url=ollama_url,
                 )
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error loading ollama: {e}")
                 self.signals.error.emit(
-                    "Error Loading Ollama, please check the url in engagement settings."
+                    f"Error during inference {e}."
                 )
                 return
             if "notes" in self.endpoint:
@@ -174,136 +174,104 @@ class AgentTaskRunner(QRunnable):
             self.signals.finished.emit()
             logger.info("AgentTaskRunner finished execution.")
 
-    def query_ollama(
-        self, query: str, endpoint: str, model: str = "mistral", ollama_url: str = ""
-    ) -> str:
+    def query_ollama(self, query: str, endpoint: str, model: str = "mistral", ollama_url: str = "") -> str:
         """
         Generate a response using Ollama, executing tool calls if needed.
         """
-        logger.info(
-            f"Starting query_ollama with endpoint: {endpoint} and model: {model}"
-        )
+        logger.info(f"Starting query_ollama with endpoint: {endpoint} and model: {model}")
 
         try:
+            # Initialize ChatOllama LLM based on provided settings.
             if ollama_url:
-                llm = ChatOllama(model=model, base_url=ollama_url)
+                llm_instance = ChatOllama(model=model, base_url=ollama_url)
             else:
-                llm = ChatOllama(model=model)
+                llm_instance = ChatOllama(model=model)
         except Exception as e:
             utilities.show_message(
                 "Error Loading Ollama",
-                "Ollama could not be loaded, please check the url in engagement settings and try again",
+                "Ollama could not be loaded, please check the URL in engagement settings and try again",
             )
-
             logger.error("Error Loading Ollama", e)
-        # Prompt generation logic
+            raise e
+
+        # Build the prompt differently based on the endpoint type.
         if "notes" in endpoint:
             logger.info("Building prompt for 'notes' endpoint in query_ollama.")
             instructions = "As a penetration testing assistant, please take detailed notes in a report style. "
             self.query = instructions + ":" + query
             if self.notes_memory is not None:
                 conversation_context = "\n".join(
-                    f"{msg['role']}: {msg['content']}"
-                    for msg in self.notes_memory.history
+                    f"{msg['role']}: {msg['content']}" for msg in self.notes_memory.history
                 )
                 logger.debug(f"Notes memory context: {conversation_context}")
             else:
                 conversation_context = ""
-                logger.warning(
-                    "No notes_memory provided; conversation context will be empty."
-                )
+                logger.warning("No notes_memory provided; conversation context will be empty.")
             prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
+            # Use basic LLM call if no tool calling is needed.
+            response = llm_instance.invoke(prompt)
+            logger.info(f"Ollama initial response: {response}")
+            return response.content
         elif "suggestion" in endpoint:
             logger.info("Building prompt for 'suggestion' endpoint in query_ollama.")
             instructions = (
                 "As a penetration testing assistant, suggest actionable steps with commands to find "
-                "vulnerabilities and/or exploit vulnerabilities that have been found, based on the following tool output. Prioritize suggesting open-source, free tools as opposed to paid tools. When suggesting tools, be sure to include the exact commands to run "
+                "vulnerabilities and/or exploit vulnerabilities that have been found, based on the following tool output. "
+                "Prioritize open-source, free tools over paid ones. When suggesting tools, be sure to include the exact commands to run "
             )
             self.query = instructions + ":" + query
             if self.suggestions_memory is not None:
                 conversation_context = "\n".join(
-                    f"{msg['role']}: {msg['content']}"
-                    for msg in self.suggestions_memory.history
+                    f"{msg['role']}: {msg['content']}" for msg in self.suggestions_memory.history
                 )
                 logger.debug(f"Suggestions memory context: {conversation_context}")
             else:
                 conversation_context = ""
-                logger.warning(
-                    "No suggestions_memory provided; conversation context will be empty."
-                )
+                logger.warning("No suggestions_memory provided; conversation context will be empty.")
             prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
+            response = llm_instance.invoke(prompt)
+            logger.info(f"Ollama initial response: {response}")
+            return response.content
         else:
+            # Default endpoint: use tool calling via an agent.
             try:
-                llm = ChatOllama(model=model).bind_tools(self.tools)
-
-                if ollama_url:
-                    llm = ChatOllama(model=model, base_url=ollama_url).bind_tools(
-                        self.tools
-                    )
-                else:
-                    self.llm = ChatOllama(model=model).bind_tools(self.tools)
+                # Bind the tools to the LLM.
+                llm_instance = llm_instance.bind_tools(self.tools)
+                # Initialize the agent with ZERO_SHOT_REACT_DESCRIPTION.
+                agent = initialize_agent(
+                    self.tools,
+                    llm_instance,
+                    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+                    verbose=True
+                )
             except Exception as e:
-
-                logger.error(e)
+                logger.error("Error initializing tool-calling agent:", e)
                 raise e
+
             logger.info("Building prompt for default endpoint in query_ollama.")
             instructions = "You are a penetration testing assistant. "
             self.query = instructions + ":" + query
             if self.conversation_memory is not None:
                 conversation_context = "\n".join(
-                    f"{msg['role']}: {msg['content']}"
-                    for msg in self.conversation_memory.history
+                    f"{msg['role']}: {msg['content']}" for msg in self.conversation_memory.history
                 )
                 logger.debug(f"Conversation memory context: {conversation_context}")
             else:
                 conversation_context = ""
-                logger.warning(
-                    "No conversation_memory provided; conversation context will be empty."
-                )
+                logger.warning("No conversation_memory provided; conversation context will be empty.")
+            # Although the agent holds its own prompt internally, you may choose to include additional context.
             prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
-        logger.debug(f"Generated prompt for Ollama: {prompt}")
+            logger.debug(f"Generated prompt for Ollama: {prompt}")
 
-        response = llm.invoke(prompt)
-        logger.info(f"Ollama initial response: {response}")
-        max_iterations = 5
-        iteration = 0
+            # Run the agent. Note: here we call agent.run() with the query (or prompt) as input.
+            # It should return an object with attributes 'content' and possibly 'tool_calls'.
+            response = agent.run(self.query)
+            logger.info(f"Ollama initial response: {response}")
+            return response
 
-        while (
-            response.content.strip() == ""
-            and response.tool_calls
-            and iteration < max_iterations
-        ):
-            logger.info(f"Iteration {iteration} in tool call resolution loop.")
-            for tool_call in response.tool_calls:
-                tool_result = None
-                for tool in self.tools:
-                    if tool.name == tool_call.get("name", ""):
-                        tool_result = tool.invoke(tool_call.get("args", {}))
-                        logger.debug(
-                            f"Invoked tool {tool.name} with result: {tool_result}"
-                        )
-                        break
-                if tool_result is None:
-                    tool_result = f"Tool {tool_call.get('name')} not found."
-                    logger.warning(tool_result)
-                prompt += f"\n[Tool {tool_call.get('name')} output]: {tool_result}"
-            response = llm.invoke(prompt)
-            logger.info(f"Response after iteration {iteration}: {response}")
-            iteration += 1
+        
 
-        # Update conversation memory if available
-        if self.conversation_memory is not None:
-            self.conversation_memory.add_message("user", self.query)
-            self.conversation_memory.add_message("assistant", response.content)
-            logger.info("Updated conversation memory with Ollama query and response.")
-            logger.debug(
-                "Current Memory: "
-                + ", ".join(str(msg) for msg in self.conversation_memory.history)
-            )
-        else:
-            logger.warning("No conversation_memory provided; skipping memory update.")
-
-        return response.content
+  
 
 
 class TerminalEmulatorWindow(QMainWindow):
@@ -1182,32 +1150,8 @@ class CommandInputArea(QLineEdit):
             )
         )
 
-    def set_agent_mode(self, mode):
-        if mode:
-            self.tools_agent_mode = True
-        else:
-            self.tools_agent_mode = False
 
-    def create_agent(self, agent_type):
-        if agent_type == "tools_agent":
-            tools = [BASH_TOOL, SEARCH_TOOL, searchsploit]
 
-        else:
-            tools = [SEARCH_TOOL]
-
-        try:
-
-            created_agent = initialize_agent(
-                tools,
-                self.model,
-                agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
-                verbose=True,
-                handle_parsing_errors=True,
-            )
-            return created_agent
-        except Exception as e:
-            logger.error("Error during agent creation: %s", e, exc_info=True)
-            raise
 
     def set_password_mode(self, data: bool):
         """
@@ -1521,10 +1465,10 @@ class CommandInputArea(QLineEdit):
         self.model_busy_busy_signal.emit(False)
         self.model_busy = False
 
-    def onModelError(self):
+    def onModelError(self,error):
         utilities.show_message(
             "Error Loading Ollama",
-            "Ollama could not be loaded, please check the url in engagement settings and try again",
+            f"Ollama could not be loaded: {error}",
         )
         self.threads_status.emit("completed")
         QApplication.restoreOverrideCursor()
