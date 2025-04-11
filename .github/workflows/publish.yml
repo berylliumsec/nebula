@@ -121,10 +121,8 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Ollama is now the sole source of LLM inference
-              - Added a thread feed that summarizes penetration testing efforts every five minutes
-              - Minor style changes
-              - Added docker image for quick setup
+              - Added an agent for tool invocation
+              - Fixed a bug where the notes window was not popping out
 
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true

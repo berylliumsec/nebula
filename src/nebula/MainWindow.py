@@ -421,7 +421,7 @@ class Nebula(QMainWindow):
     model_signal = pyqtSignal(bool)
     main_window_loaded = pyqtSignal(bool)
     model_creation_in_progress = pyqtSignal(bool)
-    tools_agent_mode = pyqtSignal(bool)
+
 
     def __init__(self, engagement_folder=None):
         super().__init__()
@@ -510,7 +510,7 @@ class Nebula(QMainWindow):
 
         self.command_input_area = CommandInputArea(manager=self.manager)
 
-        self.tools_agent_mode.connect(self.command_input_area.set_agent_mode)
+
         self.command_input_area.setFixedHeight(50)
         self.command_input_area.setObjectName("commandInputArea")
         self.command_input_area.setToolTip(
@@ -1044,7 +1044,13 @@ class Nebula(QMainWindow):
         self.model_creation_in_progress.connect(
             self.log_side_bar.enable_or_disable_due_to_model_creation
         )
-
+        self.pop_out_window = AiNotesPopupWindow(
+                notes_file_path=os.path.join(
+                    self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"], "ai_notes.html"
+                ),
+                manager=self.manager,
+                command_input_area=self.command_input_area,
+            )
         logger.debug("main window loaded")
         self.vector_db = ChromaManager(
             collection_name="nebula_collection",
