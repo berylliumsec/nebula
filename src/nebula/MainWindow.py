@@ -422,7 +422,6 @@ class Nebula(QMainWindow):
     main_window_loaded = pyqtSignal(bool)
     model_creation_in_progress = pyqtSignal(bool)
 
-
     def __init__(self, engagement_folder=None):
         super().__init__()
         logger.debug("begin showing main window")
@@ -509,7 +508,6 @@ class Nebula(QMainWindow):
         self.suggestions_layout.addWidget(self.suggestions_button, 1)
 
         self.command_input_area = CommandInputArea(manager=self.manager)
-
 
         self.command_input_area.setFixedHeight(50)
         self.command_input_area.setObjectName("commandInputArea")
@@ -1045,12 +1043,12 @@ class Nebula(QMainWindow):
             self.log_side_bar.enable_or_disable_due_to_model_creation
         )
         self.pop_out_window = AiNotesPopupWindow(
-                notes_file_path=os.path.join(
-                    self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"], "ai_notes.html"
-                ),
-                manager=self.manager,
-                command_input_area=self.command_input_area,
-            )
+            notes_file_path=os.path.join(
+                self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"], "ai_notes.html"
+            ),
+            manager=self.manager,
+            command_input_area=self.command_input_area,
+        )
         logger.debug("main window loaded")
         self.vector_db = ChromaManager(
             collection_name="nebula_collection",

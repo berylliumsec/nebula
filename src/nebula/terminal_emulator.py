@@ -8,10 +8,10 @@ import signal
 import time
 import warnings
 
-from langchain.agents import AgentType, initialize_agent
-from langchain_community.llms import HuggingFacePipeline
+from langchain.agents import (AgentExecutor, AgentType, create_openai_tools_agent,
+                              initialize_agent)
 from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
-from langchain_ollama import ChatOllama
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from PyQt6 import QtCore
 from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
                           QStringListModel, Qt, QThread, QThreadPool, QTimer,
@@ -21,8 +21,6 @@ from PyQt6.QtWidgets import (QApplication, QCompleter, QFileDialog,
                              QHBoxLayout, QLineEdit, QMainWindow, QMenu,
                              QMessageBox, QPushButton, QToolBar, QVBoxLayout,
                              QWidget)
-from transformers import (AutoModelForCausalLM, AutoTokenizer,
-                          BitsAndBytesConfig, pipeline)
 
 from . import constants, utilities
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
@@ -30,7 +28,7 @@ from .conversation_memory import ConversationMemory
 from .log_config import setup_logging
 from .tools.searchsploit import searchsploit
 from .update_utils import return_path
-from langchain.agents import initialize_agent, AgentType
+
 BASH_TOOL = ShellTool(return_direct=True)
 SEARCH_TOOL = DuckDuckGoSearchRun(return_direct=True)
 
@@ -49,52 +47,6 @@ class ModelWorkerSignals(QObject):
     modelName = pyqtSignal(str)
 
 
-class ModelCreationWorker(QRunnable):
-    def __init__(self, manager):
-        super().__init__()
-        self.manager = manager
-        self.signals = ModelWorkerSignals()
-
-    def run(self):
-        logger.debug("creating model")
-        self.signals.modelCreationInProgress.emit(True)
-
-        try:
-            config = self.manager.load_config()
-            model_name = config["MODEL"]
-            cache_dir = config["CACHE_DIR"]
-            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                model_max_length=32000,
-                low_cpu_mem_usage=True,
-                cache_dir=cache_dir,
-            )
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                low_cpu_mem_usage=True,
-                quantization_config=bnb_config,
-                device_map="auto",
-                cache_dir=cache_dir,
-            )
-            raw_pipe = pipeline(
-                "text-generation",
-                model=self.model,
-                tokenizer=self.tokenizer,
-                max_new_tokens=32000,
-                use_fast=True,
-                return_full_text=False,
-            )
-            self.pipe = HuggingFacePipeline(pipeline=raw_pipe)
-        except Exception as e:
-            logger.error(f"Could not start model: {e}")
-            return  # Early exit; finally block will run.
-        finally:
-            self.signals.modelCreationInProgress.emit(False)
-        self.signals.modelCreated.emit(self.pipe)
-        self.signals.modelName.emit(model_name)
-
-
 class AgentTaskRunnerSignals(QObject):
     """
     Defines the signals available from a running worker thread.
@@ -111,23 +63,23 @@ class AgentTaskRunnerSignals(QObject):
 class AgentTaskRunner(QRunnable):
     """
     Worker thread to run agent queries.
+    This version uses a factory method to select the LLM service based on environment
+    variables (e.g. OPENAI_API_KEY) and is structured to easily support other AI services later.
     """
 
     def __init__(
         self,
         query: str = "",
         endpoint: str = "",
-        ollama_model: str = "mistral",
-        notes_memory: str = "",
-        suggestions_memory: str = "",
-        conversation_memory: str = "",
-        manager: str = "",
+        notes_memory=None,
+        suggestions_memory=None,
+        conversation_memory=None,
+        manager=None,
     ):
         super().__init__()
         self.manager = manager
         self.query = query
         self.endpoint = endpoint
-        self.ollama_model = ollama_model
         self.signals = AgentTaskRunnerSignals()
         self.notes_memory = notes_memory
         self.suggestions_memory = suggestions_memory
@@ -138,21 +90,23 @@ class AgentTaskRunner(QRunnable):
         logger.info("AgentTaskRunner started execution.")
         logger.debug(f"Initial query: {self.query}")
         try:
+            # Load configuration (including the Ollama URL) from the manager.
             self.CONFIG = self.manager.load_config()
+            model = self.CONFIG["MODEL"]
             ollama_url = self.CONFIG["OLLAMA_URL"]
+
             try:
-                response = self.query_ollama(
-                    self.query,
-                    self.endpoint,
-                    model=self.ollama_model,
+                response = self.query_llm(
+                    query=self.query,
+                    endpoint=self.endpoint,
+                    model=model,
                     ollama_url=ollama_url,
                 )
             except Exception as e:
-                logger.error(f"Error loading ollama: {e}")
-                self.signals.error.emit(
-                    f"Error during inference {e}."
-                )
-                return
+                logger.error(f"Error during inference: {e}")
+                raise e
+
+            # Save the conversation to the proper memory store.
             if "notes" in self.endpoint:
                 self.notes_memory.add_message(role="User", content=self.query)
                 self.notes_memory.add_message(role="Assistant", content=response)
@@ -165,6 +119,7 @@ class AgentTaskRunner(QRunnable):
                 self.conversation_memory.add_message(role="User", content=self.query)
                 self.conversation_memory.add_message(role="Assistant", content=response)
                 self.conversation_memory.save()
+
             self.signals.result.emit(self.endpoint, "ai", response)
             logger.info("AgentTaskRunner completed successfully.")
         except Exception as e:
@@ -174,104 +129,129 @@ class AgentTaskRunner(QRunnable):
             self.signals.finished.emit()
             logger.info("AgentTaskRunner finished execution.")
 
-    def query_ollama(self, query: str, endpoint: str, model: str = "mistral", ollama_url: str = "") -> str:
+    def query_llm(
+        self, query: str, endpoint: str, model: str = "mistral", ollama_url: str = ""
+    ) -> str:
         """
-        Generate a response using Ollama, executing tool calls if needed.
+        Generate a response using the selected LLM service.
+        The method builds the prompt and context based on the endpoint type.
         """
-        logger.info(f"Starting query_ollama with endpoint: {endpoint} and model: {model}")
+        logger.info(f"Starting query_llm with endpoint: {endpoint} and model: {model}")
 
-        try:
-            # Initialize ChatOllama LLM based on provided settings.
-            if ollama_url:
-                llm_instance = ChatOllama(model=model, base_url=ollama_url)
-            else:
-                llm_instance = ChatOllama(model=model)
-        except Exception as e:
-            utilities.show_message(
-                "Error Loading Ollama",
-                "Ollama could not be loaded, please check the URL in engagement settings and try again",
-            )
-            logger.error("Error Loading Ollama", e)
-            raise e
+        # Create the LLM instance based on the service selection logic.
+        llm_instance, ollama_or_openai = utilities.get_llm_instance(
+            model=model, ollama_url=ollama_url, signals=self.signals
+        )
 
-        # Build the prompt differently based on the endpoint type.
         if "notes" in endpoint:
-            logger.info("Building prompt for 'notes' endpoint in query_ollama.")
+            logger.info("Building prompt for 'notes' endpoint.")
             instructions = "As a penetration testing assistant, please take detailed notes in a report style. "
-            self.query = instructions + ":" + query
+            full_query = instructions + ":" + query
+            conversation_context = ""
             if self.notes_memory is not None:
                 conversation_context = "\n".join(
-                    f"{msg['role']}: {msg['content']}" for msg in self.notes_memory.history
+                    f"{msg['role']}: {msg['content']}"
+                    for msg in self.notes_memory.history
                 )
                 logger.debug(f"Notes memory context: {conversation_context}")
             else:
-                conversation_context = ""
-                logger.warning("No notes_memory provided; conversation context will be empty.")
-            prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
-            # Use basic LLM call if no tool calling is needed.
+                logger.warning(
+                    "No notes_memory provided; conversation context will be empty."
+                )
+            prompt = f"{conversation_context}\nUser: {full_query}\nAssistant:"
             response = llm_instance.invoke(prompt)
-            logger.info(f"Ollama initial response: {response}")
+            logger.info(f"LLM initial response: {response}")
             return response.content
+
         elif "suggestion" in endpoint:
-            logger.info("Building prompt for 'suggestion' endpoint in query_ollama.")
+            logger.info("Building prompt for 'suggestion' endpoint.")
             instructions = (
                 "As a penetration testing assistant, suggest actionable steps with commands to find "
                 "vulnerabilities and/or exploit vulnerabilities that have been found, based on the following tool output. "
                 "Prioritize open-source, free tools over paid ones. When suggesting tools, be sure to include the exact commands to run "
             )
-            self.query = instructions + ":" + query
+            full_query = instructions + ":" + query
+            conversation_context = ""
             if self.suggestions_memory is not None:
                 conversation_context = "\n".join(
-                    f"{msg['role']}: {msg['content']}" for msg in self.suggestions_memory.history
+                    f"{msg['role']}: {msg['content']}"
+                    for msg in self.suggestions_memory.history
                 )
                 logger.debug(f"Suggestions memory context: {conversation_context}")
             else:
-                conversation_context = ""
-                logger.warning("No suggestions_memory provided; conversation context will be empty.")
-            prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
-            response = llm_instance.invoke(prompt)
-            logger.info(f"Ollama initial response: {response}")
-            return response.content
-        else:
-            # Default endpoint: use tool calling via an agent.
-            try:
-                # Bind the tools to the LLM.
-                llm_instance = llm_instance.bind_tools(self.tools)
-                # Initialize the agent with ZERO_SHOT_REACT_DESCRIPTION.
-                agent = initialize_agent(
-                    self.tools,
-                    llm_instance,
-                    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-                    verbose=True
+                logger.warning(
+                    "No suggestions_memory provided; conversation context will be empty."
                 )
+            prompt = f"{conversation_context}\nUser: {full_query}\nAssistant:"
+            response = llm_instance.invoke(prompt)
+            logger.info(f"LLM initial response: {response}")
+            return response.content
+
+        else:
+            try:
+                # Bind available tools to the LLM instance.
+
+                # Initialize the agent with tool-calling capability.
+                if not ollama_or_openai == "openai":
+                    llm_with_tools = llm_instance.bind_tools(self.tools)
+                    agent = initialize_agent(
+                        self.tools,
+                        llm_with_tools,
+                        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+                        verbose=True,
+                        handle_parsing_errors=True,
+                    )
+                else:
+                    prompt = ChatPromptTemplate.from_messages(
+                        [
+                            ("system", "You are a penetration testing assistant"),
+                            ("user", "{input}"),
+                            MessagesPlaceholder(variable_name="agent_scratchpad"),
+                        ]
+                    )
+                    agent = create_openai_tools_agent(
+                        llm_instance, tools=self.tools, prompt=prompt
+                    )
+                    agent_executor = AgentExecutor(
+                        agent=agent,
+                        tools=self.tools,
+                        verbose=True,
+                        handle_parsing_errors=True,
+                        return_intermediate_steps=True,
+                    )
+                    response = agent_executor.invoke({"input": self.query})
+
             except Exception as e:
                 logger.error("Error initializing tool-calling agent:", e)
                 raise e
 
-            logger.info("Building prompt for default endpoint in query_ollama.")
+            logger.info("Building prompt for default endpoint.")
             instructions = "You are a penetration testing assistant. "
-            self.query = instructions + ":" + query
+            full_query = instructions + ":" + query
+            conversation_context = ""
             if self.conversation_memory is not None:
                 conversation_context = "\n".join(
-                    f"{msg['role']}: {msg['content']}" for msg in self.conversation_memory.history
+                    f"{msg['role']}: {msg['content']}"
+                    for msg in self.conversation_memory.history
                 )
                 logger.debug(f"Conversation memory context: {conversation_context}")
             else:
-                conversation_context = ""
-                logger.warning("No conversation_memory provided; conversation context will be empty.")
-            # Although the agent holds its own prompt internally, you may choose to include additional context.
-            prompt = f"{conversation_context}\nUser: {self.query}\nAssistant:"
-            logger.debug(f"Generated prompt for Ollama: {prompt}")
+                logger.warning(
+                    "No conversation_memory provided; conversation context will be empty."
+                )
+            prompt = f"{conversation_context}\nUser: {full_query}\nAssistant:"
+            logger.debug(f"Generated prompt for LLM: {prompt}")
 
-            # Run the agent. Note: here we call agent.run() with the query (or prompt) as input.
-            # It should return an object with attributes 'content' and possibly 'tool_calls'.
-            response = agent.run(self.query)
-            logger.info(f"Ollama initial response: {response}")
-            return response
+            # Run the agent. Here the full_query is passed to enable tool-calling.
+            if not ollama_or_openai == "openai":
+                response = agent.run(full_query)
+                logger.info(f"LLM response: {response}")
+                return response
+            else:
+                response = agent_executor.invoke({"input": query})
 
-        
-
-  
+                logger.info(f"LLM response: {response}")
+                return response["output"]
 
 
 class TerminalEmulatorWindow(QMainWindow):
@@ -1150,9 +1130,6 @@ class CommandInputArea(QLineEdit):
             )
         )
 
-
-
-
     def set_password_mode(self, data: bool):
         """
         Set password mode based on the input data.
@@ -1465,10 +1442,10 @@ class CommandInputArea(QLineEdit):
         self.model_busy_busy_signal.emit(False)
         self.model_busy = False
 
-    def onModelError(self,error):
+    def onModelError(self, error):
         utilities.show_message(
-            "Error Loading Ollama",
-            f"Ollama could not be loaded: {error}",
+            "Error Loading Model",
+            f"{error}",
         )
         self.threads_status.emit("completed")
         QApplication.restoreOverrideCursor()
@@ -1488,25 +1465,27 @@ class CommandInputArea(QLineEdit):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
         logger.debug("OLLAMA configuration detected; using OLLAMA mode.")
-
-        model_task = AgentTaskRunner(
-            query=command,
-            endpoint=endpoint,
-            conversation_memory=self.conversation_memory,
-            notes_memory=self.notes_memory,
-            suggestions_memory=self.suggestions_memory,
-            manager=self.manager,
-        )
-        self.model_busy = True
-        logger.debug(
-            "Setting model_busy flag for OLLAMA mode and emitting busy signal."
-        )
-        self.model_busy_busy_signal.emit(True)
-        model_task.signals.result.connect(self.onTaskResult)
-        model_task.signals.finished.connect(self.onTaskFinished)
-        model_task.signals.error.connect(self.onModelError)
-        logger.debug("Starting model_task for OLLAMA mode.")
-        self.threadpool.start(model_task)
+        try:
+            model_task = AgentTaskRunner(
+                query=command,
+                endpoint=endpoint,
+                conversation_memory=self.conversation_memory,
+                notes_memory=self.notes_memory,
+                suggestions_memory=self.suggestions_memory,
+                manager=self.manager,
+            )
+            self.model_busy = True
+            logger.debug(
+                "Setting model_busy flag for OLLAMA mode and emitting busy signal."
+            )
+            self.model_busy_busy_signal.emit(True)
+            model_task.signals.result.connect(self.onTaskResult)
+            model_task.signals.finished.connect(self.onTaskFinished)
+            model_task.signals.error.connect(self.onModelError)
+            logger.debug("Starting model_task for OLLAMA mode.")
+            self.threadpool.start(model_task)
+        except Exception as e:
+            logger.error(f"Error performing inference: {e}")
 
     def update_suggestion_notes_function(self, command, data):
         self.api_tasks -= 1

@@ -2,7 +2,6 @@ import os
 from typing import List
 
 from langchain_community.tools import DuckDuckGoSearchRun
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
 
@@ -40,11 +39,7 @@ class statusFeedWorker(QRunnable):
     A worker for querying the RAG index and retrieving a status feed via the LLM.
     """
 
-    def __init__(
-        self,
-        query: str,
-        manager,
-    ):
+    def __init__(self, query: str, manager):
         super().__init__()
         self.query = query
         self.manager = manager
@@ -54,44 +49,39 @@ class statusFeedWorker(QRunnable):
 
     @pyqtSlot()
     def run(self):
-        status_list = None  # Initialize here to ensure it exists even on failure
+        status_list = None  # Initialize to ensure it exists even on failure
 
-        # Initialize the LLM using ChatOllama and bind the search tool
+        # Initialize the LLM using the unified factory method.
         try:
-            logger.info("[statusFeedManager] Initializing ChatOllama LLM...")
+            logger.info("[statusFeedManager] Initializing LLM...")
             self.CONFIG = self.manager.load_config()
-            if self.CONFIG["OLLAMA_URL"]:
-                self.llm = ChatOllama(
-                    model=self.CONFIG["MODEL"], base_url=self.CONFIG["OLLAMA_URL"]
-                )
-            else:
-                self.llm = ChatOllama(model=self.CONFIG["MODEL"])
-
-            logger.info("[statusFeedManager] ChatOllama LLM initialized successfully.")
+            model = self.CONFIG["MODEL"]
+            ollama_url = self.CONFIG.get("OLLAMA_URL", "")
+            self.llm, ollama_or_openai = utilities.get_llm_instance(
+                model=model, ollama_url=ollama_url
+            )
+            logger.info("[statusFeedManager] LLM initialized successfully.")
         except Exception as e:
-            logger.error(f"[statusFeedManager] Failed to initialize ChatOllama: {e}")
-
-            self.signals.error.emit([str("Unable to load ollama")])
+            logger.error(f"[statusFeedManager] Failed to initialize LLM: {e}")
+            self.signals.error.emit(e)
             return
 
+        # Query the LLM using a structured output format.
         try:
             response = self.llm.with_structured_output(
                 StatusFeed, method="json_schema"
             ).invoke(self.query)
+
             status_list = [status.status for status in response.status_feed]
             if not isinstance(status_list, list):
-                self.signals.error.emit(["Error querying ollama"])
+                self.signals.error.emit(["Error querying LLM"])
 
-            # If the loop is successful and a valid status_list was obtained, emit it.
+            # If the call was successful and a valid status_list was obtained, emit it.
             if status_list is not None:
                 self.signals.finished.emit(status_list)
 
         except Exception as error:
-            logger.error(
-                f"Error on attempt: {error}",
-                exc_info=True,
-            )
-
+            logger.error(f"Error on attempt: {error}", exc_info=True)
             self.signals.error.emit([str(error)])
 
 
@@ -137,9 +127,6 @@ class statusFeedManager:
         logger.info(
             "[statusFeedManager] Initialized and obtained QThreadPool instance."
         )
-
-        # Define the tools to bind with ChatOllama
-        self.tools = [SEARCH_TOOL]
 
     def update_status_feed(self):
         """
@@ -194,10 +181,10 @@ class statusFeedManager:
 
         logger.info("[statusFeedManager] status feed worker started.")
 
-    def on_status_feed_update_error(self):
+    def on_status_feed_update_error(self, error_message):
         utilities.show_message(
-            "Error Loading Ollama",
-            "Ollama could not be loaded, please check the url in engagement settings and try again",
+            "Error Loading Model",
+            f"{error_message}",
         )
 
     def on_status_feed_update(self, result):
