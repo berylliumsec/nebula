@@ -121,8 +121,8 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Added an agent for tool invocation
-              - Fixed a bug where the notes window was not popping out
+              - Added support for open ai
+              - Toggle between terminal and AI agent mode with a button now, you no longer have to use "!". You can still use "!" but it wil be deprecated soon
 
       - name: Upload Release Assets
         if: github.event.pull_request.merged == true

@@ -8,8 +8,8 @@ import signal
 import time
 import warnings
 
-from langchain.agents import (AgentExecutor, AgentType, create_openai_tools_agent,
-                              initialize_agent)
+from langchain.agents import (AgentExecutor, AgentType,
+                              create_openai_tools_agent, initialize_agent)
 from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from PyQt6 import QtCore
@@ -1071,7 +1071,7 @@ class CommandInputArea(QLineEdit):
         self.history_watcher = QFileSystemWatcher([self.CONFIG["HISTORY_FILE"]])
         self.history_watcher.fileChanged.connect(self.load_command_history)
         self.commands = []
-
+        self.input_mode = ""
         self.history_index = -1
         self.returnPressed.connect(lambda: self.execute_command(self.text()))
 
@@ -1130,6 +1130,10 @@ class CommandInputArea(QLineEdit):
             )
         )
 
+    def set_input_mode(self, data: str):
+        """Set the input mode"""
+        self.input_mode = data
+
     def set_password_mode(self, data: bool):
         """
         Set password mode based on the input data.
@@ -1150,7 +1154,7 @@ class CommandInputArea(QLineEdit):
         except Exception as e:
             logger.error(f"An error occurred while setting password mode: {e}")
 
-    def set_style_sheet(self, data):
+    def set_style_sheet(self, data: bool):
         if data:
             self.setStyleSheet(
                 """
@@ -1297,20 +1301,14 @@ class CommandInputArea(QLineEdit):
             logger.error(f"An error occurred while writing to the file: {e}")
 
     def execute_command(self, command=None):
-        if self.autonomous_mode and (
-            command.startswith("!") or command.startswith("?!")
-        ):
-            utilities.show_message(
-                "Autonomous Mode is enabled",
-                "Disable autonomous mode to interact with the AI Assistants",
-            )
-            return
+
         if command is None:
             command = self.command_input_area.text().strip()
         self.add_to_command_history(command)
-        if command.startswith("!"):
+        if self.input_mode == "ai" or command.startswith("!"):
             logger.debug("command assistant invoked")
-            command = command.replace("!", "").strip()
+            if command.startswith("!"):
+                command = command.replace("!", "").strip()
 
             self.execute_api_call(command, endpoint="command")
 
