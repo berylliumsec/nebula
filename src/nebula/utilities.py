@@ -15,8 +15,16 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QMessageBox,
-                             QPushButton, QScrollArea, QTextEdit, QVBoxLayout)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QTextEdit,
+    QVBoxLayout,
+)
 
 from . import constants
 from .log_config import setup_logging

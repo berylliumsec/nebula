@@ -6,15 +6,47 @@ from pygments import highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name, guess_lexer
 from PyQt6 import QtCore
-from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRect, QRunnable,
-                          QStringListModel, Qt, QThreadPool, QTimer, QUrl,
-                          pyqtSignal)
-from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence,
-                         QTextCharFormat, QTextCursor, QTextListFormat)
-from PyQt6.QtWidgets import (QApplication, QColorDialog, QCompleter, QDialog,
-                             QDockWidget, QFileDialog, QHBoxLayout,
-                             QInputDialog, QLabel, QListWidget, QMainWindow,
-                             QMenu, QMessageBox, QTextEdit, QToolBar, QWidget)
+from PyQt6.QtCore import (
+    QFile,
+    QFileSystemWatcher,
+    QObject,
+    QRect,
+    QRunnable,
+    QStringListModel,
+    Qt,
+    QThreadPool,
+    QTimer,
+    QUrl,
+    pyqtSignal,
+)
+from PyQt6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QTextCharFormat,
+    QTextCursor,
+    QTextListFormat,
+)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QColorDialog,
+    QCompleter,
+    QDialog,
+    QDockWidget,
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QListWidget,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QTextEdit,
+    QToolBar,
+    QWidget,
+)
 
 from . import constants, update_utils, utilities
 from .log_config import setup_logging

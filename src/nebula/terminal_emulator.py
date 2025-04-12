@@ -8,19 +8,42 @@ import signal
 import time
 import warnings
 
-from langchain.agents import (AgentExecutor, AgentType,
-                              create_openai_tools_agent, initialize_agent)
+from langchain.agents import (
+    AgentExecutor,
+    AgentType,
+    create_openai_tools_agent,
+    initialize_agent,
+)
 from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from PyQt6 import QtCore
-from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
-                          QStringListModel, Qt, QThread, QThreadPool, QTimer,
-                          pyqtSignal)
+from PyQt6.QtCore import (
+    QFile,
+    QFileSystemWatcher,
+    QObject,
+    QRunnable,
+    QStringListModel,
+    Qt,
+    QThread,
+    QThreadPool,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QAction, QIcon, QMouseEvent, QPixmap, QTextCursor
-from PyQt6.QtWidgets import (QApplication, QCompleter, QFileDialog,
-                             QHBoxLayout, QLineEdit, QMainWindow, QMenu,
-                             QMessageBox, QPushButton, QToolBar, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCompleter,
+    QFileDialog,
+    QHBoxLayout,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import constants, utilities
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
@@ -89,6 +112,7 @@ class AgentTaskRunner(QRunnable):
     def run(self):
         logger.info("AgentTaskRunner started execution.")
         logger.debug(f"Initial query: {self.query}")
+
         try:
             # Load configuration (including the Ollama URL) from the manager.
             self.CONFIG = self.manager.load_config()
@@ -1464,7 +1488,7 @@ class CommandInputArea(QLineEdit):
 
         logger.debug("OLLAMA configuration detected; using OLLAMA mode.")
         try:
-            model_task = AgentTaskRunner(
+            self.model_task = AgentTaskRunner(
                 query=command,
                 endpoint=endpoint,
                 conversation_memory=self.conversation_memory,
@@ -1477,11 +1501,11 @@ class CommandInputArea(QLineEdit):
                 "Setting model_busy flag for OLLAMA mode and emitting busy signal."
             )
             self.model_busy_busy_signal.emit(True)
-            model_task.signals.result.connect(self.onTaskResult)
-            model_task.signals.finished.connect(self.onTaskFinished)
-            model_task.signals.error.connect(self.onModelError)
+            self.model_task.signals.result.connect(self.onTaskResult)
+            self.model_task.signals.finished.connect(self.onTaskFinished)
+            self.model_task.signals.error.connect(self.onModelError)
             logger.debug("Starting model_task for OLLAMA mode.")
-            self.threadpool.start(model_task)
+            self.threadpool.start(self.model_task)
         except Exception as e:
             logger.error(f"Error performing inference: {e}")
 

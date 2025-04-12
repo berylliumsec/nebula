@@ -80,7 +80,7 @@ docker run --rm -it   -e DISPLAY=$DISPLAY   -v /home/YOUR_HOST_NAME/.local/share
 ```
 ### Interacting with the models. 
 
-To interact with the models, begin your input with a `!` for example: `! write a python script to scan the ports of a remote system`
+To interact with the models, begin your input with a `!` or use the AI/Terminal button to switch between modes. For example: `! write a python script to scan the ports of a remote system` the "!" is not needed if you use the context button
 
 ## Key Features
 

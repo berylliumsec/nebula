@@ -1,9 +1,18 @@
 from PyQt6.QtCore import Qt, QThreadPool
-from PyQt6.QtWidgets import (QComboBox, QDialog, QFileDialog, QHBoxLayout,
-                             QLineEdit, QMessageBox, QProgressDialog,
-                             QPushButton, QVBoxLayout)
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from . import constants
+
 # Import the worker from your chroma_manager module.
 from .chroma_manager import AddDocumentsWorker
 from .log_config import setup_logging

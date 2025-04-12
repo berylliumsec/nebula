@@ -4,12 +4,17 @@ import os
 
 from langchain.schema import Document
 from langchain_chroma import Chroma
-from langchain_community.document_loaders import (CSVLoader, DirectoryLoader,
-                                                  JSONLoader, PyPDFLoader,
-                                                  TextLoader,
-                                                  UnstructuredFileLoader,
-                                                  UnstructuredURLLoader)
+from langchain_community.document_loaders import (
+    CSVLoader,
+    DirectoryLoader,
+    JSONLoader,
+    PyPDFLoader,
+    TextLoader,
+    UnstructuredFileLoader,
+    UnstructuredURLLoader,
+)
 from langchain_huggingface import HuggingFaceEmbeddings
+
 # PyQt imports for QRunnable and signals.
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot
 
