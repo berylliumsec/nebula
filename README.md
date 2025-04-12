@@ -43,19 +43,29 @@ python -m pip install nebula-ai --upgrade
 
 **Ollama Local Model Based Usage**
 
-Install Ollama and download the three supported models (you can also download only the ones you'd be using):
+Install Ollama and download your preferred models for example
 
 ```bash
  ollama pull mistral
- ollama pull deepseek-r1
- ollama pull llama3.1
- ```
+```
+Then enter the model's exact name as it appears in Ollama in the engagement settings.
 
- Run nebula
+**OpenAI Models Usage**
 
- ```
- nebula
- ```
+To use openai models, add your api keys to your env like so
+
+```bash
+export OPENAI_API_KEY="sk-blah-blaj"
+```
+
+Then enter the OpenAI model's exact name in the engagement settings.
+
+
+Run nebula
+
+```
+nebula
+```
 
 **Using docker**
 
@@ -70,7 +80,7 @@ docker run --rm -it   -e DISPLAY=$DISPLAY   -v /home/YOUR_HOST_NAME/.local/share
 ```
 ### Interacting with the models. 
 
-To interact with the models, begin your input with a `!` for example: `! write a python script to scan the ports of a remote system`
+To interact with the models, begin your input with a `!` or use the AI/Terminal button to switch between modes. For example: `! write a python script to scan the ports of a remote system` the "!" is not needed if you use the context button
 
 ## Key Features
 

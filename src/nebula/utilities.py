@@ -11,10 +11,20 @@ import termios
 import xml.etree.ElementTree as ET
 
 import tiktoken
+from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QMessageBox,
-                             QPushButton, QScrollArea, QTextEdit, QVBoxLayout)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QTextEdit,
+    QVBoxLayout,
+)
 
 from . import constants
 from .log_config import setup_logging
@@ -194,6 +204,36 @@ def strip_ansi_codes(text):
         # Assuming logger.debug is defined elsewhere in your code
         logger.debug(f"Unexpected error processing input: {e}")
         return text if isinstance(text, str) else ""
+
+
+def get_llm_instance(model: str, ollama_url: str = "", signals: pyqtSignal = None):
+    """
+    Factory method to create the LLM instance.
+    If OPENAI_API_KEY is set, use LangChain's ChatOpenAI.
+    Otherwise, use ChatOllama.
+    This design allows adding additional AI service branches later.
+    """
+    if os.getenv("OPENAI_API_KEY"):
+        logger.info("OPENAI_API_KEY found. Using ChatOpenAI from LangChain.")
+
+        # If the provided model is not suitable for OpenAI (e.g. 'mistral' is an Ollama default),
+        # you might remap it to an appropriate default like 'gpt-3.5-turbo'. Adjust as needed.
+
+        llm_instance = ChatOpenAI(model_name=model)
+        ollama_or_openai = "openai"
+    else:
+        logger.info("OPENAI_API_KEY not set. Using ChatOllama.")
+        try:
+            ollama_or_openai = "openai"
+            if ollama_url:
+                llm_instance = ChatOllama(model=model, base_url=ollama_url)
+            else:
+                llm_instance = ChatOllama(model=model)
+        except Exception as e:
+            signals.error.emit(str(e))
+            logger.error("Error Loading Ollama", e)
+            raise e
+    return llm_instance, ollama_or_openai
 
 
 def show_systems_requirements_message(title, message):

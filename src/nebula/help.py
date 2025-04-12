@@ -1,8 +1,12 @@
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QTextBrowser,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
-from . import \
-    update_utils  # Assuming update_utils is a module in the same package
+from . import update_utils  # Assuming update_utils is a module in the same package
 
 
 class HelpWindow(QMainWindow):

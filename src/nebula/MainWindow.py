@@ -7,16 +7,46 @@ import warnings
 from queue import Queue
 
 from PyQt6 import QtCore
-from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QPoint,
-                          QRunnable, QSize, Qt, QThread, QThreadPool, QTimer,
-                          pyqtSignal)
+from PyQt6.QtCore import (
+    QFile,
+    QFileSystemWatcher,
+    QObject,
+    QPoint,
+    QRunnable,
+    QSize,
+    Qt,
+    QThread,
+    QThreadPool,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
-    QAction, QGuiApplication, QIcon, QPixmap, QTextCursor)
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog,
-                             QFrame, QHBoxLayout, QInputDialog, QLabel,
-                             QListWidget, QListWidgetItem, QMainWindow, QMenu,
-                             QMessageBox, QPushButton, QSizePolicy, QToolBar,
-                             QToolTip, QVBoxLayout, QWidget)
+    QAction,
+    QGuiApplication,
+    QIcon,
+    QPixmap,
+    QTextCursor,
+)
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QToolBar,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import constants, tool_configuration, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
@@ -418,10 +448,9 @@ class LogSideBar(QListWidget):
 
 
 class Nebula(QMainWindow):
-    model_signal = pyqtSignal(bool)
+    input_mode_signal = pyqtSignal(str)
     main_window_loaded = pyqtSignal(bool)
     model_creation_in_progress = pyqtSignal(bool)
-
 
     def __init__(self, engagement_folder=None):
         super().__init__()
@@ -510,7 +539,6 @@ class Nebula(QMainWindow):
 
         self.command_input_area = CommandInputArea(manager=self.manager)
 
-
         self.command_input_area.setFixedHeight(50)
         self.command_input_area.setObjectName("commandInputArea")
         self.command_input_area.setToolTip(
@@ -535,6 +563,7 @@ class Nebula(QMainWindow):
             manager=self.manager,
             command_input_area=self.command_input_area,
         )
+        self.input_mode_signal.connect(self.command_input_area.set_input_mode)
 
         self.central_display_area.notes_signal_from_central_display_area.connect(
             self.command_input_area.execute_api_call
@@ -563,6 +592,16 @@ class Nebula(QMainWindow):
         )
 
         self.clear_button.setIcon(QIcon(self.clear_button_icon_path))
+
+        self.ai_or_bash = QPushButton()
+        self.ai_or_bash.setFixedHeight(50)
+        self.ai_or_bash.setObjectName("AiOrBashButton")
+        self.ai_or_bash.setToolTip("Switch between bash command or ai prompts")
+        self.ai_or_bash_icon_path = return_path(("Images/terminal.png"))
+        self.ai_or_bash.setIcon(QIcon(self.ai_or_bash_icon_path))
+        self.input_mode = "terminal"
+        self.ai_or_bash.clicked.connect(self.switch_between_terminal_and_ai)
+
         self.upload_button = QPushButton()
         self.upload_button.setFixedHeight(50)
         self.upload_button.setObjectName("uploadButton")
@@ -573,6 +612,7 @@ class Nebula(QMainWindow):
         self.input_frame.setObjectName("inputFrame")
         self.input_frame_layout = QHBoxLayout(self.input_frame)
         self.input_frame_layout.addWidget(self.clear_button)
+        self.input_frame_layout.addWidget(self.ai_or_bash)
         self.input_frame_layout.addWidget(self.command_input_area)
         self.input_frame_layout.addWidget(self.upload_button)
         self.middle_frame = QFrame()
@@ -1045,12 +1085,12 @@ class Nebula(QMainWindow):
             self.log_side_bar.enable_or_disable_due_to_model_creation
         )
         self.pop_out_window = AiNotesPopupWindow(
-                notes_file_path=os.path.join(
-                    self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"], "ai_notes.html"
-                ),
-                manager=self.manager,
-                command_input_area=self.command_input_area,
-            )
+            notes_file_path=os.path.join(
+                self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"], "ai_notes.html"
+            ),
+            manager=self.manager,
+            command_input_area=self.command_input_area,
+        )
         logger.debug("main window loaded")
         self.vector_db = ChromaManager(
             collection_name="nebula_collection",
@@ -1246,6 +1286,21 @@ class Nebula(QMainWindow):
             self.clear_button.clicked.disconnect()
             self.clear_button.clicked.connect(self.clear_screen)
             self.clear_button.setToolTip("Clear the display area, Long press to reset")
+
+    def switch_between_terminal_and_ai(self):
+        if self.input_mode == "ai":
+            # Change to terminal mode
+            self.input_mode = "terminal"
+
+            # Update the icon for terminal mode
+            self.ai_or_bash.setIcon(QIcon(return_path("Images/terminal.png")))
+        else:
+            # Change back to ai mode
+            self.input_mode = "ai"
+            # Update the icon for ai mode
+            self.ai_or_bash.setIcon(QIcon(return_path("Images/agent_off.png")))
+
+        self.input_mode_signal.emit(self.input_mode)
 
     def change_clear_button_icon_temporarily(self, data):
         if data:

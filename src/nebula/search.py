@@ -1,7 +1,14 @@
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import ChatOllama
-from PyQt6.QtCore import (QObject, QRunnable, QStringListModel, Qt,
-                          QThreadPool, pyqtSignal, pyqtSlot)
+from PyQt6.QtCore import (
+    QObject,
+    QRunnable,
+    QStringListModel,
+    Qt,
+    QThreadPool,
+    pyqtSignal,
+    pyqtSlot,
+)
 from PyQt6.QtWidgets import QCompleter, QLineEdit
 
 from . import constants, utilities
