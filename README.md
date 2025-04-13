@@ -18,7 +18,7 @@ Introducing Nebula Pro, Nebula Pro improves on Nebula 2.0 by adding additional f
 
 ## Nebula: AI-Powered Penetration Testing Platform
 
-Nebula is a cutting-edge, AI-powered penetration testing tool designed for cybersecurity professionals and ethical hackers. It integrates advanced open-source AI models such as Meta's Llama-3.1-8B-Instruct, Mistralai's Mistral-7B-Instruct-v0.2, and DeepSeek-R1-Distill-Llama-8B—directly into the command line interface (CLI). By leveraging these state-of-the-art models, Nebula not only enhances vulnerability assessments and penetration testing workflows but also supports any tool that can be invoked from the CLI.
+Nebula is a cutting-edge, AI-powered penetration testing tool designed for cybersecurity professionals and ethical hackers. It integrates advanced open-source AI models such as OpenAI's models (any model that is available via API) Meta's Llama-3.1-8B-Instruct, Mistralai's Mistral-7B-Instruct-v0.2, and DeepSeek-R1-Distill-Llama-8B—directly into the command line interface (CLI). By leveraging these state-of-the-art models, Nebula not only enhances vulnerability assessments and penetration testing workflows but also supports any tool that can be invoked from the CLI.
 
 
 ## Installation
@@ -52,10 +52,10 @@ Then enter the model's exact name as it appears in Ollama in the engagement sett
 
 **OpenAI Models Usage**
 
-To use openai models, add your api keys to your env like so
+To use OpenAI models, add your API keys to your env like so
 
 ```bash
-export OPENAI_API_KEY="sk-blah-blaj"
+export OpenAI_API_KEY="sk-blah-blaj"
 ```
 
 Then enter the OpenAI model's exact name in the engagement settings.
@@ -84,7 +84,7 @@ To interact with the models, begin your input with a `!` or use the AI/Terminal 
 
 ## Key Features
 
-- **AI-Powered Internet Search via agentes:**  
+- **AI-Powered Internet Search via agents:**  
   Enhance responses by integrating real-time, internet-sourced context to keep you updated on cybersecurity trends. "whats in the news on cybersecurity today"
   
 - **AI-Assisted Note-Taking:**  
@@ -101,6 +101,7 @@ To interact with the models, begin your input with a `!` or use the AI/Terminal 
 
 - **Manual Note-Taking & Automatic Command Logging:**  
   Maintain a detailed log of your actions and findings with both automated and manual note-taking features.
+  
 - **Status feed:**  
   This panel displays your most recent penetration testing activities, it refreshes every five minutes
 
