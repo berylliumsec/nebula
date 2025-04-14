@@ -4,17 +4,12 @@ import os
 
 from langchain.schema import Document
 from langchain_chroma import Chroma
-from langchain_community.document_loaders import (
-    CSVLoader,
-    DirectoryLoader,
-    JSONLoader,
-    PyPDFLoader,
-    TextLoader,
-    UnstructuredFileLoader,
-    UnstructuredURLLoader,
-)
+from langchain_community.document_loaders import (CSVLoader, DirectoryLoader,
+                                                  JSONLoader, PyPDFLoader,
+                                                  TextLoader,
+                                                  UnstructuredFileLoader,
+                                                  UnstructuredURLLoader)
 from langchain_huggingface import HuggingFaceEmbeddings
-
 # PyQt imports for QRunnable and signals.
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot
 
@@ -151,7 +146,10 @@ class ChromaManager:
             )
 
     def query(self, query_text, k=2):
-        results = self.vector_store.similarity_search(query_text, k=k)
+        retriever = self.vector_store.as_retriever(
+            search_type="mmr", search_kwargs={"k": 1, "fetch_k": 5}
+        )
+        results = retriever.invoke(query_text)
         return results
 
 

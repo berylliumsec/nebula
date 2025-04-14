@@ -3,18 +3,9 @@ import os
 import warnings
 
 from PyQt6.QtCore import QFile, QSettings, pyqtSignal
-from PyQt6.QtWidgets import (
-    QApplication,
-    QFileDialog,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QPushButton,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
+                             QLineEdit, QMessageBox, QPushButton, QTextEdit,
+                             QVBoxLayout, QWidget)
 
 from . import constants
 from .log_config import setup_logging

@@ -7,46 +7,16 @@ import warnings
 from queue import Queue
 
 from PyQt6 import QtCore
-from PyQt6.QtCore import (
-    QFile,
-    QFileSystemWatcher,
-    QObject,
-    QPoint,
-    QRunnable,
-    QSize,
-    Qt,
-    QThread,
-    QThreadPool,
-    QTimer,
-    pyqtSignal,
-)
+from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QPoint,
+                          QSize, Qt, QThread, QThreadPool, QTimer,
+                          pyqtSignal)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
-    QAction,
-    QGuiApplication,
-    QIcon,
-    QPixmap,
-    QTextCursor,
-)
-from PyQt6.QtWidgets import (
-    QAbstractItemView,
-    QApplication,
-    QFileDialog,
-    QFrame,
-    QHBoxLayout,
-    QInputDialog,
-    QLabel,
-    QListWidget,
-    QListWidgetItem,
-    QMainWindow,
-    QMenu,
-    QMessageBox,
-    QPushButton,
-    QSizePolicy,
-    QToolBar,
-    QToolTip,
-    QVBoxLayout,
-    QWidget,
-)
+    QAction, QGuiApplication, QIcon, QPixmap, QTextCursor)
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog,
+                             QFrame, QHBoxLayout, QInputDialog, QLabel,
+                             QListWidget, QListWidgetItem, QMainWindow, QMenu,
+                             QMessageBox, QPushButton, QSizePolicy, QToolBar,
+                             QToolTip, QVBoxLayout, QWidget)
 
 from . import constants, tool_configuration, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
@@ -75,30 +45,6 @@ logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/MainWindow.log")
 class FileProcessorSignal(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(Exception)
-
-
-class IndexFileTask(QRunnable):
-    """
-    QRunnable class for indexing a file.
-    """
-
-    def __init__(self, file_path: str, index_line_function):
-        super().__init__()
-        self.file_path = file_path
-        self.index_line_function = index_line_function
-
-    def run(self):
-        logger.info(f"Indexing file for search: {self.file_path}")
-        try:
-            with open(self.file_path, "r") as file:
-                for line in file:
-                    self.index_line_function(line.strip())
-            utilities.show_message(
-                "Indexing Complete",
-                "The file has been successfully indexed for search.",
-            )
-        except Exception as e:
-            logger.error(f"Failed to index file: {e}")
 
 
 class InsightsProcessorWorker(QObject):

@@ -1,14 +1,5 @@
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import ChatOllama
-from PyQt6.QtCore import (
-    QObject,
-    QRunnable,
-    QStringListModel,
-    Qt,
-    QThreadPool,
-    pyqtSignal,
-    pyqtSlot,
-)
+from PyQt6.QtCore import (QObject, QRunnable, QStringListModel, Qt,
+                          QThreadPool, pyqtSignal, pyqtSlot)
 from PyQt6.QtWidgets import QCompleter, QLineEdit
 
 from . import constants, utilities
@@ -16,8 +7,6 @@ from .chroma_manager import ChromaManager
 from .log_config import setup_logging
 
 logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/search.log")
-
-embeddings_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L12-v2")
 
 
 class WorkerSignals(QObject):
@@ -45,10 +34,10 @@ class SearchWorker(QRunnable):
             docs = self.rag.query(self.query, k=1)
             formatted_results = [doc.page_content.strip() for doc in docs]
             logger.info(
-                f"[Worker] Retrieved {len(formatted_results)} documents from the index"
+                f"[Worker] Retrieved {len(formatted_results)} documents from the index, content of the document is {formatted_results}"
             )
             prompt = (
-                f"Answer this question: {self.query} based on the context, "
+                f"Answer this question: '{self.query}' based on the context, "
                 f"if the context does not contain the answer to the question, simply respond with 'Answers not found', "
                 f"context: {formatted_results}."
             )
@@ -79,18 +68,16 @@ class CustomSearchLineEdit(QLineEdit):
         self.manager = manager
         self.CONFIG = self.manager.load_config()
 
-        # Initialize ChatOllama LLM.
+        # Initialize model LLM.
         try:
-            logger.info("[Main] Initializing ChatOllama with model")
-            if self.CONFIG["OLLAMA_URL"]:
-                self.llm = ChatOllama(
-                    model=self.CONFIG["MODEL"], base_url=self.CONFIG["OLLAMA_URL"]
-                )
-            else:
-                self.llm = ChatOllama(model=self.CONFIG["MODEL"])
-            logger.info("[Main] ChatOllama initialized successfully.")
+            logger.info("[Main] Initializing model with model")
+
+            self.llm, _ = utilities.get_llm_instance(
+                model=self.CONFIG["MODEL"], ollama_url=self.CONFIG["OLLAMA_URL"]
+            )
+            logger.info("[Main] model initialized successfully.")
         except Exception as e:
-            logger.error(f"[Main] Failed to initialize ChatOllama: {e}")
+            logger.error(f"[Main] Failed to initialize model: {e}")
             utilities.show_message(
                 "Error Loading Ollama",
                 "Ollama could not be loaded, please check the url in engagement settings and try again",

@@ -4,17 +4,9 @@ import cv2
 from PyQt6 import QtCore
 from PyQt6.QtCore import QFileSystemWatcher, QPoint, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QIcon, QImage, QPainter, QPixmap
-from PyQt6.QtWidgets import (
-    QApplication,
-    QColorDialog,
-    QDialog,
-    QFileDialog,
-    QHBoxLayout,
-    QInputDialog,
-    QListWidget,
-    QToolBar,
-    QVBoxLayout,
-)
+from PyQt6.QtWidgets import (QApplication, QColorDialog, QDialog, QFileDialog,
+                             QHBoxLayout, QInputDialog, QListWidget,
+                             QToolBar, QVBoxLayout)
 
 from . import constants
 from .image_display_label import ImageDisplayLabel
@@ -183,11 +175,12 @@ class ImageCommandWindow(QDialog):
         self.toolbar.addAction(self.cropAction)
 
         self.imageListWidget = QListWidget()
+        # Prevent the image selection panel from shrinking too much.
+        self.imageListWidget.setMinimumWidth(200)
         self.imageListWidget.itemClicked.connect(self.loadImageFromList)
 
         self.imageLabel = ImageDisplayLabel()
         self.imageLabel.setPixmap(QPixmap())
-
         self.imageLabel.clicked.connect(self.handleLabelClick)
 
         self.image = None
@@ -242,9 +235,7 @@ class ImageCommandWindow(QDialog):
 
     def center(self):
         screen = QApplication.primaryScreen()
-
         screen_geometry = screen.availableGeometry()
-
         window_geometry = self.frameGeometry()
         window_geometry.moveCenter(screen_geometry.center())
         self.move(window_geometry.topLeft())
@@ -413,23 +404,25 @@ class ImageCommandWindow(QDialog):
 
     def convertEventCoordsToImageCoords(self, event):
         try:
-            x = event.position().x()
-            y = event.position().y()
+            # Get the global position from the event, and map it to the imageLabel coordinate system.
+            local_pos = self.imageLabel.mapFromGlobal(event.globalPosition().toPoint())
+            x = local_pos.x()
+            y = local_pos.y()
 
-            # Since there's no scrollbar, we adjust the calculation to directly use the event's x and y.
-            # Assuming the image is centered within the widget, we calculate the offsets
+            # Compute the offset where the image is drawn within the imageLabel.
             offset_x = (self.imageLabel.width() - self.displayed_image_width) // 2
             offset_y = (self.imageLabel.height() - self.displayed_image_height) // 2
 
-            # Adjusting x and y based on the offsets if the image is centered
+            # Calculate the point relative to the actual displayed image (which is centered).
             widget_x = x - offset_x
             widget_y = y - offset_y
 
+            # Compute the scaling factors between the original image and the displayed (scaled) image.
             scale_w, scale_h = self.getScaleFactors()
             image_x = int(widget_x * scale_w)
             image_y = int(widget_y * scale_h)
 
-            # Ensure coordinates are not negative
+            # Clamp coordinates to avoid negatives.
             return max(0, image_x), max(0, image_y)
         except Exception as e:
             logger.error(f"Error in convertEventCoordsToImageCoords: {e}")
@@ -576,42 +569,48 @@ class ImageCommandWindow(QDialog):
             return 1, 1
 
     def updateImageDisplay(self, _=None):
-        self.imageLabel.setFixedSize(QtCore.QSize(1024, 768))
-
         try:
             if self.image is None:
                 return
 
+            # Always start with a fresh copy of the current image.
             self.temp_image = self.image.copy()
 
+            # Draw interactive overlays (cropping rectangle, drawn shapes, etc.) if needed.
             if self.isDrawing:
-                start_point_tuple, end_point_tuple = None, None
-                if isinstance(self.startPoint, QPoint):
-                    start_point_tuple = (self.startPoint.x(), self.startPoint.y())
-                if isinstance(self.endPoint, QPoint):
-                    end_point_tuple = (self.endPoint.x(), self.endPoint.y())
+                # Convert QPoints to tuples for rectangle drawing.
+                start_point_tuple = (
+                    (self.startPoint.x(), self.startPoint.y())
+                    if isinstance(self.startPoint, QPoint)
+                    else self.startPoint
+                )
+                end_point_tuple = (
+                    (self.endPoint.x(), self.endPoint.y())
+                    if isinstance(self.endPoint, QPoint)
+                    else self.endPoint
+                )
 
                 if self.mode == "crop":
                     cv2.rectangle(
                         self.temp_image,
-                        start_point_tuple or self.startPoint,
-                        end_point_tuple or self.endPoint,
+                        start_point_tuple,
+                        end_point_tuple,
                         self.selectedColor,
                         1,
                     )
-
-                if self.mode == "draw":
+                elif self.mode == "draw":
                     cv2.rectangle(
                         self.temp_image,
-                        start_point_tuple or self.startPoint,
-                        end_point_tuple or self.endPoint,
+                        start_point_tuple,
+                        end_point_tuple,
                         self.selectedColor,
                         self.selectedThickness,
                     )
                 elif self.mode == "blur":
+                    # Only apply blur if the start and end positions are in proper order.
                     if (
-                        start_point_tuple[1] < end_point_tuple[1]
-                        and start_point_tuple[0] < end_point_tuple[0]
+                        start_point_tuple[0] < end_point_tuple[0]
+                        and start_point_tuple[1] < end_point_tuple[1]
                     ):
                         roi = self.temp_image[
                             start_point_tuple[1] : end_point_tuple[1],
@@ -625,50 +624,51 @@ class ImageCommandWindow(QDialog):
                 elif self.mode == "arrow":
                     cv2.arrowedLine(
                         self.temp_image,
-                        start_point_tuple or self.startPoint,
-                        end_point_tuple or self.endPoint,
+                        start_point_tuple,
+                        end_point_tuple,
                         self.selectedColor,
                         self.selectedThickness,
                         cv2.LINE_AA,
                     )
 
+            # Convert the CV image to a QImage, then to a QPixmap.
             q_img = self.convertCvImageToQImage(self.temp_image)
             originalPixmap = QPixmap.fromImage(q_img)
 
+            # Get the display (label) size.
             labelSize = self.imageLabel.size()
+
+            # Determine if the image needs to be scaled down. If the original image
+            # is smaller than the display area, avoid upscaling to preserve clarity.
+            if (
+                originalPixmap.width() <= labelSize.width()
+                and originalPixmap.height() <= labelSize.height()
+            ):
+                scaledPixmap = originalPixmap
+            else:
+                scaledPixmap = originalPixmap.scaled(
+                    labelSize,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+
+            # Update the dimensions used for coordinate conversion.
+            self.displayed_image_width = scaledPixmap.width()
+            self.displayed_image_height = scaledPixmap.height()
+
+            # Prepare a black background pixmap for display.
             blackBackgroundPixmap = QPixmap(labelSize)
             blackBackgroundPixmap.fill(QColor("black"))
 
-            # Calculate the scaled size while maintaining aspect ratio
-            scaledSize = originalPixmap.size().scaled(
-                labelSize, Qt.AspectRatioMode.KeepAspectRatio
-            )
-            self.displayed_image_width, self.displayed_image_height = (
-                scaledSize.width(),
-                scaledSize.height(),
-            )
-            logger.debug(
-                f"Displayed Image Height: {self.displayed_image_height}, Displayed Image Width: { self.displayed_image_width}"
-            )
+            # Center the scaled image on the label.
+            x = (labelSize.width() - scaledPixmap.width()) // 2
+            y = (labelSize.height() - scaledPixmap.height()) // 2
 
-            # Calculate the position to center the image on the black background
-            x = (labelSize.width() - self.displayed_image_width) // 2
-            y = (labelSize.height() - self.displayed_image_height) // 2
-
-            # Use QPainter to draw the original image onto the center of the black background
             painter = QPainter(blackBackgroundPixmap)
-            painter.drawPixmap(
-                x,
-                y,
-                originalPixmap.scaled(
-                    scaledSize,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                ),
-            )
+            painter.drawPixmap(x, y, scaledPixmap)
             painter.end()
 
-            # Set the pixmap with the centered image and black background to the label
+            # Finally, set the complete pixmap on the label.
             self.imageLabel.setPixmap(blackBackgroundPixmap)
 
         except Exception as e:
