@@ -1,20 +1,12 @@
 import os
+
 import cv2
 from PyQt6 import QtCore
 from PyQt6.QtCore import QFileSystemWatcher, QPoint, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QIcon, QImage, QPainter, QPixmap
-from PyQt6.QtWidgets import (
-    QApplication,
-    QColorDialog,
-    QDialog,
-    QFileDialog,
-    QHBoxLayout,
-    QInputDialog,
-    QListWidget,
-    QToolBar,
-    QVBoxLayout,
-    QSizePolicy,
-)
+from PyQt6.QtWidgets import (QApplication, QColorDialog, QDialog, QFileDialog,
+                             QHBoxLayout, QInputDialog, QListWidget,
+                             QToolBar, QVBoxLayout)
 
 from . import constants
 from .image_display_label import ImageDisplayLabel
@@ -333,13 +325,17 @@ class ImageCommandWindow(QDialog):
         except Exception as e:
             logger.error(f"Error opening directory: {e}")
 
-    def change_icon_temporarily(self, action, temp_icon_path, original_icon_path, delay=500):
+    def change_icon_temporarily(
+        self, action, temp_icon_path, original_icon_path, delay=500
+    ):
         action.setIcon(QIcon(temp_icon_path))
         self.window().repaint()
         QApplication.processEvents()  # Force the UI to update
         QTimer.singleShot(delay, lambda: action.setIcon(QIcon(original_icon_path)))
 
-    def provide_feedback_and_execute(self, action, temp_icon_path, original_icon_path, function):
+    def provide_feedback_and_execute(
+        self, action, temp_icon_path, original_icon_path, function
+    ):
         self.change_icon_temporarily(action, temp_icon_path, original_icon_path)
         function()
 
@@ -384,7 +380,9 @@ class ImageCommandWindow(QDialog):
                     self.updateImageDisplay()
                     logger.debug(f"Image loaded from {fname}")
                 else:
-                    logger.error("Failed to load the image or unsupported image format.")
+                    logger.error(
+                        "Failed to load the image or unsupported image format."
+                    )
         except Exception as e:
             logger.error(f"Error loading image: {e}")
 
@@ -491,7 +489,9 @@ class ImageCommandWindow(QDialog):
                     x2, y2 = self.endPoint.x(), self.endPoint.y()
                 else:
                     x2, y2 = self.endPoint
-                self.image = self.image[min(y1, y2):max(y1, y2), min(x1, x2):max(x1, x2)]
+                self.image = self.image[
+                    min(y1, y2) : max(y1, y2), min(x1, x2) : max(x1, x2)
+                ]
                 self.updateImageDisplay()
 
             except Exception as e:
@@ -532,9 +532,13 @@ class ImageCommandWindow(QDialog):
             elif self.mode == "blur":
                 start_point = (self.startPoint.x(), self.startPoint.y())
                 end_point = (self.endPoint.x(), self.endPoint.y())
-                roi = self.image[start_point[1]:end_point[1], start_point[0]:end_point[0]]
+                roi = self.image[
+                    start_point[1] : end_point[1], start_point[0] : end_point[0]
+                ]
                 kernel_size = (5, 5)
-                self.image[start_point[1]:end_point[1], start_point[0]:end_point[0]] = cv2.blur(roi, kernel_size)
+                self.image[
+                    start_point[1] : end_point[1], start_point[0] : end_point[0]
+                ] = cv2.blur(roi, kernel_size)
 
             self.updateImageDisplay()
         except Exception as e:
@@ -587,7 +591,13 @@ class ImageCommandWindow(QDialog):
                 )
 
                 if self.mode == "crop":
-                    cv2.rectangle(self.temp_image, start_point_tuple, end_point_tuple, self.selectedColor, 1)
+                    cv2.rectangle(
+                        self.temp_image,
+                        start_point_tuple,
+                        end_point_tuple,
+                        self.selectedColor,
+                        1,
+                    )
                 elif self.mode == "draw":
                     cv2.rectangle(
                         self.temp_image,
@@ -598,15 +608,18 @@ class ImageCommandWindow(QDialog):
                     )
                 elif self.mode == "blur":
                     # Only apply blur if the start and end positions are in proper order.
-                    if start_point_tuple[0] < end_point_tuple[0] and start_point_tuple[1] < end_point_tuple[1]:
+                    if (
+                        start_point_tuple[0] < end_point_tuple[0]
+                        and start_point_tuple[1] < end_point_tuple[1]
+                    ):
                         roi = self.temp_image[
-                            start_point_tuple[1]:end_point_tuple[1],
-                            start_point_tuple[0]:end_point_tuple[0]
+                            start_point_tuple[1] : end_point_tuple[1],
+                            start_point_tuple[0] : end_point_tuple[0],
                         ]
                         kernel_size = (25, 25)
                         self.temp_image[
-                            start_point_tuple[1]:end_point_tuple[1],
-                            start_point_tuple[0]:end_point_tuple[0]
+                            start_point_tuple[1] : end_point_tuple[1],
+                            start_point_tuple[0] : end_point_tuple[0],
                         ] = cv2.blur(roi, kernel_size)
                 elif self.mode == "arrow":
                     cv2.arrowedLine(
@@ -627,13 +640,16 @@ class ImageCommandWindow(QDialog):
 
             # Determine if the image needs to be scaled down. If the original image
             # is smaller than the display area, avoid upscaling to preserve clarity.
-            if (originalPixmap.width() <= labelSize.width() and originalPixmap.height() <= labelSize.height()):
+            if (
+                originalPixmap.width() <= labelSize.width()
+                and originalPixmap.height() <= labelSize.height()
+            ):
                 scaledPixmap = originalPixmap
             else:
                 scaledPixmap = originalPixmap.scaled(
                     labelSize,
                     Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
+                    Qt.TransformationMode.SmoothTransformation,
                 )
 
             # Update the dimensions used for coordinate conversion.

@@ -1,29 +1,12 @@
 import sys
 import warnings
 
-from PyQt6.QtCore import (
-    QFile,
-    QObject,
-    QRunnable,
-    Qt,
-    QThread,
-    QThreadPool,
-    QTimer,
-    pyqtSignal,
-)
+from PyQt6.QtCore import (QFile, QObject, QRunnable, Qt, QThread, QThreadPool,
+                          QTimer, pyqtSignal)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
-    QFont,
-    QIcon,
-)
-from PyQt6.QtWidgets import (
-    QApplication,
-    QDialog,
-    QDialogButtonBox,
-    QLabel,
-    QProgressBar,
-    QVBoxLayout,
-    QWidget,
-)
+    QFont, QIcon)
+from PyQt6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QLabel,
+                             QProgressBar, QVBoxLayout, QWidget)
 
 from . import configuration_manager, constants, utilities
 from .log_config import setup_logging

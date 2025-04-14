@@ -1,13 +1,5 @@
-from langchain_huggingface import HuggingFaceEmbeddings
-from PyQt6.QtCore import (
-    QObject,
-    QRunnable,
-    QStringListModel,
-    Qt,
-    QThreadPool,
-    pyqtSignal,
-    pyqtSlot,
-)
+from PyQt6.QtCore import (QObject, QRunnable, QStringListModel, Qt,
+                          QThreadPool, pyqtSignal, pyqtSlot)
 from PyQt6.QtWidgets import QCompleter, QLineEdit
 
 from . import constants, utilities
@@ -15,8 +7,6 @@ from .chroma_manager import ChromaManager
 from .log_config import setup_logging
 
 logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/search.log")
-
-
 
 
 class WorkerSignals(QObject):
@@ -82,7 +72,9 @@ class CustomSearchLineEdit(QLineEdit):
         try:
             logger.info("[Main] Initializing model with model")
 
-            self.llm, _ = utilities.get_llm_instance(model=self.CONFIG["MODEL"],ollama_url=self.CONFIG["OLLAMA_URL"])
+            self.llm, _ = utilities.get_llm_instance(
+                model=self.CONFIG["MODEL"], ollama_url=self.CONFIG["OLLAMA_URL"]
+            )
             logger.info("[Main] model initialized successfully.")
         except Exception as e:
             logger.error(f"[Main] Failed to initialize model: {e}")

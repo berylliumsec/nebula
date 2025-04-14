@@ -1,16 +1,10 @@
 import re
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import (
-    QAction,
-    QColor,
-    QFont,
-    QKeyEvent,
-    QMouseEvent,
-    QTextCharFormat,
-    QTextCursor,
-)
-from PyQt6.QtWidgets import QApplication, QDialog, QMenu, QPushButton, QTextEdit
+from PyQt6.QtGui import (QAction, QColor, QFont, QKeyEvent, QMouseEvent,
+                         QTextCharFormat, QTextCursor)
+from PyQt6.QtWidgets import (QApplication, QDialog, QMenu, QPushButton,
+                             QTextEdit)
 
 from . import constants, utilities
 from .log_config import setup_logging

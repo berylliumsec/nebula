@@ -2,29 +2,12 @@ import os
 
 from PyQt6 import QtCore
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import (
-    QAction,
-    QColor,
-    QFont,
-    QIcon,
-    QKeySequence,
-    QTextCharFormat,
-    QTextListFormat,
-)
-from PyQt6.QtWidgets import (
-    QApplication,
-    QColorDialog,
-    QDockWidget,
-    QFileDialog,
-    QInputDialog,
-    QListWidget,
-    QMainWindow,
-    QMenu,
-    QMessageBox,
-    QTabBar,
-    QTabWidget,
-    QToolBar,
-)
+from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence,
+                         QTextCharFormat, QTextListFormat)
+from PyQt6.QtWidgets import (QApplication, QColorDialog, QDockWidget,
+                             QFileDialog, QInputDialog, QListWidget,
+                             QMainWindow, QMenu, QMessageBox, QTabBar,
+                             QTabWidget, QToolBar)
 
 from . import constants
 from .ai_notes_pop_up_window import AiNotes, CustomTitleBar

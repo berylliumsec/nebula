@@ -6,47 +6,15 @@ from pygments import highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name, guess_lexer
 from PyQt6 import QtCore
-from PyQt6.QtCore import (
-    QFile,
-    QFileSystemWatcher,
-    QObject,
-    QRect,
-    QRunnable,
-    QStringListModel,
-    Qt,
-    QThreadPool,
-    QTimer,
-    QUrl,
-    pyqtSignal,
-)
-from PyQt6.QtGui import (
-    QAction,
-    QColor,
-    QFont,
-    QIcon,
-    QKeySequence,
-    QTextCharFormat,
-    QTextCursor,
-    QTextListFormat,
-)
-from PyQt6.QtWidgets import (
-    QApplication,
-    QColorDialog,
-    QCompleter,
-    QDialog,
-    QDockWidget,
-    QFileDialog,
-    QHBoxLayout,
-    QInputDialog,
-    QLabel,
-    QListWidget,
-    QMainWindow,
-    QMenu,
-    QMessageBox,
-    QTextEdit,
-    QToolBar,
-    QWidget,
-)
+from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRect, QRunnable,
+                          QStringListModel, Qt, QThreadPool, QTimer, QUrl,
+                          pyqtSignal)
+from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence,
+                         QTextCharFormat, QTextCursor, QTextListFormat)
+from PyQt6.QtWidgets import (QApplication, QColorDialog, QCompleter, QDialog,
+                             QDockWidget, QFileDialog, QHBoxLayout,
+                             QInputDialog, QLabel, QListWidget, QMainWindow,
+                             QMenu, QMessageBox, QTextEdit, QToolBar, QWidget)
 
 from . import constants, update_utils, utilities
 from .log_config import setup_logging
@@ -386,7 +354,6 @@ class AiNotes(QTextEdit):
         indexdir = update_utils.return_path("command_search_index")
         selected_text = self.textCursor().selectedText()
         self.search_window.add_to_index(selected_text, indexdir)
-
 
     def insertFileLink(self):
         directory = self.manager.load_config()["LOG_DIRECTORY"]  # Adjust as necessary
@@ -996,8 +963,6 @@ class AiNotesPopupWindow(QMainWindow):
     def add_bookmark(self):
         self.textEdit.toggle_bookmark()  # Ensure AiNotes has a method to add the current position as a bookmark
         self.updateBookmarksList()
-
-
 
     def on_search_replace_triggered(self, _=None):
         dialog = SearchReplaceDialog(self.textEdit, self)

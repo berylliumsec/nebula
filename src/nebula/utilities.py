@@ -15,16 +15,8 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import (
-    QApplication,
-    QDialog,
-    QHBoxLayout,
-    QMessageBox,
-    QPushButton,
-    QScrollArea,
-    QTextEdit,
-    QVBoxLayout,
-)
+from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QMessageBox,
+                             QPushButton, QScrollArea, QTextEdit, QVBoxLayout)
 
 from . import constants
 from .log_config import setup_logging
@@ -234,7 +226,6 @@ def get_llm_instance(model: str, ollama_url: str = "", signals: pyqtSignal = Non
             logger.error("Error Loading Ollama", e)
             raise e
     return llm_instance, ollama_or_openai
-
 
 
 def show_message(title, message):

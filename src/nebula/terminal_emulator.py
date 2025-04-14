@@ -8,42 +8,19 @@ import signal
 import time
 import warnings
 
-from langchain.agents import (
-    AgentExecutor,
-    AgentType,
-    create_openai_tools_agent,
-    initialize_agent,
-)
+from langchain.agents import (AgentExecutor, AgentType,
+                              create_openai_tools_agent, initialize_agent)
 from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from PyQt6 import QtCore
-from PyQt6.QtCore import (
-    QFile,
-    QFileSystemWatcher,
-    QObject,
-    QRunnable,
-    QStringListModel,
-    Qt,
-    QThread,
-    QThreadPool,
-    QTimer,
-    pyqtSignal,
-)
+from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QRunnable,
+                          QStringListModel, Qt, QThread, QThreadPool, QTimer,
+                          pyqtSignal)
 from PyQt6.QtGui import QAction, QIcon, QMouseEvent, QPixmap, QTextCursor
-from PyQt6.QtWidgets import (
-    QApplication,
-    QCompleter,
-    QFileDialog,
-    QHBoxLayout,
-    QLineEdit,
-    QMainWindow,
-    QMenu,
-    QMessageBox,
-    QPushButton,
-    QToolBar,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtWidgets import (QApplication, QCompleter, QFileDialog,
+                             QHBoxLayout, QLineEdit, QMainWindow, QMenu,
+                             QMessageBox, QPushButton, QToolBar, QVBoxLayout,
+                             QWidget)
 
 from . import constants, utilities
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
@@ -61,9 +38,6 @@ warnings.filterwarnings("ignore")
 logger = setup_logging(
     log_file=constants.SYSTEM_LOGS_DIR + "/terminal_emulator.log", level=logging.INFO
 )
-
-
-
 
 
 class AgentTaskRunnerSignals(QObject):
@@ -1408,7 +1382,6 @@ class CommandInputArea(QLineEdit):
         msg.setWindowTitle("File Too Large")
         msg.setStyleSheet("QMessageBox { background-color: #333; color: white; }")
         msg.exec()
-
 
     def onTaskResult(self, endpoint, command, result):
         if not any(sub in endpoint for sub in ["suggestion", "notes"]):

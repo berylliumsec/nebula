@@ -3,20 +3,10 @@ import os
 from PyQt6.QtCore import QSize, QTimer
 from PyQt6.QtGui import QFont  # Use QtGui in PyQt6
 from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import (
-    QApplication,
-    QGridLayout,
-    QHBoxLayout,
-    QLineEdit,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QSpacerItem,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLineEdit,
+                             QMainWindow, QMessageBox, QPushButton,
+                             QScrollArea, QSizePolicy, QSpacerItem,
+                             QVBoxLayout, QWidget)
 
 from .update_utils import return_path
 
