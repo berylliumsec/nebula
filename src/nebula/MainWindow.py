@@ -77,29 +77,6 @@ class FileProcessorSignal(QObject):
     error = pyqtSignal(Exception)
 
 
-class IndexFileTask(QRunnable):
-    """
-    QRunnable class for indexing a file.
-    """
-
-    def __init__(self, file_path: str, index_line_function):
-        super().__init__()
-        self.file_path = file_path
-        self.index_line_function = index_line_function
-
-    def run(self):
-        logger.info(f"Indexing file for search: {self.file_path}")
-        try:
-            with open(self.file_path, "r") as file:
-                for line in file:
-                    self.index_line_function(line.strip())
-            utilities.show_message(
-                "Indexing Complete",
-                "The file has been successfully indexed for search.",
-            )
-        except Exception as e:
-            logger.error(f"Failed to index file: {e}")
-
 
 class InsightsProcessorWorker(QObject):
     def __init__(self, file_path, gate_way_endpoint, command_input_area):

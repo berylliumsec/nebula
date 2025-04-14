@@ -236,30 +236,6 @@ def get_llm_instance(model: str, ollama_url: str = "", signals: pyqtSignal = Non
     return llm_instance, ollama_or_openai
 
 
-def show_systems_requirements_message(title, message):
-    msg_box = QMessageBox()
-    msg_box.setWindowTitle(title)
-    msg_box.setText(message)
-    msg_box.setStyleSheet(DARK_STYLE_SHEET)
-    msg_box.setStandardButtons(
-        QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
-    )
-
-    # Calculate the center position
-    screen = QApplication.primaryScreen().geometry()
-    msg_box.setGeometry(
-        (screen.width() - msg_box.width()) // 2,
-        (screen.height() - msg_box.height()) // 2,
-        msg_box.width(),
-        msg_box.height(),
-    )
-
-    # Execute the message box and wait for user response
-    retval = msg_box.exec()
-
-    # Return True if OK was clicked, False otherwise
-    return retval == QMessageBox.StandardButton.Ok
-
 
 def show_message(title, message):
     msg_box = QMessageBox()

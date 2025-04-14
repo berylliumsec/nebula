@@ -387,16 +387,6 @@ class AiNotes(QTextEdit):
         selected_text = self.textCursor().selectedText()
         self.search_window.add_to_index(selected_text, indexdir)
 
-    def handle_anchor_clicked(self, url):
-        # Handle local file links specially, otherwise use QDesktopServices for http/https links
-        if url.scheme() == "file":
-            # The path might need adjustments depending on how it's stored
-            file_path = url.toLocalFile()
-            # Try opening the file with the default application
-            if not utilities.open_url(url):
-                logger.error(f"Failed to open file: {file_path}")
-        else:
-            utilities.open_url(url)
 
     def insertFileLink(self):
         directory = self.manager.load_config()["LOG_DIRECTORY"]  # Adjust as necessary
@@ -1007,9 +997,7 @@ class AiNotesPopupWindow(QMainWindow):
         self.textEdit.toggle_bookmark()  # Ensure AiNotes has a method to add the current position as a bookmark
         self.updateBookmarksList()
 
-    def get_input(self, title, label):
-        text, ok = QInputDialog.getText(self, title, label)
-        return text if ok else None
+
 
     def on_search_replace_triggered(self, _=None):
         dialog = SearchReplaceDialog(self.textEdit, self)

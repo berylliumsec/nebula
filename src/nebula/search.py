@@ -1,5 +1,4 @@
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import ChatOllama
 from PyQt6.QtCore import (
     QObject,
     QRunnable,
@@ -17,7 +16,7 @@ from .log_config import setup_logging
 
 logger = setup_logging(log_file=constants.SYSTEM_LOGS_DIR + "/search.log")
 
-embeddings_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L12-v2")
+
 
 
 class WorkerSignals(QObject):
@@ -79,18 +78,14 @@ class CustomSearchLineEdit(QLineEdit):
         self.manager = manager
         self.CONFIG = self.manager.load_config()
 
-        # Initialize ChatOllama LLM.
+        # Initialize model LLM.
         try:
-            logger.info("[Main] Initializing ChatOllama with model")
-            if self.CONFIG["OLLAMA_URL"]:
-                self.llm = ChatOllama(
-                    model=self.CONFIG["MODEL"], base_url=self.CONFIG["OLLAMA_URL"]
-                )
-            else:
-                self.llm = ChatOllama(model=self.CONFIG["MODEL"])
-            logger.info("[Main] ChatOllama initialized successfully.")
+            logger.info("[Main] Initializing model with model")
+
+            self.llm = utilities.get_llm_instance(model=self.CONFIG["MODEL"],ollama_url=self.CONFIG["OLLAMA_URL"])
+            logger.info("[Main] model initialized successfully.")
         except Exception as e:
-            logger.error(f"[Main] Failed to initialize ChatOllama: {e}")
+            logger.error(f"[Main] Failed to initialize model: {e}")
             utilities.show_message(
                 "Error Loading Ollama",
                 "Ollama could not be loaded, please check the url in engagement settings and try again",

@@ -63,11 +63,7 @@ logger = setup_logging(
 )
 
 
-class ModelWorkerSignals(QObject):
-    # Signal to emit when the model is created
-    modelCreated = pyqtSignal(object)
-    modelCreationInProgress = pyqtSignal(bool)
-    modelName = pyqtSignal(str)
+
 
 
 class AgentTaskRunnerSignals(QObject):
@@ -1085,7 +1081,6 @@ class CommandInputArea(QLineEdit):
         self.textChanged.connect(self.fileCompleter.update_model)
         self.autonomous_mode = False
         self.web_mode = False
-        self.tools_agent_mode = False
         self.contextMenu = self.createContextMenu()
         self.history = []
         self.manager = manager
@@ -1132,7 +1127,6 @@ class CommandInputArea(QLineEdit):
             "awk",
             "sed",
         ]
-        self.tools_agent = None
         self.general_agent = None
 
         self.conversation_memory = ConversationMemory(
@@ -1415,8 +1409,6 @@ class CommandInputArea(QLineEdit):
         msg.setStyleSheet("QMessageBox { background-color: #333; color: white; }")
         msg.exec()
 
-    def setModelName(self, model_name):
-        self.model_name = model_name
 
     def onTaskResult(self, endpoint, command, result):
         if not any(sub in endpoint for sub in ["suggestion", "notes"]):
