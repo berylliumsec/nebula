@@ -413,27 +413,30 @@ class ImageCommandWindow(QDialog):
 
     def convertEventCoordsToImageCoords(self, event):
         try:
-            x = event.position().x()
-            y = event.position().y()
+            # Get the global position from the event, and map it to the imageLabel coordinate system.
+            local_pos = self.imageLabel.mapFromGlobal(event.globalPosition().toPoint())
+            x = local_pos.x()
+            y = local_pos.y()
 
-            # Since there's no scrollbar, we adjust the calculation to directly use the event's x and y.
-            # Assuming the image is centered within the widget, we calculate the offsets
+            # Compute the offset where the image is drawn within the imageLabel.
             offset_x = (self.imageLabel.width() - self.displayed_image_width) // 2
             offset_y = (self.imageLabel.height() - self.displayed_image_height) // 2
 
-            # Adjusting x and y based on the offsets if the image is centered
+            # Calculate the point relative to the actual displayed image (which is centered).
             widget_x = x - offset_x
             widget_y = y - offset_y
 
+            # Compute the scaling factors between the original image and the displayed (scaled) image.
             scale_w, scale_h = self.getScaleFactors()
             image_x = int(widget_x * scale_w)
             image_y = int(widget_y * scale_h)
 
-            # Ensure coordinates are not negative
+            # Clamp coordinates to avoid negatives.
             return max(0, image_x), max(0, image_y)
         except Exception as e:
             logger.error(f"Error in convertEventCoordsToImageCoords: {e}")
             return None, None
+
 
     def handleLabelClick(self, event):
         try:

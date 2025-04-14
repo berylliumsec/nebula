@@ -82,7 +82,7 @@ class CustomSearchLineEdit(QLineEdit):
         try:
             logger.info("[Main] Initializing model with model")
 
-            self.llm = utilities.get_llm_instance(model=self.CONFIG["MODEL"],ollama_url=self.CONFIG["OLLAMA_URL"])
+            self.llm, _ = utilities.get_llm_instance(model=self.CONFIG["MODEL"],ollama_url=self.CONFIG["OLLAMA_URL"])
             logger.info("[Main] model initialized successfully.")
         except Exception as e:
             logger.error(f"[Main] Failed to initialize model: {e}")
