@@ -44,10 +44,10 @@ class SearchWorker(QRunnable):
             docs = self.rag.query(self.query, k=1)
             formatted_results = [doc.page_content.strip() for doc in docs]
             logger.info(
-                f"[Worker] Retrieved {len(formatted_results)} documents from the index"
+                f"[Worker] Retrieved {len(formatted_results)} documents from the index, content of the document is {formatted_results}"
             )
             prompt = (
-                f"Answer this question: {self.query} based on the context, "
+                f"Answer this question: '{self.query}' based on the context, "
                 f"if the context does not contain the answer to the question, simply respond with 'Answers not found', "
                 f"context: {formatted_results}."
             )

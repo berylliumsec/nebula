@@ -151,7 +151,10 @@ class ChromaManager:
             )
 
     def query(self, query_text, k=2):
-        results = self.vector_store.similarity_search(query_text, k=k)
+        retriever =  self.vector_store.as_retriever(
+            search_type="mmr", search_kwargs={"k": 1, "fetch_k": 5}
+        )
+        results = retriever.invoke(query_text)
         return results
 
 
