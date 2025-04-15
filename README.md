@@ -43,7 +43,7 @@ python -m pip install nebula-ai --upgrade
 
 **Ollama Local Model Based Usage**
 
-Install Ollama and download your preferred models for example
+[Install Ollama](https://ollama.com/download/mac) and download your preferred models for example
 
 ```bash
  ollama pull mistral
