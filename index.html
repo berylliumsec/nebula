@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta name="google-site-verification" content="r-aYreEr1T_XhqjFSR4VvrGB7YVt-gdo8U4BqocJKMU" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nebula – AI-Powered Penetration Testing Assistant</title>
+    <meta
+      name="description"
+      content="Nebula is an advanced, open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking."
+    />
+    <!-- SEO Keywords (integrated from previous improvements) -->
+    <meta
+      name="keywords"
+      content="AI-powered penetration testing, AI penetration testing tools, automated penetration testing, open-source cybersecurity tools, open-source penetration testing, vulnerability assessments, ethical hacking tools, Nebula"
+    />
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" sizes="32x32" href="images/logo.png" />
+    <link rel="apple-touch-icon" href="images/logo.png" />
+    <!-- Google Fonts -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Inline CSS -->
+    <style>
+      /* Reset & Box Sizing */
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        font-family: 'Roboto', sans-serif;
+        background-color: #0d0d0d;
+        color: #dcdcdc;
+        line-height: 1.6;
+      }
+      a {
+        text-decoration: none;
+        color: inherit;
+      }
+      /* Header & Navigation */
+      header {
+        background-color: #101010;
+        padding: 1rem 2rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        position: sticky;
+        top: 0;
+        z-index: 1000;
+      }
+      .logo img {
+        height: 50px;
+      }
+      nav ul {
+        list-style: none;
+        display: flex;
+        gap: 1.5rem;
+      }
+      nav a {
+        color: #dcdcdc;
+        font-weight: 500;
+        transition: color 0.3s;
+      }
+      nav a:hover,
+      nav a:focus {
+        color: #ffffff;
+      }
+      /* Hero Section */
+      .hero {
+        text-align: center;
+        padding: 3rem 2rem;
+        background: linear-gradient(135deg, #101010, #0d0d0d);
+      }
+      .hero h1 {
+        font-size: 2.5rem;
+        margin-bottom: 1rem;
+      }
+      .hero p {
+        font-size: 1.125rem;
+        max-width: 800px;
+        margin: 0 auto 2rem;
+      }
+      /* Main Content */
+      main {
+        padding: 2rem;
+        max-width: 900px;
+        margin: 0 auto;
+      }
+      section {
+        margin-bottom: 3rem;
+      }
+      section h2 {
+        font-size: 2rem;
+        margin-bottom: 1rem;
+        border-bottom: 2px solid #ffffff;
+        display: inline-block;
+        padding-bottom: 0.3rem;
+      }
+      section h3 {
+        font-size: 1.5rem;
+        margin-top: 1.5rem;
+        margin-bottom: 0.75rem;
+        color: #ffffff;
+      }
+      p {
+        margin-bottom: 1rem;
+      }
+      img {
+        max-width: 100%;
+        height: auto;
+        margin: 1rem 0;
+      }
+      pre {
+        background-color: #1a1a1a;
+        padding: 1rem;
+        overflow-x: auto;
+        border-radius: 4px;
+        margin-bottom: 1rem;
+      }
+      code {
+        font-family: monospace;
+        color: #ffffff;
+      }
+      ul {
+        padding-left: 1.5rem;
+        margin-bottom: 1rem;
+      }
+      li {
+        margin-bottom: 0.5rem;
+      }
+      /* Button */
+      .button {
+        display: inline-block;
+        padding: 0.75rem 1.5rem;
+        background-color: #ffffff;
+        color: #ffffff;
+        font-weight: bold;
+        border-radius: 4px;
+        transition: background-color 0.3s;
+      }
+      .button:hover,
+      .button:focus {
+        background-color: #0088cc;
+      }
+      /* Footer */
+      footer {
+        background-color: #101010;
+        text-align: center;
+        padding: 1rem;
+        font-size: 0.9rem;
+      }
+      footer a {
+        color: #ffffff;
+      }
+      footer a:hover,
+      footer a:focus {
+        text-decoration: underline;
+      }
+      /* Responsive Typography */
+      @media (max-width: 768px) {
+        .hero h1 {
+          font-size: 2rem;
+        }
+        nav ul {
+          flex-direction: column;
+          gap: 1rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Header -->
+    <header>
+      <div class="logo">
+        <a href="#overview">
+          <img src="images/logo.png" alt="Beryllium Security Logo" />
+        </a>
+      </div>
+      <nav aria-label="Main Navigation">
+        <ul>
+          <li><a href="#overview">Overview</a></li>
+          <li><a href="#installation">Installation</a></li>
+          <li><a href="#running">Running</a></li>
+          <li><a href="#features">Key Features</a></li>
+          <li><a href="#support">Support</a></li>
+        </ul>
+      </nav>
+    </header>
+
+    <!-- Hero / Intro Section -->
+    <section class="hero" id="overview">
+      <h1>Nebula – AI-Powered Penetration Testing Assistant</h1>
+      <p>
+        Nebula is an advanced, open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking.
+      </p>
+      <!-- Additional SEO-friendly content -->
+      <p>
+        By combining AI-driven testing with robust open-source cybersecurity tools, Nebula empowers security teams to perform comprehensive vulnerability assessments and uncover hidden threats faster than ever before.
+      </p>
+      <img src="images/Nebula.png" alt="Nebula AI-Powered Penetration Testing CLI Interface" />
+      
+      <h3>Acknowledgement</h3>
+      <p>
+        <strong>First I would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.</strong>
+      </p>
+      
+      <h3>News</h3>
+      <p>
+        <strong>Introducing the Deep Application Profiler (DAP).</strong> DAP uses neural networks to analyze an executable's internal structure and intent, rather than relying on traditional virus signatures. This approach enables it to detect new, zero-day malware that conventional methods often miss. DAP also provides detailed breakdowns for rapid analyst review and is available as both a web service and an API. 
+        <a href="https://www.berylliumsec.com/dap-overview" target="_blank" rel="noopener">Learn More Here</a>
+      </p>
+      <p>
+        <strong>Introducing Nebula Pro.</strong> Nebula Pro improves on Nebula 2.0 by adding additional features such as autonomous mode, code analysis and more. 
+        <a href="https://www.berylliumsec.com/nebula-pro-overview" target="_blank" rel="noopener">Learn More Here</a>
+      </p>
+      
+      <h3>Nebula: AI-Powered Penetration Testing Platform</h3>
+      <p>
+        Nebula integrates advanced open-source AI models like Meta's Llama-3.1-8B-Instruct and Mistralai's Mistral-7B-Instruct-v0.2 into a single, powerful command-line interface. This fusion of AI and open-source cybersecurity tools allows ethical hackers and security professionals to perform detailed vulnerability assessments and improve overall cyber defenses.
+      </p>
+    </section>
+
+    <!-- Installation Section -->
+    <main>
+      <section id="installation">
+        <h2>Installation</h2>
+        <p><strong>System Requirements:</strong></p>
+        <ul>
+          <li>At least 8GB of GPU memory (tested with 12GB)</li>
+          <li>Python 3.11 or higher</li>
+        </ul>
+        <p><strong>Installation Command:</strong></p>
+        <pre><code>python -m pip install nebula-ai --upgrade</code></pre>
+      </section>
+
+      <!-- Running Nebula Section -->
+      <section id="running">
+        <h2>Running Nebula</h2>
+        <p><strong>Important:</strong> On your first run, you’ll be prompted to select a cache directory where Nebula will download your chosen AI model. Follow these steps:</p>
+        <ol>
+          <li>
+            Create a free <a href="https://huggingface.co/" target="_blank" rel="noopener">Hugging Face Account</a>, agree to the terms, and generate an access token.
+          </li>
+          <li>
+            Export your token to the CLI:
+            <pre><code>export HF_TOKEN=YourTokenHere</code></pre>
+          </li>
+          <li>
+            Launch Nebula and monitor the download progress:
+            <pre><code>nebula</code></pre>
+          </li>
+        </ol>
+        <p>
+          This step only needs to be completed once. Monitor the CLI where you invoked <code>nebula</code> to view the download progress.
+        </p>
+        <h3>Interacting with the Models</h3>
+        <p>
+          To interact with the models, begin your input with a <code>!</code> (for example: <code>! write a python script to scan the ports of a remote system</code>).
+        </p>
+      </section>
+
+      <!-- Key Features Section -->
+      <section id="features">
+        <h2>Key Features</h2>
+        <ul>
+          <li>
+            <strong>AI-Powered Internet Search:</strong> Enhance responses by integrating real-time, internet-sourced context to keep you updated on cybersecurity trends.
+          </li>
+          <li>
+            <strong>AI-Assisted Note-Taking:</strong> Automatically record and categorize security findings.
+          </li>
+          <li>
+            <strong>Real-Time AI-Driven Insights:</strong> Get immediate suggestions for discovering and exploiting vulnerabilities based on terminal tool outputs.
+          </li>
+          <li>
+            <strong>Enhanced Tool Integration:</strong> Seamlessly import data from external tools for AI-powered note-taking and advice.
+          </li>
+          <li>
+            <strong>Integrated Screenshot &amp; Editing:</strong> Capture and annotate images directly within Nebula for streamlined documentation.
+          </li>
+          <li>
+            <strong>Manual Note-Taking &amp; Automatic Command Logging:</strong> Maintain a detailed log of your actions and findings with both automated and manual note-taking features.
+          </li>
+        </ul>
+      </section>
+
+      <!-- Getting Started Section -->
+      <section id="getting-started">
+        <h2>Getting Started</h2>
+        <p>
+          For a comprehensive video guide, visit 
+          <a href="https://www.berylliumsec.com/nebula-pro-feature-guide" target="_blank" rel="noopener">this page</a> and 
+          <a href="https://www.youtube.com/playlist?list=PLySxaLbLL0gpAaDQYq6g6sb1q6KwqOAr4" target="_blank" rel="noopener">this YouTube playlist</a>. Please note that some features are only applicable to Nebula Pro.
+        </p>
+        <p>
+          You can also access the help screen within Nebula or refer to the <a href="/MANUAL.md" target="_blank" rel="noopener">User Manual</a> for more information.
+        </p>
+      </section>
+
+      <!-- Roadmap Section -->
+      <section id="roadmap">
+        <h2>Roadmap</h2>
+        <ul>
+          <li>Support more models</li>
+          <li>Add agents</li>
+        </ul>
+      </section>
+
+      <!-- Troubleshooting Section -->
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <p>
+          Logs are located at <code>/home/[your_username]/.local/share/nebula/logs</code>. You will most likely find the reason for any error in one of these logs.
+        </p>
+      </section>
+
+      <!-- Get More Support Section -->
+      <section id="support">
+        <h2>Get More Support</h2>
+        <ul>
+          <li>
+            Have questions or need help? <a href="https://github.com/berylliumsec/nebula/issues" target="_blank" rel="noopener">Open an Issue</a> on GitHub.
+          </li>
+          <li>
+            For comprehensive guides, check out our <a href="https://www.berylliumsec.com/nebula-pro-feature-guide" target="_blank" rel="noopener">Video Guide</a> and refer to the <a href="/MANUAL.md" target="_blank" rel="noopener">User Manual</a>.
+          </li>
+        </ul>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+      <p>&copy; 2025 Beryllium Security. All rights reserved.</p>
+      <p>
+        Follow us on 
+        <a href="https://github.com/berylliumsec" target="_blank" rel="noopener">GitHub</a>
+      </p>
+    </footer>
+  </body>
+</html>
