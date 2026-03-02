@@ -104,12 +104,8 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Rebuilt the terminal emulator with selectable QProcess or Pexpect backends, added the pexpect dependency, and removed bitsandbytes for a more reliable shell experience across platforms.
-              - The engagement setup dialog is now a resizable QDialog that remembers your last folder, pre-fills Chroma/Threat DB paths, and seeds the Ollama URL so you can reopen projects faster.
-              - Clear screen now wipes the central display area in both the main window and terminal emulator instead of injecting a shell command, keeping the UI tidy regardless of backend state.
-              - Hardened window lifecycle management by initializing the help window attribute and ensuring the splash/progress window closes as soon as Nebula loads.
-              - Updated Python compatibility to 3.10–3.13.9, refreshed dependencies/documentation, and restored the public index page.
-
+               - Supporting older versions of python
+               
       - name: Upload Release Assets
         run: |
           for asset in dist/*; do
