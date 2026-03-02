@@ -9,6 +9,7 @@ on:
 
 jobs:
   release-build:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.get_bumped_version.outputs.new_version }}
@@ -31,20 +32,6 @@ jobs:
         run: |
           NEW_VERSION=$(grep '^version =' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-
-      # Commit and push the bumped version if there are changes.
-      - name: Commit bumped version
-        run: |
-          git config --global user.email "david@berylliumsec.com"
-          git config --global user.name "David I"
-          git add pyproject.toml
-          if ! git diff-index --quiet HEAD; then
-            NEW_VERSION=$(grep '^version =' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-            git commit -m "Bump version to $NEW_VERSION"
-            git push
-          else
-            echo "No changes to commit"
-          fi
 
       - name: Setup Conda Environment
         uses: conda-incubator/setup-miniconda@v2
@@ -73,6 +60,7 @@ jobs:
           path: dist/
 
   pypi-docker-publish:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     environment: nebula
     needs: release-build
@@ -95,9 +83,6 @@ jobs:
       - name: Install Poetry via Conda
         run: conda install -c conda-forge poetry -y
 
-      - name: Install bump script dependencies
-        run: pip install toml
-
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4
         with:
@@ -105,11 +90,9 @@ jobs:
           path: dist/
 
       - name: Publish release distributions to PyPI
-        if: github.event.pull_request.merged == true 
         uses: pypa/gh-action-pypi-publish@release/v1
 
       - name: Create GitHub Release  
-        if: github.event.pull_request.merged == true
         id: create_release
         uses: actions/create-release@v1
         env:
@@ -121,14 +104,9 @@ jobs:
           prerelease: false
           body: |
             Release Notes:
-              - Rebuilt the terminal emulator with selectable QProcess or Pexpect backends, added the pexpect dependency, and removed bitsandbytes for a more reliable shell experience across platforms.
-              - The engagement setup dialog is now a resizable QDialog that remembers your last folder, pre-fills Chroma/Threat DB paths, and seeds the Ollama URL so you can reopen projects faster.
-              - Clear screen now wipes the central display area in both the main window and terminal emulator instead of injecting a shell command, keeping the UI tidy regardless of backend state.
-              - Hardened window lifecycle management by initializing the help window attribute and ensuring the splash/progress window closes as soon as Nebula loads.
-              - Updated Python compatibility to 3.11–3.13.9, refreshed dependencies/documentation, and restored the public index page.
-
+               - Supporting older versions of python
+               
       - name: Upload Release Assets
-        if: github.event.pull_request.merged == true
         run: |
           for asset in dist/*; do
             gh release upload ${{ needs.release-build.outputs.new_version }} $asset

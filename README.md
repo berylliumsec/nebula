@@ -27,7 +27,7 @@ Nebula is a cutting-edge, AI-powered penetration testing tool designed for cyber
 
 For CPU-Based Inference(Ollama)(Note that Ollama Supports GPU too):
 - At least 16GB of RAM 
-- Python 3.11 – 3.13.9
+- Python 3.10 – 3.13.9
 - [Ollama](https://ollama.com/)
 
 **Installation Command:**
