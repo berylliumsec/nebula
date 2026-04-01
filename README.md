@@ -11,10 +11,8 @@ Nebula is an advanced, AI-powered penetration testing open-source tool that revo
 
 ## News
 
-Introducing the Deep Application Profiler (DAP). DAP uses neural networks to analyze an executable's internal structure and intent, rather than relying on traditional virus signatures. This approach enables it to detect new, zero-day malware that conventional methods often miss. DAP also provides detailed breakdowns for rapid analyst review and is available as both a web service and an API. [Learn More Here](https://www.berylliumsec.com/dap-overview)
+Introducing the Deep Application Profiler (DAP). DAP uses neural networks to analyze an executable's internal structure and intent, rather than relying on traditional virus signatures. This approach enables it to detect new, zero-day malware that conventional methods often miss. DAP also provides detailed breakdowns for rapid analyst review and is available as both a web service and an API. [Learn More Here](https://berylliumsec.com/malware-analysis)
 
-
-Introducing Nebula Pro, Nebula Pro improves on Nebula 2.0 by adding additional features such as autonomous mode, code analysis and more. [Learn More Here](https://www.berylliumsec.com/nebula-pro-overview)
 
 ## Nebula: AI-Powered Penetration Testing Platform
 
@@ -106,10 +104,6 @@ To interact with the models, begin your input with a `!` or use the AI/Terminal 
   This panel displays your most recent penetration testing activities, it refreshes every five minutes
 
 
-## Getting Started
-
-For a comprehensive video guide visit [here](https://www.berylliumsec.com/nebula-pro-feature-guide) and [here](https://www.youtube.com/playlist?list=PLySxaLbLL0gpAaDQYq6g6sb1q6KwqOAr4). Please note that some features are only applicable to Nebula Pro.You can also access the help screen within Nebula or refer to the [Manual.md](/MANUAL.md) document
-
 ### Roadmap
 
 - Create custom models that are more useful for penetration testing
@@ -121,4 +115,3 @@ Logs are located at `/home/[your_username]/.local/share/nebula/logs`. You would 
 ## Get More Support
 
 - Have questions or need help? [Open an Issue](https://github.com/berylliumsec/nebula/issues) on GitHub.
-- For comprehensive guides, check out our [Video Guide](https://www.berylliumsec.com/nebula-pro-feature-guide) and [User Manual](/MANUAL.md).
