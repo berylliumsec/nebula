@@ -439,7 +439,9 @@ class Nebula(QMainWindow):
         self.log_side_bar.itemClicked.connect(self.on_file_item_clicked)
 
         self.populate_file_list()
-        self.file_system_watcher = QFileSystemWatcher([self.CONFIG["LOG_DIRECTORY"]])
+        self.file_system_watcher = QFileSystemWatcher(
+            [self.CONFIG["LOG_DIRECTORY"]], self
+        )
         self.file_system_watcher.directoryChanged.connect(self.populate_file_list)
 
         self.current_font_size = 10
@@ -866,7 +868,9 @@ class Nebula(QMainWindow):
         self.setCentralWidget(self.central_widget)
 
         self.resize(1320, 700)
-        self.ai_file_watcher = QFileSystemWatcher([self.CONFIG["LOG_DIRECTORY"]])
+        self.ai_file_watcher = QFileSystemWatcher(
+            [self.CONFIG["LOG_DIRECTORY"]], self
+        )
         self.ai_file_watcher.directoryChanged.connect(self.on_directory_changed)
 
         self.eco_mode = QAction("Click Here to Activate Eco mode", self)
@@ -1017,7 +1021,7 @@ class Nebula(QMainWindow):
         logger.debug("centered application")
 
         self.current_action_index = 0
-        self.tour_timer = QTimer()
+        self.tour_timer = QTimer(self)
         self.tour_timer.setSingleShot(True)
         logger.debug("Starting tour")
         self.tour_timer.timeout.connect(self.next_step)
@@ -1380,6 +1384,11 @@ class Nebula(QMainWindow):
             logger.error(f"{e}")
 
     def closeEvent(self, event):
+        for timer_name in ("status_feed_timer", "tour_timer"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                timer.stop()
+
         # Close all child windows first
         for window in self.child_windows:
             try:

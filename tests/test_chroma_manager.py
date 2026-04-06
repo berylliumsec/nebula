@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from langchain.schema import Document
+from langchain_classic.schema import Document
 
 from nebula import chroma_manager
 
