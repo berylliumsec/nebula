@@ -5,7 +5,7 @@ include = [ "src/nebula/images/*", "src/nebula/Images_readme/*", "src/nebula/com
 
 [tool.poetry]
 name = "nebula-ai"
-version = "2.0.0b19"
+version = "2.0.0b23"
 description = "AI-Powered Ethical Hacking Assistant"
 readme = "README.md"
 authors = [ "David I <david@berylliumsec.com>",]
@@ -66,3 +66,13 @@ pexpect = "^4.9.0"
 
 [tool.poetry.extras]
 flash = [ "flash-attn",]
+
+[tool.pytest.ini_options]
+testpaths = [ "tests",]
+
+[tool.coverage.run]
+source = [ "src/nebula",]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true

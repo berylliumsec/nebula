@@ -219,7 +219,7 @@ class MainApplication(QApplication):
         self.start_app_tour()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     app = MainApplication(sys.argv)
     app.start()
     sys.exit(app.exec())
