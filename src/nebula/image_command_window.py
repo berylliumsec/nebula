@@ -209,7 +209,7 @@ class ImageCommandWindow(QDialog):
         self.history = []
 
         self.dir_path = os.path.join(self.CONFIG["SCREENSHOTS_DIR"])
-        self.file_system_watcher = QFileSystemWatcher([self.dir_path])
+        self.file_system_watcher = QFileSystemWatcher([self.dir_path], self)
         self.file_system_watcher.directoryChanged.connect(
             lambda: self.loadImagesFromDirectory(self.dir_path)
         )

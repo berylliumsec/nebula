@@ -116,7 +116,7 @@ class AiNotes(QTextEdit):
         self.updater = AutocompleteUpdater()
         self.updater.update.connect(self.updateCompleter)
 
-        self.watcher = QFileSystemWatcher([self.directory])
+        self.watcher = QFileSystemWatcher([self.directory], self)
         self.watcher.directoryChanged.connect(self.refreshAutocomplete)
 
         self.threadPool = QThreadPool()

@@ -7,8 +7,9 @@ import warnings
 
 import pexpect
 
-from langchain.agents import (AgentExecutor, AgentType,
-                              create_openai_tools_agent, initialize_agent)
+from langchain_classic.agents import (AgentExecutor, AgentType,
+                                      create_openai_tools_agent,
+                                      initialize_agent)
 from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from PyQt6 import QtCore
@@ -1126,7 +1127,7 @@ class CommandInputArea(QLineEdit):
         self.free_model_creation_in_progress = False
         self.CONFIG = self.manager.load_config()
         self.load_command_history()
-        self.history_watcher = QFileSystemWatcher([self.CONFIG["HISTORY_FILE"]])
+        self.history_watcher = QFileSystemWatcher([self.CONFIG["HISTORY_FILE"]], self)
         self.history_watcher.fileChanged.connect(self.load_command_history)
         self.commands = []
         self.input_mode = "terminal"
