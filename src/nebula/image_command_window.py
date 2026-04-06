@@ -359,9 +359,9 @@ class ImageCommandWindow(QDialog):
             image_path = os.path.join(self.dir_path, item.text())
             self.image_path = image_path
             self.image = cv2.imread(image_path)
-            self.original_image = self.image.copy()
             if self.image is None:
                 raise ValueError(f"Failed to load the image from {image_path}")
+            self.original_image = self.image.copy()
 
             self.updateImageDisplay()
 
