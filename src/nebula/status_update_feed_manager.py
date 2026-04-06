@@ -72,9 +72,11 @@ class statusFeedWorker(QRunnable):
                 StatusFeed, method="json_schema"
             ).invoke(self.query)
 
-            status_list = [status.status for status in response.status_feed]
-            if not isinstance(status_list, list):
+            if not isinstance(response.status_feed, list):
                 self.signals.error.emit(["Error querying LLM"])
+                return
+
+            status_list = [status.status for status in response.status_feed]
 
             # If the call was successful and a valid status_list was obtained, emit it.
             if status_list is not None:
