@@ -579,21 +579,18 @@ def process_text(text):
 
         processed_segments = []
         for segment in segments:
-            if not segment.strip().startswith("```"):
-                # Split the text while preserving file paths or command lines.
-                sub_segments = file_path_or_command_pattern.split(segment)
-                path_delimiters = file_path_or_command_pattern.findall(segment)
+            # Split the text while preserving file paths or command lines.
+            sub_segments = file_path_or_command_pattern.split(segment)
+            path_delimiters = file_path_or_command_pattern.findall(segment)
 
-                processed_sub_segments = []
-                for i, sub_segment in enumerate(sub_segments):
-                    processed_sub_segments.append(sub_segment)
-                    if i < len(path_delimiters):
-                        # Reinsert file path or command line segments unchanged.
-                        processed_sub_segments.append(path_delimiters[i])
+            processed_sub_segments = []
+            for i, sub_segment in enumerate(sub_segments):
+                processed_sub_segments.append(sub_segment)
+                if i < len(path_delimiters):
+                    # Reinsert file path or command line segments unchanged.
+                    processed_sub_segments.append(path_delimiters[i])
 
-                processed_segments.append("".join(processed_sub_segments))
-            else:
-                processed_segments.append(segment)
+            processed_segments.append("".join(processed_sub_segments))
 
         result_text = ""
         for i, segment in enumerate(processed_segments):

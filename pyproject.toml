@@ -66,3 +66,13 @@ pexpect = "^4.9.0"
 
 [tool.poetry.extras]
 flash = [ "flash-attn",]
+
+[tool.pytest.ini_options]
+testpaths = [ "tests",]
+
+[tool.coverage.run]
+source = [ "src/nebula",]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
