@@ -45,7 +45,10 @@ def bump_version(current_version: str, bump_type: str) -> str:
             num += 1
             new_version = f"{major}.{minor}.{patch}{tag}{num}"
         else:
-            # If no prerelease tag, add one (defaulting to beta 0)
+            # A prerelease made after a stable release must target a newer
+            # version.  For example, 2.0.0 -> 2.0.1b0; 2.0.0b0 would sort
+            # before the already-published 2.0.0 release.
+            patch += 1
             new_version = f"{major}.{minor}.{patch}b0"
     elif bump_type == "release":
         # For a release, remove any prerelease tag (i.e. make it a stable version).
