@@ -16,7 +16,7 @@ Introducing the Deep Application Profiler (DAP). DAP uses neural networks to ana
 
 ## Nebula: AI-Powered Penetration Testing Platform
 
-Nebula is a cutting-edge, AI-powered penetration testing tool designed for cybersecurity professionals and ethical hackers. It integrates advanced open-source AI models such as OpenAI's models (any model that is available via API) Meta's Llama-3.1-8B-Instruct, Mistralai's Mistral-7B-Instruct-v0.2, and DeepSeek-R1-Distill-Llama-8B—directly into the command line interface (CLI). By leveraging these state-of-the-art models, Nebula not only enhances vulnerability assessments and penetration testing workflows but also supports any tool that can be invoked from the CLI.
+Nebula is a cutting-edge, AI-powered penetration testing tool designed for cybersecurity professionals and ethical hackers. It integrates both hosted models available through the OpenAI API and open-source models such as Meta's Llama-3.1-8B-Instruct, Mistral AI's Mistral-7B-Instruct-v0.2, and DeepSeek-R1-Distill-Llama-8B directly into the command line interface (CLI). By leveraging these state-of-the-art models, Nebula not only enhances vulnerability assessments and penetration testing workflows but also supports any tool that can be invoked from the CLI.
 
 
 ## Installation

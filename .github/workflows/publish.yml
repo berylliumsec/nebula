@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.get_bumped_version.outputs.new_version }}
+      prerelease: ${{ steps.release_type.outputs.prerelease }}
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
@@ -22,9 +23,22 @@ jobs:
       - name: Install bump script dependencies
         run: pip install toml
 
-      # Bump the version in pyproject.toml.
+      - name: Determine release type
+        id: release_type
+        env:
+          STABLE_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'stable-release') }}
+        run: |
+          if [[ "$STABLE_RELEASE" == "true" ]]; then
+            echo "bump_type=release" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "bump_type=prerelease" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Stable-release PRs remove the beta suffix; all other PRs advance it.
       - name: Bump version in pyproject.toml
-        run: python bump_version.py prerelease
+        run: python bump_version.py "${{ steps.release_type.outputs.bump_type }}"
 
       # Read the bumped version from pyproject.toml and set it as an output.
       - name: Get bumped version
@@ -101,7 +115,7 @@ jobs:
           tag_name: ${{ needs.release-build.outputs.new_version }}
           release_name: Release ${{ needs.release-build.outputs.new_version }}
           draft: false
-          prerelease: false
+          prerelease: ${{ needs.release-build.outputs.prerelease == 'true' }}
           body: |
             Release Notes:
                - Supporting older versions of python
