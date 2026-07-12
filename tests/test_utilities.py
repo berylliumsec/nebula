@@ -1,12 +1,8 @@
-import json
-import os
 import re
 import struct
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PyQt6.QtGui import QTextDocument
 from PyQt6.QtWidgets import QTextEdit
 
 from nebula import utilities
@@ -70,7 +66,9 @@ def test_edit_command_dialog_modes(qapp):
 
 def test_set_terminal_size_packs_expected_values(monkeypatch):
     calls = []
-    monkeypatch.setattr(utilities.fcntl, "ioctl", lambda fd, op, packed: calls.append((fd, op, packed)))
+    monkeypatch.setattr(
+        utilities.fcntl, "ioctl", lambda fd, op, packed: calls.append((fd, op, packed))
+    )
 
     utilities.set_terminal_size(9, 40, 80)
 
@@ -81,7 +79,9 @@ def test_set_terminal_size_packs_expected_values(monkeypatch):
 
 def test_open_url_invokes_xdg_open(monkeypatch):
     calls = []
-    monkeypatch.setattr(utilities.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        utilities.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs))
+    )
 
     utilities.open_url("https://example.com")
 
@@ -111,7 +111,11 @@ def test_strip_ansi_codes_handles_strings_bytes_and_errors(monkeypatch):
 
     messages = []
     monkeypatch.setattr(utilities.logger, "debug", messages.append)
-    monkeypatch.setattr(utilities.re, "compile", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("compile failed")))
+    monkeypatch.setattr(
+        utilities.re,
+        "compile",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("compile failed")),
+    )
 
     assert utilities.strip_ansi_codes("raw") == "raw"
     assert messages and "compile failed" in messages[0]
@@ -127,7 +131,7 @@ def test_get_llm_instance_selects_openai(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "token")
     monkeypatch.setattr(utilities, "ChatOpenAI", FakeChatOpenAI)
 
-    llm, backend = utilities.get_llm_instance("gpt-demo")
+    llm, backend = utilities.get_llm_instance("gpt-demo", provider="openai")
 
     assert isinstance(llm, FakeChatOpenAI)
     assert backend == "openai"
@@ -144,10 +148,12 @@ def test_get_llm_instance_selects_ollama_and_emits_errors(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(utilities, "ChatOllama", FakeChatOllama)
 
-    llm, backend = utilities.get_llm_instance("mistral", ollama_url="http://ollama")
+    llm, backend = utilities.get_llm_instance(
+        "mistral", ollama_url="http://ollama", provider="ollama"
+    )
 
     assert isinstance(llm, FakeChatOllama)
-    assert backend == "openai"
+    assert backend == "ollama"
     assert created == [("mistral", "http://ollama")]
 
     signals = SimpleNamespace(error=Emitter())
@@ -158,9 +164,43 @@ def test_get_llm_instance_selects_ollama_and_emits_errors(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="ollama failed"):
-        utilities.get_llm_instance("mistral", signals=signals)
+        utilities.get_llm_instance("mistral", signals=signals, provider="ollama")
 
     assert signals.error.values == ["ollama failed"]
+
+
+def test_provider_selection_is_explicit_and_never_uses_api_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "present-but-not-a-selector")
+    monkeypatch.delenv("NEBULA_AI_PROVIDER", raising=False)
+
+    with pytest.raises(ValueError, match="No AI provider selected"):
+        utilities.get_llm_instance("model")
+
+    created = []
+    monkeypatch.setattr(
+        utilities,
+        "ChatOllama",
+        lambda model, base_url=None: created.append((model, base_url)) or object(),
+    )
+    _, backend = utilities.get_llm_instance("local", provider="ollama")
+    assert backend == "ollama"
+    assert created == [("local", None)]
+
+    monkeypatch.setenv("NEBULA_AI_PROVIDER", "openai")
+    assert utilities.resolve_ai_provider() == "openai"
+
+
+def test_privacy_hooks_and_legacy_web_normalization(tmp_path):
+    privacy_file = tmp_path / "privacy.txt"
+    privacy_file.write_text("secret\nsecret-value\n\n")
+
+    assert (
+        utilities.run_hooks("token=secret-value and secret", str(privacy_file))
+        == "token=[REDACTED] and [REDACTED]"
+    )
+    with pytest.raises(utilities.PrivacyPolicyUnavailable, match="missing"):
+        utilities.run_hooks("unchanged", str(tmp_path / "missing"))
+    assert utilities.extract_data_for_web("ok\x00\x1b[31m red") == "ok red"
 
 
 def test_show_message_uses_message_box(monkeypatch):
@@ -197,8 +237,12 @@ def test_show_message_uses_message_box(monkeypatch):
 
 
 def test_is_included_command_and_password_detection(monkeypatch):
-    assert utilities.is_included_command("nmap -sV", {"SELECTED_TOOLS": ["nmap"]}) is True
-    assert utilities.is_included_command("ls -la", {"SELECTED_TOOLS": ["nmap"]}) is False
+    assert (
+        utilities.is_included_command("nmap -sV", {"SELECTED_TOOLS": ["nmap"]}) is True
+    )
+    assert (
+        utilities.is_included_command("ls -la", {"SELECTED_TOOLS": ["nmap"]}) is False
+    )
     assert utilities.is_included_command("pwd", {"SELECTED_TOOLS": []}) is False
 
     class BadConfig(dict):
@@ -210,7 +254,11 @@ def test_is_included_command_and_password_detection(monkeypatch):
     assert utilities.is_linux_asking_for_password(b"login: root's password") is True
     assert utilities.is_linux_asking_for_password(b"\xff") is None
 
-    monkeypatch.setattr(utilities.re, "search", lambda *args, **kwargs: (_ for _ in ()).throw(re.error("bad regex")))
+    monkeypatch.setattr(
+        utilities.re,
+        "search",
+        lambda *args, **kwargs: (_ for _ in ()).throw(re.error("bad regex")),
+    )
     assert utilities.is_linux_asking_for_password("password:") is None
 
 
@@ -225,7 +273,9 @@ def test_log_command_output_and_filename_creation(tmp_path, monkeypatch):
 
     existing = tmp_path / "scan_20240101000000"
     existing.write_text("old\n")
-    monkeypatch.setattr(utilities, "create_filename_from_command", lambda command: "scan_20240101000000")
+    monkeypatch.setattr(
+        utilities, "create_filename_from_command", lambda command: "scan_20240101000000"
+    )
 
     utilities.log_command_output("nmap -sV", "result", {"LOG_DIRECTORY": str(tmp_path)})
 
@@ -236,15 +286,22 @@ def test_log_command_output_and_filename_creation(tmp_path, monkeypatch):
 
     monkeypatch.setattr(utilities, "create_filename_from_command", lambda command: None)
     utilities.log_command_output("nmap -sV", "result", {"LOG_DIRECTORY": str(tmp_path)})
-    assert any("Failed to create a valid filename." in str(message) for message in messages)
+    assert any(
+        "Failed to create a valid filename." in str(message) for message in messages
+    )
 
-    monkeypatch.setattr(utilities, "create_filename_from_command", lambda command: "broken")
+    monkeypatch.setattr(
+        utilities, "create_filename_from_command", lambda command: "broken"
+    )
     monkeypatch.setattr(
         "builtins.open",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
     utilities.log_command_output("nmap -sV", "result", {"LOG_DIRECTORY": str(tmp_path)})
-    assert any("Error writing command output to file: disk full" in str(message) for message in messages)
+    assert any(
+        "Error writing command output to file: disk full" in str(message)
+        for message in messages
+    )
 
     assert original_create_filename("nmap -sV").startswith("nmap_")
     assert original_create_filename(None) is None
@@ -255,10 +312,16 @@ def test_process_output_and_shell_commands(monkeypatch):
     assert "\t" not in processed
     assert "\r" not in processed
 
-    monkeypatch.setattr(utilities, "strip_ansi_codes", lambda data: (_ for _ in ()).throw(RuntimeError("bad output")))
+    monkeypatch.setattr(
+        utilities,
+        "strip_ansi_codes",
+        lambda data: (_ for _ in ()).throw(RuntimeError("bad output")),
+    )
     assert utilities.process_output("data") is None
 
-    monkeypatch.setattr(utilities.subprocess, "check_output", lambda *args, **kwargs: b"pwd\nls\n")
+    monkeypatch.setattr(
+        utilities.subprocess, "check_output", lambda *args, **kwargs: b"pwd\nls\n"
+    )
     assert utilities.get_shell_commands() == ["ls", "pwd"]
 
     monkeypatch.setattr(
@@ -334,7 +397,7 @@ def test_parse_nmap_nessus_zap_and_nikto_files(tmp_path, monkeypatch):
         "<OWASPZAPReport><site><alerts><alertitem><desc>desc</desc></alertitem></alerts></site></OWASPZAPReport>"
     )
     assert utilities.parse_zap(str(zap_file)) == "desc"
-    assert utilities.parse_zap(str(tmp_path / 'missing.zap')) == ""
+    assert utilities.parse_zap(str(tmp_path / "missing.zap")) == ""
 
     nikto_file = tmp_path / "nikto.xml"
     nikto_file.write_text(
@@ -365,8 +428,14 @@ def test_process_text_token_helpers_and_initial_help(tmp_path, monkeypatch):
     )
     assert utilities.process_text("fallback text") == "fallback text"
 
-    monkeypatch.setattr(utilities.tiktoken, "get_encoding", lambda name: FakeEncoding(name))
-    monkeypatch.setattr(utilities.tiktoken, "encoding_for_model", lambda name: FakeEncoding(f"model:{name}"))
+    monkeypatch.setattr(
+        utilities.tiktoken, "get_encoding", lambda name: FakeEncoding(name)
+    )
+    monkeypatch.setattr(
+        utilities.tiktoken,
+        "encoding_for_model",
+        lambda name: FakeEncoding(f"model:{name}"),
+    )
 
     assert isinstance(utilities.encoding_getter("cl100k_base"), FakeEncoding)
     assert isinstance(utilities.encoding_getter("gpt-4"), FakeEncoding)

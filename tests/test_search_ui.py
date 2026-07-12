@@ -48,6 +48,7 @@ def make_manager():
     return SimpleNamespace(
         load_config=lambda: {
             "MODEL": "demo-model",
+            "AI_PROVIDER": "ollama",
             "OLLAMA_URL": "http://ollama",
             "CHROMA_DB_PATH": "/tmp/chroma",
         }
@@ -108,7 +109,7 @@ def test_custom_search_line_edit_initializes_and_uses_ui(qapp, monkeypatch):
     monkeypatch.setattr(
         search.utilities,
         "get_llm_instance",
-        lambda model, ollama_url="": ("llm", "openai"),
+        lambda model, ollama_url="", provider=None: ("llm", "ollama"),
     )
     monkeypatch.setattr(search, "ChromaManager", lambda **kwargs: fake_rag)
 
@@ -193,8 +194,8 @@ def test_custom_search_line_edit_handles_init_failures(qapp, monkeypatch):
         assert widget.rag is None
         assert shown_messages == [
             (
-                "Error Loading Ollama",
-                "Ollama could not be loaded, please check the url in engagement settings and try again",
+                "Error Loading Model",
+                "The configured model provider could not be loaded. Check the engagement settings and try again.",
             )
         ]
     finally:
@@ -205,7 +206,7 @@ def test_custom_search_line_edit_chromadb_info_branches(qapp, monkeypatch):
     monkeypatch.setattr(
         search.utilities,
         "get_llm_instance",
-        lambda model, ollama_url="": ("llm", "openai"),
+        lambda model, ollama_url="", provider=None: ("llm", "ollama"),
     )
     info_messages = []
     monkeypatch.setattr(search.logger, "info", info_messages.append)

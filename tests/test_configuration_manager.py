@@ -48,6 +48,7 @@ def test_config_manager_creates_and_updates_paths(tmp_path, monkeypatch):
     assert saved["MODEL"] == "model-a"
     assert saved["CHROMA_DB_PATH"] == "/tmp/chroma"
     assert saved["THREAT_DB_PATH"] == "/tmp/threat"
+    assert saved["AI_PROVIDER"] == "ollama"
     assert saved["OLLAMA"] is True
     assert saved["OLLAMA_URL"] == "http://ollama"
     assert saved["USE_INTERNET_SEARCH"] is True

@@ -3,9 +3,9 @@ import os
 import warnings
 
 from PyQt6.QtCore import QFile, QSettings, Qt, pyqtSignal
-from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout,
-                             QLabel, QLineEdit, QMessageBox, QPushButton,
-                             QTextEdit, QVBoxLayout)
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
+                             QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+                             QMessageBox, QPushButton, QTextEdit, QVBoxLayout)
 
 from . import constants
 from .log_config import setup_logging
@@ -90,6 +90,19 @@ class settings(QDialog):
             layout.addWidget(inputWidget)
         logger.info("Setup IP addresses, URLs and lookout items inputs")
 
+        # Provider selection is intentionally independent of installed API keys.
+        providerLabel = QLabel("AI Provider")
+        layout.addWidget(providerLabel)
+        self.providerComboBox = QComboBox()
+        self.providerComboBox.addItem("Ollama (local)", "ollama")
+        self.providerComboBox.addItem("OpenAI", "openai")
+        layout.addWidget(self.providerComboBox)
+        self.internetSearchCheckbox = QCheckBox(
+            "Allow the AI assistant to search the internet"
+        )
+        self.internetSearchCheckbox.setChecked(False)
+        layout.addWidget(self.internetSearchCheckbox)
+
         # --- Model Selection ---
         self.model_name = ""
         self.modelLabel = QLabel("Enter model name e.g: deepseek-r1:32b ")
@@ -130,8 +143,11 @@ class settings(QDialog):
         chromadbLayout.addWidget(self.chromadbDirBtn)
         layout.addLayout(chromadbLayout)
 
-        # --- threatDB Directory Selection (Required) ---
-        threatdbDirTitleLabel = QLabel("ThreatDB Directory (Required)")
+        # Retained only so old engagement files remain round-trippable. There is
+        # no ThreatDB integration in the open-source 2.x runtime.
+        threatdbDirTitleLabel = QLabel(
+            "Legacy ThreatDB Directory (compatibility only; currently unused)"
+        )
 
         layout.addWidget(threatdbDirTitleLabel)
 
@@ -162,6 +178,8 @@ class settings(QDialog):
         self.ipAddressesInput.setEnabled(enabled)
         self.urlsInput.setEnabled(enabled)
         self.lookoutInput.setEnabled(enabled)
+        self.providerComboBox.setEnabled(enabled)
+        self.internetSearchCheckbox.setEnabled(enabled)
         self.modelLineEdit.setEnabled(enabled)
         self.chromadbDirLineEdit.setEnabled(enabled)
         self.chromadbDirBtn.setEnabled(enabled)
@@ -279,6 +297,16 @@ class settings(QDialog):
                 self.urlsInput.setText("\n".join(details.get("urls", [])))
                 self.lookoutInput.setText("\n".join(details.get("lookout_items", [])))
                 self.model_name = details.get("model")
+                provider = details.get("ai_provider")
+                if not provider and isinstance(details.get("ollama"), bool):
+                    provider = "ollama" if details["ollama"] else "openai"
+                provider = str(provider or "ollama").strip().lower()
+                provider_index = self.providerComboBox.findData(provider)
+                if provider_index >= 0:
+                    self.providerComboBox.setCurrentIndex(provider_index)
+                self.internetSearchCheckbox.setChecked(
+                    bool(details.get("use_internet_search", False))
+                )
                 self.ollama_url = details.get(
                     "ollama_url", self.default_ollama_url
                 )
@@ -325,32 +353,34 @@ class settings(QDialog):
             ]
 
             chromadb_dir = self.chromadbDirLineEdit.text().strip()
-            threatdb_dir = self.threatdbDirLineEdit.text().strip()
+            threatdb_dir = (
+                self.threatdbDirLineEdit.text().strip() or self.engagementFolder
+            )
             self.model_name = self.modelLineEdit.text().strip()
             if not chromadb_dir:
                 QMessageBox.warning(
                     self, "Input Error", "Please select a ChromaDB directory."
                 )
                 return
-            if not threatdb_dir:
-                QMessageBox.warning(
-                    self, "Input Error", "Please select a threatDB directory."
-                )
-                return
-
             if not self.model_name:
-                QMessageBox.warning(self, "Input Error", "Please enter an ollama_model")
+                QMessageBox.warning(self, "Input Error", "Please enter a model name")
                 return
             ollama_url = self.ollamaLineEdit.text().strip()
+            ai_provider = self.providerComboBox.currentData()
             current_engagement_settings = {
                 "engagement_name": self.engagementName,
                 "ip_addresses": ip_addresses,
                 "urls": urls,
                 "lookout_items": lookout_items,
+                "ai_provider": ai_provider,
                 "model": self.model_name,
                 "chromadb_dir": chromadb_dir,
                 "threatdb_dir": threatdb_dir,
+                # Retain the old flag so previous 2.x builds can still open the
+                # engagement without using API-key presence as selection logic.
+                "ollama": ai_provider == "ollama",
                 "ollama_url": ollama_url,
+                "use_internet_search": self.internetSearchCheckbox.isChecked(),
             }
             file_path = os.path.join(self.engagementFolder, "engagement_details.json")
             with open(file_path, "w") as file:

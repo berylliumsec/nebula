@@ -58,7 +58,9 @@ class statusFeedWorker(QRunnable):
             model = self.CONFIG["MODEL"]
             ollama_url = self.CONFIG.get("OLLAMA_URL", "")
             self.llm, ollama_or_openai = utilities.get_llm_instance(
-                model=model, ollama_url=ollama_url
+                model=model,
+                ollama_url=ollama_url,
+                provider=utilities.get_configured_ai_provider(self.CONFIG),
             )
             logger.info("[statusFeedManager] LLM initialized successfully.")
         except Exception as e:

@@ -5,9 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt6.QtCore import QEvent, QPointF, Qt
 from PyQt6.QtGui import QKeyEvent, QMouseEvent, QTextCursor
-from PyQt6.QtWidgets import QDialog, QLineEdit, QTextEdit, QWidget
+from PyQt6.QtWidgets import QDialog, QLineEdit, QTextEdit
 
 from nebula import terminal_emulator
 
@@ -87,6 +87,7 @@ class FakeManager:
         self.privacy_file.write_text("")
         self.config = {
             "MODEL": "demo-model",
+            "AI_PROVIDER": "ollama",
             "OLLAMA_URL": "http://ollama",
             "MEMORY_DIRECTORY": str(self.memory_dir),
             "HISTORY_FILE": str(self.history_file),
@@ -321,7 +322,7 @@ def test_agent_task_runner_run_and_query_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(
         terminal_emulator.utilities,
         "get_llm_instance",
-        lambda model, ollama_url="", signals=None: (llm, "ollama"),
+        lambda model, ollama_url="", signals=None, provider=None: (llm, "ollama"),
     )
     fake_agent = FakeAgent()
     monkeypatch.setattr(
@@ -336,6 +337,16 @@ def test_agent_task_runner_run_and_query_paths(tmp_path, monkeypatch):
         notes_memory=notes_memory,
         manager=manager,
     )
+    assert terminal_emulator.BASH_TOOL not in notes_runner.tools
+    assert terminal_emulator.SEARCH_TOOL not in notes_runner.tools
+
+    manager.config["ALLOW_UNSAFE_MODEL_SHELL"] = True
+    manager.config["USE_INTERNET_SEARCH"] = True
+    unsafe_runner = terminal_emulator.AgentTaskRunner(manager=manager)
+    assert terminal_emulator.BASH_TOOL in unsafe_runner.tools
+    assert terminal_emulator.SEARCH_TOOL in unsafe_runner.tools
+    manager.config["ALLOW_UNSAFE_MODEL_SHELL"] = False
+    manager.config["USE_INTERNET_SEARCH"] = False
     note_results = []
     notes_runner.signals.result.connect(lambda endpoint, command, result: note_results.append((endpoint, command, result)))
     notes_runner.run()
@@ -359,7 +370,8 @@ def test_agent_task_runner_run_and_query_paths(tmp_path, monkeypatch):
     )
     command_runner.run()
     assert conversation_memory.saved == 1
-    assert fake_agent.commands == ["You are a penetration testing assistant. :ls"]
+    assert len(fake_agent.commands) == 1
+    assert "You are a penetration testing assistant. :ls" in fake_agent.commands[0]
 
     errors = []
     failing_runner = terminal_emulator.AgentTaskRunner(
@@ -381,7 +393,7 @@ def test_agent_task_runner_run_and_query_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(
         terminal_emulator.utilities,
         "get_llm_instance",
-        lambda model, ollama_url="", signals=None: (llm, "openai"),
+        lambda model, ollama_url="", signals=None, provider=None: (llm, "openai"),
     )
     monkeypatch.setattr(
         terminal_emulator,
@@ -404,8 +416,12 @@ def test_agent_task_runner_run_and_query_paths(tmp_path, monkeypatch):
         conversation_memory=conversation_memory,
         manager=manager,
     )
-    assert openai_runner.query_llm("pwd", "command", model="demo", ollama_url="x") == "out:pwd"
-    assert openai_executor.calls[-1] == {"input": "pwd"}
+    openai_result = openai_runner.query_llm(
+        "pwd", "command", model="demo", ollama_url="x"
+    )
+    assert openai_result.startswith("out:")
+    assert len(openai_executor.calls) == 1
+    assert "You are a penetration testing assistant. :pwd" in openai_executor.calls[0]["input"]
 
     notes_runner.notes_memory = FakeMemory()
     assert "reply:" in notes_runner.query_llm("facts", "notes")
@@ -420,7 +436,7 @@ def test_agent_task_runner_run_and_query_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(
         terminal_emulator.utilities,
         "get_llm_instance",
-        lambda model, ollama_url="", signals=None: (llm, "ollama"),
+        lambda model, ollama_url="", signals=None, provider=None: (llm, "ollama"),
     )
     with pytest.raises(RuntimeError, match="agent init failed"):
         command_runner.query_llm("ls", "command")
@@ -653,7 +669,6 @@ def test_shell_backends_and_terminal_core(qapp, tmp_path, monkeypatch):
     assert shell_path.endswith("cmd.exe")
     monkeypatch.setattr(terminal_emulator, "os", os)
 
-    errors = []
     terminal._handle_backend_error("bad shell")
     terminal.backend.started = 0
     monkeypatch.setattr(
@@ -917,7 +932,10 @@ def test_dynamic_completer_and_command_input_area(qapp, tmp_path, monkeypatch):
         widget.onTaskResult("suggestion", "cmd", "tip")
         assert suggestion_updates[-1] == "tip"
 
+        api_finished = []
+        widget.api_call_execution_finished.connect(lambda: api_finished.append(True))
         widget.onTaskFinished()
+        assert api_finished == [True]
         widget.onModelError("broken")
         monkeypatch.setattr(widget.threadpool, "start", lambda task: completed.append(task))
         widget.execute_api_call("help", "command")
@@ -971,7 +989,7 @@ def test_agent_window_and_backend_edge_paths(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(
         terminal_emulator.utilities,
         "get_llm_instance",
-        lambda model, ollama_url="", signals=None: (llm, "ollama"),
+        lambda model, ollama_url="", signals=None, provider=None: (llm, "ollama"),
     )
     monkeypatch.setattr(terminal_emulator, "initialize_agent", lambda *args, **kwargs: FakeAgent())
 

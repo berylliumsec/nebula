@@ -1,5 +1,11 @@
 # Nebula – AI-Powered Penetration Testing Assistant
 
+> **Nebula 3 developer preview:** the repository now contains the headless Core,
+> policy-controlled tool boundary, durable multi-agent runtime, React workspace,
+> and Tauri shell described in the modernization plan. See
+> [docs/NEBULA3.md](docs/NEBULA3.md) for commands, vLLM configuration, safety
+> invariants, and the remaining release gates. Nebula 2.x is maintenance-only.
+
 Nebula is an advanced, AI-powered penetration testing open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking.
 
 ## Important upgrade notice
@@ -62,7 +68,8 @@ python -m pip install nebula-ai --upgrade
 ```bash
  ollama pull mistral
 ```
-Then enter the model's exact name as it appears in Ollama in the engagement settings.
+Then select **Ollama** as the AI provider and enter the model's exact name as it
+appears in Ollama in the engagement settings.
 
 **OpenAI Models Usage**
 
@@ -72,7 +79,21 @@ To use OpenAI models, add your API keys to your env like so
 export OPENAI_API_KEY="sk-blah-blaj"
 ```
 
-Then enter the OpenAI model's exact name in the engagement settings.
+Then select **OpenAI** as the AI provider and enter the OpenAI model's exact name
+in the engagement settings. Provider selection is explicit: the presence of
+`OPENAI_API_KEY` does not change an engagement from Ollama to OpenAI. For
+headless compatibility, set `NEBULA_AI_PROVIDER=openai` or
+`NEBULA_AI_PROVIDER=ollama`.
+
+### Legacy-agent safety
+
+The Nebula 2.x AI assistant does not receive a host shell tool by default.
+Commands shown in AI responses are suggestions for the operator to review and
+run in the human-controlled terminal. The old direct-shell behavior is available
+only as an unsafe compatibility option by setting
+`NEBULA_UNSAFE_MODEL_SHELL=1` (or `ALLOW_UNSAFE_MODEL_SHELL` in an engagement's
+`config.json`). This grants the model unsandboxed command execution and is not
+recommended.
 
 
 Run nebula
@@ -81,28 +102,31 @@ Run nebula
 nebula
 ```
 
-**Using docker**
+**Nebula 3 container preview**
 
-First allow local connections to your X server:
-
-```bash
-xhost +local:docker
-```
+The legacy root/X11 container is not a Nebula 3 release path. Run the non-root,
+loopback-published Core profile with an explicit API token:
 
 ```bash
-docker run --rm -it   -e DISPLAY=$DISPLAY   -v /home/YOUR_HOST_NAME/.local/share/nebula/logs:/root/.local/share/nebula/logs -v YOUR_ENGAGEMENT_FOLDER_ON_HOST_MACHINE:/engagements -v /tmp/.X11-unix:/tmp/.X11-unix   berylliumsec/nebula:latest
+export NEBULA_V3_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+docker compose -f compose.v3.yaml up --build
 ```
+
+No Docker/Podman socket is mounted. The service therefore remains analysis-only
+until a separately administered worker with enforced egress is configured.
 ### Interacting with the models. 
 
 To interact with the models, begin your input with a `!` or use the AI/Terminal button to switch between modes. For example: `! write a python script to scan the ports of a remote system` the "!" is not needed if you use the context button
 
 ## Key Features
 
-- **AI-Powered Internet Search via agents:**  
-  Enhance responses by integrating real-time, internet-sourced context to keep you updated on cybersecurity trends. "whats in the news on cybersecurity today"
+- **Optional AI-Powered Internet Search:**
+  When `use_internet_search` is enabled for an engagement, the assistant may use
+  DuckDuckGo search. It is disabled otherwise; retrieved content is untrusted and
+  should be reviewed before acting on it.
   
-- **AI-Assisted Note-Taking:**  
-  Automatically record and categorize security findings.
+- **AI-Assisted Note-Taking:**
+  Draft report-style notes from selected terminal output for analyst review.
 
 - **Real-Time AI-Driven Insights:**  
   Get immediate suggestions for discovering and exploiting vulnerabilities based on terminal tool outputs.

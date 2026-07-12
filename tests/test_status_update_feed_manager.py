@@ -53,12 +53,18 @@ def test_status_feed_worker_emits_finished_results(monkeypatch):
     monkeypatch.setattr(
         status_update_feed_manager.utilities,
         "get_llm_instance",
-        lambda model, ollama_url="": (fake_llm, "openai"),
+        lambda model, ollama_url="", provider=None: (fake_llm, "openai"),
     )
 
     worker = status_update_feed_manager.statusFeedWorker(
         "query",
-        SimpleNamespace(load_config=lambda: {"MODEL": "m", "OLLAMA_URL": "http://o"}),
+        SimpleNamespace(
+            load_config=lambda: {
+                "MODEL": "m",
+                "AI_PROVIDER": "openai",
+                "OLLAMA_URL": "http://o",
+            }
+        ),
     )
     finished = []
     errors = []
@@ -82,7 +88,13 @@ def test_status_feed_worker_emits_error_when_llm_init_fails(monkeypatch):
 
     worker = status_update_feed_manager.statusFeedWorker(
         "query",
-        SimpleNamespace(load_config=lambda: {"MODEL": "m", "OLLAMA_URL": ""}),
+        SimpleNamespace(
+            load_config=lambda: {
+                "MODEL": "m",
+                "AI_PROVIDER": "openai",
+                "OLLAMA_URL": "",
+            }
+        ),
     )
     errors = []
     worker.signals.error.connect(errors.append)
@@ -102,7 +114,13 @@ def test_status_feed_worker_emits_error_when_invoke_fails(monkeypatch):
 
     worker = status_update_feed_manager.statusFeedWorker(
         "query",
-        SimpleNamespace(load_config=lambda: {"MODEL": "m", "OLLAMA_URL": ""}),
+        SimpleNamespace(
+            load_config=lambda: {
+                "MODEL": "m",
+                "AI_PROVIDER": "openai",
+                "OLLAMA_URL": "",
+            }
+        ),
     )
     errors = []
     worker.signals.error.connect(errors.append)
@@ -124,7 +142,13 @@ def test_status_feed_worker_emits_error_for_non_list_status_feed(monkeypatch):
 
     worker = status_update_feed_manager.statusFeedWorker(
         "query",
-        SimpleNamespace(load_config=lambda: {"MODEL": "m", "OLLAMA_URL": ""}),
+        SimpleNamespace(
+            load_config=lambda: {
+                "MODEL": "m",
+                "AI_PROVIDER": "openai",
+                "OLLAMA_URL": "",
+            }
+        ),
     )
     finished = []
     errors = []

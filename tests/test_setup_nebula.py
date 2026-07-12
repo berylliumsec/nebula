@@ -1,6 +1,4 @@
 import json
-from pathlib import Path
-from types import SimpleNamespace
 
 from nebula import setup_nebula
 
@@ -130,6 +128,8 @@ def test_setup_dialog_loads_engagement_details(qapp, tmp_path, monkeypatch):
                     "ip_addresses": ["1.1.1.1"],
                     "urls": ["https://example.com"],
                     "lookout_items": ["admin"],
+                    "ai_provider": "openai",
+                    "use_internet_search": True,
                     "model": "model-a",
                     "chromadb_dir": "/tmp/chroma",
                     "threatdb_dir": "/tmp/threat",
@@ -143,6 +143,8 @@ def test_setup_dialog_loads_engagement_details(qapp, tmp_path, monkeypatch):
         assert dialog.ipAddressesInput.toPlainText() == "1.1.1.1"
         assert dialog.urlsInput.toPlainText() == "https://example.com"
         assert dialog.lookoutInput.toPlainText() == "admin"
+        assert dialog.providerComboBox.currentData() == "openai"
+        assert dialog.internetSearchCheckbox.isChecked() is True
         assert dialog.modelLineEdit.text() == "model-a"
         assert dialog.chromadbDirLineEdit.text() == "/tmp/chroma"
         assert dialog.threatdbDirLineEdit.text() == "/tmp/threat"
@@ -183,12 +185,9 @@ def test_setup_dialog_validates_and_saves_engagement(qapp, tmp_path, monkeypatch
 
         dialog.chromadbDirLineEdit.setText("/tmp/chroma")
         dialog.saveEngagement()
-        assert warnings[-1] == ("Input Error", "Please select a threatDB directory.")
+        assert warnings[-1] == ("Input Error", "Please enter a model name")
 
         dialog.threatdbDirLineEdit.setText("/tmp/threat")
-        dialog.saveEngagement()
-        assert warnings[-1] == ("Input Error", "Please enter an ollama_model")
-
         dialog.modelLineEdit.setText("model-a")
         dialog.ipAddressesInput.setText("1.1.1.1\n")
         dialog.urlsInput.setText("https://example.com\n")
@@ -203,10 +202,13 @@ def test_setup_dialog_validates_and_saves_engagement(qapp, tmp_path, monkeypatch
             "ip_addresses": ["1.1.1.1"],
             "urls": ["https://example.com"],
             "lookout_items": ["admin"],
+            "ai_provider": "ollama",
             "model": "model-a",
             "chromadb_dir": "/tmp/chroma",
             "threatdb_dir": "/tmp/threat",
+            "ollama": True,
             "ollama_url": dialog.default_ollama_url,
+            "use_internet_search": False,
         }
         assert completed == [str(engagement)]
 

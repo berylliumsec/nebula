@@ -7,16 +7,45 @@ import warnings
 from queue import Queue
 
 from PyQt6 import QtCore
-from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QPoint,
-                          QSize, Qt, QThread, QThreadPool, QTimer,
-                          pyqtSignal)
+from PyQt6.QtCore import (
+    QFile,
+    QFileSystemWatcher,
+    QObject,
+    QPoint,
+    QSize,
+    Qt,
+    QThread,
+    QThreadPool,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt6.QtGui import (  # This module helps in opening URLs in the default browser
-    QAction, QGuiApplication, QIcon, QPixmap, QTextCursor)
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog,
-                             QFrame, QHBoxLayout, QInputDialog, QLabel,
-                             QListWidget, QListWidgetItem, QMainWindow, QMenu,
-                             QMessageBox, QPushButton, QSizePolicy, QToolBar,
-                             QToolTip, QVBoxLayout, QWidget)
+    QAction,
+    QGuiApplication,
+    QIcon,
+    QPixmap,
+    QTextCursor,
+)
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QToolBar,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import constants, tool_configuration, utilities
 from .ai_notes_pop_up_window import AiNotes, AiNotesPopupWindow
@@ -175,7 +204,6 @@ class FileProcessorWorker(QObject):
                 self.chunks_queue.task_done()
                 return
         else:
-
             logger.debug(
                 f"Finished chunking, sending to API, gateway endpoint is {self.gate_way_endpoint}, the content being sent is {file_contents}"
             )
@@ -412,9 +440,7 @@ class Nebula(QMainWindow):
         self.manager = ConfigManager(engagement_folder)
         self.CONFIG = self.manager.load_config()
 
-        self.child_windows = (
-            []
-        )  # Initialize an empty list to keep track of child windows
+        self.child_windows = []  # Initialize an empty list to keep track of child windows
         self.log_side_bar = LogSideBar(manager=self.manager)
         self.child_windows.append(self.log_side_bar)
 
@@ -868,9 +894,7 @@ class Nebula(QMainWindow):
         self.setCentralWidget(self.central_widget)
 
         self.resize(1320, 700)
-        self.ai_file_watcher = QFileSystemWatcher(
-            [self.CONFIG["LOG_DIRECTORY"]], self
-        )
+        self.ai_file_watcher = QFileSystemWatcher([self.CONFIG["LOG_DIRECTORY"]], self)
         self.ai_file_watcher.directoryChanged.connect(self.on_directory_changed)
 
         self.eco_mode = QAction("Click Here to Activate Eco mode", self)
@@ -1616,7 +1640,6 @@ class Nebula(QMainWindow):
     def upload_file(self, _=None):
         """Initiate the file upload process and handle the user's choice."""
         try:
-
             file_path = self.get_file_path()
 
             self.process_file(file_path)
@@ -1697,7 +1720,6 @@ class Nebula(QMainWindow):
             if new_files:
                 logger.info(f"New files detected: {new_files}")
                 for file in new_files:
-
                     logger.debug(f"Processing file: {file}")
                     if self.suggestions_action.isChecked():
                         if not file.startswith("ai"):

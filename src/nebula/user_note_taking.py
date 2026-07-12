@@ -490,7 +490,14 @@ class UserNoteTaking(QMainWindow):
 
             # Now save the content to the file
             try:
-                with open(filePath, "w") as file:
+                resolvedFilePath = (
+                    filePath
+                    if os.path.isabs(filePath)
+                    else os.path.join(
+                        self.CONFIG["SUGGESTIONS_NOTES_DIRECTORY"], filePath
+                    )
+                )
+                with open(resolvedFilePath, "w") as file:
                     file.write(content)
             except Exception as e:
                 QMessageBox.critical(

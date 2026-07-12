@@ -15,8 +15,15 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QMessageBox,
-                             QPushButton, QScrollArea, QTextEdit, QVBoxLayout)
+from PyQt6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QTextEdit,
+    QVBoxLayout,
+)
 
 from . import constants
 from .log_config import setup_logging
@@ -198,34 +205,91 @@ def strip_ansi_codes(text):
         return text if isinstance(text, str) else ""
 
 
-def get_llm_instance(model: str, ollama_url: str = "", signals: pyqtSignal = None):
-    """
-    Factory method to create the LLM instance.
-    If OPENAI_API_KEY is set, use LangChain's ChatOpenAI.
-    Otherwise, use ChatOllama.
-    This design allows adding additional AI service branches later.
-    """
-    if os.getenv("OPENAI_API_KEY"):
-        logger.info("OPENAI_API_KEY found. Using ChatOpenAI from LangChain.")
+SUPPORTED_AI_PROVIDERS = frozenset({"ollama", "openai"})
 
-        # If the provided model is not suitable for OpenAI (e.g. 'mistral' is an Ollama default),
-        # you might remap it to an appropriate default like 'gpt-3.5-turbo'. Adjust as needed.
 
-        llm_instance = ChatOpenAI(model_name=model)
-        ollama_or_openai = "openai"
-    else:
-        logger.info("OPENAI_API_KEY not set. Using ChatOllama.")
-        try:
-            ollama_or_openai = "openai"
+def resolve_ai_provider(provider=None):
+    """Return an explicitly selected legacy provider.
+
+    Provider selection must not depend on the presence of a credential.  Callers
+    should pass the engagement's ``AI_PROVIDER`` value.  ``NEBULA_AI_PROVIDER``
+    is supported for headless/compatibility use, but an API key is never used as
+    a provider-selection signal.
+    """
+    selected = provider or os.getenv("NEBULA_AI_PROVIDER")
+    if not selected:
+        raise ValueError(
+            "No AI provider selected. Choose OpenAI or Ollama in engagement "
+            "settings, or set NEBULA_AI_PROVIDER."
+        )
+
+    selected = str(selected).strip().lower()
+    aliases = {
+        "local": "ollama",
+        "chatollama": "ollama",
+        "hosted": "openai",
+        "chatopenai": "openai",
+    }
+    selected = aliases.get(selected, selected)
+    if selected not in SUPPORTED_AI_PROVIDERS:
+        supported = ", ".join(sorted(SUPPORTED_AI_PROVIDERS))
+        raise ValueError(
+            f"Unsupported AI provider '{selected}'. Supported providers: {supported}."
+        )
+    return selected
+
+
+def get_configured_ai_provider(config):
+    """Resolve an engagement provider, including the pre-2.0 ``OLLAMA`` flag."""
+    config = config or {}
+    provider = config.get("AI_PROVIDER")
+    if provider:
+        return resolve_ai_provider(provider)
+
+    env_provider = os.getenv("NEBULA_AI_PROVIDER")
+    if env_provider:
+        return resolve_ai_provider(env_provider)
+
+    # Older engagement files used an explicit boolean.  This is a migration
+    # path, not credential-based inference.
+    if "OLLAMA" in config and isinstance(config["OLLAMA"], bool):
+        return "ollama" if config["OLLAMA"] else "openai"
+
+    raise ValueError(
+        "This engagement does not select an AI provider. Open engagement "
+        "settings and choose OpenAI or Ollama."
+    )
+
+
+def _emit_model_error(signals, error):
+    if signals is not None and getattr(signals, "error", None) is not None:
+        signals.error.emit(str(error))
+
+
+def get_llm_instance(
+    model: str,
+    ollama_url: str = "",
+    signals: pyqtSignal = None,
+    provider: str = None,
+):
+    """Create a legacy LLM client for an explicitly selected provider."""
+    selected_provider = resolve_ai_provider(provider)
+    try:
+        if selected_provider == "openai":
+            logger.info("Using explicitly selected OpenAI provider.")
+            llm_instance = ChatOpenAI(model_name=model)
+        else:
+            logger.info("Using explicitly selected Ollama provider.")
             if ollama_url:
                 llm_instance = ChatOllama(model=model, base_url=ollama_url)
             else:
                 llm_instance = ChatOllama(model=model)
-        except Exception as e:
-            signals.error.emit(str(e))
-            logger.error("Error Loading Ollama: %s", e)
-            raise e
-    return llm_instance, ollama_or_openai
+    except Exception as error:
+        _emit_model_error(signals, error)
+        logger.error("Error loading %s model: %s", selected_provider, error)
+        raise
+
+    return llm_instance, selected_provider
 
 
 def show_message(title, message):
@@ -559,6 +623,60 @@ def parse_nikto_xml(file_path):
     except Exception as e:
         logger.error(f"Error processing file: {e}")
         return ""
+
+
+class PrivacyPolicyUnavailable(RuntimeError):
+    """Configured privacy controls could not be loaded; cloud transfer must stop."""
+
+
+def run_hooks(text, privacy_file):
+    """Redact engagement exclusions before text is sent to an AI provider.
+
+    Each non-empty line in ``privacy_file`` is treated as a literal value.  The
+    longest values are replaced first so overlapping exclusions cannot leak a
+    suffix.  A missing/unreadable exclusion file fails closed with respect to
+    transfer: if a configured policy cannot be read, no original content is
+    returned to the caller.
+    """
+    if not isinstance(text, str) or not text or not privacy_file:
+        return text
+
+    try:
+        with open(privacy_file, "r", encoding="utf-8") as file:
+            exclusions = {
+                line.strip() for line in file.read().splitlines() if line.strip()
+            }
+    except FileNotFoundError as error:
+        raise PrivacyPolicyUnavailable(
+            "configured privacy exclusions file is missing"
+        ) from error
+    except OSError as error:
+        logger.error("Unable to read privacy exclusions: %s", error)
+        raise PrivacyPolicyUnavailable(
+            "configured privacy exclusions file cannot be read"
+        ) from error
+
+    redacted = text
+    for exclusion in sorted(exclusions, key=len, reverse=True):
+        redacted = redacted.replace(exclusion, "[REDACTED]")
+    return redacted
+
+
+def extract_data_for_web(text):
+    """Normalize legacy web-mode output without performing network activity.
+
+    The old terminal called this helper even though it was never implemented.
+    Keeping it as a conservative text normalizer prevents the dormant code path
+    from crashing or silently discarding evidence.
+    """
+    if text is None:
+        return ""
+    normalized = strip_ansi_codes(text)
+    return "".join(
+        character
+        for character in normalized
+        if character in "\n\r\t" or character.isprintable()
+    )
 
 
 def process_text(text):

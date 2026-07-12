@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -76,6 +75,30 @@ def test_add_message_trims_history_and_persists_to_disk(tmp_path):
     assert json.loads(memory_file.read_text()) == memory.history
 
 
+def test_independent_memory_instances_append_without_lost_updates(tmp_path):
+    memory_file = tmp_path / "memory.json"
+    first = conversation_memory.ConversationMemory(
+        max_tokens=20, file_path=str(memory_file)
+    )
+    second = conversation_memory.ConversationMemory(
+        max_tokens=20, file_path=str(memory_file)
+    )
+
+    first.add_message("user", "first")
+    second.add_messages(
+        [
+            {"role": "user", "content": "second"},
+            {"role": "assistant", "content": "reply"},
+        ]
+    )
+
+    assert json.loads(memory_file.read_text()) == [
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": "reply"},
+    ]
+
+
 def test_save_logs_error_when_write_fails(tmp_path, monkeypatch):
     messages = []
     memory = conversation_memory.ConversationMemory(
@@ -84,7 +107,8 @@ def test_save_logs_error_when_write_fails(tmp_path, monkeypatch):
 
     monkeypatch.setattr(conversation_memory.logger, "error", messages.append)
     monkeypatch.setattr(
-        "builtins.open",
+        conversation_memory.tempfile,
+        "mkstemp",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
 

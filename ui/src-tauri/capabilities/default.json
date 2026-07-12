@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Minimal capability set for the Nebula desktop workspace.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

@@ -1,12 +1,25 @@
 import json
 import os
+import tempfile
+import threading
+from contextlib import contextmanager
 
 import tiktoken  # Ensure you have installed tiktoken (pip install tiktoken)
+from filelock import FileLock
 
 from . import constants
 from .log_config import setup_logging
 
 logger = setup_logging(log_file=f"{constants.SYSTEM_LOGS_DIR}/memory.log")
+
+_LOCKS = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for_path(file_path):
+    key = os.path.abspath(file_path) if file_path else "<memory-only>"
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(key, threading.RLock())
 
 
 class ConversationMemory:
@@ -14,6 +27,7 @@ class ConversationMemory:
 
         self.max_tokens = max_tokens
         self.file_path = file_path
+        self._thread_lock = _lock_for_path(file_path)
         self.history = (
             []
         )  # List of messages: each message is a dict with keys "role" and "content"
@@ -36,10 +50,36 @@ class ConversationMemory:
         """
         Append a new message to the conversation history, trim if necessary, and persist the update.
         """
-        logger.info(f"Adding message: role={role}, content length={len(content)}")
-        self.history.append({"role": role, "content": content})
-        self.trim_memory()
-        self.save()
+        self.add_messages([{"role": role, "content": content}])
+
+    def add_messages(self, messages):
+        """Atomically append one or more messages and persist the new history."""
+        try:
+            normalized = []
+            for message in messages:
+                role = message["role"]
+                content = message["content"]
+                if not isinstance(role, str) or not isinstance(content, str):
+                    raise TypeError("Conversation roles and content must be strings")
+                normalized.append({"role": role, "content": content})
+
+            with self._file_lock():
+                # Reload while holding the shared path lock so independent
+                # workers append to the latest history instead of overwriting it.
+                disk_history = self._read_unlocked()
+                if disk_history is not None:
+                    self.history = disk_history
+                for message in normalized:
+                    logger.info(
+                        "Adding message: role=%s, content length=%d",
+                        message["role"],
+                        len(message["content"]),
+                    )
+                    self.history.append(message)
+                self.trim_memory()
+                self._save_unlocked()
+        except Exception as e:
+            logger.error(f"Error saving conversation memory: {e}")
 
     def trim_memory(self):
         """
@@ -65,8 +105,8 @@ class ConversationMemory:
         Persist the conversation history to disk.
         """
         try:
-            with open(self.file_path, "w") as f:
-                json.dump(self.history, f)
+            with self._file_lock():
+                self._save_unlocked()
             logger.info(f"Successfully saved conversation memory to {self.file_path}")
         except Exception as e:
             logger.error(f"Error saving conversation memory: {e}")
@@ -75,17 +115,76 @@ class ConversationMemory:
         """
         Load the conversation history from disk if it exists.
         """
-        if os.path.exists(self.file_path):
+        if not self.file_path:
+            return
+        try:
+            with self._file_lock():
+                loaded = self._read_unlocked()
+                if loaded is not None:
+                    self.history = loaded
+                    logger.info(
+                        f"Successfully loaded conversation memory from {self.file_path}"
+                    )
+                else:
+                    logger.info(
+                        f"No existing conversation memory found at {self.file_path}. Starting fresh."
+                    )
+        except Exception as e:
+            logger.error(f"Error loading conversation memory: {e}")
+            self.history = []
+
+    @contextmanager
+    def _file_lock(self):
+        """Serialize writers both in-process and across processes."""
+        with self._thread_lock:
+            if not self.file_path:
+                yield
+                return
+
+            parent = os.path.dirname(os.path.abspath(self.file_path))
+            os.makedirs(parent, exist_ok=True)
+            with FileLock(self.file_path + ".lock"):
+                yield
+
+    def _read_unlocked(self):
+        if not self.file_path or not os.path.exists(self.file_path):
+            return None
+        with open(self.file_path, "r", encoding="utf-8") as file:
+            history = json.load(file)
+        if not isinstance(history, list) or any(
+            not isinstance(message, dict)
+            or not isinstance(message.get("role"), str)
+            or not isinstance(message.get("content"), str)
+            for message in history
+        ):
+            raise ValueError("Conversation memory must be a list of role/content messages")
+        return history
+
+    def _save_unlocked(self):
+        if not self.file_path:
+            return
+
+        parent = os.path.dirname(os.path.abspath(self.file_path))
+        os.makedirs(parent, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{os.path.basename(self.file_path)}.",
+            suffix=".tmp",
+            dir=parent,
+            text=True,
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                json.dump(self.history, file)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, self.file_path)
+        except Exception:
             try:
-                with open(self.file_path, "r") as f:
-                    self.history = json.load(f)
-                logger.info(
-                    f"Successfully loaded conversation memory from {self.file_path}"
-                )
-            except Exception as e:
-                logger.error(f"Error loading conversation memory: {e}")
-                self.history = []
-        else:
-            logger.info(
-                f"No existing conversation memory found at {self.file_path}. Starting fresh."
-            )
+                os.close(descriptor)
+            except OSError:
+                pass
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+            raise

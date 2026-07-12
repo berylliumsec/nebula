@@ -91,8 +91,6 @@ class HelpWindow(QMainWindow):
         command_input_area_image = update_utils.return_path(
             "Images_readme/command_input_area.png"
         )
-        code_analysis = update_utils.return_path("Images_readme/code_analysis.png")
-
         eclipse = update_utils.return_path("Images_readme/eclipse.png")
         help_content_html = f"""
 <style>
@@ -108,13 +106,14 @@ class HelpWindow(QMainWindow):
 <h1>Nebula: AI-Driven PenTestOps Platform</h1>
 <p>Nebula is a cutting-edge platform designed for ethical hackers, offering an AI-driven approach to identify and exploit security vulnerabilities efficiently. This toolkit combines advanced technology with user-friendly features to enhance the cybersecurity workflow.</p>
 <h2>Getting Started</h2>
+<div class="note"><strong>Provider and command safety:</strong> Select Ollama or OpenAI explicitly in engagement settings. AI-generated commands are suggestions; Nebula does not give the model an unsandboxed host shell by default.</div>
 <h3>Home Screen</h3>
 <ul>
     <li><strong>Sending Files for AI-Based Analysis:</strong> Send uploaded files or previous commands for suggestions or recommendations by using the context menu.<br><br><img src="{previous_results_context_menu_image}" alt="Sending Files for AI-Based Analysis"></li>
    
     
     <li><strong>Context Menu Interaction:</strong> Highlight any text to bring up the context menu for quick actions and features.<br><br><img src="{context_menu_image}" alt="Context Menu"></li>
-    <li><strong>AI-Assisted Note-Taking:</strong> Automates documentation of crucial security findings, organizing them by CWE identifiers and aligning with NIST controls when applicable. <br><br><img src="{ai_notes_image}" alt="AI-Assisted Note-Taking"></li>
+    <li><strong>AI-Assisted Note-Taking:</strong> Drafts report-style notes from selected terminal output. Review and correct generated notes before using them in a report. <br><br><img src="{ai_notes_image}" alt="AI-Assisted Note-Taking"></li>
     <li><strong>AI-Based Suggestions:</strong> Activate this to receive AI-based suggestions for exploiting vulnerabilities by toggling the suggestions icon.<br><br><img src="{enable_ai_suggestions_image}" alt="AI-Based Suggestions"></li>
     <li><strong>Viewing Suggestions:</strong> When suggestions are available, the suggestions icon lights up. Click it to view the suggestions.<br><br><img src="{suggestions_available_image}" alt="Viewing Suggestions"></li>
 
@@ -130,7 +129,6 @@ class HelpWindow(QMainWindow):
     <li><strong>Clear Screen:</strong> Click the clear screen icon to remove all content from the central display area.<br><br><img src="{clear_screen}" alt="Clear Screen"></li>
     <li><strong>View Engagement Details:</strong> Access detailed information about your current engagement by clicking the engagement details icon.<br><br><img src="{engagement_details}" alt="Engagement Details"></li>
     <li><strong>Command Input Area:</strong> Enter commands directly into the command input area at the bottom of the terminal. Start with an exclamation mark for AI assistant interactions.<br><br><img src="{command_input_area_image}" alt="Command Input Area"></li>
-    <li><strong>Static Code Analysis:</strong> Click on the Code Analysis icon to open the code analysis window. Proceed to toggle the code analysis icon to activate it, then paste the code you wish to analyze<br><br><img src="{code_analysis}" alt="Code Analysis"></li>
     </ul>
 
 
@@ -162,9 +160,9 @@ class HelpWindow(QMainWindow):
     ?? I cannot seem to ask Nebula any questions, please help.
 </pre>
 <h2>More Help</h2>
-<p>You can ask the Nebula AI assistants any questions answered in this manual using the following format</p>
+<p>You can ask the configured Nebula AI assistant a question by starting terminal input with an exclamation mark:</p>
 <pre>
-    ?! how do i turn on autonomous mode?
+    ! summarize the evidence collected so far
 </pre>
 <p><em>Nebula: Empowering ethical hackers with AI-driven precision and efficiency.</em></p>
 """

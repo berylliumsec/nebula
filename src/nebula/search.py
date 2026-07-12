@@ -73,14 +73,16 @@ class CustomSearchLineEdit(QLineEdit):
             logger.info("[Main] Initializing model with model")
 
             self.llm, _ = utilities.get_llm_instance(
-                model=self.CONFIG["MODEL"], ollama_url=self.CONFIG["OLLAMA_URL"]
+                model=self.CONFIG["MODEL"],
+                ollama_url=self.CONFIG["OLLAMA_URL"],
+                provider=utilities.get_configured_ai_provider(self.CONFIG),
             )
             logger.info("[Main] model initialized successfully.")
         except Exception as e:
             logger.error(f"[Main] Failed to initialize model: {e}")
             utilities.show_message(
-                "Error Loading Ollama",
-                "Ollama could not be loaded, please check the url in engagement settings and try again",
+                "Error Loading Model",
+                "The configured model provider could not be loaded. Check the engagement settings and try again.",
             )
 
             self.llm = None

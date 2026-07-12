@@ -7,20 +7,44 @@ import warnings
 
 import pexpect
 
-from langchain_classic.agents import (AgentExecutor, AgentType,
-                                      create_openai_tools_agent,
-                                      initialize_agent)
+from langchain_classic.agents import (
+    AgentExecutor,
+    AgentType,
+    create_openai_tools_agent,
+    initialize_agent,
+)
 from langchain_community.tools import DuckDuckGoSearchRun, ShellTool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from PyQt6 import QtCore
-from PyQt6.QtCore import (QFile, QFileSystemWatcher, QObject, QProcess,
-                          QProcessEnvironment, QSocketNotifier, QRunnable,
-                          QStringListModel, Qt, QThreadPool, QTimer, pyqtSignal)
+from PyQt6.QtCore import (
+    QFile,
+    QFileSystemWatcher,
+    QObject,
+    QProcess,
+    QProcessEnvironment,
+    QSocketNotifier,
+    QRunnable,
+    QStringListModel,
+    Qt,
+    QThreadPool,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QAction, QIcon, QMouseEvent, QPixmap, QTextCursor
-from PyQt6.QtWidgets import (QApplication, QCompleter, QFileDialog,
-                             QHBoxLayout, QLineEdit, QMainWindow, QMenu,
-                             QMessageBox, QPushButton, QToolBar, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCompleter,
+    QFileDialog,
+    QHBoxLayout,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import constants, utilities
 from .central_display_area_in_main_window import CentralDisplayAreaInMainWindow
@@ -56,8 +80,8 @@ class AgentTaskRunnerSignals(QObject):
 class AgentTaskRunner(QRunnable):
     """
     Worker thread to run agent queries.
-    This version uses a factory method to select the LLM service based on environment
-    variables (e.g. OPENAI_API_KEY) and is structured to easily support other AI services later.
+    The engagement configuration selects the LLM provider explicitly. Executable
+    host-shell access is excluded unless the unsafe compatibility flag is set.
     """
 
     def __init__(
@@ -77,7 +101,51 @@ class AgentTaskRunner(QRunnable):
         self.notes_memory = notes_memory
         self.suggestions_memory = suggestions_memory
         self.conversation_memory = conversation_memory
-        self.tools = [BASH_TOOL, SEARCH_TOOL, searchsploit]
+        initial_config = self.manager.load_config() if self.manager is not None else {}
+        self.tools = self._build_agent_tools(initial_config)
+
+    @staticmethod
+    def _setting_enabled(value):
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _build_agent_tools(self, config):
+        """Return only the tools explicitly permitted by this engagement."""
+        config = config or {}
+        tools = []
+        if self._setting_enabled(config.get("USE_INTERNET_SEARCH", False)):
+            tools.append(SEARCH_TOOL)
+
+        unsafe_shell = self._setting_enabled(
+            config.get("ALLOW_UNSAFE_MODEL_SHELL", False)
+        ) or self._setting_enabled(os.getenv("NEBULA_UNSAFE_MODEL_SHELL", ""))
+        if unsafe_shell:
+            logger.warning(
+                "Unsafe compatibility mode enabled: the AI agent can execute "
+                "commands directly on the host."
+            )
+            # SearchSploit also launches a host process, so it is covered by the
+            # same explicit unsafe compatibility gate as the generic shell.
+            tools[0:0] = [BASH_TOOL, searchsploit]
+        return tools
+
+    @staticmethod
+    def _record_exchange(memory, query, response):
+        if memory is None:
+            return
+        messages = [
+            {"role": "User", "content": query},
+            {"role": "Assistant", "content": response},
+        ]
+        if hasattr(memory, "add_messages"):
+            memory.add_messages(messages)
+            return
+
+        # Compatibility with third-party memory objects used by legacy plugins.
+        for message in messages:
+            memory.add_message(**message)
+        memory.save()
 
     def run(self):
         logger.info("AgentTaskRunner started execution.")
@@ -87,7 +155,9 @@ class AgentTaskRunner(QRunnable):
             # Load configuration (including the Ollama URL) from the manager.
             self.CONFIG = self.manager.load_config()
             model = self.CONFIG["MODEL"]
-            ollama_url = self.CONFIG["OLLAMA_URL"]
+            ollama_url = self.CONFIG.get("OLLAMA_URL", "")
+            provider = utilities.get_configured_ai_provider(self.CONFIG)
+            self.tools = self._build_agent_tools(self.CONFIG)
 
             try:
                 response = self.query_llm(
@@ -95,6 +165,7 @@ class AgentTaskRunner(QRunnable):
                     endpoint=self.endpoint,
                     model=model,
                     ollama_url=ollama_url,
+                    provider=provider,
                 )
             except Exception as e:
                 logger.error(f"Error during inference: {e}")
@@ -102,17 +173,11 @@ class AgentTaskRunner(QRunnable):
 
             # Save the conversation to the proper memory store.
             if "notes" in self.endpoint:
-                self.notes_memory.add_message(role="User", content=self.query)
-                self.notes_memory.add_message(role="Assistant", content=response)
-                self.notes_memory.save()
+                self._record_exchange(self.notes_memory, self.query, response)
             elif "suggestion" in self.endpoint:
-                self.suggestions_memory.add_message(role="User", content=self.query)
-                self.suggestions_memory.add_message(role="Assistant", content=response)
-                self.suggestions_memory.save()
+                self._record_exchange(self.suggestions_memory, self.query, response)
             else:
-                self.conversation_memory.add_message(role="User", content=self.query)
-                self.conversation_memory.add_message(role="Assistant", content=response)
-                self.conversation_memory.save()
+                self._record_exchange(self.conversation_memory, self.query, response)
 
             self.signals.result.emit(self.endpoint, "ai", response)
             logger.info("AgentTaskRunner completed successfully.")
@@ -124,7 +189,12 @@ class AgentTaskRunner(QRunnable):
             logger.info("AgentTaskRunner finished execution.")
 
     def query_llm(
-        self, query: str, endpoint: str, model: str = "mistral", ollama_url: str = ""
+        self,
+        query: str,
+        endpoint: str,
+        model: str = "mistral",
+        ollama_url: str = "",
+        provider: str = None,
     ) -> str:
         """
         Generate a response using the selected LLM service.
@@ -134,7 +204,13 @@ class AgentTaskRunner(QRunnable):
 
         # Create the LLM instance based on the service selection logic.
         llm_instance, ollama_or_openai = utilities.get_llm_instance(
-            model=model, ollama_url=ollama_url, signals=self.signals
+            model=model,
+            ollama_url=ollama_url,
+            signals=self.signals,
+            provider=provider
+            or utilities.get_configured_ai_provider(
+                self.manager.load_config() if self.manager is not None else {}
+            ),
         )
 
         if "notes" in endpoint:
@@ -182,43 +258,6 @@ class AgentTaskRunner(QRunnable):
             return response.content
 
         else:
-            try:
-                # Bind available tools to the LLM instance.
-
-                # Initialize the agent with tool-calling capability.
-                if not ollama_or_openai == "openai":
-                    llm_with_tools = llm_instance.bind_tools(self.tools)
-                    agent = initialize_agent(
-                        self.tools,
-                        llm_with_tools,
-                        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-                        verbose=True,
-                        handle_parsing_errors=True,
-                    )
-                else:
-                    prompt = ChatPromptTemplate.from_messages(
-                        [
-                            ("system", "You are a penetration testing assistant"),
-                            ("user", "{input}"),
-                            MessagesPlaceholder(variable_name="agent_scratchpad"),
-                        ]
-                    )
-                    agent = create_openai_tools_agent(
-                        llm_instance, tools=self.tools, prompt=prompt
-                    )
-                    agent_executor = AgentExecutor(
-                        agent=agent,
-                        tools=self.tools,
-                        verbose=True,
-                        handle_parsing_errors=True,
-                        return_intermediate_steps=True,
-                    )
-                    response = agent_executor.invoke({"input": self.query})
-
-            except Exception as e:
-                logger.error("Error initializing tool-calling agent: %s", e)
-                raise e
-
             logger.info("Building prompt for default endpoint.")
             instructions = "You are a penetration testing assistant. "
             full_query = instructions + ":" + query
@@ -236,16 +275,46 @@ class AgentTaskRunner(QRunnable):
             prompt = f"{conversation_context}\nUser: {full_query}\nAssistant:"
             logger.debug(f"Generated prompt for LLM: {prompt}")
 
-            # Run the agent. Here the full_query is passed to enable tool-calling.
-            if not ollama_or_openai == "openai":
-                response = agent.run(full_query)
-                logger.info(f"LLM response: {response}")
-                return response
-            else:
-                response = agent_executor.invoke({"input": query})
+            try:
+                # Run exactly one agent invocation. The previous OpenAI path
+                # invoked the executor once during initialization and then a
+                # second time below, duplicating tool side effects.
+                if ollama_or_openai == "ollama":
+                    llm_with_tools = llm_instance.bind_tools(self.tools)
+                    agent = initialize_agent(
+                        self.tools,
+                        llm_with_tools,
+                        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+                        verbose=True,
+                        handle_parsing_errors=True,
+                    )
+                    response = agent.run(prompt)
+                    logger.info("Ollama agent response received.")
+                    return response
 
-                logger.info(f"LLM response: {response}")
+                prompt_template = ChatPromptTemplate.from_messages(
+                    [
+                        ("system", "You are a penetration testing assistant"),
+                        ("user", "{input}"),
+                        MessagesPlaceholder(variable_name="agent_scratchpad"),
+                    ]
+                )
+                agent = create_openai_tools_agent(
+                    llm_instance, tools=self.tools, prompt=prompt_template
+                )
+                agent_executor = AgentExecutor(
+                    agent=agent,
+                    tools=self.tools,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    return_intermediate_steps=True,
+                )
+                response = agent_executor.invoke({"input": prompt})
+                logger.info("OpenAI agent response received.")
                 return response["output"]
+            except Exception as e:
+                logger.error("Error running tool-calling agent: %s", e)
+                raise
 
 
 class TerminalEmulatorWindow(QMainWindow):
@@ -547,9 +616,7 @@ class QProcessShellBackend(BaseShellBackend):
         super().__init__(parent)
         self._resolver = shell_command_resolver
         self.process = QProcess(self)
-        self.process.setProcessChannelMode(
-            QProcess.ProcessChannelMode.MergedChannels
-        )
+        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.process.readyReadStandardOutput.connect(self._emit_output)
         self.process.errorOccurred.connect(self._handle_error)
         self.process.finished.connect(self._handle_finished)
@@ -709,9 +776,7 @@ class TerminalEmulator(QObject):
             "NEBULA_TERMINAL_BACKEND", "qprocess"
         ).lower()
         if backend_preference == "pexpect":
-            self.backend = PexpectShellBackend(
-                self._resolve_shell_command, parent=self
-            )
+            self.backend = PexpectShellBackend(self._resolve_shell_command, parent=self)
             self.backend_mode = "pexpect"
         else:
             self.backend = QProcessShellBackend(
@@ -849,7 +914,6 @@ class TerminalEmulator(QObject):
                     and utilities.is_included_command(self.current_command, self.CONFIG)
                     and "reset" not in self.current_command
                 ):
-
                     logger.info(
                         "Non-autonomous mode with included command. Logging command output."
                     )
@@ -873,7 +937,6 @@ class TerminalEmulator(QObject):
                     and "reset" not in self.current_command
                     and self.number_of_autonomous_commands > 0
                 ):
-
                     logger.info(
                         "Autonomous mode active with %d autonomous job(s).",
                         self.number_of_autonomous_commands,
@@ -903,7 +966,6 @@ class TerminalEmulator(QObject):
                     and self.number_of_autonomous_commands == 0
                     and utilities.is_included_command(self.current_command, self.CONFIG)
                 ):
-
                     logger.info(
                         "Autonomous mode active with 0 autonomous jobs and command is included."
                     )
@@ -1451,7 +1513,6 @@ class CommandInputArea(QLineEdit):
 
     def onTaskResult(self, endpoint, command, result):
         if not any(sub in endpoint for sub in ["suggestion", "notes"]):
-
             utilities.log_command_output("ai", result, self.CONFIG)
             self.commands_memory.add_message(
                 role="Assistant", content=f"Response: {result}"
@@ -1466,7 +1527,6 @@ class CommandInputArea(QLineEdit):
                 "Endpoint is NOTE_TAKING_API_GATEWAY_ENDPOINT. Setting up finished signal."
             )
             try:
-
                 self.update_ai_notes_function(command, result)
 
                 logger.debug("Successfully connected to update_ai_notes_function.")
@@ -1478,7 +1538,6 @@ class CommandInputArea(QLineEdit):
                 "Endpoint is SUGGESTIONS_API_GATEWAY_ENDPOINT. Setting up finished signal."
             )
             try:
-
                 self.update_suggestion_notes_function(command, result)
 
                 logger.debug(
@@ -1494,6 +1553,9 @@ class CommandInputArea(QLineEdit):
         QApplication.restoreOverrideCursor()
         self.model_busy_busy_signal.emit(False)
         self.model_busy = False
+        # FileProcessorWorker waits for this signal before submitting the next
+        # chunk. Without it, multi-chunk note/suggestion imports stall forever.
+        self.api_call_execution_finished.emit()
 
     def onModelError(self, error):
         utilities.show_message(

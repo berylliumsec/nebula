@@ -71,6 +71,14 @@
 - **Accessing Settings:** Click the settings icon below.  
   ![Settings](src/nebula/Images_readme/settings.png)
 
+- **AI provider:** Select Ollama or OpenAI explicitly for each engagement. An
+  OpenAI API key does not select the provider automatically.
+
+- **Agent command safety:** AI-generated commands are suggestions and do not run
+  through a model-controlled host shell by default. The human terminal remains
+  available for reviewed commands. The legacy unsandboxed shell compatibility
+  flag should be used only in an isolated test environment.
+
 
 
 ### Context Menu

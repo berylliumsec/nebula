@@ -557,7 +557,16 @@ class ConfigManager(QObject):
                 )
                 updated_config["CHROMA_DB_PATH"] = details.get("chromadb_dir", "")
                 updated_config["THREAT_DB_PATH"] = details.get("threatdb_dir", "")
-                updated_config["OLLAMA"] = details.get("ollama", False)
+                provider = details.get("ai_provider")
+                if not provider and isinstance(details.get("ollama"), bool):
+                    provider = "ollama" if details["ollama"] else "openai"
+                # Engagements created by the short-lived URL-only settings
+                # screen migrate to the safer local provider and are made
+                # explicit when next saved.
+                provider = provider or self.CONFIG.get("AI_PROVIDER") or "ollama"
+                provider = str(provider).strip().lower()
+                updated_config["AI_PROVIDER"] = provider
+                updated_config["OLLAMA"] = provider == "ollama"
                 updated_config["OLLAMA_URL"] = details.get("ollama_url", False)
                 updated_config["USE_INTERNET_SEARCH"] = details.get(
                     "use_internet_search", False

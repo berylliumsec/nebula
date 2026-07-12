@@ -1,7 +1,7 @@
-import importlib.resources
-import os
 from contextlib import contextmanager
 from pathlib import Path
+
+import pytest
 
 from nebula import update_utils
 
@@ -19,8 +19,8 @@ def test_resource_path_uses_importlib_resources(monkeypatch):
         seen["resource"] = resource
         yield Path("/package") / resource
 
-    monkeypatch.setattr(importlib.resources, "files", lambda package: FakeFiles())
-    monkeypatch.setattr(importlib.resources, "as_file", fake_as_file)
+    monkeypatch.setattr(update_utils, "files", lambda package: FakeFiles())
+    monkeypatch.setattr(update_utils, "as_file", fake_as_file)
 
     resolved = update_utils.resource_path("config/dark-stylesheet.css")
 
@@ -31,37 +31,15 @@ def test_resource_path_uses_importlib_resources(monkeypatch):
     }
 
 
-def test_resource_path_falls_back_to_module_directory(monkeypatch):
+def test_resource_path_fails_closed_when_package_data_is_unavailable(monkeypatch):
     monkeypatch.setattr(
-        importlib.resources,
+        update_utils,
         "files",
         lambda package: (_ for _ in ()).throw(RuntimeError("missing package data")),
     )
-    monkeypatch.setattr(update_utils.sys, "frozen", False, raising=False)
-    monkeypatch.delattr(update_utils.sys, "_MEIPASS", raising=False)
 
-    resolved = update_utils.resource_path("config/dark-stylesheet.css")
-
-    expected = os.path.join(
-        os.path.dirname(os.path.abspath(update_utils.__file__)),
-        "config/dark-stylesheet.css",
-    )
-    assert resolved == expected
-
-
-def test_resource_path_falls_back_to_meipass_when_frozen(monkeypatch):
-    monkeypatch.setattr(
-        importlib.resources,
-        "files",
-        lambda package: (_ for _ in ()).throw(RuntimeError("missing package data")),
-    )
-    monkeypatch.setattr(update_utils.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(update_utils.sys, "_MEIPASS", "/tmp/bundle", raising=False)
-
-    assert (
-        update_utils.resource_path("Images/logo.png")
-        == "/tmp/bundle/Images/logo.png"
-    )
+    with pytest.raises(RuntimeError, match="missing package data"):
+        update_utils.resource_path("config/dark-stylesheet.css")
 
 
 def test_is_run_as_package_respects_docker_override(monkeypatch):

@@ -2,8 +2,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from PyQt6.QtCore import QPoint, Qt
-from PyQt6.QtGui import QColor, QMouseEvent, QTextCursor
-from PyQt6.QtWidgets import QListWidgetItem, QTextEdit, QWidget
+from PyQt6.QtGui import QColor, QTextCursor
+from PyQt6.QtWidgets import QTextEdit, QWidget
 
 from nebula import suggestions_pop_out_window, user_note_taking
 
@@ -96,7 +96,6 @@ def test_suggestions_pop_out_window_workflow(qapp, tmp_path, monkeypatch):
     autosave_path = Path(manager.load_config()["SUGGESTIONS_NOTES_DIRECTORY"]) / "suggestions.html"
     autosave_path.write_text("<p>saved</p>")
 
-    infos = []
     errors = []
     monkeypatch.setattr(
         suggestions_pop_out_window.QMessageBox,
@@ -264,12 +263,12 @@ def test_suggestions_pop_out_window_open_and_formatting_branches(
 
 
 def test_user_note_taking_workflow(qapp, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     patch_note_window_dependencies(user_note_taking, monkeypatch, tmp_path)
     manager = build_manager(tmp_path)
     notes_dir = Path(manager.load_config()["SUGGESTIONS_NOTES_DIRECTORY"])
     (notes_dir / "1.html").write_text("<p>existing</p>")
 
-    infos = []
     errors = []
     monkeypatch.setattr(
         user_note_taking.QMessageBox,
@@ -289,7 +288,6 @@ def test_user_note_taking_workflow(qapp, tmp_path, monkeypatch):
         assert window.tabWidget.count() == 1
         assert "existing" in window.getCurrentTextEdit().toHtml()
 
-        old_file = notes_dir / "1.html"
         window.renameTabFile("1", "renamed")
         assert (notes_dir / "renamed.html").exists()
         assert window.tabFilePaths[0] == "renamed.html"
@@ -334,6 +332,7 @@ def test_user_note_taking_workflow(qapp, tmp_path, monkeypatch):
         )
         window.saveFile()
         assert (notes_dir / "renamed.html").exists()
+        assert not (tmp_path / "renamed.html").exists()
 
         monkeypatch.setattr(
             user_note_taking.QFileDialog,

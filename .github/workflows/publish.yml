@@ -64,6 +64,9 @@ jobs:
           conda install -c conda-forge poetry -y
           # (Optional) Check that Poetry is installed.
           which poetry && poetry --version
+          poetry check
+          poetry install --no-interaction
+          QT_QPA_PLATFORM=offscreen poetry run pytest -q
           # Build the distributions.
           poetry build
 
@@ -96,6 +99,14 @@ jobs:
 
       - name: Install Poetry via Conda
         run: conda install -c conda-forge poetry -y
+
+      - name: Install and verify the release candidate
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          poetry check
+          poetry install --no-interaction
+          poetry run pytest -q
 
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4

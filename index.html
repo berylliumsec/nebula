@@ -216,8 +216,10 @@
         <a href="https://www.berylliumsec.com/dap-overview" target="_blank" rel="noopener">Learn More Here</a>
       </p>
       <p>
-        <strong>Introducing Nebula Pro.</strong> Nebula Pro improves on Nebula 2.0 by adding additional features such as autonomous mode, code analysis and more. 
-        <a href="https://www.berylliumsec.com/nebula-pro-overview" target="_blank" rel="noopener">Learn More Here</a>
+        <strong>Nebula 2.x safety note.</strong> Autonomous execution and static
+        code analysis are not features of this open-source release. AI-generated
+        commands require operator review and the model-controlled host shell is
+        disabled by default.
       </p>
       
       <h3>Nebula: AI-Powered Penetration Testing Platform</h3>
@@ -242,14 +244,14 @@
       <!-- Running Nebula Section -->
       <section id="running">
         <h2>Running Nebula</h2>
-        <p><strong>Important:</strong> On your first run, you’ll be prompted to select a cache directory where Nebula will download your chosen AI model. Follow these steps:</p>
+        <p><strong>Important:</strong> Select either Ollama or OpenAI explicitly in engagement settings. Provider selection never changes merely because an API key is present.</p>
         <ol>
           <li>
-            Create a free <a href="https://huggingface.co/" target="_blank" rel="noopener">Hugging Face Account</a>, agree to the terms, and generate an access token.
+            For local inference, install Ollama and pull a model before selecting the Ollama provider.
           </li>
           <li>
-            Export your token to the CLI:
-            <pre><code>export HF_TOKEN=YourTokenHere</code></pre>
+            For OpenAI, export your credential without using it as a provider selector:
+            <pre><code>export OPENAI_API_KEY=YourKeyHere</code></pre>
           </li>
           <li>
             Launch Nebula and monitor the download progress:
@@ -257,7 +259,7 @@
           </li>
         </ol>
         <p>
-          This step only needs to be completed once. Monitor the CLI where you invoked <code>nebula</code> to view the download progress.
+          AI-generated commands are suggestions for the human-controlled terminal. Unsandboxed model shell access is disabled by default.
         </p>
         <h3>Interacting with the Models</h3>
         <p>
@@ -270,10 +272,10 @@
         <h2>Key Features</h2>
         <ul>
           <li>
-            <strong>AI-Powered Internet Search:</strong> Enhance responses by integrating real-time, internet-sourced context to keep you updated on cybersecurity trends.
+            <strong>Optional AI-Powered Internet Search:</strong> When explicitly enabled for an engagement, the assistant may retrieve internet context through DuckDuckGo. Web content is untrusted and should be reviewed.
           </li>
           <li>
-            <strong>AI-Assisted Note-Taking:</strong> Automatically record and categorize security findings.
+            <strong>AI-Assisted Note-Taking:</strong> Draft report-style notes from selected terminal output for analyst review.
           </li>
           <li>
             <strong>Real-Time AI-Driven Insights:</strong> Get immediate suggestions for discovering and exploiting vulnerabilities based on terminal tool outputs.

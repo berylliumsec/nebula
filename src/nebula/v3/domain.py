@@ -1,0 +1,656 @@
+"""Typed, UI-independent domain contracts for Nebula 3.
+
+The relational store is authoritative.  These models are the stable boundary used
+by the API, providers, policy engine, importers, and future GUI clients.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import re
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, ClassVar
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def utc_now() -> datetime:
+    """Return a timezone-aware UTC timestamp."""
+
+    return datetime.now(timezone.utc)
+
+
+class StringEnum(str, Enum):
+    """A Python 3.10-compatible string enum."""
+
+
+class EngagementStatus(StringEnum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETE = "complete"
+    ARCHIVED = "archived"
+
+
+class RiskClass(StringEnum):
+    LOCAL_READ = "local_read"
+    PASSIVE = "passive"
+    ACTIVE_SCAN = "active_scan"
+    WORKSPACE_WRITE = "workspace_write"
+    CREDENTIAL_USE = "credential_use"
+    EXPLOITATION = "exploitation"
+    PERSISTENCE = "persistence"
+    DESTRUCTIVE = "destructive"
+    SCOPE_CHANGE = "scope_change"
+
+
+class FindingStatus(StringEnum):
+    CANDIDATE = "candidate"
+    VALIDATED = "validated"
+    CONFIRMED = "confirmed"
+    ACCEPTED_RISK = "accepted-risk"
+    FALSE_POSITIVE = "false-positive"
+    REMEDIATED = "remediated"
+    RETEST_PASSED = "retest-passed"
+    RETEST_FAILED = "retest-failed"
+
+
+class Severity(StringEnum):
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class RunStatus(StringEnum):
+    QUEUED = "queued"
+    PLANNING = "planning"
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    PAUSED = "paused"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    COMPLETE = "complete"
+
+
+class TaskStatus(StringEnum):
+    PENDING = "pending"
+    READY = "ready"
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    BLOCKED = "blocked"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    COMPLETE = "complete"
+
+
+class ToolCallStatus(StringEnum):
+    PROPOSED = "proposed"
+    WAITING_APPROVAL = "waiting_approval"
+    APPROVED = "approved"
+    RUNNING = "running"
+    DENIED = "denied"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    COMPLETE = "complete"
+
+
+class ApprovalStatus(StringEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    EDITED = "edited"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+
+
+class CorrelationMethod(StringEnum):
+    PURL = "purl"
+    CPE = "cpe"
+    SCANNER_CVE = "scanner_cve"
+    FUZZY_BANNER = "fuzzy_banner"
+
+
+class CorrelationStatus(StringEnum):
+    CANDIDATE = "candidate"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    NOT_AFFECTED = "not_affected"
+
+
+class NebulaModel(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_assignment=True,
+        populate_by_name=True,
+        protected_namespaces=(),
+        str_strip_whitespace=True,
+    )
+
+
+class Entity(NebulaModel):
+    """Common persisted-entity fields with optimistic revision support."""
+
+    entity_kind: ClassVar[str]
+    id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=200)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    revision: int = Field(default=1, ge=1)
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def timestamps_must_be_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def updated_after_creation(self) -> "Entity":
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at cannot be earlier than created_at")
+        return self
+
+
+class MissionGrant(NebulaModel):
+    risk_classes: list[RiskClass]
+    tool_names: list[str] = Field(default_factory=list)
+    targets: list[str] = Field(default_factory=list)
+    granted_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+    granted_by: str = Field(min_length=1)
+
+    @field_validator("granted_at", "expires_at")
+    @classmethod
+    def expiry_must_be_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("grant timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def expiry_after_grant(self) -> "MissionGrant":
+        if self.expires_at <= self.granted_at:
+            raise ValueError("expires_at must be later than granted_at")
+        return self
+
+
+class ScopePolicy(Entity):
+    entity_kind: ClassVar[str] = "scope_policies"
+    engagement_id: str
+    allowed_cidrs: list[str] = Field(default_factory=list)
+    allowed_domains: list[str] = Field(default_factory=list)
+    allowed_urls: list[str] = Field(default_factory=list)
+    allowed_ports: list[int] = Field(default_factory=list)
+    not_before: datetime | None = None
+    not_after: datetime | None = None
+    prohibited_actions: list[str] = Field(default_factory=list)
+    local_only: bool = False
+    max_concurrency: int = Field(default=1, ge=1, le=256)
+    grants: list[MissionGrant] = Field(default_factory=list)
+
+    @field_validator("allowed_cidrs")
+    @classmethod
+    def normalize_cidrs(cls, values: list[str]) -> list[str]:
+        normalized = []
+        for value in values:
+            normalized.append(str(ipaddress.ip_network(value, strict=False)))
+        return sorted(set(normalized))
+
+    @field_validator("allowed_domains")
+    @classmethod
+    def normalize_domains(cls, values: list[str]) -> list[str]:
+        normalized = []
+        domain_pattern = re.compile(
+            r"^(?:\*\.)?(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        )
+        for value in values:
+            domain = value.rstrip(".").lower()
+            if not domain_pattern.fullmatch(domain):
+                raise ValueError(f"invalid domain: {value}")
+            normalized.append(domain)
+        return sorted(set(normalized))
+
+    @field_validator("allowed_ports")
+    @classmethod
+    def normalize_ports(cls, values: list[int]) -> list[int]:
+        for value in values:
+            if not 1 <= value <= 65535:
+                raise ValueError("ports must be between 1 and 65535")
+        return sorted(set(values))
+
+    @field_validator("not_before", "not_after")
+    @classmethod
+    def optional_times_must_be_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("scope timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def valid_window(self) -> "ScopePolicy":
+        if self.not_before and self.not_after and self.not_after <= self.not_before:
+            raise ValueError("not_after must be later than not_before")
+        return self
+
+
+class Engagement(Entity):
+    entity_kind: ClassVar[str] = "engagements"
+    name: str = Field(min_length=1, max_length=300)
+    description: str = ""
+    status: EngagementStatus = EngagementStatus.DRAFT
+    scope_policy_id: str | None = None
+    client_name: str | None = None
+    owner_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Asset(Entity):
+    entity_kind: ClassVar[str] = "assets"
+    engagement_id: str
+    asset_type: str = "host"
+    name: str
+    address: str | None = None
+    hostname: str | None = None
+    criticality: Severity = Severity.MEDIUM
+    exposed: bool | None = None
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Service(Entity):
+    entity_kind: ClassVar[str] = "services"
+    engagement_id: str
+    asset_id: str
+    protocol: str = "tcp"
+    port: int | None = Field(default=None, ge=1, le=65535)
+    name: str | None = None
+    product: str | None = None
+    version: str | None = None
+    banner: str | None = None
+    cpes: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Identity(Entity):
+    entity_kind: ClassVar[str] = "identities"
+    engagement_id: str
+    principal: str
+    identity_type: str = "account"
+    realm: str | None = None
+    asset_ids: list[str] = Field(default_factory=list)
+    privileged: bool | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SoftwareComponent(Entity):
+    entity_kind: ClassVar[str] = "software_components"
+    engagement_id: str
+    asset_id: str | None = None
+    service_id: str | None = None
+    name: str
+    vendor: str | None = None
+    version: str | None = None
+    ecosystem: str | None = None
+    purl: str | None = None
+    cpes: list[str] = Field(default_factory=list)
+    source_evidence_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Observation(Entity):
+    entity_kind: ClassVar[str] = "observations"
+    engagement_id: str
+    observation_type: str
+    title: str
+    body: str = ""
+    asset_ids: list[str] = Field(default_factory=list)
+    service_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    source: str | None = None
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Evidence(Entity):
+    entity_kind: ClassVar[str] = "evidence"
+    engagement_id: str
+    evidence_type: str
+    title: str
+    description: str = ""
+    artifact_id: str | None = None
+    finding_id: str | None = None
+    asset_ids: list[str] = Field(default_factory=list)
+    tool_call_id: str | None = None
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    captured_at: datetime = Field(default_factory=utc_now)
+    captured_by: str | None = None
+    source_version: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Artifact(Entity):
+    entity_kind: ClassVar[str] = "artifacts"
+    engagement_id: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: int = Field(ge=0)
+    filename: str | None = None
+    media_type: str = "application/octet-stream"
+    storage_path: str
+    source: str | None = None
+    parent_artifact_id: str | None = None
+    redacted: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Remediation(Entity):
+    entity_kind: ClassVar[str] = "remediations"
+    engagement_id: str
+    finding_id: str | None = None
+    summary: str
+    details: str = ""
+    references: list[str] = Field(default_factory=list)
+    owner: str | None = None
+    due_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Finding(Entity):
+    entity_kind: ClassVar[str] = "findings"
+    engagement_id: str
+    title: str
+    description: str = ""
+    status: FindingStatus = FindingStatus.CANDIDATE
+    severity: Severity = Severity.INFO
+    severity_rationale: str = ""
+    asset_ids: list[str] = Field(default_factory=list)
+    service_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    observation_ids: list[str] = Field(default_factory=list)
+    correlation_ids: list[str] = Field(default_factory=list)
+    remediation_id: str | None = None
+    cve_ids: list[str] = Field(default_factory=list)
+    cwe_ids: list[str] = Field(default_factory=list)
+    verifier_id: str | None = None
+    verified_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def confirmed_findings_are_evidence_backed(self) -> "Finding":
+        if self.status == FindingStatus.CONFIRMED:
+            if not self.evidence_ids:
+                raise ValueError("confirmed findings require evidence")
+            if not self.verifier_id or not self.verified_at:
+                raise ValueError("confirmed findings require verifier attribution")
+        return self
+
+
+class Advisory(Entity):
+    entity_kind: ClassVar[str] = "advisories"
+    advisory_id: str
+    source: str
+    title: str
+    description: str = ""
+    published_at: datetime | None = None
+    modified_at: datetime | None = None
+    cvss: dict[str, Any] = Field(default_factory=dict)
+    cwes: list[str] = Field(default_factory=list)
+    affected: list[dict[str, Any]] = Field(default_factory=list)
+    references: list[str] = Field(default_factory=list)
+    kev: bool = False
+    epss_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    epss_percentile: float | None = Field(default=None, ge=0.0, le=1.0)
+    source_snapshot_id: str | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class Correlation(Entity):
+    entity_kind: ClassVar[str] = "correlations"
+    engagement_id: str
+    component_id: str | None = None
+    service_id: str | None = None
+    advisory_id: str
+    method: CorrelationMethod
+    status: CorrelationStatus = CorrelationStatus.CANDIDATE
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str
+    matched_identifiers: dict[str, str] = Field(default_factory=dict)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    conflicting_evidence_ids: list[str] = Field(default_factory=list)
+    analyst_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def fuzzy_matches_are_not_auto_confirmed(self) -> "Correlation":
+        if (
+            self.method == CorrelationMethod.FUZZY_BANNER
+            and self.status == CorrelationStatus.CONFIRMED
+            and not self.analyst_id
+        ):
+            raise ValueError("fuzzy banner matches require analyst confirmation")
+        return self
+
+
+class RunBudget(NebulaModel):
+    max_concurrency: int = Field(default=1, ge=1, le=256)
+    max_delegation_depth: int = Field(default=3, ge=0, le=32)
+    max_duration_seconds: int = Field(default=3600, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1)
+    max_cost_usd: float | None = Field(default=None, ge=0)
+    max_tool_calls: int = Field(default=100, ge=0)
+    max_retries: int = Field(default=2, ge=0, le=100)
+    per_target_active_operations: int = Field(default=1, ge=1, le=64)
+
+
+class AgentRun(Entity):
+    entity_kind: ClassVar[str] = "runs"
+    engagement_id: str
+    objective: str
+    status: RunStatus = RunStatus.QUEUED
+    supervisor_provider_id: str | None = None
+    supervisor_model: str | None = None
+    budget: RunBudget = Field(default_factory=RunBudget)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    last_event_sequence: int = Field(default=0, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Task(Entity):
+    entity_kind: ClassVar[str] = "tasks"
+    engagement_id: str
+    run_id: str
+    parent_task_id: str | None = None
+    specialist_role: str
+    title: str
+    instructions: str = ""
+    status: TaskStatus = TaskStatus.PENDING
+    depends_on: list[str] = Field(default_factory=list)
+    assigned_agent_id: str | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    risk_class: RiskClass = RiskClass.LOCAL_READ
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentAttempt(Entity):
+    entity_kind: ClassVar[str] = "agent_attempts"
+    engagement_id: str
+    run_id: str
+    task_id: str
+    agent_role: str
+    attempt_number: int = Field(ge=1)
+    provider_profile_id: str | None = None
+    model: str | None = None
+    status: TaskStatus = TaskStatus.PENDING
+    input: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] | None = None
+    tokens_used: int = Field(default=0, ge=0)
+    cost_usd: float = Field(default=0.0, ge=0)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = None
+
+
+class ToolCall(Entity):
+    entity_kind: ClassVar[str] = "tool_calls"
+    engagement_id: str
+    run_id: str
+    task_id: str | None = None
+    tool_name: str
+    status: ToolCallStatus = ToolCallStatus.PROPOSED
+    risk_class: RiskClass
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = None
+    approval_id: str | None = None
+    idempotency_key: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = None
+
+
+class Approval(Entity):
+    entity_kind: ClassVar[str] = "approvals"
+    engagement_id: str
+    run_id: str
+    task_id: str | None = None
+    tool_call_id: str | None = None
+    status: ApprovalStatus = ApprovalStatus.PENDING
+    risk_class: RiskClass
+    exact_request: dict[str, Any]
+    target: str | None = None
+    credential_class: str | None = None
+    expected_effects: list[str] = Field(default_factory=list)
+    policy_rationale: str
+    requested_by: str
+    decided_by: str | None = None
+    requested_at: datetime = Field(default_factory=utc_now)
+    decided_at: datetime | None = None
+    expires_at: datetime | None = None
+    decision_note: str | None = None
+
+
+class ModelCapabilities(NebulaModel):
+    streaming: bool = False
+    cancellation: bool = False
+    tool_calling: bool = False
+    strict_structured_output: bool = False
+    parallel_tool_calls: bool = False
+    vision: bool = False
+    documents: bool = False
+    audio: bool = False
+    embeddings: bool = False
+    reasoning_controls: bool = False
+
+
+class ProviderPrivacy(NebulaModel):
+    local_only: bool = False
+    retention: str | None = None
+    residency: list[str] = Field(default_factory=list)
+    permits_sensitive_data: bool = False
+
+
+class ProviderProfile(Entity):
+    entity_kind: ClassVar[str] = "providers"
+    name: str
+    provider_type: str
+    endpoint: str | None = None
+    enabled: bool = True
+    is_local: bool = False
+    secret_ref: str | None = None
+    model_allowlist: list[str] = Field(default_factory=list)
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+    privacy: ProviderPrivacy = Field(default_factory=ProviderPrivacy)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SourceSnapshot(Entity):
+    entity_kind: ClassVar[str] = "source_snapshots"
+    source: str
+    fetched_at: datetime = Field(default_factory=utc_now)
+    source_updated_at: datetime | None = None
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    record_count: int = Field(default=0, ge=0)
+    artifact_id: str | None = None
+    cursor: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeSource(Entity):
+    entity_kind: ClassVar[str] = "knowledge"
+    engagement_id: str
+    name: str
+    source_type: str
+    artifact_id: str | None = None
+    status: str = "ready"
+    citation: str | None = None
+    document_count: int = Field(default=0, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Report(Entity):
+    entity_kind: ClassVar[str] = "reports"
+    engagement_id: str
+    title: str
+    status: str = "draft"
+    executive_summary: str = ""
+    finding_ids: list[str] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+    signed_off_by: str | None = None
+    signed_off_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunEvent(NebulaModel):
+    """An immutable, monotonically sequenced event in an agent run."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    run_id: str
+    sequence: int = Field(ge=1)
+    event_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    actor_id: str | None = None
+    occurred_at: datetime = Field(default_factory=utc_now)
+    idempotency_key: str | None = None
+
+
+ENTITY_MODELS: tuple[type[Entity], ...] = (
+    Engagement,
+    ScopePolicy,
+    Asset,
+    Service,
+    Identity,
+    SoftwareComponent,
+    Observation,
+    Finding,
+    Evidence,
+    Artifact,
+    Advisory,
+    Correlation,
+    Remediation,
+    AgentRun,
+    Task,
+    AgentAttempt,
+    ToolCall,
+    Approval,
+    ProviderProfile,
+    SourceSnapshot,
+    KnowledgeSource,
+    Report,
+)
+
+ENTITY_MODEL_BY_KIND: dict[str, type[Entity]] = {
+    model.entity_kind: model for model in ENTITY_MODELS
+}
+
+
+def entity_engagement_id(entity: Entity) -> str | None:
+    """Return an entity's owning engagement without importing storage concerns."""
+
+    if isinstance(entity, Engagement):
+        return entity.id
+    value = getattr(entity, "engagement_id", None)
+    return value if isinstance(value, str) else None

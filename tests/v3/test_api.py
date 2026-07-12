@@ -1,0 +1,326 @@
+from datetime import timedelta
+
+import pytest
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from nebula.v3.api import create_app
+from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.domain import (
+    AgentRun,
+    Approval,
+    ApprovalStatus,
+    Engagement,
+    ProviderProfile,
+    RiskClass,
+    utc_now,
+)
+from nebula.v3.providers import OpenAICompatibleProvider, ProviderFlavor, ProviderHealth
+from nebula.v3.storage import NebulaStore
+
+
+@pytest.fixture
+def api(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    app = create_app(
+        store,
+        artifact_store=artifacts,
+        auth_token="test-token",
+        allow_internal_event_append=True,
+    )
+    return TestClient(app), store, artifacts
+
+
+def _auth():
+    return {"Authorization": "Bearer test-token"}
+
+
+def test_health_is_public_but_data_routes_require_auth(api):
+    client, _, _ = api
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200
+    assert response.json()["journal_mode"] == "wal"
+    assert client.get("/api/v1/engagements").status_code == 401
+    assert client.get("/api/v1/engagements", headers=_auth()).status_code == 200
+    catalog = client.get("/api/v1/provider-catalog", headers=_auth())
+    assert catalog.status_code == 200
+    assert any(
+        item["flavor"] == "vllm" and item["local"] is True
+        for item in catalog.json()
+    )
+
+
+def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
+    client, store, _ = api
+    profile = store.create(
+        ProviderProfile(
+            name="Lab vLLM",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["security-model"],
+        )
+    )
+
+    async def healthy(runtime):
+        assert runtime.config.flavor == ProviderFlavor.VLLM
+        assert runtime.config.base_url == "http://127.0.0.1:8000/v1"
+        return ProviderHealth(
+            provider_id=runtime.config.id,
+            healthy=True,
+            models=["security-model", "vision-model"],
+        )
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "health", healthy)
+
+    response = client.post(
+        f"/api/v1/providers/{profile.id}/health", headers=_auth()
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider_id": profile.id,
+        "healthy": True,
+        "models": ["security-model", "vision-model"],
+        "detail": None,
+    }
+
+
+def test_tauri_cors_and_audit_resources_are_fail_closed_by_default(tmp_path):
+    store = NebulaStore(tmp_path / "secure.db")
+    app = create_app(store, auth_token="test-token")
+    client = TestClient(app)
+    preflight = client.options(
+        "/api/v1/engagements",
+        headers={
+            "Origin": "http://tauri.localhost",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "http://tauri.localhost"
+    assert client.post("/api/v1/runs/nope/events", headers=_auth()).status_code == 405
+    assert client.post("/api/v1/approvals", headers=_auth(), json={}).status_code == 405
+    assert client.patch("/api/v1/tool-calls/nope", headers=_auth(), json={}).status_code == 405
+    assert client.delete("/api/v1/artifacts/nope", headers=_auth()).status_code == 405
+
+
+def test_typed_crud_revision_and_overview(api):
+    client, _, _ = api
+    created = client.post(
+        "/api/v1/engagements", headers=_auth(), json={"name": "API engagement"}
+    )
+    assert created.status_code == 201
+    engagement = created.json()
+    engagement_id = engagement["id"]
+
+    patched = client.patch(
+        f"/api/v1/engagements/{engagement_id}",
+        headers=_auth(),
+        json={"changes": {"description": "updated"}, "expected_revision": 1},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["revision"] == 2
+    assert patched.json()["description"] == "updated"
+
+    stale = client.patch(
+        f"/api/v1/engagements/{engagement_id}",
+        headers=_auth(),
+        json={"changes": {"description": "stale"}, "expected_revision": 1},
+    )
+    assert stale.status_code == 409
+    overview = client.get(
+        f"/api/v1/engagements/{engagement_id}/overview", headers=_auth()
+    )
+    assert overview.status_code == 200
+    assert overview.json()["counts"]["engagements"] == 1
+
+    assert (
+        client.delete(
+            f"/api/v1/engagements/{engagement_id}", headers=_auth()
+        ).status_code
+        == 204
+    )
+    assert (
+        client.get(f"/api/v1/engagements/{engagement_id}", headers=_auth()).status_code
+        == 404
+    )
+
+
+def test_run_event_rest_and_authenticated_websocket_replay(api):
+    client, _, _ = api
+    for number in (1, 2):
+        response = client.post(
+            "/api/v1/runs/run-1/events",
+            headers=_auth(),
+            json={
+                "event_type": "task.progress",
+                "payload": {"number": number},
+                "idempotency_key": f"event-{number}",
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["sequence"] == number
+
+    replay = client.get("/api/v1/runs/run-1/events?after=1", headers=_auth()).json()
+    assert [event["sequence"] for event in replay["events"]] == [2]
+
+    with client.websocket_connect(
+        "/api/v1/runs/run-1/events/ws?after=0",
+        subprotocols=["nebula.events.v1", "nebula.auth.dGVzdC10b2tlbg"],
+    ) as websocket:
+        assert websocket.accepted_subprotocol == "nebula.events.v1"
+        assert websocket.receive_json()["event"]["sequence"] == 1
+        assert websocket.receive_json()["event"]["sequence"] == 2
+        assert websocket.receive_json() == {
+            "kind": "replay_complete",
+            "after_sequence": 2,
+        }
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/api/v1/runs/run-1/events/ws"):
+            pass
+    assert exc_info.value.code == 4401
+
+
+def test_artifact_content_and_openapi_contract(api):
+    client, store, artifacts = api
+    engagement = client.post(
+        "/api/v1/engagements", headers=_auth(), json={"name": "Artifacts"}
+    ).json()
+    artifact = artifacts.put_bytes(
+        b"evidence", engagement_id=engagement["id"], filename="proof.txt"
+    )
+    store.create(artifact)
+    response = client.get(f"/api/v1/artifacts/{artifact.id}/content", headers=_auth())
+    assert response.status_code == 200
+    assert response.content == b"evidence"
+
+    schema = client.get("/openapi.json").json()
+    assert "/api/v1/providers" in schema["paths"]
+    assert "/api/v1/findings" in schema["paths"]
+    request_schema = schema["paths"]["/api/v1/engagements"]["post"]["requestBody"][
+        "content"
+    ]["application/json"]["schema"]
+    assert request_schema["$ref"].endswith("/Engagement")
+
+
+def test_approval_decision_is_revisioned_and_recorded_in_run_ledger(api):
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Approval API"))
+    run = store.create(
+        AgentRun(engagement_id=engagement.id, objective="Approved operation")
+    )
+    approval = store.create(
+        Approval(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            risk_class=RiskClass.ACTIVE_SCAN,
+            exact_request={
+                "tool_name": "scan.tcp",
+                "arguments": {"ports": [80]},
+            },
+            target="192.0.2.8",
+            policy_rationale="active scan requires a scoped operator decision",
+            requested_by="network-specialist",
+        )
+    )
+
+    response = client.post(
+        f"/api/v1/approvals/{approval.id}/decision",
+        headers=_auth(),
+        json={
+            "decision": "approve",
+            "reason": "Approved port 443 only",
+            "edited_arguments": {"ports": [443]},
+        },
+    )
+
+    assert response.status_code == 200
+    decided = response.json()
+    assert decided["status"] == ApprovalStatus.EDITED.value
+    assert decided["revision"] == approval.revision + 1
+    assert decided["exact_request"]["arguments"] == {"ports": [443]}
+    assert decided["decided_by"] == "operator"
+    assert decided["decided_at"] is not None
+    persisted = store.get(Approval, approval.id)
+    assert persisted.status == ApprovalStatus.EDITED
+    events = store.replay_events(run.id)
+    assert len(events) == 1
+    assert events[0].event_type == "approval.resolved"
+    assert events[0].actor_id == "operator"
+    assert events[0].payload == {
+        "approval_id": approval.id,
+        "status": "edited",
+        "decided_by": "operator",
+    }
+    assert (
+        client.post(
+            f"/api/v1/approvals/{approval.id}/decision",
+            headers=_auth(),
+            json={"decision": "reject"},
+        ).status_code
+        == 409
+    )
+
+
+def test_expired_approval_is_durably_expired_instead_of_approved(api):
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Expired approval"))
+    run = store.create(AgentRun(engagement_id=engagement.id, objective="Do not run"))
+    approval = store.create(
+        Approval(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            risk_class=RiskClass.CREDENTIAL_USE,
+            exact_request={"tool_name": "login.test", "arguments": {}},
+            policy_rationale="credential use always requires approval",
+            requested_by="web-specialist",
+            expires_at=utc_now() - timedelta(seconds=1),
+        )
+    )
+
+    response = client.post(
+        f"/api/v1/approvals/{approval.id}/decision",
+        headers=_auth(),
+        json={"decision": "approve"},
+    )
+
+    assert response.status_code == 410
+    expired = store.get(Approval, approval.id)
+    assert expired.status == ApprovalStatus.EXPIRED
+    assert expired.decided_by == "system"
+    assert expired.decided_at is not None
+    events = store.replay_events(run.id)
+    assert [event.event_type for event in events] == ["approval.expired"]
+    assert events[0].actor_id == "system"
+
+
+def test_websocket_header_auth_survives_malformed_optional_auth_protocol(api):
+    client, _, _ = api
+    with client.websocket_connect(
+        "/api/v1/runs/empty/events/ws",
+        headers=_auth(),
+        subprotocols=["nebula.events.v1", "nebula.auth.not!base64"],
+    ) as websocket:
+        assert websocket.accepted_subprotocol == "nebula.events.v1"
+        assert websocket.receive_json() == {
+            "kind": "replay_complete",
+            "after_sequence": 0,
+        }
+
+
+def test_websocket_rejects_conflicting_valid_credentials(api):
+    client, _, _ = api
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            "/api/v1/runs/empty/events/ws",
+            headers=_auth(),
+            subprotocols=[
+                "nebula.events.v1",
+                "nebula.auth.d3JvbmctdG9rZW4",
+            ],
+        ):
+            pass
+    assert exc_info.value.code == 4401

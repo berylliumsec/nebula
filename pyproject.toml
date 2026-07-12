@@ -20,6 +20,7 @@ from = "src"
 
 [tool.poetry.scripts]
 nebula = "nebula.nebula:main"
+nebula3 = "nebula.v3.cli:main"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<=3.13.9"
@@ -43,6 +44,17 @@ Whoosh = "*"
 fastapi = ">=0.135.3,<1"
 uvicorn = "*"
 pydantic = "*"
+SQLAlchemy = ">=2.0,<3"
+psycopg = { version = ">=3.2,<4", extras = ["binary"] }
+alembic = ">=1.14,<2"
+httpx = ">=0.28,<1"
+typer = ">=0.16,<1"
+filelock = ">=3.16,<4"
+langgraph = ">=1.1,<2"
+langgraph-checkpoint-sqlite = ">=3.1,<4"
+jsonschema = ">=4.23,<5"
+packaging = "*"
+semantic-version = "2.10.0"
 langchain = ">=1.2.15,<2"
 regex = "*"
 typing-extensions = "*"
@@ -71,10 +83,23 @@ spacy = ">=3.8.14,<4"
 thinc = ">=8.3.13,<9"
 
 [tool.poetry.extras]
-flash = [ "flash-attn",]
+# Flash Attention is intentionally not installed by the core package.  Local
+# inference is provided by external runtimes (Ollama/vLLM/SGLang/llama.cpp),
+# which keeps the control plane small and avoids compiling GPU extensions at
+# install time.
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.3,<10"
+pytest-cov = ">=6,<8"
+pytest-qt = ">=4.4,<5"
+ruff = ">=0.11,<1"
+mypy = ">=1.15,<2"
+pyinstaller = ">=6.12,<7"
 
 [tool.pytest.ini_options]
 testpaths = [ "tests",]
+addopts = "--import-mode=importlib"
+pythonpath = [ ".", "src" ]
 
 [tool.coverage.run]
 source = [ "src/nebula",]
