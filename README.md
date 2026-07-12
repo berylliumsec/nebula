@@ -2,6 +2,22 @@
 
 Nebula is an advanced, AI-powered penetration testing open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking.
 
+## Important upgrade notice
+
+Nebula 2.0.0 is now available. Because earlier releases were published as beta versions, pip may have kept some existing installations on an older version even when `--upgrade` was used. Users running Python 3.10 through 3.13 should upgrade with:
+
+```bash
+python -m pip install --upgrade nebula-ai
+```
+
+Verify the installed version with:
+
+```bash
+python -m pip show nebula-ai
+```
+
+The output should show `Version: 2.0.0`. Python 3.14 is not currently supported; use Python 3.13 or earlier when installing Nebula 2.0.0.
+
 
 ![Nebula AI-Powered Penetration Testing CLI Interface](/images/Nebula.png)
 
