@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:desktop": "npm run build && npm run build:core && npm run dev",
     "build": "tsc -b && vite build",
+    "build:core": "poetry -C .. run python -m scripts.build_nebula_core",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

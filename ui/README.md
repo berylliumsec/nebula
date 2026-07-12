@@ -13,6 +13,18 @@ npm run build
 
 Set `VITE_NEBULA_API_URL` only when the browser API is not served from the same origin. Vite proxies `/api` to `NEBULA_DEV_BACKEND` (default `http://127.0.0.1:8765`) during development. Preview data is visibly labeled and disappears only after Core health, authentication, and initial resource loading succeed.
 
+To run the desktop application, install the repository's Poetry development
+dependencies and launch Tauri from the repository root:
+
+```bash
+npm --prefix ui run tauri -- dev
+```
+
+The Tauri development hook builds the browser workspace, freezes the current
+Nebula Core into the target-triple sidecar path, generates its build metadata
+and third-party notices, and then starts Vite. The first launch therefore takes
+longer than browser-only development with `npm run dev`.
+
 `nebula3 ui` launches the browser with a one-time token in the URL fragment. The runtime consumes `#token=…` into memory and immediately removes it with `history.replaceState`; it never stores the token in local or session storage.
 
 ## API boundaries
@@ -30,10 +42,12 @@ The shell launches only a canonicalized `nebula-core` sibling binary. It clears 
 {"protocol":"nebula-sidecar-v1","ipc_token":"…"}
 ```
 
-Core must reply on stdout within eight seconds with exactly one bounded JSON line:
+Core must reply on stdout within 60 seconds with exactly one bounded JSON line:
 
 ```json
 {"protocol":"nebula-sidecar-v1","host":"127.0.0.1","port":49152}
 ```
 
-No shell capability is granted to the webview. Packaging the Core binary is deliberately left to the Core release pipeline so the UI cannot execute an arbitrary development command.
+No shell capability is granted to the webview. The trusted Tauri development
+hook builds only the checked-out Core entry point; distributable Core and
+installer packaging remain controlled by the audited release pipeline.

@@ -5,7 +5,7 @@
   "identifier": "io.nebula.security",
   "mainBinaryName": "nebula-ui",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev:desktop",
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"

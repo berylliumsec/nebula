@@ -51,6 +51,27 @@ def test_version_cli_supports_release_check_contract():
     assert result.stdout.strip() == CURRENT_VERSION
 
 
+def test_core_build_script_supports_direct_path_imports(tmp_path):
+    script = ROOT / "scripts" / "build_nebula_core.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import runpy; "
+                f"runpy.run_path({str(script)!r}, run_name='build_import_check')"
+            ),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def _version_fixture(root: Path) -> None:
     (root / "src/nebula/v3").mkdir(parents=True)
     (root / "ui/src-tauri").mkdir(parents=True)
@@ -174,6 +195,26 @@ def test_core_payload_staging_excludes_caches_and_source_maps(tmp_path):
     assert not (staged_migrations / "__pycache__").exists()
     assert (staged_frontend / "assets/app.js").is_file()
     assert not (staged_frontend / "assets/app.js.map").exists()
+
+
+def test_tauri_dev_hook_builds_core_and_required_resources_before_vite():
+    tauri = json.loads(
+        (ROOT / "ui/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+    )
+    package = json.loads((ROOT / "ui/package.json").read_text(encoding="utf-8"))
+
+    assert tauri["build"]["beforeDevCommand"] == "npm run dev:desktop"
+    assert package["scripts"]["dev:desktop"] == (
+        "npm run build && npm run build:core && npm run dev"
+    )
+    assert package["scripts"]["build:core"] == (
+        "poetry -C .. run python -m scripts.build_nebula_core"
+    )
+    assert tauri["bundle"]["externalBin"] == ["binaries/nebula-core"]
+    assert (
+        "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt"
+        in tauri["bundle"]["resources"]
+    )
 
 
 def test_artifact_member_audit_accepts_only_complete_v3_payload():

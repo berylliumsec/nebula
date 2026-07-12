@@ -10,6 +10,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# ``python scripts/build_nebula_core.py`` puts the scripts directory, rather
+# than the repository root, on sys.path.  Keep direct invocation equivalent to
+# the supported ``python -m scripts.build_nebula_core`` form used by CI.
+if __package__ in {None, ""}:
+    repository_root = str(Path(__file__).resolve().parents[1])
+    if repository_root not in sys.path:
+        sys.path.insert(0, repository_root)
+
 from scripts.generate_third_party_notices import generate_notices
 from scripts.nebula3_version import check_versions
 from scripts.package_audit import FORBIDDEN_MODULES, inspect_pyinstaller_binary

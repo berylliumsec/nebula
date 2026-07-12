@@ -17,8 +17,8 @@ fn verify(artifact: &Path, signature_path: &Path, encoded_public_key: &str) -> R
         .map_err(|error| format!("cannot read updater signature: {error}"))?;
     let signature = Signature::decode(&decoded_text(&encoded_signature, "signature")?)
         .map_err(|error| format!("invalid updater signature: {error}"))?;
-    let content = fs::read(artifact)
-        .map_err(|error| format!("cannot read updater artifact: {error}"))?;
+    let content =
+        fs::read(artifact).map_err(|error| format!("cannot read updater artifact: {error}"))?;
     public_key
         .verify(&content, &signature, true)
         .map_err(|error| format!("updater signature verification failed: {error}"))
