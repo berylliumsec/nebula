@@ -141,6 +141,12 @@ def test_runtime_dependency_boundary_keeps_legacy_stacks_out_of_main():
     }
 
 
+def test_core_archive_rejects_nltk_and_its_pyinstaller_runtime_hook():
+    for member in ("nltk", "nltk/tokenize/casual.py", "pyi_rth_nltk.py"):
+        with pytest.raises(ArtifactAuditError, match="forbidden members"):
+            validate_members([member])
+
+
 def test_nebula3_runtime_has_no_conditional_import_fallbacks():
     conditional_imports = []
     for path in sorted((ROOT / "src/nebula/v3").glob("*.py")):
