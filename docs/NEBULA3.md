@@ -30,7 +30,7 @@ Nebula is packaged as one application and required imports fail immediately if
 the installation is incomplete.
 
 ```bash
-poetry install
+poetry install --without legacy,legacy-dev --with dev
 poetry run nebula3 doctor
 poetry run nebula3 migrate
 poetry run nebula3 serve --host 127.0.0.1 --port 8000
@@ -51,6 +51,19 @@ poetry run nebula3 ui
 The browser token is carried in the URL fragment, consumed into memory, and
 removed immediately. Tauri sends its 256-bit one-time token through the Core
 process's stdin instead of a URL or process argument.
+
+## Desktop installers
+
+End users install one native application; they do not install Python, Poetry,
+Node, npm, Rust, Cargo, or a compiler. The Tauri bundle contains the browser
+workspace and a sibling `nebula-core` one-file executable with Python 3.12,
+migrations, notices, and all mandatory Core dependencies. Nebula 2 and PyQt are
+structurally excluded from this build.
+
+Release tags use the form `nebula-v3.x.y`. The protected release workflow builds
+native macOS arm64/x64 DMGs and Linux x64 DEB/AppImage artifacts, audits their
+contents, exercises the installed `--self-test`, creates SBOMs and provenance,
+and stages a draft release. See [the release runbook](../packaging/RELEASING.md).
 
 ## vLLM
 
@@ -139,6 +152,7 @@ shell. PostgreSQL team authorization, OIDC/RBAC, remote workers, full scanner
 normalization, production report rendering, generated-client drift enforcement,
 MCP/A2A, signed plugins, and advanced specialist packs remain release-gated.
 
-The combined distribution also requires a licensing decision for PyQt
-(GPLv3/commercial) before release under the repository's current BSD metadata.
-No release workflow should represent that review as complete.
+Nebula 2 remains a separately triggered legacy distribution. Its PyQt licensing
+review does not apply to Nebula 3 installers because the legacy dependency and
+test groups are absent from the freezer environment and a binary-content gate
+rejects legacy GUI modules.

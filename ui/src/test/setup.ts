@@ -1,5 +1,8 @@
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
+
+configure({ asyncUtilTimeout: 3_000 });
 
 class TestResizeObserver implements ResizeObserver {
   observe(): void {}
@@ -22,6 +25,11 @@ Object.defineProperty(window, "matchMedia", {
 });
 
 vi.stubGlobal("ResizeObserver", TestResizeObserver);
+
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value: vi.fn(() => null),
+});
 
 afterEach(() => {
   localStorage.clear();

@@ -1,14 +1,18 @@
 import { useState } from "react";
-import { Activity, Cloud, Cpu, KeyRound, Laptop, RefreshCw } from "lucide-react";
+import { Activity, Cloud, Cpu, KeyRound, Laptop, Pencil, Power, RefreshCw, Trash2 } from "lucide-react";
 import type { ProviderHealth } from "../api/types";
 
 interface ProviderHealthCardProps {
   provider: ProviderHealth;
   preview?: boolean;
+  busy?: boolean;
   onRefresh?: (id: string) => Promise<void>;
+  onEdit?: (provider: ProviderHealth) => void;
+  onToggle?: (provider: ProviderHealth) => Promise<void>;
+  onDelete?: (provider: ProviderHealth) => Promise<void>;
 }
 
-export function ProviderHealthCard({ provider, preview = false, onRefresh }: ProviderHealthCardProps) {
+export function ProviderHealthCard({ provider, preview = false, busy = false, onRefresh, onEdit, onToggle, onDelete }: ProviderHealthCardProps) {
   const [refreshing, setRefreshing] = useState(false);
   const KindIcon = provider.kind === "local" ? Laptop : provider.kind === "gateway" ? Cpu : Cloud;
   const refresh = async () => {
@@ -56,21 +60,26 @@ export function ProviderHealthCard({ provider, preview = false, onRefresh }: Pro
         <span>
           {provider.state === "unconfigured" ? <KeyRound size={14} /> : <Activity size={14} />}
           {provider.state === "unconfigured"
-            ? "Credentials required"
+            ? "Configuration required"
             : preview
               ? "Preview profile"
               : "Profile registered"}
         </span>
-        <button
-          className="icon-button subtle"
-          type="button"
-          aria-label={`Refresh ${provider.name} health`}
-          aria-busy={refreshing}
-          disabled={!onRefresh || preview || refreshing}
-          onClick={() => void refresh()}
-        >
-          <RefreshCw size={15} aria-hidden="true" />
-        </button>
+        <div className="provider-card-actions">
+          <button className="icon-button subtle" type="button" aria-label={`Edit ${provider.name}`} disabled={!onEdit || preview || busy} onClick={() => onEdit?.(provider)}><Pencil size={14} aria-hidden="true" /></button>
+          <button className="icon-button subtle" type="button" aria-label={`${provider.enabled ? "Disable" : "Enable"} ${provider.name}`} disabled={!onToggle || preview || busy} onClick={() => void onToggle?.(provider)}><Power size={14} aria-hidden="true" /></button>
+          <button className="icon-button subtle" type="button" aria-label={`Delete ${provider.name}`} disabled={!onDelete || preview || busy} onClick={() => void onDelete?.(provider)}><Trash2 size={14} aria-hidden="true" /></button>
+          <button
+            className="icon-button subtle"
+            type="button"
+            aria-label={`Refresh ${provider.name} health`}
+            aria-busy={refreshing}
+            disabled={!onRefresh || preview || refreshing || busy || !provider.enabled}
+            onClick={() => void refresh()}
+          >
+            <RefreshCw size={15} aria-hidden="true" />
+          </button>
+        </div>
       </footer>
     </article>
   );

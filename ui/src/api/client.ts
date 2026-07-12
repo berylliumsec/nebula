@@ -3,14 +3,36 @@ import type {
   ApprovalDecisionRequest,
   ApprovalSummary,
   AssetSummary,
+  AssetCreateRequest,
+  ChatCitation,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ChatSessionSummary,
+  ChatStreamEvent,
   EngagementSummary,
+  EngagementCreateRequest,
+  EvidenceSummary,
+  EvidenceUploadRequest,
+  FindingCreateRequest,
   FindingSummary,
   HealthResponse,
+  KnowledgeIngestRequest,
+  KnowledgeSource,
+  MissionCreateRequest,
+  OperatorProfile,
+  OperatorProfileCreateRequest,
+  OperatorProfileUpdateRequest,
   Page,
+  PersistedChatMessage,
   ProviderCatalogEntry,
   ProviderCreateRequest,
   ProviderHealth,
   ProviderRuntimeHealth,
+  ProviderUpdateRequest,
+  ReportCreateRequest,
+  ReportSummary,
+  ReportUpdateRequest,
+  RunStopRequest,
 } from "./types";
 
 type JsonObject = Record<string, unknown>;
@@ -19,12 +41,15 @@ interface WireEntity extends JsonObject {
   id: string;
   created_at: string;
   updated_at: string;
+  revision: number;
 }
 
 interface WireEngagement extends WireEntity {
   name: string;
+  description?: string;
   client_name?: string | null;
   status: EngagementSummary["status"];
+  tags?: string[];
   metadata?: JsonObject;
 }
 
@@ -57,18 +82,63 @@ interface WireAsset extends WireEntity {
   name: string;
   address?: string | null;
   hostname?: string | null;
+  criticality?: AssetSummary["criticality"];
   exposed?: boolean | null;
+  tags?: string[];
   metadata?: JsonObject;
 }
 
 interface WireFinding extends WireEntity {
   engagement_id: string;
   title: string;
+  description?: string;
   severity: FindingSummary["severity"];
+  severity_rationale?: string;
   status: string;
   asset_ids?: string[];
   evidence_ids?: string[];
   cve_ids?: string[];
+  cwe_ids?: string[];
+  verifier_id?: string | null;
+  verified_at?: string | null;
+}
+
+interface WireReport extends WireEntity {
+  revision: number;
+  engagement_id: string;
+  title: string;
+  status: string;
+  executive_summary?: string;
+  finding_ids?: string[];
+  artifact_ids?: string[];
+  signed_off_by?: string | null;
+  signed_off_at?: string | null;
+  metadata?: JsonObject;
+}
+
+interface WireEvidence extends WireEntity {
+  engagement_id: string;
+  evidence_type: string;
+  title: string;
+  description?: string;
+  artifact_id?: string | null;
+  finding_id?: string | null;
+  asset_ids?: string[];
+  sha256?: string | null;
+  captured_at: string;
+  captured_by?: string | null;
+  source_version?: string | null;
+  metadata?: JsonObject;
+}
+
+interface WireOperatorProfile extends WireEntity {
+  revision: number;
+  display_name: string;
+  email?: string | null;
+  role?: string | null;
+  active: boolean;
+  activated_at?: string | null;
+  metadata?: JsonObject;
 }
 
 interface WireProvider extends WireEntity {
@@ -82,7 +152,9 @@ interface WireProvider extends WireEntity {
   capabilities?: Record<string, boolean>;
   privacy?: {
     local_only?: boolean;
+    retention?: string | null;
     residency?: string[];
+    permits_sensitive_data?: boolean;
   };
   metadata?: JsonObject;
 }
@@ -100,7 +172,80 @@ interface WireProviderCatalogEntry extends JsonObject {
   display_name: string;
   local: boolean;
   default_base_url?: string | null;
+  suggested_key_env?: string | null;
   support_tier: ProviderCatalogEntry["supportTier"];
+  notes?: string | null;
+}
+
+interface WireKnowledgeSource extends WireEntity {
+  engagement_id: string;
+  name: string;
+  source_type: string;
+  artifact_id?: string | null;
+  status: string;
+  citation?: string | null;
+  document_count?: number;
+  metadata?: JsonObject;
+}
+
+interface WireChatCitation extends JsonObject {
+  source_id: string;
+  name: string;
+  citation?: string | null;
+  artifact_id?: string | null;
+  chunk_id: string;
+  page?: number | null;
+  excerpt: string;
+}
+
+interface WireChatCompletion extends JsonObject {
+  session_id?: string | null;
+  provider_id: string;
+  model: string;
+  message: { role: "assistant"; content: string };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  };
+  finish_reason?: string | null;
+  provider_request_id?: string | null;
+  citations?: WireChatCitation[];
+}
+
+interface WireChatStreamEvent extends Partial<WireChatCompletion> {
+  type: "started" | "delta" | "done" | "error";
+  provider_id?: string;
+  model?: string;
+  delta?: string;
+  detail?: string;
+}
+
+interface WireChatSession extends WireEntity {
+  engagement_id: string;
+  title: string;
+  provider_profile_id: string;
+  model?: string | null;
+  metadata?: JsonObject;
+}
+
+interface WirePersistedChatMessage extends WireEntity {
+  engagement_id: string;
+  session_id: string;
+  sequence: number;
+  role: "user" | "assistant";
+  content: string;
+  provider_profile_id?: string | null;
+  model?: string | null;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  } | null;
+  finish_reason?: string | null;
+  provider_request_id?: string | null;
+  citations?: WireChatCitation[];
+  metadata?: JsonObject;
 }
 
 export interface ApiClientOptions {
@@ -137,20 +282,46 @@ function stringField(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function objectOptions(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return { ...(value as Record<string, unknown>) };
+}
+
+function configuredDefaultModel(providerType: string, value?: string): string | undefined {
+  const model = value?.trim() || undefined;
+  if (["anthropic", "bedrock"].includes(providerType.toLowerCase()) && !model) {
+    throw new Error(`${providerType === "bedrock" ? "AWS Bedrock" : "Anthropic"} profiles require a default model ID.`);
+  }
+  return model;
+}
+
+function normalizedIdentifiers(values?: string[]): string[] {
+  return [...new Set((values ?? []).map((value) => value.trim().toUpperCase()).filter(Boolean))];
+}
+
 function page<T>(items: T[]): Page<T> {
   return { items, total: items.length };
 }
 
-function engagementQuery(engagementId: string): string {
-  return `engagement_id=${encodeURIComponent(engagementId)}`;
+const MAX_LIST_LIMIT = 1_000;
+
+function engagementQuery(engagementId: string, offset: number): string {
+  return `engagement_id=${encodeURIComponent(engagementId)}&limit=${MAX_LIST_LIMIT}&offset=${offset}`;
+}
+
+function globalListPath(resource: string, offset: number): string {
+  return `${resource}?limit=${MAX_LIST_LIMIT}&offset=${offset}`;
 }
 
 function mapEngagement(value: WireEngagement): EngagementSummary {
   return {
     id: value.id,
     name: value.name,
+    description: value.description ?? "",
     clientName: value.client_name ?? undefined,
     status: value.status,
+    tags: value.tags ?? [],
+    createdAt: value.created_at,
     updatedAt: value.updated_at,
     scopeAssetCount: numberField(value.metadata?.scope_asset_count),
   };
@@ -225,10 +396,16 @@ function mapAsset(value: WireAsset): AssetSummary {
     engagementId: value.engagement_id,
     displayName: value.name || value.hostname || value.address || value.id,
     kind,
+    address: value.address ?? undefined,
+    hostname: value.hostname ?? undefined,
+    criticality: value.criticality ?? "medium",
     exposure: value.exposed === true ? "external" : value.exposed === false ? "internal" : "unknown",
-    serviceCount: numberField(value.metadata?.service_count),
-    findingCount: numberField(value.metadata?.finding_count),
+    tags: value.tags ?? [],
+    serviceCount: typeof value.metadata?.service_count === "number" ? value.metadata.service_count : undefined,
+    findingCount: typeof value.metadata?.finding_count === "number" ? value.metadata.finding_count : undefined,
     lastSeenAt: stringField(value.metadata?.last_seen_at),
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
   };
 }
 
@@ -249,12 +426,78 @@ function mapFinding(value: WireFinding): FindingSummary {
     id: value.id,
     engagementId: value.engagement_id,
     title: value.title,
+    description: value.description ?? "",
     severity: value.severity,
+    severityRationale: value.severity_rationale ?? "",
     status: findingStatuses.has(normalizedStatus) ? normalizedStatus : "candidate",
+    assetIds: value.asset_ids ?? [],
+    evidenceIds: value.evidence_ids ?? [],
     affectedAssetCount: value.asset_ids?.length ?? 0,
     evidenceCount: value.evidence_ids?.length ?? 0,
     cveIds: value.cve_ids ?? [],
+    cweIds: value.cwe_ids ?? [],
+    verifierId: value.verifier_id ?? undefined,
+    verifiedAt: value.verified_at ?? undefined,
     updatedAt: value.updated_at,
+  };
+}
+
+function mapReport(value: WireReport): ReportSummary {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    title: value.title,
+    status: value.status,
+    executiveSummary: value.executive_summary ?? "",
+    findingIds: value.finding_ids ?? [],
+    artifactIds: value.artifact_ids ?? [],
+    signedOffBy: value.signed_off_by ?? undefined,
+    signedOffAt: value.signed_off_at ?? undefined,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+    revision: value.revision,
+  };
+}
+
+function mapEvidence(value: WireEvidence): EvidenceSummary {
+  const metadata = value.metadata ?? {};
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    evidenceType: value.evidence_type,
+    title: value.title,
+    description: value.description ?? "",
+    artifactId: value.artifact_id ?? undefined,
+    findingId: value.finding_id ?? undefined,
+    assetIds: value.asset_ids ?? [],
+    sha256: value.sha256 ?? undefined,
+    capturedAt: value.captured_at,
+    capturedBy: value.captured_by ?? undefined,
+    sourceVersion: value.source_version ?? undefined,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+    metadata: {
+      ...metadata,
+      filename: stringField(metadata.filename),
+      mediaType: stringField(metadata.media_type),
+      size: typeof metadata.size === "number" ? metadata.size : undefined,
+      source: stringField(metadata.source),
+    },
+  };
+}
+
+function mapOperatorProfile(value: WireOperatorProfile): OperatorProfile {
+  return {
+    id: value.id,
+    displayName: value.display_name,
+    email: value.email ?? undefined,
+    role: value.role ?? undefined,
+    active: value.active,
+    activatedAt: value.activated_at ?? undefined,
+    metadata: value.metadata ?? {},
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+    revision: value.revision,
   };
 }
 
@@ -265,12 +508,37 @@ function mapProvider(value: WireProvider): ProviderHealth {
   const isGateway = ["gateway", "openrouter", "litellm"].some((name) =>
     value.provider_type.toLowerCase().includes(name),
   );
-  const state: ProviderHealth["state"] = value.enabled === false ? "offline" : "degraded";
+  const metadata = value.metadata ?? {};
+  const defaultModel = stringField(metadata.default_model);
+  const effectiveDefaultModel = defaultModel ?? value.model_allowlist?.[0];
+  const requiresDefaultModel = ["anthropic", "bedrock"].includes(value.provider_type.toLowerCase());
+  const state: ProviderHealth["state"] = value.enabled === false
+    ? "offline"
+    : requiresDefaultModel && !defaultModel
+      ? "unconfigured"
+      : "unchecked";
   return {
     id: value.id,
+    revision: value.revision,
     name: value.name,
+    providerType: value.provider_type,
     kind: value.is_local ? "local" : isGateway ? "gateway" : "commercial",
+    local: value.is_local === true,
     state,
+    enabled: value.enabled !== false,
+    endpoint: value.endpoint ?? undefined,
+    models: value.model_allowlist ?? [],
+    modelAllowlist: value.model_allowlist ?? [],
+    defaultModel,
+    effectiveDefaultModel,
+    credentialEnv: value.secret_ref?.startsWith("env:")
+      ? value.secret_ref.slice(4)
+      : undefined,
+    permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
+    retention: value.privacy?.retention ?? undefined,
+    residency: value.privacy?.residency ?? [],
+    options: objectOptions(metadata.options),
+    metadata,
     modelCount: value.model_allowlist?.length ?? 0,
     privacy: value.privacy?.local_only
       ? "local_only"
@@ -280,6 +548,8 @@ function mapProvider(value: WireProvider): ProviderHealth {
     capabilities,
     message: value.enabled === false
       ? "Provider profile is disabled."
+      : requiresDefaultModel && !defaultModel
+        ? "Configure a default model before using this provider for chat or missions."
       : "Profile loaded; run a health check to discover available models.",
   };
 }
@@ -300,8 +570,148 @@ function mapProviderCatalog(value: WireProviderCatalogEntry): ProviderCatalogEnt
     displayName: value.display_name,
     local: value.local,
     defaultBaseUrl: value.default_base_url ?? undefined,
+    suggestedKeyEnv: value.suggested_key_env ?? undefined,
     supportTier: value.support_tier,
+    notes: value.notes ?? undefined,
   };
+}
+
+function mapKnowledgeSource(value: WireKnowledgeSource): KnowledgeSource {
+  const metadata = value.metadata ?? {};
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    name: value.name,
+    sourceType: value.source_type,
+    artifactId: value.artifact_id ?? undefined,
+    status: value.status,
+    citation: value.citation ?? undefined,
+    documentCount: numberField(value.document_count),
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+    metadata: {
+      ...metadata,
+      filename: stringField(metadata.filename),
+      mediaType: stringField(metadata.media_type),
+      size: typeof metadata.size === "number" ? metadata.size : undefined,
+      sha256: stringField(metadata.sha256),
+      chunkCount: typeof metadata.chunk_count === "number" ? metadata.chunk_count : undefined,
+      indexedAt: stringField(metadata.indexed_at),
+    },
+  };
+}
+
+function mapChatCitation(value: WireChatCitation): ChatCitation {
+  return {
+    sourceId: value.source_id,
+    name: value.name,
+    citation: value.citation ?? undefined,
+    artifactId: value.artifact_id ?? undefined,
+    chunkId: value.chunk_id,
+    page: value.page ?? undefined,
+    excerpt: value.excerpt,
+  };
+}
+
+function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
+  const inputTokens = numberField(value.usage?.input_tokens);
+  const outputTokens = numberField(value.usage?.output_tokens);
+  return {
+    sessionId: value.session_id ?? undefined,
+    providerId: value.provider_id,
+    model: value.model,
+    message: value.message,
+    usage: {
+      inputTokens,
+      outputTokens,
+      totalTokens: typeof value.usage?.total_tokens === "number"
+        ? value.usage.total_tokens
+        : inputTokens + outputTokens,
+    },
+    finishReason: value.finish_reason ?? undefined,
+    providerRequestId: value.provider_request_id ?? undefined,
+    citations: (value.citations ?? []).map(mapChatCitation),
+  };
+}
+
+function chatRequestBody(body: ChatCompletionRequest, stream: boolean): JsonObject {
+  return {
+    provider_id: body.providerId,
+    engagement_id: body.engagementId,
+    session_id: body.sessionId,
+    model: body.model || undefined,
+    messages: body.messages,
+    max_output_tokens: body.maxOutputTokens,
+    temperature: body.temperature,
+    include_knowledge: body.includeKnowledge ?? true,
+    allow_cloud_knowledge: body.allowCloudKnowledge ?? false,
+    stream,
+  };
+}
+
+function mapChatSession(value: WireChatSession): ChatSessionSummary {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    title: value.title,
+    providerId: value.provider_profile_id,
+    model: value.model ?? undefined,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  };
+}
+
+function mapPersistedChatMessage(value: WirePersistedChatMessage): PersistedChatMessage {
+  const inputTokens = numberField(value.usage?.input_tokens);
+  const outputTokens = numberField(value.usage?.output_tokens);
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    sessionId: value.session_id,
+    sequence: value.sequence,
+    role: value.role,
+    content: value.content,
+    providerId: value.provider_profile_id ?? undefined,
+    model: value.model ?? undefined,
+    usage: value.usage ? {
+      inputTokens,
+      outputTokens,
+      totalTokens: typeof value.usage.total_tokens === "number"
+        ? value.usage.total_tokens
+        : inputTokens + outputTokens,
+    } : undefined,
+    finishReason: value.finish_reason ?? undefined,
+    providerRequestId: value.provider_request_id ?? undefined,
+    citations: (value.citations ?? []).map(mapChatCitation),
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  };
+}
+
+async function responseError(response: Response): Promise<ApiError> {
+  const text = await response.text();
+  let details: unknown = text;
+  if (text) {
+    try {
+      details = JSON.parse(text);
+    } catch {
+      // Preserve a non-JSON Core/proxy response verbatim.
+    }
+  }
+  const message =
+    typeof details === "object" && details && "message" in details
+      ? String(details.message)
+      : typeof details === "object" && details && "detail" in details
+        ? typeof details.detail === "string"
+          ? details.detail
+          : JSON.stringify(details.detail)
+        : text || `Nebula API request failed (${response.status})`;
+  return new ApiError(
+    message,
+    response.status,
+    response.headers.get("x-request-id") ?? undefined,
+    details,
+  );
 }
 
 export class ApiClient {
@@ -337,19 +747,7 @@ export class ApiClient {
     });
 
     if (!response.ok) {
-      let details: unknown;
-      try {
-        details = await response.json();
-      } catch {
-        details = await response.text();
-      }
-      const message =
-        typeof details === "object" && details && "message" in details
-          ? String(details.message)
-          : typeof details === "object" && details && "detail" in details
-            ? String(details.detail)
-          : `Nebula API request failed (${response.status})`;
-      throw new ApiError(message, response.status, response.headers.get("x-request-id") ?? undefined, details);
+      throw await responseError(response);
     }
 
     if (response.status === 204) {
@@ -358,32 +756,128 @@ export class ApiClient {
     return (await response.json()) as T;
   }
 
+  private async listAll<T>(resource: string, signal?: AbortSignal, engagementId?: string): Promise<T[]> {
+    const items: T[] = [];
+    let offset = 0;
+    while (true) {
+      const path = engagementId
+        ? `${resource}?${engagementQuery(engagementId, offset)}`
+        : globalListPath(resource, offset);
+      const batch = await this.request<T[]>(path, { signal });
+      items.push(...batch);
+      if (batch.length < MAX_LIST_LIMIT) return items;
+      offset += batch.length;
+    }
+  }
+
   health(signal?: AbortSignal): Promise<HealthResponse> {
     return this.request<
       Partial<HealthResponse> & {
         api_version?: string;
         dialect?: string;
+        human_pty?: HealthResponse["humanPty"];
       }
     >("health", { signal }).then((health) => ({
       status: health.status === "degraded" ? "degraded" : "ok",
       version: health.version ?? health.api_version ?? "unknown",
       mode: health.mode ?? (health.dialect?.startsWith("postgres") ? "team" : "local"),
       runner: health.runner ?? "unavailable",
+      humanPty: health.humanPty ?? health.human_pty ?? "unavailable",
     }));
   }
 
   listEngagements(signal?: AbortSignal): Promise<Page<EngagementSummary>> {
-    return this.request<WireEngagement[]>("engagements", { signal })
+    return this.listAll<WireEngagement>("engagements", signal)
       .then((items) => page(items.map(mapEngagement)));
   }
 
+  createEngagement(body: EngagementCreateRequest): Promise<EngagementSummary> {
+    return this.request<WireEngagement>("engagements", {
+      method: "POST",
+      body: JSON.stringify({
+        name: body.name.trim(),
+        description: body.description ?? "",
+        client_name: body.clientName || null,
+        status: body.status ?? "draft",
+        tags: body.tags ?? [],
+        metadata: {},
+      }),
+    }).then(mapEngagement);
+  }
+
+  listOperatorProfiles(signal?: AbortSignal): Promise<OperatorProfile[]> {
+    return this.request<WireOperatorProfile[]>("operator-profiles", { signal })
+      .then((items) => items.map(mapOperatorProfile));
+  }
+
+  getActiveOperatorProfile(signal?: AbortSignal): Promise<OperatorProfile> {
+    return this.request<WireOperatorProfile>("operator-profiles/active", { signal })
+      .then(mapOperatorProfile);
+  }
+
+  createOperatorProfile(body: OperatorProfileCreateRequest): Promise<OperatorProfile> {
+    return this.request<WireOperatorProfile>("operator-profiles", {
+      method: "POST",
+      body: JSON.stringify({ display_name: body.displayName, email: body.email || null, role: body.role || null, metadata: body.metadata ?? {} }),
+    }).then(mapOperatorProfile);
+  }
+
+  updateOperatorProfile(id: string, body: OperatorProfileUpdateRequest): Promise<OperatorProfile> {
+    return this.request<WireOperatorProfile>(`operator-profiles/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        ...(body.displayName === undefined ? {} : { display_name: body.displayName }),
+        ...(body.email === undefined ? {} : { email: body.email || null }),
+        ...(body.role === undefined ? {} : { role: body.role || null }),
+        ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
+        expected_revision: body.expectedRevision,
+      }),
+    }).then(mapOperatorProfile);
+  }
+
+  activateOperatorProfile(id: string, expectedRevision?: number): Promise<OperatorProfile> {
+    return this.request<WireOperatorProfile>(`operator-profiles/${encodeURIComponent(id)}/activate`, {
+      method: "POST",
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    }).then(mapOperatorProfile);
+  }
+
+  async deleteOperatorProfile(id: string, expectedRevision?: number): Promise<void> {
+    const headers = new Headers();
+    if (expectedRevision !== undefined) headers.set("If-Match", String(expectedRevision));
+    await this.request<void>(`operator-profiles/${encodeURIComponent(id)}`, { method: "DELETE", headers });
+  }
+
   listRuns(engagementId: string, signal?: AbortSignal): Promise<Page<AgentRunSummary>> {
-    return this.request<WireAgentRun[]>(`runs?${engagementQuery(engagementId)}`, { signal })
+    return this.listAll<WireAgentRun>("runs", signal, engagementId)
       .then((items) => page(items.map(mapRun)));
   }
 
+  createMission(body: MissionCreateRequest): Promise<AgentRunSummary> {
+    return this.request<WireAgentRun>("missions", {
+      method: "POST",
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        objective: body.objective,
+        provider_id: body.providerId,
+        model: body.model,
+        max_duration_seconds: body.maxDurationSeconds,
+        max_tokens: body.maxTokens,
+        max_cost_usd: body.maxCostUsd,
+        max_retries: body.maxRetries,
+      }),
+    }).then(mapRun);
+  }
+
+  stopRun(id: string, body: RunStopRequest = {}): Promise<AgentRunSummary> {
+    return this.request<WireAgentRun>(`runs/${encodeURIComponent(id)}/stop`, {
+      method: "POST",
+      body: JSON.stringify({ reason: body.reason }),
+    }).then(mapRun);
+  }
+
   listApprovals(engagementId: string, signal?: AbortSignal): Promise<Page<ApprovalSummary>> {
-    return this.request<WireApproval[]>(`approvals?${engagementQuery(engagementId)}`, { signal })
+    return this.listAll<WireApproval>("approvals", signal, engagementId)
       .then((items) => page(items.map(mapApproval).filter((item) => item.status === "pending")));
   }
 
@@ -399,19 +893,121 @@ export class ApiClient {
   }
 
   listAssets(engagementId: string, signal?: AbortSignal): Promise<Page<AssetSummary>> {
-    return this.request<WireAsset[]>(`assets?${engagementQuery(engagementId)}`, { signal })
+    return this.listAll<WireAsset>("assets", signal, engagementId)
       .then((items) => page(items.map(mapAsset)));
   }
 
+  createAsset(body: AssetCreateRequest): Promise<AssetSummary> {
+    const exposed = body.exposure === "external"
+      ? true
+      : body.exposure === "internal"
+        ? false
+        : null;
+    return this.request<WireAsset>("assets", {
+      method: "POST",
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        asset_type: body.kind,
+        name: body.name.trim(),
+        address: body.address || null,
+        hostname: body.hostname || null,
+        criticality: body.criticality ?? "medium",
+        exposed,
+        tags: body.tags ?? [],
+        metadata: {},
+      }),
+    }).then(mapAsset);
+  }
+
   listFindings(engagementId: string, signal?: AbortSignal): Promise<Page<FindingSummary>> {
-    return this.request<WireFinding[]>(`findings?${engagementQuery(engagementId)}`, { signal })
+    return this.listAll<WireFinding>("findings", signal, engagementId)
       .then((items) => page(items.map(mapFinding)));
+  }
+
+  createFinding(body: FindingCreateRequest): Promise<FindingSummary> {
+    return this.request<WireFinding>("findings", {
+      method: "POST",
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        title: body.title.trim(),
+        description: body.description?.trim() ?? "",
+        status: "candidate",
+        severity: body.severity,
+        severity_rationale: body.severityRationale?.trim() ?? "",
+        asset_ids: [...new Set(body.assetIds ?? [])],
+        cve_ids: normalizedIdentifiers(body.cveIds),
+        cwe_ids: normalizedIdentifiers(body.cweIds),
+        metadata: { origin: "manual_operator_entry" },
+      }),
+    }).then(mapFinding);
+  }
+
+  listEvidence(engagementId: string, signal?: AbortSignal): Promise<Page<EvidenceSummary>> {
+    return this.listAll<WireEvidence>("evidence", signal, engagementId)
+      .then((items) => page(items.map(mapEvidence)));
+  }
+
+  uploadEvidence(body: EvidenceUploadRequest, signal?: AbortSignal): Promise<EvidenceSummary> {
+    return this.request<WireEvidence>("evidence/upload", {
+      method: "POST",
+      signal,
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        filename: body.filename,
+        title: body.title.trim(),
+        evidence_type: body.evidenceType,
+        content_base64: body.contentBase64,
+        media_type: body.mediaType,
+        description: body.description ?? "",
+        source: body.source,
+        finding_id: body.findingId,
+        asset_ids: body.assetIds ?? [],
+        captured_by: body.capturedBy,
+        source_version: body.sourceVersion,
+        metadata: body.metadata ?? {},
+      }),
+    }).then(mapEvidence);
+  }
+
+  listReports(engagementId: string, signal?: AbortSignal): Promise<Page<ReportSummary>> {
+    return this.listAll<WireReport>("reports", signal, engagementId)
+      .then((items) => page(items.map(mapReport)));
+  }
+
+  createReport(body: ReportCreateRequest): Promise<ReportSummary> {
+    return this.request<WireReport>("reports", {
+      method: "POST",
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        title: body.title.trim(),
+        status: body.status ?? "draft",
+        executive_summary: body.executiveSummary ?? "",
+        finding_ids: body.findingIds ?? [],
+        artifact_ids: [],
+        metadata: {},
+      }),
+    }).then(mapReport);
+  }
+
+  updateReport(id: string, body: ReportUpdateRequest): Promise<ReportSummary> {
+    return this.request<WireReport>(`reports/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expected_revision: body.expectedRevision,
+        changes: {
+          ...(body.title === undefined ? {} : { title: body.title.trim() }),
+          ...(body.status === undefined ? {} : { status: body.status }),
+          ...(body.executiveSummary === undefined ? {} : { executive_summary: body.executiveSummary }),
+          ...(body.findingIds === undefined ? {} : { finding_ids: body.findingIds }),
+        },
+      }),
+    }).then(mapReport);
   }
 
   listProviders(signal?: AbortSignal): Promise<Page<ProviderHealth>> {
     // Provider profiles are global in the current single-organization Core.
     // Applying engagement_id would correctly return no rows.
-    return this.request<WireProvider[]>("providers", { signal })
+    return this.listAll<WireProvider>("providers", signal)
       .then((items) => page(items.map(mapProvider)));
   }
 
@@ -421,21 +1017,82 @@ export class ApiClient {
   }
 
   createProvider(body: ProviderCreateRequest): Promise<ProviderHealth> {
-    const modelAllowlist = body.defaultModel ? [body.defaultModel] : [];
+    const defaultModel = configuredDefaultModel(body.providerType, body.defaultModel);
+    const modelAllowlist = [...new Set(
+      [defaultModel, ...(body.modelAllowlist ?? [])]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .map((value) => value.trim()),
+    )];
+    const credentialEnv = body.credentialEnv?.trim().replace(/^env:/, "");
     return this.request<WireProvider>("providers", {
       method: "POST",
       body: JSON.stringify({
-        name: body.name,
+        name: body.name.trim(),
         provider_type: body.providerType,
-        endpoint: body.endpoint || null,
+        endpoint: body.endpoint?.trim() || null,
         enabled: true,
         is_local: body.local,
+        secret_ref: credentialEnv ? `env:${credentialEnv}` : null,
         model_allowlist: modelAllowlist,
         capabilities: { streaming: true },
-        privacy: { local_only: body.local },
-        metadata: body.defaultModel ? { default_model: body.defaultModel } : {},
+        privacy: {
+          local_only: body.local,
+          permits_sensitive_data: body.permitsSensitiveData === true,
+        },
+        metadata: {
+          ...(defaultModel ? { default_model: defaultModel } : {}),
+          ...(body.options && Object.keys(body.options).length ? { options: body.options } : {}),
+        },
       }),
     }).then(mapProvider);
+  }
+
+  updateProvider(id: string, body: ProviderUpdateRequest): Promise<ProviderHealth> {
+    const defaultModel = configuredDefaultModel(body.providerType, body.defaultModel);
+    const modelAllowlist = [...new Set(
+      [defaultModel, ...body.modelAllowlist]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .map((value) => value.trim()),
+    )];
+    const credentialEnv = body.credentialEnv?.trim().replace(/^env:/, "");
+    const metadata = { ...(body.metadata ?? {}) };
+    delete metadata.default_model;
+    delete metadata.options;
+    if (defaultModel) metadata.default_model = defaultModel;
+    if (body.options && Object.keys(body.options).length) metadata.options = body.options;
+    return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        changes: {
+          name: body.name.trim(),
+          endpoint: body.endpoint?.trim() || null,
+          secret_ref: credentialEnv ? `env:${credentialEnv}` : null,
+          model_allowlist: modelAllowlist,
+          privacy: {
+            local_only: body.local,
+            retention: body.retention ?? null,
+            residency: body.residency,
+            permits_sensitive_data: body.permitsSensitiveData,
+          },
+          metadata,
+        },
+        expected_revision: body.expectedRevision,
+      }),
+    }).then(mapProvider);
+  }
+
+  setProviderEnabled(id: string, enabled: boolean, expectedRevision: number): Promise<ProviderHealth> {
+    return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ changes: { enabled }, expected_revision: expectedRevision }),
+    }).then(mapProvider);
+  }
+
+  async deleteProvider(id: string, expectedRevision: number): Promise<void> {
+    await this.request<void>(`providers/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "If-Match": String(expectedRevision) },
+    });
   }
 
   refreshProviderHealth(id: string, signal?: AbortSignal): Promise<ProviderRuntimeHealth> {
@@ -443,5 +1100,162 @@ export class ApiClient {
       `providers/${encodeURIComponent(id)}/health`,
       { method: "POST", signal },
     ).then(mapProviderRuntimeHealth);
+  }
+
+  listKnowledgeSources(engagementId: string, signal?: AbortSignal): Promise<Page<KnowledgeSource>> {
+    return this.listAll<WireKnowledgeSource>("knowledge", signal, engagementId)
+      .then((items) => page(items.map(mapKnowledgeSource)));
+  }
+
+  ingestKnowledgeSource(body: KnowledgeIngestRequest, signal?: AbortSignal): Promise<KnowledgeSource> {
+    return this.request<WireKnowledgeSource>("knowledge/ingest", {
+      method: "POST",
+      signal,
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        filename: body.filename,
+        media_type: body.mediaType,
+        content_base64: body.contentBase64,
+      }),
+    }).then(mapKnowledgeSource);
+  }
+
+  reindexKnowledgeSource(id: string, signal?: AbortSignal): Promise<KnowledgeSource> {
+    return this.request<WireKnowledgeSource>(`knowledge/${encodeURIComponent(id)}/reindex`, {
+      method: "POST",
+      signal,
+    }).then(mapKnowledgeSource);
+  }
+
+  async deleteKnowledgeSource(id: string, signal?: AbortSignal): Promise<void> {
+    await this.request<void>(`knowledge/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      signal,
+    });
+  }
+
+  async getArtifactContent(id: string, signal?: AbortSignal): Promise<Blob> {
+    const headers = new Headers({ Accept: "*/*" });
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/artifacts/${encodeURIComponent(id)}/content`,
+      { headers, signal, credentials: "same-origin" },
+    );
+    if (!response.ok) throw await responseError(response);
+    return response.blob();
+  }
+
+  completeChat(body: ChatCompletionRequest, signal?: AbortSignal): Promise<ChatCompletionResponse> {
+    return this.request<WireChatCompletion>("chat/completions", {
+      method: "POST",
+      signal,
+      body: JSON.stringify(chatRequestBody(body, false)),
+    }).then(mapChatCompletion);
+  }
+
+  listChatSessions(engagementId: string, signal?: AbortSignal): Promise<Page<ChatSessionSummary>> {
+    return this.listAll<WireChatSession>("chat-sessions", signal, engagementId)
+      .then((items) => page(items.map(mapChatSession)));
+  }
+
+  listChatMessages(sessionId: string, signal?: AbortSignal): Promise<PersistedChatMessage[]> {
+    return this.request<WirePersistedChatMessage[]>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+      { signal },
+    ).then((items) => items.map(mapPersistedChatMessage));
+  }
+
+  async streamChat(
+    body: ChatCompletionRequest,
+    onEvent: (event: ChatStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatCompletionResponse> {
+    const headers = new Headers({
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+    });
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      signal,
+      credentials: "same-origin",
+      body: JSON.stringify(chatRequestBody(body, true)),
+    });
+    if (!response.ok) throw await responseError(response);
+    if (!response.body) {
+      throw new ApiError("The chat response stream was empty.", 502);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let completed: ChatCompletionResponse | undefined;
+
+    const processBlock = (block: string) => {
+      const lines = block.replace(/\r/g, "").split("\n");
+      const data = lines
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (!data || data === "[DONE]") return;
+      let wire: WireChatStreamEvent;
+      try {
+        wire = JSON.parse(data) as WireChatStreamEvent;
+      } catch {
+        throw new ApiError("Nebula Core returned a malformed chat stream frame.", 502, undefined, data);
+      }
+      if (wire.type === "error") {
+        const event: ChatStreamEvent = { type: "error", detail: wire.detail || "Chat completion failed." };
+        onEvent(event);
+        throw new ApiError(event.detail, 502, undefined, wire);
+      }
+      if (wire.type === "started") {
+        onEvent({
+          type: "started",
+          providerId: wire.provider_id ?? body.providerId,
+          model: wire.model ?? body.model ?? "unknown",
+          sessionId: wire.session_id ?? undefined,
+        });
+        return;
+      }
+      if (wire.type === "delta") {
+        onEvent({
+          type: "delta",
+          providerId: wire.provider_id ?? body.providerId,
+          model: wire.model ?? body.model ?? "unknown",
+          delta: wire.delta ?? "",
+        });
+        return;
+      }
+      if (wire.type === "done") {
+        if (!wire.provider_id || !wire.model || !wire.message) {
+          throw new ApiError("Nebula Core returned an incomplete chat completion.", 502, undefined, wire);
+        }
+        completed = mapChatCompletion(wire as WireChatCompletion);
+        onEvent({ type: "done", ...completed });
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      let separator = buffer.search(/\r?\n\r?\n/);
+      while (separator >= 0) {
+        const block = buffer.slice(0, separator);
+        const match = buffer.slice(separator).match(/^\r?\n\r?\n/);
+        buffer = buffer.slice(separator + (match?.[0].length ?? 2));
+        processBlock(block);
+        separator = buffer.search(/\r?\n\r?\n/);
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) processBlock(buffer);
+    if (!completed) {
+      throw new ApiError("The chat response ended before a completion was received.", 502);
+    }
+    return completed;
   }
 }

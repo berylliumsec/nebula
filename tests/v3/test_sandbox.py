@@ -82,7 +82,7 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
 def test_workspace_mount_is_omitted_or_scoped_by_declared_access(
     tmp_path, access, expected_mode
 ):
-    runner = ContainerSandboxRunner(runtime="podman")
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
     request = _request(tmp_path, workspace_access=access)
     workspace = runner._validate(request)
     argv = runner._argv(request, workspace)
@@ -101,7 +101,7 @@ def test_workspace_mount_is_omitted_or_scoped_by_declared_access(
 
 
 def test_runner_rejects_unpinned_images_secrets_and_unapproved_networks(tmp_path):
-    runner = ContainerSandboxRunner(runtime="podman")
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
     with pytest.raises(SandboxError, match="pinned"):
         runner._validate(_request(tmp_path, image="registry.invalid/latest"))
     with pytest.raises(SandboxError, match="OPENAI_API_KEY"):
@@ -116,3 +116,26 @@ def test_runner_rejects_unpinned_images_secrets_and_unapproved_networks(tmp_path
                 network_name="ordinary-bridge",
             )
         )
+
+
+def test_runtime_discovery_ignores_ambient_path_and_accepts_explicit_absolute_path(
+    tmp_path, monkeypatch
+):
+    trusted = tmp_path / "trusted" / "podman"
+    trusted.parent.mkdir()
+    trusted.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    trusted.chmod(0o755)
+    untrusted = tmp_path / "untrusted"
+    untrusted.mkdir()
+    (untrusted / "docker").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (untrusted / "docker").chmod(0o755)
+    monkeypatch.setenv("PATH", str(untrusted))
+    monkeypatch.delenv("NEBULA_V3_CONTAINER_RUNTIME", raising=False)
+    monkeypatch.setattr(ContainerSandboxRunner, "_trusted_runtime_paths", (trusted,))
+
+    assert ContainerSandboxRunner().runtime == str(trusted)
+    assert ContainerSandboxRunner(runtime=str(trusted)).runtime == str(trusted)
+    with pytest.raises(ValueError, match="absolute path"):
+        ContainerSandboxRunner(runtime="docker")
+    with pytest.raises(ValueError, match="docker or podman"):
+        ContainerSandboxRunner(runtime=str(tmp_path / "other"))

@@ -4,8 +4,8 @@ import json
 import httpx
 from typer.testing import CliRunner
 
-from nebula.v3.cli import app
-from nebula.v3.domain import AgentRun, Engagement, ProviderProfile
+from nebula.v3.cli import _is_loopback, app
+from nebula.v3.domain import AgentRun, Artifact, Engagement, ProviderProfile
 from nebula.v3.providers import (
     ModelCapabilities,
     OpenAICompatibleProvider,
@@ -13,6 +13,7 @@ from nebula.v3.providers import (
     config_from_catalog,
 )
 from nebula.v3.storage import NebulaStore
+from nebula.v3.version import __version__
 
 
 def _manifest(root):
@@ -23,18 +24,45 @@ def _manifest(root):
     }
 
 
+def test_loopback_detection_supports_ipv6_and_rejects_mixed_dns(monkeypatch):
+    assert _is_loopback("127.0.0.1") is True
+    assert _is_loopback("::1") is True
+    assert _is_loopback("192.0.2.1") is False
+
+    monkeypatch.setattr(
+        "nebula.v3.cli.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (2, 1, 6, "", ("127.0.0.1", 0)),
+            (2, 1, 6, "", ("192.0.2.1", 0)),
+        ],
+    )
+    assert _is_loopback("mixed.example") is False
+
+
 def test_doctor_reports_analysis_only_without_host_fallback(tmp_path, monkeypatch):
     async def unavailable(_self):
         return False, "rootless runner is not configured"
 
     monkeypatch.setattr("nebula.v3.cli.ContainerSandboxRunner.available", unavailable)
-    result = CliRunner().invoke(app, ["doctor", "--data-dir", str(tmp_path)])
+    monkeypatch.setenv("NEBULA_BUILD_COMMIT", "doctor-commit")
+    monkeypatch.setenv("NEBULA_BUILD_TARGET", "doctor-target")
+    monkeypatch.setenv("NEBULA_BUILD_TIMESTAMP", "2026-07-12T12:00:00Z")
+    monkeypatch.setenv("NEBULA_DISTRIBUTION_CHANNEL", "qa")
+    result = CliRunner().invoke(app, ["doctor", "--json", "--data-dir", str(tmp_path)])
 
     assert result.exit_code == 0, result.stdout
     report = json.loads(result.stdout)
     assert report["status"] == "ok"
+    assert report["version"] == __version__
+    assert report["commit"] == "doctor-commit"
+    assert report["target"] == "doctor-target"
+    assert report["build_timestamp"] == "2026-07-12T12:00:00Z"
+    assert report["distribution_channel"] == "qa"
     assert report["database"]["journal_mode"] == "wal"
     assert report["artifacts"]["writable"] is True
+    assert report["artifacts"]["checked"] == 0
+    assert report["artifacts"]["corrupt"] == 0
+    assert report["artifacts"]["orphan_blobs"] == 0
     assert report["api"]["version"] == "v1"
     assert report["sandbox"] == {
         "available": False,
@@ -42,6 +70,52 @@ def test_doctor_reports_analysis_only_without_host_fallback(tmp_path, monkeypatc
         "host_fallback": False,
         "mode": "analysis-only",
     }
+
+
+def test_doctor_reports_corrupt_persisted_artifacts(tmp_path, monkeypatch):
+    async def unavailable(_self):
+        return False, "not configured"
+
+    monkeypatch.setattr("nebula.v3.cli.ContainerSandboxRunner.available", unavailable)
+    data_dir = tmp_path / "doctor-data"
+    store = NebulaStore(data_dir / "nebula.db")
+    artifact = store.create(
+        Artifact(
+            engagement_id="eng-a",
+            sha256="a" * 64,
+            size=10,
+            storage_path=f"sha256/aa/aa/{'a' * 64}",
+        )
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["doctor", "--json", "--data-dir", str(data_dir)],
+    )
+
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    assert report["status"] == "error"
+    assert report["artifacts"]["checked"] == 1
+    assert report["artifacts"]["corrupt"] == 1
+    assert report["artifacts"]["corrupt_ids"] == [artifact.id]
+
+
+def test_worker_rejects_unimplemented_daemon_mode():
+    result = CliRunner().invoke(app, ["worker", "--no-once"])
+
+    assert result.exit_code != 0
+    assert "durable worker mode is release-gated" in result.output
+
+
+def test_cli_run_rejects_unattached_executable_tool_budget():
+    result = CliRunner().invoke(
+        app,
+        ["run", "engagement", "objective", "--max-tool-calls", "1"],
+    )
+
+    assert result.exit_code != 0
+    assert "executable mission tools are release-gated" in result.output
 
 
 def test_cli_imports_legacy_side_by_side_then_exports_bundle(tmp_path, monkeypatch):

@@ -10,15 +10,24 @@ rust-version = "1.85"
 name = "nebula_ui_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+direct-updater = ["dep:tauri-plugin-updater"]
+
 [build-dependencies]
 tauri-build = { version = "2.5.6", features = [] }
 
 [dependencies]
 base64 = "0.22.1"
 getrandom = "0.4.1"
+minisign-verify = "0.2.5"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tauri = { version = "2.11.5", features = [] }
+tauri-plugin-updater = { version = "2.10.1", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.177"
 
 [profile.release]
 codegen-units = 1

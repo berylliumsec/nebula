@@ -117,7 +117,7 @@ def test_database_failure_compensates_new_artifacts(tmp_path, monkeypatch):
     assert "simulated database failure" in report.errors[0]
     assert report.source_unchanged is True
     assert store.count(Engagement) == 0
-    assert list(artifacts.iter_digests()) == []
+    assert list(artifacts.iter_digests())
 
 
 def test_importer_refuses_to_place_destination_inside_source(tmp_path):

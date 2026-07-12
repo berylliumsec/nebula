@@ -12,6 +12,7 @@ import signal
 import struct
 import termios
 from pathlib import Path
+from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -21,6 +22,7 @@ class PtyError(RuntimeError):
 
 
 _SESSION_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
+_MAX_INPUT_BYTES = 1024 * 1024
 
 
 class HumanPtyService:
@@ -31,6 +33,12 @@ class HumanPtyService:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root.chmod(0o700)
 
+    @property
+    def available(self) -> bool:
+        """Return whether this host can provide the POSIX PTY boundary."""
+
+        return any(path.is_file() for path in (Path("/bin/bash"), Path("/bin/sh")))
+
     async def serve(
         self,
         websocket: WebSocket,
@@ -39,6 +47,12 @@ class HumanPtyService:
         columns: int,
         rows: int,
     ) -> None:
+        if not self.available:
+            await websocket.close(
+                code=1013,
+                reason="human PTY sessions are unavailable on this platform",
+            )
+            return
         if not _SESSION_ID.fullmatch(session_id):
             await websocket.close(code=4400, reason="invalid terminal session id")
             return
@@ -57,17 +71,22 @@ class HumanPtyService:
             "TERM": "xterm-256color",
             "LANG": os.getenv("LANG", "C.UTF-8"),
         }
-        process = await asyncio.create_subprocess_exec(
-            str(shell),
-            "--noprofile",
-            "--norc",
-            cwd=workspace,
-            env=environment,
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            start_new_session=True,
-        )
+        shell_arguments = ["--noprofile", "--norc"] if shell.name == "bash" else []
+        try:
+            process = await asyncio.create_subprocess_exec(
+                str(shell),
+                *shell_arguments,
+                cwd=workspace,
+                env=environment,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                start_new_session=True,
+            )
+        except BaseException:
+            os.close(slave)
+            os.close(master)
+            raise
         os.close(slave)
 
         async def output() -> None:
@@ -87,13 +106,22 @@ class HumanPtyService:
                     frame = json.loads(message)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(frame, dict):
+                    continue
                 if frame.get("type") == "input" and isinstance(frame.get("data"), str):
-                    await asyncio.to_thread(
-                        os.write, master, frame["data"].encode("utf-8")
-                    )
+                    data = frame["data"].encode("utf-8")
+                    if len(data) > _MAX_INPUT_BYTES:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "detail": "terminal input frame exceeds the 1 MiB limit",
+                            }
+                        )
+                        continue
+                    await asyncio.to_thread(_write_all, master, data)
                 elif frame.get("type") == "resize":
-                    new_columns = int(frame.get("columns", 0))
-                    new_rows = int(frame.get("rows", 0))
+                    new_columns = _integer(frame.get("columns"))
+                    new_rows = _integer(frame.get("rows"))
                     if 1 <= new_columns <= 1000 and 1 <= new_rows <= 1000:
                         _resize(master, new_columns, new_rows)
 
@@ -137,6 +165,23 @@ def _resize(descriptor: int, columns: int, rows: int) -> None:
         termios.TIOCSWINSZ,
         struct.pack("HHHH", rows, columns, 0, 0),
     )
+
+
+def _integer(value: Any) -> int:
+    """Accept JSON integers but reject booleans, floats, and coercion surprises."""
+
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _write_all(descriptor: int, data: bytes) -> None:
+    """Write a complete terminal frame even when the PTY accepts it in pieces."""
+
+    view = memoryview(data)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise PtyError("terminal input stream closed during write")
+        view = view[written:]
 
 
 __all__ = ["HumanPtyService", "PtyError"]

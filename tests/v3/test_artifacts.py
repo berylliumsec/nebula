@@ -40,14 +40,14 @@ def test_integrity_verification_detects_tampering(tmp_path):
         store.put_bytes(b"before", engagement_id="eng-1")
 
 
-def test_compensation_deletes_only_a_new_blob(tmp_path):
+def test_failed_write_cleanup_never_deletes_a_potentially_shared_blob(tmp_path):
     store = ArtifactStore(tmp_path / "artifacts")
     new = store.put_bytes_with_status(b"new", engagement_id="eng-1")
     duplicate = store.put_bytes_with_status(b"new", engagement_id="eng-1")
     store.discard_new_blob(duplicate)
     assert store.path_for(new.artifact).exists()
     store.discard_new_blob(new)
-    assert not store.path_for(new.artifact).exists()
+    assert store.path_for(new.artifact).exists()
 
 
 def test_artifact_path_must_match_digest(tmp_path):

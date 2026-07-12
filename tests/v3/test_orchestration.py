@@ -1,5 +1,6 @@
 import asyncio
 
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from nebula.v3.domain import (
@@ -13,6 +14,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.orchestration import (
     EvidenceVerifier,
+    MissionError,
     MissionPlan,
     MissionRuntime,
     PlannedTask,
@@ -256,6 +258,76 @@ def test_projected_budget_overrun_fails_run_durably(tmp_path):
         "task.failed",
         "run.failed",
     ]
+
+
+def test_start_does_not_resurrect_a_failed_run(tmp_path):
+    task = PlannedTask(
+        id="never-run",
+        role=SpecialistRole.SCOPE_PLANNING,
+        title="Must remain terminal",
+        instructions="No work should be dispatched",
+    )
+    supervisor = PlannedSupervisor(
+        MissionPlan(summary="Terminal run", rationale="Retry guard", tasks=[task])
+    )
+    runtime, store = _runtime(tmp_path, supervisor, {})
+    failed = store.create(
+        AgentRun(
+            id="failed-run",
+            engagement_id="engagement-1",
+            objective="Already failed",
+            status=RunStatus.FAILED,
+        )
+    )
+
+    with pytest.raises(MissionError, match="already terminal"):
+        asyncio.run(
+            runtime.start(
+                engagement_id=failed.engagement_id,
+                objective=failed.objective,
+                run_id=failed.id,
+            )
+        )
+
+    assert store.get(AgentRun, failed.id) == failed
+    assert store.replay_events(failed.id) == []
+
+
+def test_plan_node_recovery_reuses_durable_tasks_and_event(tmp_path):
+    task = PlannedTask(
+        id="recovered-task",
+        role=SpecialistRole.SCOPE_PLANNING,
+        title="Recover planning",
+        instructions="Reuse the durable task",
+    )
+    supervisor = PlannedSupervisor(
+        MissionPlan(summary="Recoverable", rationale="Checkpoint retry", tasks=[task])
+    )
+    runtime, store = _runtime(tmp_path, supervisor, {})
+    run = store.create(
+        AgentRun(
+            id="recovered-run",
+            engagement_id="engagement-1",
+            objective="Recover the planning node",
+            status=RunStatus.PLANNING,
+        )
+    )
+    state = {
+        "engagement_id": run.engagement_id,
+        "run_id": run.id,
+        "objective": run.objective,
+        "context": {},
+        "budget": run.budget.model_dump(mode="json"),
+    }
+
+    first = asyncio.run(runtime._plan(state))
+    retried = asyncio.run(runtime._plan(state))
+
+    assert retried == first
+    assert store.count(Task, engagement_id=run.engagement_id) == 1
+    assert store.get(AgentRun, run.id).status == RunStatus.RUNNING
+    [event] = store.replay_events(run.id)
+    assert event.event_type == "run.planned"
 
 
 def test_evidence_verifier_requires_linked_evidence_and_reproduction_steps():

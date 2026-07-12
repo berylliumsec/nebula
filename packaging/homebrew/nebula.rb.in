@@ -1,0 +1,27 @@
+cask "nebula" do
+  version "@VERSION@"
+
+  on_arm do
+    sha256 "@SHA256_ARM64@"
+    url "https://github.com/BerylliumSec/nebula/releases/download/nebula-v#{version}/Nebula-#{version}-macOS-arm64-managed.dmg"
+  end
+
+  on_intel do
+    sha256 "@SHA256_X64@"
+    url "https://github.com/BerylliumSec/nebula/releases/download/nebula-v#{version}/Nebula-#{version}-macOS-x64-managed.dmg"
+  end
+
+  name "Nebula"
+  desc "Local-first security engagement workspace"
+  homepage "https://github.com/BerylliumSec/nebula"
+
+  depends_on macos: ">= :ventura"
+
+  app "Nebula.app"
+  binary "#{appdir}/Nebula.app/Contents/MacOS/nebula-core", target: "nebula"
+
+  caveats <<~EOS
+    Active security tools require an independently installed and approved
+    Docker or Podman runner. Nebula never falls back to host execution.
+  EOS
+end

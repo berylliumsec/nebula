@@ -1,6 +1,13 @@
-import { useState, type FormEvent } from "react";
-import { Contrast, KeyRound, Moon, Plus, Server, ShieldCheck, Sun, X } from "lucide-react";
-import type { ProviderCatalogEntry } from "../api/types";
+import { useEffect, useState, type FormEvent } from "react";
+import { Check, Contrast, Download, KeyRound, Moon, PackageCheck, Pencil, Plus, Server, ShieldCheck, Sun, Trash2, UserRound, X } from "lucide-react";
+import type { OperatorProfile, ProviderCatalogEntry, ProviderHealth } from "../api/types";
+import {
+  checkForUpdate,
+  getReleaseInfo,
+  installAvailableUpdate,
+  type AvailableUpdate,
+  type ReleaseInfo,
+} from "../api/updater";
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
@@ -13,6 +20,11 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
   { value: "high-contrast", label: "High contrast", icon: Contrast },
 ];
 
+function providerOption(provider: ProviderHealth, key: string): string {
+  const value = provider.options[key];
+  return typeof value === "string" ? value : "";
+}
+
 export function SettingsPage() {
   const { preference, setPreference } = useTheme();
   const {
@@ -23,22 +35,117 @@ export function SettingsPage() {
     providerCatalog,
     refreshProvider,
     addProvider,
+    updateProvider,
+    setProviderEnabled,
+    deleteProvider,
+    operatorProfiles,
+    createOperatorProfile,
+    updateOperatorProfile,
+    activateOperatorProfile,
+    deleteOperatorProfile,
   } = useWorkspace();
   const [adding, setAdding] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<ProviderHealth>();
   const [selected, setSelected] = useState<ProviderCatalogEntry>();
   const [name, setName] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [model, setModel] = useState("");
+  const [modelAllowlistText, setModelAllowlistText] = useState("");
+  const [credentialEnv, setCredentialEnv] = useState("");
+  const [vertexProject, setVertexProject] = useState("");
+  const [vertexLocation, setVertexLocation] = useState("");
+  const [awsRegion, setAwsRegion] = useState("");
+  const [permitsSensitiveData, setPermitsSensitiveData] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string>();
+  const [providerBusy, setProviderBusy] = useState<string>();
+  const [providerActionError, setProviderActionError] = useState<string>();
+  const [operatorDialog, setOperatorDialog] = useState(false);
+  const [editingOperator, setEditingOperator] = useState<OperatorProfile>();
+  const [operatorName, setOperatorName] = useState("");
+  const [operatorEmail, setOperatorEmail] = useState("");
+  const [operatorRole, setOperatorRole] = useState("");
+  const [operatorBusy, setOperatorBusy] = useState<string>();
+  const [operatorError, setOperatorError] = useState<string>();
+  const [settingsSection, setSettingsSection] = useState("provider-settings");
+  const [release, setRelease] = useState<ReleaseInfo>();
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "installing" | "current" | "restart" | "error">("idle");
+  const [updateMessage, setUpdateMessage] = useState<string>();
+
+  useEffect(() => {
+    let active = true;
+    void getReleaseInfo()
+      .then((info) => {
+        if (active) setRelease(info);
+      })
+      .catch(() => {
+        if (active) setRelease(undefined);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const checkUpdates = async () => {
+    setUpdateState("checking");
+    setUpdateMessage(undefined);
+    try {
+      const update = await checkForUpdate();
+      setAvailableUpdate(update);
+      setUpdateState(update ? "idle" : "current");
+    } catch (error) {
+      setUpdateState("error");
+      setUpdateMessage(error instanceof Error ? error.message : "Could not check for updates.");
+    }
+  };
+
+  const installUpdate = async () => {
+    setUpdateState("installing");
+    setUpdateMessage(undefined);
+    try {
+      const installed = await installAvailableUpdate();
+      setUpdateState(installed ? "restart" : "current");
+      if (!installed) setAvailableUpdate(undefined);
+    } catch (error) {
+      setUpdateState("error");
+      setUpdateMessage(error instanceof Error ? error.message : "Could not install the update.");
+    }
+  };
 
   const openProviderDialog = () => {
     const entry = providerCatalog.find((item) => item.flavor === "vllm") ?? providerCatalog[0];
     if (!entry) return;
+    setEditingProvider(undefined);
     setSelected(entry);
     setName(entry.flavor === "vllm" ? "Local vLLM" : entry.displayName);
     setEndpoint(entry.defaultBaseUrl ?? "");
     setModel("");
+    setModelAllowlistText("");
+    setCredentialEnv(entry.suggestedKeyEnv ?? "");
+    setVertexProject("");
+    setVertexLocation("");
+    setAwsRegion("");
+    setPermitsSensitiveData(false);
+    setProviderActionError(undefined);
+    setFormError(undefined);
+    setAdding(true);
+  };
+
+  const openProviderEdit = (provider: ProviderHealth) => {
+    const entry = providerCatalog.find((item) => item.flavor === provider.providerType);
+    setEditingProvider(provider);
+    setSelected(entry);
+    setName(provider.name);
+    setEndpoint(provider.endpoint ?? entry?.defaultBaseUrl ?? "");
+    setModel(provider.defaultModel ?? "");
+    setModelAllowlistText(provider.modelAllowlist.join("\n"));
+    setCredentialEnv(provider.credentialEnv ?? "");
+    setVertexProject(providerOption(provider, "project"));
+    setVertexLocation(providerOption(provider, "location"));
+    setAwsRegion(providerOption(provider, "region"));
+    setPermitsSensitiveData(provider.permitsSensitiveData);
+    setProviderActionError(undefined);
     setFormError(undefined);
     setAdding(true);
   };
@@ -49,47 +156,186 @@ export function SettingsPage() {
     setSelected(entry);
     setName(entry.displayName);
     setEndpoint(entry.defaultBaseUrl ?? "");
+    setModel("");
+    setModelAllowlistText("");
+    setCredentialEnv(entry.suggestedKeyEnv ?? "");
+    setVertexProject("");
+    setVertexLocation("");
+    setAwsRegion("");
+    setPermitsSensitiveData(false);
   };
 
   const submitProvider = async (event: FormEvent) => {
     event.preventDefault();
-    if (!selected) return;
+    const providerType = editingProvider?.providerType ?? selected?.flavor;
+    if (!providerType) return;
+    if (!name.trim()) {
+      setFormError("A provider profile name is required.");
+      return;
+    }
+    if (["anthropic", "bedrock"].includes(providerType) && !model.trim()) {
+      setFormError(`${providerType === "bedrock" ? "AWS Bedrock" : "Anthropic"} profiles require a default model ID before chat or missions can use them.`);
+      return;
+    }
+    if (providerType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim())) {
+      setFormError("Vertex profiles require a Google Cloud project and location.");
+      return;
+    }
+    const modelAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
+    const options = { ...(editingProvider?.options ?? {}) };
+    if (providerType === "vertex") {
+      options.project = vertexProject.trim();
+      options.location = vertexLocation.trim();
+    }
+    if (providerType === "bedrock") {
+      if (awsRegion.trim()) options.region = awsRegion.trim();
+      else delete options.region;
+    }
     setSaving(true);
     setFormError(undefined);
     try {
-      await addProvider({
-        name,
-        providerType: selected.flavor,
-        endpoint: endpoint || undefined,
-        local: selected.local,
-        defaultModel: model || undefined,
-      });
+      if (editingProvider) {
+        await updateProvider(editingProvider.id, {
+          name,
+          providerType,
+          endpoint: endpoint || undefined,
+          local: editingProvider.local,
+          defaultModel: model || undefined,
+          modelAllowlist,
+          credentialEnv: credentialEnv || undefined,
+          permitsSensitiveData,
+          retention: editingProvider.retention,
+          residency: editingProvider.residency,
+          options,
+          metadata: editingProvider.metadata,
+          expectedRevision: editingProvider.revision,
+        });
+      } else if (selected) {
+        await addProvider({
+          name,
+          providerType,
+          endpoint: endpoint || undefined,
+          local: selected.local,
+          defaultModel: model || undefined,
+          modelAllowlist,
+          credentialEnv: credentialEnv || undefined,
+          permitsSensitiveData,
+          options,
+        });
+      }
       setAdding(false);
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : "Could not add provider.");
+      setFormError(error instanceof Error ? error.message : `Could not ${editingProvider ? "save" : "add"} provider.`);
     } finally {
       setSaving(false);
     }
   };
+
+  const toggleProvider = async (provider: ProviderHealth) => {
+    setProviderBusy(provider.id);
+    setProviderActionError(undefined);
+    try {
+      await setProviderEnabled(provider.id, !provider.enabled, provider.revision);
+    } catch (error) {
+      setProviderActionError(error instanceof Error ? error.message : "Could not change the provider state.");
+    } finally {
+      setProviderBusy(undefined);
+    }
+  };
+
+  const removeProvider = async (provider: ProviderHealth) => {
+    if (!window.confirm(`Delete provider profile “${provider.name}”? Profiles referenced by chat or mission history cannot be deleted.`)) return;
+    setProviderBusy(provider.id);
+    setProviderActionError(undefined);
+    try {
+      await deleteProvider(provider.id, provider.revision);
+    } catch (error) {
+      setProviderActionError(error instanceof Error ? error.message : "Could not delete the provider profile.");
+    } finally {
+      setProviderBusy(undefined);
+    }
+  };
+
+  const openOperator = (profile?: OperatorProfile) => {
+    setEditingOperator(profile);
+    setOperatorName(profile?.displayName ?? "");
+    setOperatorEmail(profile?.email ?? "");
+    setOperatorRole(profile?.role ?? "");
+    setOperatorError(undefined);
+    setOperatorDialog(true);
+  };
+
+  const submitOperator = async (event: FormEvent) => {
+    event.preventDefault();
+    setOperatorBusy(editingOperator?.id ?? "new");
+    setOperatorError(undefined);
+    try {
+      if (editingOperator) {
+        await updateOperatorProfile(editingOperator.id, { displayName: operatorName, email: operatorEmail, role: operatorRole, expectedRevision: editingOperator.revision });
+      } else {
+        await createOperatorProfile({ displayName: operatorName, email: operatorEmail || undefined, role: operatorRole || undefined });
+      }
+      setOperatorDialog(false);
+    } catch (error) {
+      setOperatorError(error instanceof Error ? error.message : "Could not save the operator profile.");
+    } finally {
+      setOperatorBusy(undefined);
+    }
+  };
+
+  const activateOperator = async (profile: OperatorProfile) => {
+    setOperatorBusy(profile.id);
+    setOperatorError(undefined);
+    try {
+      await activateOperatorProfile(profile.id, profile.revision);
+    } catch (error) {
+      setOperatorError(error instanceof Error ? error.message : "Could not activate the operator profile.");
+    } finally {
+      setOperatorBusy(undefined);
+    }
+  };
+
+  const removeOperator = async (profile: OperatorProfile) => {
+    if (!window.confirm(`Delete the local operator profile “${profile.displayName}”?`)) return;
+    setOperatorBusy(profile.id);
+    setOperatorError(undefined);
+    try {
+      await deleteOperatorProfile(profile.id, profile.revision);
+    } catch (error) {
+      setOperatorError(error instanceof Error ? error.message : "Could not delete the operator profile.");
+    } finally {
+      setOperatorBusy(undefined);
+    }
+  };
+  const dialogProviderType = editingProvider?.providerType ?? selected?.flavor ?? "";
+  const dialogLocal = editingProvider?.local ?? selected?.local ?? false;
+  const requiresDefaultModel = ["anthropic", "bedrock"].includes(dialogProviderType);
+  const dialogAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
   return (
     <div className="page settings-page">
-      <PageHeader eyebrow="Workspace configuration" title="Settings" description="Explicit provider, runner, privacy, access, and appearance controls." />
-      <nav className="settings-tabs" aria-label="Settings sections"><button className="active" type="button">Providers</button><button type="button">Runners</button><button type="button">Security</button><button type="button">Team access</button><button type="button">Appearance</button></nav>
-      <section className="settings-section">
+      <PageHeader eyebrow="Workspace configuration" title="Settings" description="Provider, runtime, privacy, local attribution, and appearance controls." />
+      <nav className="settings-tabs" aria-label="Settings sections">{[["provider-settings", "Providers"], ["operator-settings", "Operators"], ["runtime-settings", "Runners"], ["security-settings", "Security"]].map(([id, label]) => <a className={settingsSection === id ? "active" : undefined} aria-current={settingsSection === id ? "location" : undefined} href={`#${id}`} key={id} onClick={() => setSettingsSection(id)}>{label}</a>)}<span aria-disabled="true" title="Team access is release-gated in the local developer preview">Team access · unavailable</span><a className={settingsSection === "appearance-settings" ? "active" : undefined} aria-current={settingsSection === "appearance-settings" ? "location" : undefined} href="#appearance-settings" onClick={() => setSettingsSection("appearance-settings")}>Appearance</a></nav>
+      <section className="settings-section" id="provider-settings">
         <div className="section-heading"><div><h2>Model providers</h2><p>Configured provider profiles and their declared capabilities.</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
+        {providerActionError && <div className="knowledge-status error" role="alert">{providerActionError}</div>}
         {providers.length > 0 ? (
-          <div className="provider-grid">{providers.map((provider) => <ProviderHealthCard provider={provider} preview={previewMode} onRefresh={refreshProvider} key={provider.id} />)}</div>
+          <div className="provider-grid">{providers.map((provider) => <ProviderHealthCard provider={provider} preview={previewMode} busy={providerBusy === provider.id} onRefresh={refreshProvider} onEdit={openProviderEdit} onToggle={toggleProvider} onDelete={removeProvider} key={provider.id} />)}</div>
         ) : (
           <div className="empty-state compact"><Server size={23} /><strong>No provider profiles</strong><p>Add a provider profile in Core before assigning a model to a mission.</p></div>
         )}
       </section>
+      <section className="settings-section" id="operator-settings">
+        <div className="section-heading"><div><h2>Local operator profiles</h2><p>Durable attribution for local activity. Profiles do not grant authentication or RBAC permissions.</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openOperator()}><Plus size={16} /> Add operator</button></div>
+        {operatorError && <div className="knowledge-status error" role="alert">{operatorError}</div>}
+        {operatorProfiles.length ? <div className="operator-profile-list">{operatorProfiles.map((profile) => <article className={profile.active ? "active" : undefined} key={profile.id}><span className="operator-profile-avatar">{profile.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "OP"}</span><div><h3>{profile.displayName}</h3><p>{profile.role || "Local operator"}{profile.email ? ` · ${profile.email}` : ""}</p></div>{profile.active ? <span className="operator-active"><Check size={13} /> Active</span> : <button className="button quiet" type="button" disabled={operatorBusy === profile.id} onClick={() => void activateOperator(profile)}>Activate</button>}<button className="icon-button subtle" type="button" aria-label={`Edit ${profile.displayName}`} disabled={operatorBusy === profile.id} onClick={() => openOperator(profile)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete ${profile.displayName}`} title={profile.active ? "Activate another profile before deleting this one" : operatorProfiles.length <= 1 ? "The last operator profile cannot be deleted" : "Delete operator profile"} disabled={operatorBusy === profile.id || profile.active || operatorProfiles.length <= 1} onClick={() => void removeOperator(profile)}><Trash2 size={14} /></button></article>)}</div> : <div className="empty-state compact"><UserRound size={23} /><strong>No durable operator profile</strong><p>Create a local profile so new evidence has explicit attribution and the workspace can show who is active.</p></div>}
+      </section>
       <div className="settings-bottom-grid">
-        <section className="panel runtime-panel">
+        <section className="panel runtime-panel" id="runtime-settings">
           <header className="panel-header compact"><div><h2>Local runtime</h2><p>Desktop control-plane boundary</p></div><Server size={19} /></header>
           <dl><div><dt>Shell</dt><dd>{runtime?.mode ?? "Detecting…"}</dd></div><div><dt>Core version</dt><dd>{health?.version ?? "Unavailable"}</dd></div><div><dt>Sandbox runner</dt><dd><span className={`status-dot ${health?.runner === "ready" ? "healthy" : "unavailable"}`} /> {health?.runner ?? "Not connected"}</dd></div><div><dt>Host fallback</dt><dd><span className="status-dot healthy" /> Disabled</dd></div></dl>
           <div className="security-note"><ShieldCheck size={17} /><span><strong>Secure by construction</strong><small>The desktop shell only starts a fixed sibling binary on loopback and transfers its one-time token over stdin.</small></span></div>
         </section>
-        <section className="panel appearance-panel">
+        <section className="panel appearance-panel" id="appearance-settings">
           <header className="panel-header compact"><div><h2>Appearance</h2><p>Saved on this device</p></div><Contrast size={19} /></header>
           <div className="theme-options">
             {themeOptions.map(({ value, label, icon: Icon }) => (
@@ -98,25 +344,64 @@ export function SettingsPage() {
           </div>
           <p className="appearance-help">All themes preserve visible keyboard focus. High contrast strengthens boundaries and meets system forced-color expectations.</p>
         </section>
-        <section className="panel secrets-panel">
+        <section className="panel secrets-panel" id="security-settings">
           <header className="panel-header compact"><div><h2>Credential references</h2><p>Secrets never enter agent context</p></div><KeyRound size={19} /></header>
-          <div className="empty-state compact"><KeyRound size={23} /><strong>Managed outside prompts</strong><p>Core resolves credential references only inside an approved tool sandbox.</p><button className="button secondary" type="button">Manage references</button></div>
+          <div className="empty-state compact"><KeyRound size={23} /><strong>Managed outside prompts</strong><p>Set provider secrets in Core’s environment before launch, then save only the environment variable name in a provider profile. An in-app secret store is not available in this preview.</p></div>
+        </section>
+        <section className="panel release-panel">
+          <header className="panel-header compact"><div><h2>About Nebula</h2><p>Build and update channel</p></div><PackageCheck size={19} /></header>
+          <dl>
+            <div><dt>Desktop version</dt><dd>{release?.version ?? "Detecting…"}</dd></div>
+            <div><dt>Distribution</dt><dd>{release?.distribution ?? "Unknown"}</dd></div>
+            <div><dt>Build</dt><dd title={release?.commit}>{release?.commit.slice(0, 12) ?? "Unknown"}</dd></div>
+            <div><dt>Target</dt><dd>{release?.buildTarget ?? "Unknown"}</dd></div>
+            <div><dt>Built</dt><dd>{release?.builtAt ?? "Unknown"}</dd></div>
+            {release?.updateChannel && <div><dt>Update channel</dt><dd>{release.updateChannel}</dd></div>}
+          </dl>
+          <div className="release-actions">
+            {release?.updaterEnabled ? (
+              availableUpdate ? (
+                <button className="button primary full" type="button" disabled={updateState === "installing"} onClick={() => void installUpdate()}>
+                  <Download size={15} /> {updateState === "installing" ? "Installing…" : `Install ${availableUpdate.version}`}
+                </button>
+              ) : (
+                <button className="button secondary full" type="button" disabled={updateState === "checking" || updateState === "restart"} onClick={() => void checkUpdates()}>
+                  <PackageCheck size={15} /> {updateState === "checking" ? "Checking…" : "Check for updates"}
+                </button>
+              )
+            ) : (
+              <p>Updates are supplied by your package manager.</p>
+            )}
+            {updateState === "current" && <p role="status">Nebula is up to date.</p>}
+            {updateState === "restart" && <p role="status">Update installed. Restart Nebula to finish.</p>}
+            {updateState === "error" && <p className="form-error" role="alert">{updateMessage}</p>}
+          </div>
         </section>
       </div>
-      {adding && selected && (
+      {adding && (selected || editingProvider) && (
         <div className="dialog-backdrop">
           <form className="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title" onSubmit={(event) => void submitProvider(event)}>
-            <header><div><small>Provider profile</small><h2 id="provider-dialog-title">Add model provider</h2></div><button className="icon-button subtle" type="button" aria-label="Close provider dialog" onClick={() => setAdding(false)}><X size={17} /></button></header>
-            <label>Provider type<select value={selected.flavor} onChange={(event) => chooseProvider(event.target.value)}>{providerCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</select></label>
+            <header><div><small>Provider profile</small><h2 id="provider-dialog-title">{editingProvider ? `Edit ${editingProvider.name}` : "Add model provider"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close provider dialog" onClick={() => setAdding(false)}><X size={17} /></button></header>
+            <label>Provider type<select value={dialogProviderType} disabled={Boolean(editingProvider)} onChange={(event) => chooseProvider(event.target.value)}>{!providerCatalog.some((entry) => entry.flavor === dialogProviderType) && <option value={dialogProviderType}>{dialogProviderType}</option>}{providerCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</select></label>
+            {editingProvider && <p className="provider-dialog-note">Provider type and locality are fixed after creation. Other profile settings use revision-safe updates.</p>}
             <label>Profile name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
-            <label>Endpoint<input required={!selected.defaultBaseUrl} value={endpoint} placeholder={selected.defaultBaseUrl ?? "https://provider.example/v1"} onChange={(event) => setEndpoint(event.target.value)} /></label>
-            <label>Default model<input value={model} placeholder="Runtime model ID (optional)" onChange={(event) => setModel(event.target.value)} /></label>
-            <p className="provider-dialog-note">{selected.local ? "Local-only profile. Nebula will not route it to a cloud fallback." : "Credentials are stored as environment references after profile creation."}</p>
+            <label>Endpoint<input required={!selected?.defaultBaseUrl} value={endpoint} placeholder={selected?.defaultBaseUrl ?? "https://provider.example/v1"} onChange={(event) => setEndpoint(event.target.value)} /></label>
+            <label>Default model<input required={requiresDefaultModel} aria-describedby="provider-model-help" value={model} placeholder={requiresDefaultModel ? "Required provider model ID" : "Runtime model ID (optional)"} onChange={(event) => setModel(event.target.value)} /></label>
+            <p className="provider-dialog-note" id="provider-model-help">{requiresDefaultModel ? `${dialogProviderType === "bedrock" ? "AWS Bedrock" : "Anthropic"} needs an explicit model ID so a fresh profile can be used immediately for chat and missions.` : !model.trim() && dialogAllowlist.length ? `No explicit default is set. Core will use ${dialogAllowlist[0]}, the first allowed model, as its fallback.` : "When blank with no allowed models, Nebula uses a model discovered by the provider health check."}</p>
+            <label>Allowed model IDs<textarea rows={3} value={modelAllowlistText} placeholder="One provider model ID per line" onChange={(event) => setModelAllowlistText(event.target.value)} /></label>
+            <p className="provider-dialog-note">The explicit default is added to this allowlist automatically. Remove an old ID here when changing it if that model should no longer be selectable.</p>
+            {dialogProviderType === "vertex" && <div className="resource-form-grid"><label>Google Cloud project<input required value={vertexProject} placeholder="my-security-project" onChange={(event) => setVertexProject(event.target.value)} /></label><label>Vertex location<input required value={vertexLocation} placeholder="us-central1" onChange={(event) => setVertexLocation(event.target.value)} /></label></div>}
+            {dialogProviderType === "bedrock" && <label>AWS region<input value={awsRegion} placeholder="Uses the ambient AWS region when blank" onChange={(event) => setAwsRegion(event.target.value)} /></label>}
+            <label>Credential environment variable<input value={credentialEnv} pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder={dialogLocal ? "Optional for authenticated local gateways" : "For example, OPENAI_API_KEY"} autoCapitalize="none" spellCheck={false} onChange={(event) => setCredentialEnv(event.target.value)} /></label>
+            {!dialogLocal && <label className="provider-consent"><input type="checkbox" checked={permitsSensitiveData} onChange={(event) => setPermitsSensitiveData(event.target.checked)} /><span><strong>Allow engagement and document data</strong><small>Permit this profile to receive redacted knowledge excerpts only after a separate confirmation for each chat request.</small></span></label>}
+            <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : "This profile will use the provider's ambient credential chain, if supported."}</p>
+            {selected?.notes && <p className="provider-dialog-note">{selected.notes}</p>}
             {formError && <p className="form-error" role="alert">{formError}</p>}
-            <footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Saving…" : "Add provider"}</button></footer>
+            <footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim() || (requiresDefaultModel && !model.trim()) || (dialogProviderType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim()))}>{saving ? "Saving…" : editingProvider ? "Save provider" : "Add provider"}</button></footer>
           </form>
         </div>
       )}
+      {operatorDialog && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="operator-dialog-title" onSubmit={(event) => void submitOperator(event)}><header><div><small>Local attribution</small><h2 id="operator-dialog-title">{editingOperator ? "Edit operator" : "Add operator"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close operator dialog" onClick={() => setOperatorDialog(false)}><X size={17} /></button></header><label>Display name<input required autoFocus value={operatorName} onChange={(event) => setOperatorName(event.target.value)} /></label><label>Email<input type="email" value={operatorEmail} onChange={(event) => setOperatorEmail(event.target.value)} /></label><label>Role<input value={operatorRole} placeholder="Engagement lead, analyst…" onChange={(event) => setOperatorRole(event.target.value)} /></label><p className="provider-dialog-note">This identity is stored locally for attribution only. It is not an authentication account and grants no permissions.</p>{operatorError && <p className="form-error" role="alert">{operatorError}</p>}<footer><button className="button secondary" type="button" onClick={() => setOperatorDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(operatorBusy)}>{operatorBusy ? "Saving…" : "Save operator"}</button></footer></form></div>}
     </div>
   );
 }

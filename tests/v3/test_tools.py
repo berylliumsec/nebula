@@ -268,6 +268,34 @@ def test_active_tool_creates_durable_approval_and_resumes_after_decision(tmp_pat
     ]
 
 
+def test_expiring_approval_persists_transition_and_event_atomically(tmp_path):
+    store = NebulaStore(Database(tmp_path / "expired-approval.db"))
+    run = store.create(
+        AgentRun(id="expiry-run", engagement_id="eng-1", objective="expire gate")
+    )
+    approval = store.create(
+        Approval(
+            engagement_id=run.engagement_id,
+            run_id=run.id,
+            risk_class=RiskClass.ACTIVE_SCAN,
+            exact_request={"tool_name": "scan.tcp", "arguments": {}},
+            policy_rationale="operator approval required",
+            requested_by="agent-network",
+        )
+    )
+
+    expired = asyncio.run(StoreToolLedger(store).expire_approval(approval))
+
+    assert expired.status == ApprovalStatus.EXPIRED
+    assert store.get(Approval, approval.id) == expired
+    [event] = store.replay_events(run.id)
+    assert event.event_type == "approval.expired"
+    assert event.payload == {
+        "approval_id": approval.id,
+        "status": ApprovalStatus.EXPIRED.value,
+    }
+
+
 def test_broker_rejects_an_unpersisted_forged_approval_decision(tmp_path):
     plugin = StubActiveTool()
     broker, store = _broker(tmp_path, plugin)
@@ -469,8 +497,6 @@ def test_store_ledger_reserves_hard_tool_budget_before_execution(tmp_path):
     asyncio.run(broker.execute(first, scope))
     with pytest.raises(RunBudgetExceededError, match="exhausted"):
         asyncio.run(
-            broker.execute(
-                first.model_copy(update={"idempotency_key": "two"}), scope
-            )
+            broker.execute(first.model_copy(update={"idempotency_key": "two"}), scope)
         )
     assert executions == [{}]

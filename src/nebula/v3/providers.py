@@ -12,6 +12,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterable
 from enum import Enum
@@ -97,13 +98,14 @@ class ModelCapabilities(BaseModel):
 
 
 class ProviderConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     id: str
     kind: ProviderKind
     flavor: ProviderFlavor = ProviderFlavor.CUSTOM
     base_url: str
     default_model: str | None = None
+    model_allowlist: list[str] = Field(default_factory=list)
     api_key_env: str | None = None
     extra_headers: dict[str, str] = Field(default_factory=dict)
     timeout_seconds: float = Field(default=120.0, gt=0, le=900)
@@ -120,6 +122,13 @@ class ProviderConfig(BaseModel):
         if not value.startswith(("http://", "https://")):
             raise ValueError("base_url must use http or https")
         return value.rstrip("/")
+
+    @field_validator("api_key_env")
+    @classmethod
+    def valid_api_key_environment_name(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("api_key_env must be a valid environment variable name")
+        return value
 
     @model_validator(mode="after")
     def endpoint_respects_locality(self) -> "ProviderConfig":
@@ -149,6 +158,15 @@ class ProviderConfig(BaseModel):
         if is_local_address and not self.local:
             raise ValueError(
                 "private/link-local provider endpoints must be explicitly labeled local"
+            )
+        if self.local and not is_local_address:
+            raise ValueError(
+                "local provider endpoints must use localhost or a private, "
+                "link-local, or reserved IP address"
+            )
+        if parsed.scheme == "http" and not is_local_address:
+            raise ValueError(
+                "unencrypted provider endpoints are allowed only on local/private addresses"
             )
         return self
 
@@ -284,10 +302,16 @@ class ModelProvider(ABC):
         return self.config.capabilities
 
     def require(self, request: ModelRequest) -> str:
+        if not self.config.enabled:
+            raise ProviderError(f"provider {self.config.id!r} is disabled")
         model = request.model or self.config.default_model
         if not model:
             raise ProviderError(
                 f"provider {self.config.id!r} requires an explicit model"
+            )
+        if self.config.model_allowlist and model not in self.config.model_allowlist:
+            raise ProviderError(
+                f"model {model!r} is not allowed by provider {self.config.id!r}"
             )
         required: list[str] = []
         if request.tools or request.tool_results:
@@ -403,7 +427,6 @@ class OpenAIResponsesProvider(ModelProvider):
         payload: dict[str, Any] = {
             "model": model,
             "input": [message.model_dump() for message in request.messages],
-            "parallel_tool_calls": request.parallel_tool_calls,
         }
         payload["input"].extend(
             {
@@ -424,6 +447,7 @@ class OpenAIResponsesProvider(ModelProvider):
         if request.temperature is not None:
             payload["temperature"] = request.temperature
         if request.tools:
+            payload["parallel_tool_calls"] = request.parallel_tool_calls
             payload["tools"] = [
                 {
                     "type": "function",
@@ -516,7 +540,6 @@ class OpenAICompatibleProvider(ModelProvider):
         payload: dict[str, Any] = {
             "model": model,
             "messages": [message.model_dump() for message in request.messages],
-            "parallel_tool_calls": request.parallel_tool_calls,
         }
         payload["messages"].extend(
             {
@@ -539,6 +562,7 @@ class OpenAICompatibleProvider(ModelProvider):
         if request.temperature is not None:
             payload["temperature"] = request.temperature
         if request.tools:
+            payload["parallel_tool_calls"] = request.parallel_tool_calls
             payload["tools"] = [
                 {
                     "type": "function",
@@ -761,7 +785,6 @@ class AnthropicProvider(ModelProvider):
                     "name": tool.name,
                     "description": tool.description,
                     "input_schema": tool.input_schema,
-                    "strict": tool.strict,
                 }
                 for tool in request.tools
             ]
@@ -1081,12 +1104,31 @@ class BedrockProvider(ModelProvider):
         )
 
     async def health(self) -> ProviderHealth:
-        return ProviderHealth(
-            provider_id=self.config.id,
-            healthy=bool(self.config.default_model),
-            models=[self.config.default_model] if self.config.default_model else [],
-            detail=None if self.config.default_model else "no default model configured",
-        )
+        def discover() -> list[str]:
+            client = boto3.client(
+                "bedrock",
+                region_name=self.config.options.get("region"),
+            )
+            response = client.list_foundation_models()
+            return [
+                item["modelId"]
+                for item in response.get("modelSummaries", [])
+                if isinstance(item.get("modelId"), str)
+            ]
+
+        try:
+            models = await asyncio.to_thread(discover)
+            return ProviderHealth(
+                provider_id=self.config.id,
+                healthy=True,
+                models=list(dict.fromkeys(models)),
+            )
+        except Exception as exc:
+            return ProviderHealth(
+                provider_id=self.config.id,
+                healthy=False,
+                detail=f"Bedrock health check failed: {type(exc).__name__}",
+            )
 
 
 PROVIDER_CATALOG: dict[ProviderFlavor, ProviderCatalogEntry] = {
@@ -1391,6 +1433,7 @@ def config_from_catalog(
     if endpoint is None:
         raise ValueError(f"{entry.display_name} requires an explicit endpoint")
     options = dict(overrides.pop("options", {}))
+    local = bool(overrides.pop("local", entry.local)) or entry.local
     if flavor == ProviderFlavor.AZURE_OPENAI:
         options.setdefault("api_key_header", "api-key")
         options.setdefault("api_key_scheme", "")
@@ -1400,7 +1443,7 @@ def config_from_catalog(
         flavor=flavor,
         base_url=endpoint,
         api_key_env=api_key_env or entry.suggested_key_env,
-        local=entry.local,
+        local=local,
         capabilities=capabilities or ModelCapabilities(),
         options=options,
         **overrides,
@@ -1410,8 +1453,15 @@ def config_from_catalog(
 def provider_from_profile(profile: ProviderProfile) -> ModelProvider:
     """Build a runtime adapter from a persisted, secret-safe provider profile."""
 
+    legacy_flavors = {
+        "openai-compatible": ProviderFlavor.CUSTOM.value,
+        "openai_compatible": ProviderFlavor.CUSTOM.value,
+        "openai-responses": ProviderFlavor.OPENAI.value,
+        "openai_responses": ProviderFlavor.OPENAI.value,
+    }
+    provider_type = legacy_flavors.get(profile.provider_type, profile.provider_type)
     try:
-        flavor = ProviderFlavor(profile.provider_type)
+        flavor = ProviderFlavor(provider_type)
     except ValueError as exc:
         raise ValueError(
             f"unknown provider type {profile.provider_type!r}; "
@@ -1443,7 +1493,9 @@ def provider_from_profile(profile: ProviderProfile) -> ModelProvider:
         base_url=profile.endpoint,
         api_key_env=secret_env,
         default_model=default_model,
+        model_allowlist=profile.model_allowlist,
         capabilities=capabilities,
+        local=profile.is_local,
         enabled=profile.enabled,
         data_residency=(
             profile.privacy.residency[0] if profile.privacy.residency else None

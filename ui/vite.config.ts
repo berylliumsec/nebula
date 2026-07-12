@@ -21,7 +21,7 @@ export default defineConfig({
   envPrefix: ["VITE_", "NEBULA_"],
   build: {
     target: "es2022",
-    sourcemap: true,
+    sourcemap: false,
   },
   test: {
     environment: "jsdom",

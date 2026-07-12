@@ -6,13 +6,12 @@ import {
   DollarSign,
   GitBranch,
   Network,
-  Pause,
-  Play,
   ScanSearch,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
+import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
 
 const agents = [
@@ -33,7 +32,7 @@ export function AgentsPage() {
           eyebrow="Supervised execution"
           title="Agents"
           description="Persisted run state and activity from Nebula Core. Specialist task details appear when the tasks resource is connected."
-          actions={<><button className="button secondary" type="button" disabled={!run}><Pause size={16} /> Pause mission</button><button className="button primary" type="button"><Play size={16} /> New mission</button></>}
+          actions={<><StopMissionButton /><NewMissionButton /></>}
         />
         <section className="mission-hero panel">
           <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replace("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{approvals.length} pending approval request{approvals.length === 1 ? "" : "s"}.</p></div>
@@ -54,8 +53,8 @@ export function AgentsPage() {
         description="One supervisor coordinates bounded specialists. Every transition is persisted before it is streamed."
         actions={
           <>
-            <button className="button secondary" type="button"><Pause size={16} /> Pause mission</button>
-            <button className="button primary" type="button"><Play size={16} /> New mission</button>
+            <StopMissionButton />
+            <NewMissionButton />
           </>
         }
       />
@@ -109,7 +108,7 @@ export function AgentsPage() {
             <article className="agent-card" key={name}>
               <header><span className={`agent-icon ${state}`}><Icon size={19} /></span><span className={`agent-state ${state}`}>{state === "running" ? <span className="pulse-dot" /> : state === "queued" ? <CircleDashed size={12} /> : null}{state}</span></header>
               <h3>{name}</h3><p>{detail}</p>
-              <footer><span>{tools}</span><span>View trail →</span></footer>
+              <footer><span>{tools}</span><span>Trail in activity center</span></footer>
             </article>
           ))}
         </div>

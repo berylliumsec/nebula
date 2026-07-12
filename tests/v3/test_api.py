@@ -17,6 +17,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.providers import OpenAICompatibleProvider, ProviderFlavor, ProviderHealth
 from nebula.v3.storage import NebulaStore
+from nebula.v3.version import __version__
 
 
 @pytest.fixture
@@ -36,18 +37,32 @@ def _auth():
     return {"Authorization": "Bearer test-token"}
 
 
-def test_health_is_public_but_data_routes_require_auth(api):
+def test_health_and_data_routes_require_auth(api):
     client, _, _ = api
-    response = client.get("/api/v1/health")
+    assert client.get("/api/v1/health").status_code == 401
+    assert (
+        client.get(
+            "/api/v1/health", headers={"Authorization": "Bearer wrong-token"}
+        ).status_code
+        == 401
+    )
+    response = client.get("/api/v1/health", headers=_auth())
     assert response.status_code == 200
     assert response.json()["journal_mode"] == "wal"
+    assert response.json()["human_pty"] == "unavailable"
+    assert response.json()["version"] == __version__
+    assert {
+        "commit",
+        "target",
+        "build_timestamp",
+        "distribution_channel",
+    } <= response.json().keys()
     assert client.get("/api/v1/engagements").status_code == 401
     assert client.get("/api/v1/engagements", headers=_auth()).status_code == 200
     catalog = client.get("/api/v1/provider-catalog", headers=_auth())
     assert catalog.status_code == 200
     assert any(
-        item["flavor"] == "vllm" and item["local"] is True
-        for item in catalog.json()
+        item["flavor"] == "vllm" and item["local"] is True for item in catalog.json()
     )
 
 
@@ -73,17 +88,55 @@ def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
 
     monkeypatch.setattr(OpenAICompatibleProvider, "health", healthy)
 
-    response = client.post(
-        f"/api/v1/providers/{profile.id}/health", headers=_auth()
-    )
+    response = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
 
     assert response.status_code == 200
     assert response.json() == {
         "provider_id": profile.id,
         "healthy": True,
-        "models": ["security-model", "vision-model"],
+        "models": ["security-model"],
         "detail": None,
     }
+
+
+def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "disabled-provider.db")
+    profile = store.create(
+        ProviderProfile(
+            name="Disabled",
+            provider_type="vllm",
+            is_local=True,
+            enabled=False,
+        )
+    )
+    invalid = store.create(
+        ProviderProfile(name="Invalid import", provider_type="not-a-provider")
+    )
+
+    async def should_not_run(_runtime):
+        raise AssertionError("disabled provider health must not access the network")
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "health", should_not_run)
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    response = client.post(
+        f"/api/v1/providers/{profile.id}/health",
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider_id": profile.id,
+        "healthy": False,
+        "models": [],
+        "detail": "provider profile is disabled",
+    }
+    refreshed = client.post("/api/v1/provider-health/refresh", headers=_auth())
+    assert refreshed.status_code == 200
+    by_id = {item["provider_id"]: item for item in refreshed.json()}
+    assert by_id[profile.id]["detail"] == "provider profile is disabled"
+    assert by_id[invalid.id]["healthy"] is False
+    assert "unknown provider type" in by_id[invalid.id]["detail"]
 
 
 def test_tauri_cors_and_audit_resources_are_fail_closed_by_default(tmp_path):
@@ -102,7 +155,10 @@ def test_tauri_cors_and_audit_resources_are_fail_closed_by_default(tmp_path):
     assert preflight.headers["access-control-allow-origin"] == "http://tauri.localhost"
     assert client.post("/api/v1/runs/nope/events", headers=_auth()).status_code == 405
     assert client.post("/api/v1/approvals", headers=_auth(), json={}).status_code == 405
-    assert client.patch("/api/v1/tool-calls/nope", headers=_auth(), json={}).status_code == 405
+    assert (
+        client.patch("/api/v1/tool-calls/nope", headers=_auth(), json={}).status_code
+        == 405
+    )
     assert client.delete("/api/v1/artifacts/nope", headers=_auth()).status_code == 405
 
 
@@ -146,13 +202,22 @@ def test_typed_crud_revision_and_overview(api):
         client.get(f"/api/v1/engagements/{engagement_id}", headers=_auth()).status_code
         == 404
     )
+    assert (
+        client.get(
+            f"/api/v1/engagements/{engagement_id}/overview",
+            headers=_auth(),
+        ).status_code
+        == 404
+    )
 
 
 def test_run_event_rest_and_authenticated_websocket_replay(api):
-    client, _, _ = api
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Event replay"))
+    run = store.create(AgentRun(engagement_id=engagement.id, objective="Replay events"))
     for number in (1, 2):
         response = client.post(
-            "/api/v1/runs/run-1/events",
+            f"/api/v1/runs/{run.id}/events",
             headers=_auth(),
             json={
                 "event_type": "task.progress",
@@ -163,11 +228,11 @@ def test_run_event_rest_and_authenticated_websocket_replay(api):
         assert response.status_code == 201
         assert response.json()["sequence"] == number
 
-    replay = client.get("/api/v1/runs/run-1/events?after=1", headers=_auth()).json()
+    replay = client.get(f"/api/v1/runs/{run.id}/events?after=1", headers=_auth()).json()
     assert [event["sequence"] for event in replay["events"]] == [2]
 
     with client.websocket_connect(
-        "/api/v1/runs/run-1/events/ws?after=0",
+        f"/api/v1/runs/{run.id}/events/ws?after=0",
         subprotocols=["nebula.events.v1", "nebula.auth.dGVzdC10b2tlbg"],
     ) as websocket:
         assert websocket.accepted_subprotocol == "nebula.events.v1"
@@ -179,7 +244,7 @@ def test_run_event_rest_and_authenticated_websocket_replay(api):
         }
 
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect("/api/v1/runs/run-1/events/ws"):
+        with client.websocket_connect(f"/api/v1/runs/{run.id}/events/ws"):
             pass
     assert exc_info.value.code == 4401
 
@@ -204,6 +269,29 @@ def test_artifact_content_and_openapi_contract(api):
         "content"
     ]["application/json"]["schema"]
     assert request_schema["$ref"].endswith("/Engagement")
+
+
+def test_static_workspace_supports_spa_reload_without_masking_missing_assets(
+    tmp_path,
+):
+    frontend = tmp_path / "dist"
+    frontend.mkdir()
+    (frontend / "index.html").write_text("<main>Nebula workspace</main>")
+    (frontend / "app.js").write_text("console.log('nebula')")
+    client = TestClient(
+        create_app(
+            NebulaStore(tmp_path / "spa.db"),
+            auth_token="test-token",
+            static_dir=frontend,
+        )
+    )
+
+    assert client.get("/settings").text == "<main>Nebula workspace</main>"
+    assert client.get("/app.js").status_code == 200
+    assert client.get("/missing.js").status_code == 404
+    api_missing = client.get("/api/v1/not-a-route")
+    assert api_missing.status_code == 404
+    assert "Nebula workspace" not in api_missing.text
 
 
 def test_approval_decision_is_revisioned_and_recorded_in_run_ledger(api):
@@ -298,9 +386,11 @@ def test_expired_approval_is_durably_expired_instead_of_approved(api):
 
 
 def test_websocket_header_auth_survives_malformed_optional_auth_protocol(api):
-    client, _, _ = api
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Empty replay"))
+    run = store.create(AgentRun(engagement_id=engagement.id, objective="No events yet"))
     with client.websocket_connect(
-        "/api/v1/runs/empty/events/ws",
+        f"/api/v1/runs/{run.id}/events/ws",
         headers=_auth(),
         subprotocols=["nebula.events.v1", "nebula.auth.not!base64"],
     ) as websocket:
@@ -309,6 +399,28 @@ def test_websocket_header_auth_survives_malformed_optional_auth_protocol(api):
             "kind": "replay_complete",
             "after_sequence": 0,
         }
+
+
+def test_run_event_routes_reject_a_missing_run(api):
+    client, _, _ = api
+
+    assert client.get("/api/v1/runs/missing/events", headers=_auth()).status_code == 404
+    assert (
+        client.post(
+            "/api/v1/runs/missing/events",
+            headers=_auth(),
+            json={"event_type": "orphan"},
+        ).status_code
+        == 404
+    )
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            "/api/v1/runs/missing/events/ws",
+            headers=_auth(),
+            subprotocols=["nebula.events.v1"],
+        ):
+            pass
+    assert exc_info.value.code == 4404
 
 
 def test_websocket_rejects_conflicting_valid_credentials(api):

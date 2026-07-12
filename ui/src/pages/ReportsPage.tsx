@@ -1,40 +1,147 @@
-import { CheckCircle2, Download, Eye, FileText, MoreHorizontal, Plus, ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Download, FileJson, FileText, Plus, Save, ShieldCheck, X } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
 
+function safeFilename(value: string): string {
+  return value.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "nebula-report";
+}
+
+function downloadFile(filename: string, content: string, type: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 export function ReportsPage() {
-  const { previewMode } = useWorkspace();
+  const { createReport, engagement, findings, previewMode, reports, updateReport } = useWorkspace();
+  const [selectedId, setSelectedId] = useState("");
+  const selected = reports.find((report) => report.id === selectedId);
+  const [title, setTitle] = useState("");
+  const [status, setStatus] = useState("draft");
+  const [summary, setSummary] = useState("");
+  const [findingIds, setFindingIds] = useState<string[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const [creating, setCreating] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [createSaving, setCreateSaving] = useState(false);
+  const readOnly = selected?.status === "final";
+
+  useEffect(() => {
+    if (selectedId && reports.some((report) => report.id === selectedId)) return;
+    setSelectedId(reports[0]?.id ?? "");
+  }, [reports, selectedId]);
+
+  useEffect(() => {
+    if (!selected) {
+      setTitle("");
+      setSummary("");
+      setFindingIds([]);
+      setDirty(false);
+      return;
+    }
+    setTitle(selected.title);
+    setStatus(selected.status);
+    setSummary(selected.executiveSummary);
+    setFindingIds(selected.findingIds);
+    setDirty(false);
+    setError(undefined);
+  }, [selected]);
+
+  const linkedFindings = useMemo(() => findings.filter((finding) => findingIds.includes(finding.id)), [findingIds, findings]);
+  const create = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!engagement) return;
+    setCreateSaving(true);
+    setError(undefined);
+    try {
+      const report = await createReport({
+        engagementId: engagement.id,
+        title: newTitle.trim(),
+        findingIds: findings.filter((finding) => ["validated", "confirmed"].includes(finding.status)).map((finding) => finding.id),
+      });
+      setSelectedId(report.id);
+      setNewTitle("");
+      setCreating(false);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Could not create the report.");
+    } finally {
+      setCreateSaving(false);
+    }
+  };
+
+  const save = async () => {
+    if (!selected || selected.status === "final" || !title.trim()) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      await updateReport(selected.id, {
+        title: title.trim(),
+        status,
+        executiveSummary: summary,
+        findingIds,
+        expectedRevision: selected.revision,
+      });
+      setDirty(false);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save the report.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setField = <T,>(setter: (value: T) => void, value: T) => {
+    if (readOnly) return;
+    setter(value);
+    setDirty(true);
+  };
+
+  const allowDiscard = () => !dirty || window.confirm("Discard the unsaved changes to this report?");
+  const selectReport = (id: string) => {
+    if (id !== selectedId && allowDiscard()) setSelectedId(id);
+  };
+  const openCreate = () => {
+    if (!allowDiscard()) return;
+    setError(undefined);
+    setCreating(true);
+  };
+
+  const markdown = () => {
+    const findingSections = linkedFindings.map((finding) => `## ${finding.title}\n\n- Severity: ${finding.severity}\n- Status: ${finding.status.replaceAll("_", " ")}\n- Identifiers: ${[...finding.cveIds, ...finding.cweIds].join(", ") || "None"}\n\n${finding.description || "No description recorded."}`).join("\n\n");
+    return `# ${title}\n\nStatus: ${status}\n\n## Executive summary\n\n${summary || "No executive summary recorded."}${findingSections ? `\n\n# Findings\n\n${findingSections}` : ""}\n`;
+  };
+
+  const exportJson = () => {
+    if (!selected) return;
+    downloadFile(`${safeFilename(title)}.json`, JSON.stringify({ ...selected, title, status, executiveSummary: summary, findingIds, findings: linkedFindings }, null, 2), "application/json");
+  };
+
   return (
     <div className="page reports-page">
-      <PageHeader eyebrow="Defensible deliverables" title="Reports" description="Compose executive and technical narratives from verified findings and cited evidence." actions={<button className="button primary" type="button"><Plus size={16} /> New report</button>} />
-      {!previewMode ? (
-        <section className="panel empty-state"><FileText size={28} /><strong>No report selected</strong><p>Connect the Core reports resource or create a report to open the composer.</p></section>
-      ) : <div className="report-layout">
+      <PageHeader eyebrow="Defensible deliverables" title="Reports" description="Compose executive narratives from persisted report data and selected findings." actions={<button className="button primary" type="button" disabled={previewMode || !engagement} onClick={openCreate}><Plus size={16} /> New report</button>} />
+      {error && <div className="knowledge-status error" role="alert">{error}</div>}
+      {!selected ? <section className="panel empty-state"><FileText size={28} /><strong>{previewMode ? "Core unavailable" : "No reports yet"}</strong><p>{previewMode ? "Connect Nebula Core to create and edit persisted reports." : "Create a draft report to begin composing an executive summary."}</p></section> : <div className="report-layout">
         <aside className="panel report-outline">
-          <header><div><span>Draft report</span><strong>Acme external assessment</strong></div><button className="icon-button subtle" type="button" aria-label="Report actions"><MoreHorizontal size={17} /></button></header>
-          <nav aria-label="Report outline"><button className="complete" type="button"><CheckCircle2 size={15} /> Cover & metadata</button><button className="active" type="button"><FileText size={15} /> Executive summary</button><button type="button"><span>3</span> Scope & methodology</button><button type="button"><span>4</span> Risk overview</button><button type="button"><span>5</span> Technical findings <em>12</em></button><button type="button"><span>6</span> Remediation roadmap</button><button type="button"><span>7</span> Appendices</button></nav>
-          <footer><span>Completion</span><strong>68%</strong><div className="progress-track small"><span style={{ width: "68%" }} /></div></footer>
+          <header><div><span>{reports.length} report{reports.length === 1 ? "" : "s"}</span><strong>{engagement?.name}</strong></div></header>
+          <nav aria-label="Reports">{reports.map((report) => <button className={report.id === selected.id ? "active" : undefined} type="button" key={report.id} onClick={() => selectReport(report.id)}><FileText size={15} /><span className="report-list-label">{report.title}<small>{report.status} · revision {report.revision}</small></span></button>)}</nav>
+          <footer><span>Persisted by Core</span><strong>{reports.length}</strong></footer>
         </aside>
-        <section className="panel report-editor">
-          <header className="report-editor-toolbar"><div><button type="button"><strong>B</strong></button><button type="button"><em>I</em></button><button type="button">H2</button><span /><button type="button">• List</button><button type="button">Add citation</button></div><span>Saved locally</span></header>
-          <article className="report-document" contentEditable suppressContentEditableWarning aria-label="Executive summary editor">
-            <span className="document-kicker">Executive summary</span>
-            <h1>Acme external security assessment</h1>
-            <p>Nebula Security assessed Acme’s externally accessible systems and supporting APIs between July 8 and July 12, 2026. Testing followed the customer-approved rules of engagement and remained within the documented asset and time boundaries.</p>
-            <h2>Overall posture</h2>
-            <p>The assessment identified one critical and four high-severity weaknesses requiring prioritized remediation. The most urgent issue affects an internet-facing gateway and has evidence of active exploitation in the wild.</p>
-            <blockquote contentEditable={false}><ShieldCheck size={17} /><span><strong>Evidence-backed statement</strong> · 3 findings · 8 immutable artifacts</span><button type="button">Inspect citations</button></blockquote>
-            <h2>Recommended next actions</h2>
-            <ol><li>Apply the vendor update to the affected gateway within 24 hours.</li><li>Restrict administrative access and require phishing-resistant MFA.</li><li>Schedule a targeted retest after the remediation window.</li></ol>
-          </article>
+        <section className="panel report-editor" aria-readonly={readOnly || undefined}>
+          <header className="report-editor-toolbar"><div><label>Status<select value={status} disabled={readOnly} onChange={(event) => setField(setStatus, event.target.value)}><option value="draft">Draft</option><option value="review">In review</option><option value="final" disabled>Final · signed</option></select></label></div><span>{readOnly ? `Final · read-only · revision ${selected.revision}` : saving ? "Saving…" : dirty ? "Unsaved changes" : `Saved · revision ${selected.revision}`}</span></header>
+          <div className="report-form">{readOnly && <p className="provider-dialog-note" role="status">This final report is an immutable signed record. Export remains available; create a new draft to make changes.</p>}<label>Report title<input value={title} readOnly={readOnly} onChange={(event) => setField(setTitle, event.target.value)} /></label><label>Executive summary<textarea rows={14} value={summary} readOnly={readOnly} placeholder="Summarize scope, posture, material findings, and recommended next actions…" onChange={(event) => setField(setSummary, event.target.value)} /></label><fieldset disabled={readOnly}><legend>Included findings</legend>{findings.length ? findings.map((finding) => <label key={finding.id}><input type="checkbox" checked={findingIds.includes(finding.id)} onChange={(event) => setField(setFindingIds, event.target.checked ? [...findingIds, finding.id] : findingIds.filter((id) => id !== finding.id))} /><span><strong>{finding.title}</strong><small>{finding.severity} · {finding.status.replaceAll("_", " ")}</small></span></label>) : <p>No findings are available.</p>}</fieldset><footer><span>{linkedFindings.length} finding{linkedFindings.length === 1 ? "" : "s"} included</span><button className="button primary" type="button" disabled={readOnly || !dirty || saving || !title.trim()} onClick={() => void save()}><Save size={15} /> {readOnly ? "Final report" : saving ? "Saving…" : "Save report"}</button></footer></div>
         </section>
         <aside className="panel report-review">
-          <header><h2>Review & export</h2><p>Checks update from structured report data.</p></header>
-          <ul><li className="pass"><CheckCircle2 size={16} /><span><strong>Evidence coverage</strong><small>12 of 12 verified findings cited</small></span></li><li className="pass"><CheckCircle2 size={16} /><span><strong>Required sections</strong><small>All consultancy sections present</small></span></li><li className="warning"><Eye size={16} /><span><strong>Reviewer sign-off</strong><small>Waiting for Morgan Lee</small></span></li></ul>
-          <div className="export-actions"><button className="button primary full" type="button"><Eye size={15} /> Preview report</button><button className="button secondary full" type="button"><Download size={15} /> Export…</button></div>
-          <p className="export-formats">PDF · HTML · Markdown · JSON · SARIF</p>
+          <header><h2>Export</h2><p>{readOnly ? "Exports use the persisted final record." : "Exports use the current editor values. Save first if they must be persisted."}</p></header>
+          <ul><li className={summary.trim() ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Executive summary</strong><small>{summary.trim() ? "Present" : "Needs content"}</small></span></li><li className={linkedFindings.length ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Finding coverage</strong><small>{linkedFindings.length} included</small></span></li></ul>
+          <div className="export-actions"><button className="button secondary full" type="button" onClick={() => downloadFile(`${safeFilename(title)}.md`, markdown(), "text/markdown")}><Download size={15} /> Markdown</button><button className="button secondary full" type="button" onClick={exportJson}><FileJson size={15} /> JSON</button><button className="button secondary full" type="button" disabled title="Signed PDF rendering is release-gated"><Download size={15} /> PDF unavailable</button></div>
         </aside>
       </div>}
+      {creating && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="report-dialog-title" onSubmit={(event) => void create(event)}><header><div><small>Persisted deliverable</small><h2 id="report-dialog-title">New report</h2></div><button className="icon-button subtle" type="button" aria-label="Close report dialog" onClick={() => setCreating(false)}><X size={17} /></button></header><label>Title<input required autoFocus value={newTitle} placeholder={`${engagement?.name ?? "Engagement"} assessment`} onChange={(event) => setNewTitle(event.target.value)} /></label><p className="provider-dialog-note">Validated and confirmed findings are included initially and can be changed in the editor.</p>{error && <p className="form-error" role="alert">{error}</p>}<footer><button className="button secondary" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={createSaving || !newTitle.trim()}>{createSaving ? "Creating…" : "Create report"}</button></footer></form></div>}
     </div>
   );
 }

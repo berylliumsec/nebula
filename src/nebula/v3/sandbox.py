@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import os
-import shutil
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
@@ -138,6 +137,20 @@ class ContainerSandboxRunner(SandboxRunner):
         "AZURE",
         "AWS_",
     )
+    # Desktop applications do not reliably inherit a login shell's PATH. More
+    # importantly, resolving an executable from an operator-controlled PATH is
+    # the wrong trust boundary for the mandatory sandbox. Keep automatic
+    # discovery to administrator- or package-manager-owned locations. A
+    # non-standard installation remains possible through an explicit absolute
+    # path in configuration.
+    _trusted_runtime_paths = (
+        Path("/usr/bin/podman"),
+        Path("/usr/local/bin/podman"),
+        Path("/opt/homebrew/bin/podman"),
+        Path("/usr/bin/docker"),
+        Path("/usr/local/bin/docker"),
+        Path("/opt/homebrew/bin/docker"),
+    )
 
     def __init__(
         self,
@@ -148,7 +161,8 @@ class ContainerSandboxRunner(SandboxRunner):
         allow_unpinned_images: bool = False,
         allowed_environment: set[str] | None = None,
     ) -> None:
-        self.runtime = runtime or shutil.which("podman") or shutil.which("docker")
+        configured_runtime = runtime or os.getenv("NEBULA_V3_CONTAINER_RUNTIME")
+        self.runtime = self._resolve_runtime(configured_runtime)
         self.rootless_required = rootless_required
         self.egress_enforced_networks = egress_enforced_networks or set()
         self.allow_unpinned_images = allow_unpinned_images
@@ -159,6 +173,23 @@ class ContainerSandboxRunner(SandboxRunner):
             "TERM",
             "NO_COLOR",
         }
+
+    @classmethod
+    def _resolve_runtime(cls, configured: str | None) -> str | None:
+        if configured:
+            candidate = Path(configured).expanduser()
+            if not candidate.is_absolute():
+                raise ValueError(
+                    "the configured container runtime must be an absolute path"
+                )
+            if candidate.name not in {"docker", "podman"}:
+                raise ValueError("the configured runtime must be docker or podman")
+            return str(candidate)
+
+        for candidate in cls._trusted_runtime_paths:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        return None
 
     async def available(self) -> tuple[bool, str]:
         if not self.runtime:

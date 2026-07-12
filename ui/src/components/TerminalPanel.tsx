@@ -82,7 +82,7 @@ export function TerminalPanel({ sessionId, transport }: TerminalPanelProps) {
     <section className="terminal-panel" aria-label="Terminal session">
       <header>
         <div className="terminal-dots" aria-hidden="true"><span /><span /><span /></div>
-        <strong>human-session-01</strong>
+        <strong>{sessionId}</strong>
         <span className={`terminal-state ${connection}`}><span /> {connection}</span>
       </header>
       <div className="terminal-host" ref={hostRef} />

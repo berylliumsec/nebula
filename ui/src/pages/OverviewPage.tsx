@@ -6,13 +6,13 @@ import {
   Clock3,
   DollarSign,
   FileCheck2,
-  Play,
   ScanSearch,
   ShieldCheck,
   Target,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "../components/PageHeader";
+import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
 
 const missionSteps = [
@@ -22,6 +22,17 @@ const missionSteps = [
   { label: "Correlate vulnerability intelligence", state: "queued", actor: "Vulnerability analyst" },
   { label: "Verify evidence and draft report", state: "queued", actor: "Evidence verifier" },
 ];
+
+type EventStepState = "complete" | "running" | "waiting" | "failed" | "stopped" | "queued";
+
+function eventStepState(kind: string): EventStepState {
+  if (kind.includes("failed")) return "failed";
+  if (kind.includes("cancelled") || kind === "run.stop_requested") return "stopped";
+  if (kind.includes("waiting") || kind === "approval.requested" || kind === "tool.requested") return "waiting";
+  if (kind.includes("completed") || kind.includes("verified") || kind.includes("resolved") || kind.includes("created") || kind === "finding.updated") return "complete";
+  if (kind.includes("started") || kind.includes("status_changed") || kind === "agent.message") return "running";
+  return "queued";
+}
 
 export function OverviewPage() {
   const { approvals, assets, engagement, events, findings, health, previewMode, run } = useWorkspace();
@@ -41,11 +52,11 @@ export function OverviewPage() {
           ? "Your supervised mission is progressing within scope. One action needs review."
           : run
             ? `${run.title} is ${run.status.replace("_", " ")}. ${approvals.length} approval request${approvals.length === 1 ? "" : "s"} pending.`
-            : "Core is online. Create or import a run to begin a supervised mission."}
+            : "Core is online. Create an analysis-only mission to begin supervised work."}
         actions={
           <>
-            <button className="button secondary" type="button">Import scan</button>
-            <button className="button primary" type="button"><Play size={16} /> New mission</button>
+            <button className="button secondary" type="button" disabled title="Scanner normalization is release-gated">Import scan unavailable</button>
+            <NewMissionButton />
           </>
         }
       />
@@ -88,11 +99,11 @@ export function OverviewPage() {
           <header className="panel-header">
             <div>
               <span className="section-kicker"><span className="pulse-dot" /> {run ? `Mission ${run.status.replace("_", " ")}` : "No active mission"}</span>
-              <h2>{run?.title ?? "Start or import a supervised mission"}</h2>
+              <h2>{run?.title ?? "Start an analysis-only supervised mission"}</h2>
               <p>{run?.startedAt ? `Started ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(run.startedAt))}` : "No start time recorded"}</p>
             </div>
             <div className="panel-header-actions">
-              <button className="button quiet" type="button" disabled={!run}>Pause</button>
+              <StopMissionButton className="button quiet" />
               <Link className="button secondary" to="/agents">Open mission <ArrowUpRight size={15} /></Link>
             </div>
           </header>
@@ -118,13 +129,13 @@ export function OverviewPage() {
             </ol>
           ) : (
             <ol className="mission-steps">
-              {events.slice(0, 5).map((event) => (
-                <li className="complete" key={event.id}>
-                  <span className="step-state"><CheckCircle2 size={16} /></span>
+              {events.slice(0, 5).map((event) => { const state = eventStepState(event.kind); return (
+                <li className={state} key={event.id}>
+                  <span className="step-state">{state === "complete" ? <CheckCircle2 size={16} /> : state === "running" ? <span /> : state === "waiting" ? <Clock3 size={13} /> : state === "failed" || state === "stopped" ? <CircleAlert size={13} /> : null}</span>
                   <div><strong>{event.summary}</strong><small>{event.actor ?? "Nebula Core"}</small></div>
                   <span className="step-label">#{event.sequence}</span>
                 </li>
-              ))}
+              ); })}
               {events.length === 0 && <li><div><strong>No persisted run events yet</strong><small>Activity appears after Core records a transition.</small></div></li>}
             </ol>
           )}

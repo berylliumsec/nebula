@@ -11,6 +11,8 @@ from .domain import (
     Approval,
     Artifact,
     Asset,
+    ChatMessage,
+    ChatSession,
     Correlation,
     Engagement,
     Evidence,
@@ -18,9 +20,11 @@ from .domain import (
     Identity,
     KnowledgeSource,
     Observation,
+    OperatorProfile,
     ProviderProfile,
     Remediation,
     Report,
+    ReportStatus,
     RunEvent,
     ScopePolicy,
     Service,
@@ -29,6 +33,7 @@ from .domain import (
     Task,
     ToolCall,
 )
+from .version import __version__, build_metadata
 
 __all__ = [
     "Advisory",
@@ -37,6 +42,8 @@ __all__ = [
     "Approval",
     "Artifact",
     "Asset",
+    "ChatMessage",
+    "ChatSession",
     "Correlation",
     "Engagement",
     "Evidence",
@@ -44,9 +51,11 @@ __all__ = [
     "Identity",
     "KnowledgeSource",
     "Observation",
+    "OperatorProfile",
     "ProviderProfile",
     "Remediation",
     "Report",
+    "ReportStatus",
     "RunEvent",
     "ScopePolicy",
     "Service",
@@ -54,4 +63,6 @@ __all__ = [
     "SourceSnapshot",
     "Task",
     "ToolCall",
+    "__version__",
+    "build_metadata",
 ]

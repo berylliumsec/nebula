@@ -250,8 +250,7 @@ class ModelSpecialist:
 
     async def run(self, context: SpecialistContext) -> SpecialistResult:
         prior = {
-            task_id: result.summary
-            for task_id, result in context.prior_results.items()
+            task_id: result.summary for task_id, result in context.prior_results.items()
         }
         request = ModelRequest(
             model=self.model,
@@ -406,19 +405,33 @@ class MissionRuntime:
             supervisor_provider_id=provider_id,
             supervisor_model=model,
         )
+        started_payload = {
+            "objective": objective,
+            "budget": run.budget.model_dump(mode="json"),
+        }
         try:
-            self.store.create(run)
-        except Exception:
+            run, _ = self.store.create_with_event(
+                run,
+                run_id=run.id,
+                event_type="run.started",
+                event_payload=started_payload,
+                idempotency_key="run:started",
+            )
+        except ConflictError:
             existing = self.store.get(AgentRun, run.id)
-            if existing.status in {RunStatus.COMPLETE, RunStatus.CANCELLED}:
+            if existing.status in {
+                RunStatus.COMPLETE,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }:
                 raise MissionError(f"run {run.id} is already terminal")
             run = existing
-        self.store.append_event(
-            run.id,
-            "run.started",
-            {"objective": objective, "budget": run.budget.model_dump(mode="json")},
-            idempotency_key="run:started",
-        )
+            self.store.append_event(
+                run.id,
+                "run.started",
+                started_payload,
+                idempotency_key="run:started",
+            )
         state: MissionState = {
             "engagement_id": engagement_id,
             "run_id": run.id,
@@ -481,28 +494,59 @@ class MissionRuntime:
             raise BudgetExceeded("planned delegation depth exceeds mission budget")
         statuses = {task.id: TaskStatus.PENDING.value for task in plan.tasks}
         for item in plan.tasks:
-            self.store.create(
-                Task(
-                    id=item.id,
-                    engagement_id=state["engagement_id"],
-                    run_id=state["run_id"],
-                    parent_task_id=item.parent_task_id,
-                    specialist_role=item.role.value,
-                    title=item.title,
-                    instructions=item.instructions,
-                    depends_on=item.depends_on,
-                    risk_class=item.risk_class,
-                )
+            candidate = Task(
+                id=item.id,
+                engagement_id=state["engagement_id"],
+                run_id=state["run_id"],
+                parent_task_id=item.parent_task_id,
+                specialist_role=item.role.value,
+                title=item.title,
+                instructions=item.instructions,
+                depends_on=item.depends_on,
+                risk_class=item.risk_class,
             )
-        self.store.update(
+            try:
+                self.store.create(candidate)
+            except ConflictError as exc:
+                existing = self.store.get(Task, candidate.id)
+                stable_fields = {
+                    "id",
+                    "engagement_id",
+                    "run_id",
+                    "parent_task_id",
+                    "specialist_role",
+                    "title",
+                    "instructions",
+                    "depends_on",
+                    "risk_class",
+                }
+                if any(
+                    getattr(existing, field) != getattr(candidate, field)
+                    for field in stable_fields
+                ):
+                    raise MissionError(
+                        f"planned task {candidate.id} conflicts with durable state"
+                    ) from exc
+        run = self.store.get(AgentRun, state["run_id"])
+        self.store.update_with_event(
             AgentRun,
             state["run_id"],
-            {"status": RunStatus.RUNNING},
-        )
-        self.store.append_event(
-            state["run_id"],
-            "run.planned",
             {
+                "status": RunStatus.RUNNING,
+                "metadata": {
+                    **run.metadata,
+                    "total_tasks": len(plan.tasks),
+                    "completed_tasks": 0,
+                    "spent_usd": 0.0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "tool_calls": 0,
+                },
+            },
+            expected_revision=run.revision,
+            run_id=state["run_id"],
+            event_type="run.planned",
+            event_payload={
                 "summary": plan.summary,
                 "rationale": plan.rationale,
                 "tasks": [task.model_dump(mode="json") for task in plan.tasks],
@@ -583,7 +627,7 @@ class MissionRuntime:
                     expected_revision=existing_attempt.revision,
                 )
             current = self.store.get(Task, task.id)
-            self.store.update(
+            self.store.update_with_event(
                 Task,
                 task.id,
                 {
@@ -592,11 +636,13 @@ class MissionRuntime:
                     "started_at": utc_now(),
                 },
                 expected_revision=current.revision,
-            )
-            self.store.append_event(
-                state["run_id"],
-                "task.started",
-                {"task_id": task.id, "attempt": attempt, "role": task.role.value},
+                run_id=state["run_id"],
+                event_type="task.started",
+                event_payload={
+                    "task_id": task.id,
+                    "attempt": attempt,
+                    "role": task.role.value,
+                },
                 idempotency_key=f"task:{task.id}:attempt:{attempt}:started",
             )
             specialist = self.specialists.get(task.role)
@@ -705,7 +751,7 @@ class MissionRuntime:
                 statuses[task.id] = (
                     TaskStatus.PENDING.value if retrying else TaskStatus.FAILED.value
                 )
-                self.store.update(
+                self.store.update_with_event(
                     Task,
                     task.id,
                     {
@@ -715,11 +761,9 @@ class MissionRuntime:
                         "completed_at": None if retrying else utc_now(),
                     },
                     expected_revision=persisted.revision,
-                )
-                self.store.append_event(
-                    state["run_id"],
-                    "task.retry_scheduled" if retrying else "task.failed",
-                    {"task_id": task.id, "error": error},
+                    run_id=state["run_id"],
+                    event_type=("task.retry_scheduled" if retrying else "task.failed"),
+                    event_payload={"task_id": task.id, "error": error},
                     idempotency_key=(
                         f"task:{task.id}:attempt:{attempts[task.id]}:"
                         f"{'retry' if retrying else 'failed'}"
@@ -747,16 +791,14 @@ class MissionRuntime:
             token_output += result.output_tokens
             cost += result.cost_usd
             tool_calls += result.tool_calls
-            self.store.update(
+            self.store.update_with_event(
                 Task,
                 task.id,
                 {"status": TaskStatus.COMPLETE, "completed_at": utc_now()},
                 expected_revision=persisted.revision,
-            )
-            self.store.append_event(
-                state["run_id"],
-                "task.completed",
-                {
+                run_id=state["run_id"],
+                event_type="task.completed",
+                event_payload={
                     "task_id": task.id,
                     "summary": result.summary,
                     "evidence_ids": result.evidence_ids,
@@ -779,6 +821,26 @@ class MissionRuntime:
                 },
                 expected_revision=attempt_entity.revision,
             )
+        run = self.store.get(AgentRun, state["run_id"])
+        self.store.update(
+            AgentRun,
+            run.id,
+            {
+                "metadata": {
+                    **run.metadata,
+                    "total_tasks": len(plan.tasks),
+                    "completed_tasks": sum(
+                        status == TaskStatus.COMPLETE.value
+                        for status in statuses.values()
+                    ),
+                    "spent_usd": cost,
+                    "input_tokens": token_input,
+                    "output_tokens": token_output,
+                    "tool_calls": tool_calls,
+                }
+            },
+            expected_revision=run.revision,
+        )
         return {
             "task_status": statuses,
             "results": results,
@@ -808,19 +870,39 @@ class MissionRuntime:
 
     async def _fail(self, state: MissionState) -> MissionState:
         run = self.store.get(AgentRun, state["run_id"])
-        self.store.update(
-            AgentRun,
-            run.id,
-            {"status": RunStatus.FAILED, "completed_at": utc_now()},
-            expected_revision=run.revision,
-        )
         summary = "mission failed: " + "; ".join(
             f"{task_id}: {error}" for task_id, error in state.get("errors", {}).items()
         )
-        self.store.append_event(
+        statuses = state.get("task_status", {})
+        plan = state.get("plan", {})
+        planned_tasks = plan.get("tasks", []) if isinstance(plan, dict) else []
+        self.store.update_with_event(
+            AgentRun,
             run.id,
-            "run.failed",
-            {"summary": summary, "errors": state.get("errors", {})},
+            {
+                "status": RunStatus.FAILED,
+                "completed_at": utc_now(),
+                "metadata": {
+                    **run.metadata,
+                    "total_tasks": len(planned_tasks),
+                    "completed_tasks": sum(
+                        status == TaskStatus.COMPLETE.value
+                        for status in statuses.values()
+                    ),
+                    "spent_usd": state.get("cost_usd", 0.0),
+                    "input_tokens": state.get("input_tokens", 0),
+                    "output_tokens": state.get("output_tokens", 0),
+                    "tool_calls": state.get("tool_calls", 0),
+                    "final_summary": summary,
+                },
+            },
+            expected_revision=run.revision,
+            run_id=run.id,
+            event_type="run.failed",
+            event_payload={
+                "summary": summary,
+                "errors": state.get("errors", {}),
+            },
             idempotency_key="run:failed",
         )
         return {"final_summary": summary}
@@ -848,16 +930,14 @@ class MissionRuntime:
         else:
             statuses[task_id] = TaskStatus.CANCELLED.value
         current = self.store.get(Task, task_id)
-        self.store.update(
+        self.store.update_with_event(
             Task,
             task_id,
             {"status": TaskStatus(statuses[task_id])},
             expected_revision=current.revision,
-        )
-        self.store.append_event(
-            state["run_id"],
-            "approval.resolved",
-            {"task_id": task_id, "status": status.value},
+            run_id=state["run_id"],
+            event_type="approval.resolved",
+            event_payload={"task_id": task_id, "status": status.value},
             idempotency_key=f"approval:{card.get('id', task_id)}:{status.value}",
         )
         if status not in {ApprovalStatus.APPROVED, ApprovalStatus.EDITED}:
@@ -878,16 +958,14 @@ class MissionRuntime:
                     ):
                         statuses[task.id] = TaskStatus.CANCELLED.value
                         dependent = self.store.get(Task, task.id)
-                        self.store.update(
+                        self.store.update_with_event(
                             Task,
                             task.id,
                             {"status": TaskStatus.CANCELLED, "completed_at": utc_now()},
                             expected_revision=dependent.revision,
-                        )
-                        self.store.append_event(
-                            state["run_id"],
-                            "task.cancelled",
-                            {
+                            run_id=state["run_id"],
+                            event_type="task.cancelled",
+                            event_payload={
                                 "task_id": task.id,
                                 "reason": "required predecessor was not approved",
                             },
@@ -934,16 +1012,30 @@ class MissionRuntime:
         }
         summary = await self.supervisor.synthesize(state["objective"], plan, results)
         run = self.store.get(AgentRun, state["run_id"])
-        self.store.update(
+        self.store.update_with_event(
             AgentRun,
             run.id,
-            {"status": RunStatus.COMPLETE, "completed_at": utc_now()},
-            expected_revision=run.revision,
-        )
-        self.store.append_event(
-            run.id,
-            "run.completed",
             {
+                "status": RunStatus.COMPLETE,
+                "completed_at": utc_now(),
+                "metadata": {
+                    **run.metadata,
+                    "total_tasks": len(plan.tasks),
+                    "completed_tasks": sum(
+                        status == TaskStatus.COMPLETE.value
+                        for status in state.get("task_status", {}).values()
+                    ),
+                    "spent_usd": state.get("cost_usd", 0.0),
+                    "input_tokens": state.get("input_tokens", 0),
+                    "output_tokens": state.get("output_tokens", 0),
+                    "tool_calls": state.get("tool_calls", 0),
+                    "final_summary": summary,
+                },
+            },
+            expected_revision=run.revision,
+            run_id=run.id,
+            event_type="run.completed",
+            event_payload={
                 "summary": summary,
                 "input_tokens": state.get("input_tokens", 0),
                 "output_tokens": state.get("output_tokens", 0),

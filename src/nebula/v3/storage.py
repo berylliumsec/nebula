@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator, TypeVar, cast
 from uuid import uuid4
 
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import and_, delete, exists, func, insert, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -91,6 +91,54 @@ class StoreTransaction:
             self.add(entity)
         return entities
 
+    def update(
+        self,
+        model: type[EntityT],
+        entity_id: str,
+        changes: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> EntityT:
+        """Apply an optimistic entity update inside this unit of work."""
+
+        protected = {"id", "created_at", "updated_at", "revision"}.intersection(changes)
+        if protected:
+            raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
+        row = self.session.get(EntityRow, entity_id)
+        if row is None or row.kind != model.entity_kind:
+            raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
+        if expected_revision is not None and row.revision != expected_revision:
+            raise ConflictError(
+                f"revision conflict: expected {expected_revision}, found {row.revision}"
+            )
+        current = _row_to_entity(row, model)
+        payload = current.model_dump(mode="python")
+        payload.update(changes)
+        payload["id"] = current.id
+        payload["created_at"] = current.created_at
+        payload["updated_at"] = utc_now()
+        payload["revision"] = current.revision + 1
+        updated = model.model_validate(payload)
+        result = self.session.execute(
+            update(EntityRow)
+            .where(
+                EntityRow.id == entity_id,
+                EntityRow.kind == model.entity_kind,
+                EntityRow.revision == current.revision,
+            )
+            .values(
+                payload=_dump_entity(updated),
+                engagement_id=entity_engagement_id(updated),
+                revision=updated.revision,
+                updated_at=updated.updated_at,
+            )
+        )
+        if result.rowcount != 1:
+            raise ConflictError(
+                f"entity {entity_id} changed while the update was in progress"
+            )
+        return updated
+
 
 class NebulaStore:
     """Persistence boundary for typed Nebula entities and run events."""
@@ -99,6 +147,24 @@ class NebulaStore:
         self.database = (
             database if isinstance(database, Database) else Database(database)
         )
+
+    def _begin_run_write(self, connection: Any, run_id: str) -> None:
+        """Serialize sequence assignment for one run on supported databases."""
+
+        dialect = self.database.engine.dialect.name
+        if dialect == "sqlite":
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            return
+        connection.begin()
+        if dialect == "postgresql":
+            # Run events do not require a matching AgentRun row at the storage
+            # boundary, so a row lock is not always available. A transaction-
+            # scoped advisory lock keeps MAX(sequence) + 1 safe per run without
+            # blocking unrelated run ledgers.
+            connection.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:run_id))"),
+                {"run_id": run_id},
+            )
 
     @contextmanager
     def transaction(self) -> Iterator[StoreTransaction]:
@@ -114,6 +180,58 @@ class NebulaStore:
         with self.transaction() as transaction:
             transaction.add_all(entities)
         return entities
+
+    def create_with_event(
+        self,
+        entity: EntityT,
+        *,
+        run_id: str,
+        event_type: str,
+        event_payload: dict[str, Any] | None = None,
+        actor_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> tuple[EntityT, RunEvent]:
+        """Atomically create an entity and append its initial audit event."""
+
+        if not run_id or not event_type:
+            raise ValueError("run_id and event_type are required")
+        connection = self.database.engine.connect()
+        try:
+            self._begin_run_write(connection, run_id)
+            connection.execute(
+                insert(EntityRow).values(
+                    id=entity.id,
+                    kind=entity.entity_kind,
+                    engagement_id=entity_engagement_id(entity),
+                    revision=entity.revision,
+                    payload=_dump_entity(entity),
+                    created_at=entity.created_at,
+                    updated_at=entity.updated_at,
+                )
+            )
+            event = self._next_event(
+                connection,
+                run_id=run_id,
+                event_type=event_type,
+                payload=event_payload,
+                actor_id=actor_id,
+                idempotency_key=idempotency_key,
+            )
+            connection.execute(
+                insert(RunEventRow).values(**event.model_dump(mode="python"))
+            )
+            connection.commit()
+            return entity, event
+        except IntegrityError as exc:
+            connection.rollback()
+            raise ConflictError(
+                f"entity or initial run event already exists: {entity.id}"
+            ) from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def reserve_tool_call(self, call: ToolCall) -> ToolCall:
         """Atomically reserve one durable run tool-call slot and create the call."""
@@ -155,6 +273,27 @@ class NebulaStore:
                 raise NotFoundError(
                     f"agent run is required before tool execution: {call.run_id}"
                 )
+            # PostgreSQL readers do not block on the run row until the
+            # ``FOR UPDATE`` statement above. A concurrent reservation may
+            # therefore have committed this deterministic call ID while this
+            # transaction waited. Recheck before consuming budget.
+            existing = (
+                connection.execute(select(EntityRow).where(EntityRow.id == call.id))
+                .mappings()
+                .first()
+            )
+            if existing is not None:
+                connection.commit()
+                row = EntityRow(
+                    id=existing["id"],
+                    kind=existing["kind"],
+                    engagement_id=existing["engagement_id"],
+                    revision=existing["revision"],
+                    payload=existing["payload"],
+                    created_at=existing["created_at"],
+                    updated_at=existing["updated_at"],
+                )
+                return _row_to_entity(row, ToolCall)
             maximum = int(run["payload"].get("budget", {}).get("max_tool_calls", 0))
             counter = (
                 connection.execute(
@@ -261,46 +400,13 @@ class NebulaStore:
         *,
         expected_revision: int | None = None,
     ) -> EntityT:
-        protected = {"id", "created_at", "updated_at", "revision"}.intersection(changes)
-        if protected:
-            raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
-        with self.database.session() as session:
-            row = session.get(EntityRow, entity_id)
-            if row is None or row.kind != model.entity_kind:
-                raise NotFoundError(
-                    f"{model.entity_kind} entity not found: {entity_id}"
-                )
-            if expected_revision is not None and row.revision != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, found {row.revision}"
-                )
-            current = _row_to_entity(row, model)
-            payload = current.model_dump(mode="python")
-            payload.update(changes)
-            payload["id"] = current.id
-            payload["created_at"] = current.created_at
-            payload["updated_at"] = utc_now()
-            payload["revision"] = current.revision + 1
-            updated = model.model_validate(payload)
-            result = session.execute(
-                update(EntityRow)
-                .where(
-                    EntityRow.id == entity_id,
-                    EntityRow.kind == model.entity_kind,
-                    EntityRow.revision == current.revision,
-                )
-                .values(
-                    payload=_dump_entity(updated),
-                    engagement_id=entity_engagement_id(updated),
-                    revision=updated.revision,
-                    updated_at=updated.updated_at,
-                )
+        with self.transaction() as transaction:
+            return transaction.update(
+                model,
+                entity_id,
+                changes,
+                expected_revision=expected_revision,
             )
-            if result.rowcount != 1:
-                raise ConflictError(
-                    f"entity {entity_id} changed while the update was in progress"
-                )
-            return updated
 
     def update_with_event(
         self,
@@ -322,10 +428,43 @@ class NebulaStore:
             raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
         connection = self.database.engine.connect()
         try:
-            if self.database.engine.dialect.name == "sqlite":
-                connection.exec_driver_sql("BEGIN IMMEDIATE")
-            else:
-                connection.begin()
+            self._begin_run_write(connection, run_id)
+            existing_event = self._event_for_idempotency_key(
+                connection, run_id, idempotency_key
+            )
+            if existing_event is not None:
+                self._validate_idempotent_event(
+                    existing_event,
+                    event_type=event_type,
+                    payload=event_payload,
+                    actor_id=actor_id,
+                )
+                referenced_ids = {
+                    value
+                    for key, value in existing_event.payload.items()
+                    if key.endswith("_id") and isinstance(value, str)
+                }
+                if entity_id != run_id and entity_id not in referenced_ids:
+                    raise ConflictError(
+                        "idempotency key belongs to a different entity transition"
+                    )
+                current_row = (
+                    connection.execute(
+                        select(EntityRow).where(
+                            EntityRow.id == entity_id,
+                            EntityRow.kind == model.entity_kind,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if current_row is None:
+                    raise ConflictError(
+                        "idempotent event exists but its transitioned entity is missing"
+                    )
+                current_entity = self._mapping_to_entity(current_row, model)
+                connection.commit()
+                return current_entity, existing_event
             row = (
                 connection.execute(
                     select(EntityRow).where(
@@ -369,14 +508,9 @@ class NebulaStore:
             )
             if result.rowcount != 1:
                 raise ConflictError("entity transition lost an optimistic lock race")
-            last_sequence = connection.scalar(
-                select(func.max(RunEventRow.sequence)).where(
-                    RunEventRow.run_id == run_id
-                )
-            )
-            event = RunEvent(
+            event = self._next_event(
+                connection,
                 run_id=run_id,
-                sequence=int(last_sequence or 0) + 1,
                 event_type=event_type,
                 payload=event_payload,
                 actor_id=actor_id,
@@ -414,17 +548,65 @@ class NebulaStore:
             expected_revision=expected_revision or existing.revision,
         )
 
-    def delete(self, model: type[Entity], entity_id: str) -> None:
+    def delete(
+        self,
+        model: type[Entity],
+        entity_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> None:
         with self.database.session() as session:
-            result = session.execute(
-                delete(EntityRow).where(
-                    EntityRow.id == entity_id, EntityRow.kind == model.entity_kind
-                )
-            )
+            predicates = [
+                EntityRow.id == entity_id,
+                EntityRow.kind == model.entity_kind,
+            ]
+            if expected_revision is not None:
+                predicates.append(EntityRow.revision == expected_revision)
+            result = session.execute(delete(EntityRow).where(*predicates))
             if result.rowcount != 1:
+                if expected_revision is not None:
+                    current_revision = session.scalar(
+                        select(EntityRow.revision).where(
+                            EntityRow.id == entity_id,
+                            EntityRow.kind == model.entity_kind,
+                        )
+                    )
+                    if current_revision is not None:
+                        raise ConflictError(
+                            "revision conflict: expected "
+                            f"{expected_revision}, found {current_revision}"
+                        )
                 raise NotFoundError(
                     f"{model.entity_kind} entity not found: {entity_id}"
                 )
+
+    def engagement_has_dependents(self, engagement_id: str) -> bool:
+        """Return whether any persisted child is owned by this engagement."""
+
+        predicate = and_(
+            EntityRow.engagement_id == engagement_id,
+            EntityRow.kind != "engagements",
+        )
+        with self.database.session() as session:
+            return bool(session.scalar(select(exists().where(predicate))))
+
+    def provider_has_history_references(self, provider_id: str) -> bool:
+        """Return whether durable chat or run history references a provider."""
+
+        predicate = or_(
+            and_(
+                EntityRow.kind == "runs",
+                EntityRow.payload["supervisor_provider_id"].as_string() == provider_id,
+            ),
+            and_(
+                EntityRow.kind.in_(
+                    ("agent_attempts", "chat_sessions", "chat_messages")
+                ),
+                EntityRow.payload["provider_profile_id"].as_string() == provider_id,
+            ),
+        )
+        with self.database.session() as session:
+            return bool(session.scalar(select(exists().where(predicate))))
 
     def overview(self, engagement_id: str | None = None) -> dict[str, Any]:
         statement = select(EntityRow.kind, func.count(EntityRow.id)).group_by(
@@ -461,44 +643,24 @@ class NebulaStore:
             raise ValueError("run_id and event_type are required")
         connection = self.database.engine.connect()
         try:
-            if self.database.engine.dialect.name == "sqlite":
-                connection.exec_driver_sql("BEGIN IMMEDIATE")
-            else:
-                connection.begin()
+            self._begin_run_write(connection, run_id)
 
-            if idempotency_key:
-                existing = (
-                    connection.execute(
-                        select(RunEventRow).where(
-                            RunEventRow.run_id == run_id,
-                            RunEventRow.idempotency_key == idempotency_key,
-                        )
-                    )
-                    .mappings()
-                    .first()
-                )
-                if existing is not None:
-                    existing_event = self._mapping_to_event(existing)
-                    if (
-                        existing_event.event_type != event_type
-                        or existing_event.payload != (payload or {})
-                        or existing_event.actor_id != actor_id
-                    ):
-                        raise ConflictError(
-                            "idempotency key was reused for a different run event"
-                        )
-                    connection.commit()
-                    return existing_event
-
-            last_sequence = connection.scalar(
-                select(func.max(RunEventRow.sequence)).where(
-                    RunEventRow.run_id == run_id
-                )
+            existing_event = self._event_for_idempotency_key(
+                connection, run_id, idempotency_key
             )
-            event = RunEvent(
-                id=str(uuid4()),
+            if existing_event is not None:
+                self._validate_idempotent_event(
+                    existing_event,
+                    event_type=event_type,
+                    payload=payload,
+                    actor_id=actor_id,
+                )
+                connection.commit()
+                return existing_event
+
+            event = self._next_event(
+                connection,
                 run_id=run_id,
-                sequence=int(last_sequence or 0) + 1,
                 event_type=event_type,
                 payload=payload or {},
                 actor_id=actor_id,
@@ -568,4 +730,72 @@ class NebulaStore:
             actor_id=row["actor_id"],
             occurred_at=occurred_at,
             idempotency_key=row["idempotency_key"],
+        )
+
+    @staticmethod
+    def _mapping_to_entity(row: Any, model: type[EntityT]) -> EntityT:
+        if row["kind"] != model.entity_kind:
+            raise CorruptRecordError(
+                f"record {row['id']} is {row['kind']}, expected {model.entity_kind}"
+            )
+        try:
+            return model.model_validate(row["payload"])
+        except Exception as exc:
+            raise CorruptRecordError(f"record {row['id']} failed validation") from exc
+
+    def _event_for_idempotency_key(
+        self, connection: Any, run_id: str, idempotency_key: str | None
+    ) -> RunEvent | None:
+        if not idempotency_key:
+            return None
+        existing = (
+            connection.execute(
+                select(RunEventRow).where(
+                    RunEventRow.run_id == run_id,
+                    RunEventRow.idempotency_key == idempotency_key,
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return self._mapping_to_event(existing) if existing is not None else None
+
+    @staticmethod
+    def _validate_idempotent_event(
+        event: RunEvent,
+        *,
+        event_type: str,
+        payload: dict[str, Any] | None,
+        actor_id: str | None,
+    ) -> None:
+        if (
+            event.event_type != event_type
+            or event.payload != (payload or {})
+            or event.actor_id != actor_id
+        ):
+            raise ConflictError("idempotency key was reused for a different run event")
+
+    @staticmethod
+    def _next_event(
+        connection: Any,
+        *,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None,
+        actor_id: str | None,
+        idempotency_key: str | None,
+        occurred_at: datetime | None = None,
+    ) -> RunEvent:
+        last_sequence = connection.scalar(
+            select(func.max(RunEventRow.sequence)).where(RunEventRow.run_id == run_id)
+        )
+        return RunEvent(
+            id=str(uuid4()),
+            run_id=run_id,
+            sequence=int(last_sequence or 0) + 1,
+            event_type=event_type,
+            payload=payload or {},
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+            occurred_at=occurred_at or utc_now(),
         )

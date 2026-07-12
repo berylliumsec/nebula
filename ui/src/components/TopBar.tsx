@@ -20,7 +20,7 @@ interface TopBarProps {
 export function TopBar({ activityOpen, onToggleActivity, onOpenPalette }: TopBarProps) {
   const location = useLocation();
   const page = navigationItems.find((item) => item.path === location.pathname) ?? navigationItems[0];
-  const { coreState, previewMode, reconnect } = useWorkspace();
+  const { coreError, coreState, previewMode, reconnect } = useWorkspace();
 
   return (
     <header className="top-bar">
@@ -35,6 +35,8 @@ export function TopBar({ activityOpen, onToggleActivity, onOpenPalette }: TopBar
           className={`connection-chip ${coreState}`}
           type="button"
           onClick={coreState === "offline" ? reconnect : undefined}
+          disabled={coreState !== "offline"}
+          title={coreError}
           aria-label={coreState === "offline" ? "Nebula Core offline. Retry connection" : `Nebula Core ${coreState}`}
         >
           {coreState === "checking" ? (
@@ -44,16 +46,15 @@ export function TopBar({ activityOpen, onToggleActivity, onOpenPalette }: TopBar
           ) : (
             <WifiOff size={14} aria-hidden="true" />
           )}
-          Core {coreState}
+          <span>Core {coreState}</span>
         </button>
         <button className="command-trigger" type="button" onClick={onOpenPalette}>
           <Command size={15} aria-hidden="true" />
           <span>Search</span>
           <kbd>⌘K</kbd>
         </button>
-        <button className="icon-button" type="button" aria-label="Notifications">
+        <button className="icon-button" type="button" aria-label="Notifications unavailable" disabled title="Notification delivery is release-gated">
           <Bell size={18} aria-hidden="true" />
-          <span className="notification-dot" />
         </button>
         <button
           className="icon-button"

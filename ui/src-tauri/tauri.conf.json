@@ -3,6 +3,7 @@
   "productName": "Nebula",
   "version": "3.0.0-alpha.1",
   "identifier": "io.nebula.security",
+  "mainBinaryName": "nebula-ui",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -31,9 +32,37 @@
   "bundle": {
     "active": true,
     "externalBin": ["binaries/nebula-core"],
-    "targets": "all",
+    "createUpdaterArtifacts": false,
     "category": "DeveloperTool",
+    "copyright": "Copyright © Nebula contributors",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "homepage": "https://github.com/BerylliumSec/nebula",
+    "licenseFile": "../../LICENSE.md",
+    "resources": {
+      "../../LICENSE.md": "licenses/LICENSE.md",
+      "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt"
+    },
     "shortDescription": "Local-first security engagement workspace",
-    "longDescription": "Nebula coordinates policy-controlled security assessment missions and their evidence."
+    "longDescription": "Nebula coordinates policy-controlled security assessment missions and their evidence.",
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/nebula": "../../packaging/linux/nebula",
+          "/usr/share/doc/nebula/LICENSE": "../../LICENSE.md",
+          "/usr/share/doc/nebula/THIRD_PARTY_NOTICES.txt": "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt",
+          "/usr/share/icons/hicolor/128x128/apps/nebula-ui.png": "icons/128x128.png"
+        }
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "hardenedRuntime": true
+    }
   }
 }

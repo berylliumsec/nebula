@@ -108,6 +108,12 @@ class ApprovalStatus(StringEnum):
     CANCELLED = "cancelled"
 
 
+class ReportStatus(StringEnum):
+    DRAFT = "draft"
+    REVIEW = "review"
+    FINAL = "final"
+
+
 class CorrelationMethod(StringEnum):
     PURL = "purl"
     CPE = "cpe"
@@ -251,7 +257,7 @@ class Asset(Entity):
     entity_kind: ClassVar[str] = "assets"
     engagement_id: str
     asset_type: str = "host"
-    name: str
+    name: str = Field(min_length=1, max_length=500)
     address: str | None = None
     hostname: str | None = None
     criticality: Severity = Severity.MEDIUM
@@ -360,7 +366,7 @@ class Remediation(Entity):
 class Finding(Entity):
     entity_kind: ClassVar[str] = "findings"
     engagement_id: str
-    title: str
+    title: str = Field(min_length=1, max_length=500)
     description: str = ""
     status: FindingStatus = FindingStatus.CANDIDATE
     severity: Severity = Severity.INFO
@@ -376,6 +382,22 @@ class Finding(Entity):
     verifier_id: str | None = None
     verified_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("cve_ids")
+    @classmethod
+    def normalize_cve_ids(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values]
+        if any(not re.fullmatch(r"CVE-\d{4}-\d{4,}", value) for value in normalized):
+            raise ValueError("CVE identifiers must use the CVE-YYYY-NNNN format")
+        return list(dict.fromkeys(normalized))
+
+    @field_validator("cwe_ids")
+    @classmethod
+    def normalize_cwe_ids(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values]
+        if any(not re.fullmatch(r"CWE-\d+", value) for value in normalized):
+            raise ValueError("CWE identifiers must use the CWE-NNN format")
+        return list(dict.fromkeys(normalized))
 
     @model_validator(mode="after")
     def confirmed_findings_are_evidence_backed(self) -> "Finding":
@@ -553,6 +575,51 @@ class ProviderPrivacy(NebulaModel):
     permits_sensitive_data: bool = False
 
 
+class OperatorProfile(Entity):
+    """Durable local operator attribution, independent of authentication."""
+
+    entity_kind: ClassVar[str] = "operator_profiles"
+    display_name: str = Field(min_length=1, max_length=200)
+    email: str | None = Field(default=None, max_length=320)
+    role: str | None = Field(default=None, max_length=200)
+    active: bool = False
+    activated_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("display_name")
+    @classmethod
+    def normalize_display_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("display_name cannot be blank")
+        return normalized
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized):
+            raise ValueError("email must be a valid address")
+        return normalized
+
+    @field_validator("role")
+    @classmethod
+    def normalize_role(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        return normalized or None
+
+    @field_validator("activated_at")
+    @classmethod
+    def activation_time_must_be_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("activated_at must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
 class ProviderProfile(Entity):
     entity_kind: ClassVar[str] = "providers"
     name: str
@@ -565,6 +632,33 @@ class ProviderProfile(Entity):
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     privacy: ProviderPrivacy = Field(default_factory=ProviderPrivacy)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("secret_ref")
+    @classmethod
+    def secret_must_be_an_environment_reference(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"env:[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("secret_ref must use an env:NAME reference")
+        return value
+
+    @field_validator("model_allowlist")
+    @classmethod
+    def normalize_model_allowlist(cls, values: list[str]) -> list[str]:
+        if any(not value for value in values):
+            raise ValueError("model allowlist entries cannot be empty")
+        return list(dict.fromkeys(values))
+
+    @model_validator(mode="after")
+    def provider_policy_is_coherent(self) -> "ProviderProfile":
+        if self.privacy.local_only and not self.is_local:
+            raise ValueError("a local-only provider profile must be marked local")
+        default_model = self.metadata.get("default_model")
+        if (
+            isinstance(default_model, str)
+            and self.model_allowlist
+            and default_model not in self.model_allowlist
+        ):
+            raise ValueError("default model must be present in model_allowlist")
+        return self
 
 
 class SourceSnapshot(Entity):
@@ -591,17 +685,80 @@ class KnowledgeSource(Entity):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChatRole(StringEnum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class ChatCitation(NebulaModel):
+    source_id: str
+    name: str
+    citation: str | None = None
+    artifact_id: str | None = None
+    chunk_id: str
+    page: int | None = Field(default=None, ge=1)
+    excerpt: str = Field(max_length=320)
+
+
+class ChatTokenUsage(NebulaModel):
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
+class ChatSession(Entity):
+    """A durable engagement-scoped analyst conversation."""
+
+    entity_kind: ClassVar[str] = "chat_sessions"
+    engagement_id: str
+    title: str = Field(min_length=1, max_length=300)
+    provider_profile_id: str
+    model: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatMessage(Entity):
+    """One immutable message in a durable analyst conversation."""
+
+    entity_kind: ClassVar[str] = "chat_messages"
+    engagement_id: str
+    session_id: str
+    sequence: int = Field(ge=1)
+    role: ChatRole
+    content: str = Field(min_length=1, max_length=200_000)
+    provider_profile_id: str | None = None
+    model: str | None = None
+    usage: ChatTokenUsage | None = None
+    finish_reason: str | None = None
+    provider_request_id: str | None = None
+    citations: list[ChatCitation] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class Report(Entity):
     entity_kind: ClassVar[str] = "reports"
     engagement_id: str
-    title: str
-    status: str = "draft"
+    title: str = Field(min_length=1, max_length=500)
+    status: ReportStatus = ReportStatus.DRAFT
     executive_summary: str = ""
     finding_ids: list[str] = Field(default_factory=list)
     artifact_ids: list[str] = Field(default_factory=list)
     signed_off_by: str | None = None
     signed_off_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def final_reports_require_complete_signoff(self) -> "Report":
+        has_operator = self.signed_off_by is not None
+        has_time = self.signed_off_at is not None
+        if has_operator != has_time:
+            raise ValueError("report signoff requires both operator and timestamp")
+        if self.status == ReportStatus.FINAL and not has_operator:
+            raise ValueError("final reports require operator signoff")
+        if self.status != ReportStatus.FINAL and has_operator:
+            raise ValueError("only final reports may contain signoff fields")
+        return self
 
 
 class RunEvent(NebulaModel):
@@ -636,9 +793,12 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     AgentAttempt,
     ToolCall,
     Approval,
+    OperatorProfile,
     ProviderProfile,
     SourceSnapshot,
     KnowledgeSource,
+    ChatSession,
+    ChatMessage,
     Report,
 )
 

@@ -13,8 +13,28 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .artifacts import ArtifactStore
-from .domain import ENTITY_MODELS, AgentRun, Artifact, Engagement, Entity, utc_now
-from .storage import NebulaStore
+from .domain import (
+    ENTITY_MODELS,
+    Advisory,
+    AgentAttempt,
+    AgentRun,
+    Approval,
+    Artifact,
+    ChatMessage,
+    ChatSession,
+    Correlation,
+    Engagement,
+    Entity,
+    Evidence,
+    Finding,
+    KnowledgeSource,
+    OperatorProfile,
+    ProviderProfile,
+    Report,
+    SourceSnapshot,
+    utc_now,
+)
+from .storage import NebulaStore, NotFoundError
 
 
 class ExportError(RuntimeError):
@@ -47,7 +67,7 @@ def _json_bytes(value: Any) -> bytes:
 def _all_entities(
     store: NebulaStore,
     model: type[Entity],
-    engagement_id: str,
+    engagement_id: str | None = None,
 ) -> list[Entity]:
     result: list[Entity] = []
     offset = 0
@@ -62,6 +82,152 @@ def _all_entities(
         if len(page) < 1000:
             return result
         offset += len(page)
+
+
+def _add_entity(
+    entities: dict[type[Entity], dict[str, Entity]], entity: Entity
+) -> None:
+    entities.setdefault(type(entity), {})[entity.id] = entity
+
+
+def _get_reference(
+    store: NebulaStore,
+    model: type[Entity],
+    entity_id: str,
+    *,
+    source: str,
+) -> Entity:
+    try:
+        return store.get(model, entity_id)
+    except NotFoundError as exc:
+        raise ExportError(
+            f"{source} references missing {model.entity_kind} entity: {entity_id}"
+        ) from exc
+
+
+def _include_referenced_globals(
+    *,
+    store: NebulaStore,
+    entities: dict[type[Entity], dict[str, Entity]],
+    events: list[Any],
+) -> None:
+    """Close explicit cross-engagement references needed to interpret a bundle."""
+
+    provider_ids: set[str] = set()
+    required_operator_ids: set[str] = set()
+    possible_operator_ids: set[str] = set()
+    advisory_ids: set[str] = set()
+    artifact_ids: set[str] = set()
+
+    for model_entities in entities.values():
+        for entity in model_entities.values():
+            if isinstance(entity, Engagement) and entity.owner_id:
+                required_operator_ids.add(entity.owner_id)
+            elif isinstance(entity, Evidence):
+                if entity.captured_by:
+                    required_operator_ids.add(entity.captured_by)
+                if entity.artifact_id:
+                    artifact_ids.add(entity.artifact_id)
+            elif isinstance(entity, Finding) and entity.verifier_id:
+                required_operator_ids.add(entity.verifier_id)
+            elif isinstance(entity, Correlation):
+                advisory_ids.add(entity.advisory_id)
+                if entity.analyst_id:
+                    required_operator_ids.add(entity.analyst_id)
+            elif isinstance(entity, Report):
+                if entity.signed_off_by:
+                    required_operator_ids.add(entity.signed_off_by)
+                artifact_ids.update(entity.artifact_ids)
+            elif isinstance(entity, Approval):
+                possible_operator_ids.add(entity.requested_by)
+                if entity.decided_by:
+                    possible_operator_ids.add(entity.decided_by)
+            elif isinstance(entity, AgentRun) and entity.supervisor_provider_id:
+                provider_ids.add(entity.supervisor_provider_id)
+            elif isinstance(entity, AgentAttempt) and entity.provider_profile_id:
+                provider_ids.add(entity.provider_profile_id)
+            elif isinstance(entity, ChatSession):
+                provider_ids.add(entity.provider_profile_id)
+            elif isinstance(entity, ChatMessage):
+                if entity.provider_profile_id:
+                    provider_ids.add(entity.provider_profile_id)
+                artifact_ids.update(
+                    citation.artifact_id
+                    for citation in entity.citations
+                    if citation.artifact_id
+                )
+            elif isinstance(entity, KnowledgeSource) and entity.artifact_id:
+                artifact_ids.add(entity.artifact_id)
+            if isinstance(entity, Artifact) and entity.parent_artifact_id:
+                artifact_ids.add(entity.parent_artifact_id)
+
+    possible_operator_ids.update(
+        event.actor_id for event in events if event.actor_id is not None
+    )
+    for provider_id in sorted(provider_ids):
+        _add_entity(
+            entities,
+            _get_reference(
+                store,
+                ProviderProfile,
+                provider_id,
+                source="engagement data",
+            ),
+        )
+    for operator_id in sorted(required_operator_ids):
+        _add_entity(
+            entities,
+            _get_reference(
+                store,
+                OperatorProfile,
+                operator_id,
+                source="engagement data",
+            ),
+        )
+    # Approval requesters and event actors may intentionally be agent/system names.
+    # Include them only when they resolve to an actual operator profile.
+    for operator_id in sorted(possible_operator_ids - required_operator_ids):
+        try:
+            operator = store.get(OperatorProfile, operator_id)
+        except NotFoundError:
+            continue
+        _add_entity(entities, operator)
+
+    if advisory_ids:
+        for advisory in _all_entities(store, Advisory):
+            if isinstance(advisory, Advisory) and advisory.advisory_id in advisory_ids:
+                _add_entity(entities, advisory)
+
+    for advisory in entities.get(Advisory, {}).values():
+        if isinstance(advisory, Advisory) and advisory.source_snapshot_id:
+            snapshot = _get_reference(
+                store,
+                SourceSnapshot,
+                advisory.source_snapshot_id,
+                source=f"advisory {advisory.id}",
+            )
+            _add_entity(entities, snapshot)
+            if isinstance(snapshot, SourceSnapshot) and snapshot.artifact_id:
+                artifact_ids.add(snapshot.artifact_id)
+
+    included_artifacts = entities.setdefault(Artifact, {})
+    pending_artifact_ids = artifact_ids - included_artifacts.keys()
+    while pending_artifact_ids:
+        artifact_id = min(pending_artifact_ids)
+        pending_artifact_ids.remove(artifact_id)
+        artifact = _get_reference(
+            store,
+            Artifact,
+            artifact_id,
+            source="engagement data",
+        )
+        _add_entity(entities, artifact)
+        if (
+            isinstance(artifact, Artifact)
+            and artifact.parent_artifact_id
+            and artifact.parent_artifact_id not in included_artifacts
+        ):
+            pending_artifact_ids.add(artifact.parent_artifact_id)
 
 
 def export_engagement(
@@ -82,23 +248,17 @@ def export_engagement(
 
     payloads: dict[str, bytes] = {}
     counts: dict[str, int] = {}
-    artifacts: list[Artifact] = []
-    runs: list[AgentRun] = []
+    entities_by_model: dict[type[Entity], dict[str, Entity]] = {}
     for model in ENTITY_MODELS:
         entities = _all_entities(store, model, engagement_id)
         if not entities:
             continue
-        counts[model.entity_kind] = len(entities)
-        payloads[f"entities/{model.entity_kind}.json"] = _json_bytes(
-            [entity.model_dump(mode="json") for entity in entities]
-        )
-        if model is Artifact:
-            artifacts = [entity for entity in entities if isinstance(entity, Artifact)]
-        if model is AgentRun:
-            runs = [entity for entity in entities if isinstance(entity, AgentRun)]
+        entities_by_model[model] = {entity.id: entity for entity in entities}
 
     events = []
-    for run in runs:
+    for run in entities_by_model.get(AgentRun, {}).values():
+        if not isinstance(run, AgentRun):
+            continue
         cursor = 0
         while True:
             page = store.replay_events(run.id, after_sequence=cursor, limit=10_000)
@@ -106,6 +266,28 @@ def export_engagement(
             if not page or len(page) < 10_000:
                 break
             cursor = page[-1].sequence
+
+    _include_referenced_globals(
+        store=store,
+        entities=entities_by_model,
+        events=events,
+    )
+    for model in ENTITY_MODELS:
+        model_entities = entities_by_model.get(model)
+        if not model_entities:
+            continue
+        entities = sorted(
+            model_entities.values(), key=lambda entity: (entity.created_at, entity.id)
+        )
+        counts[model.entity_kind] = len(entities)
+        payloads[f"entities/{model.entity_kind}.json"] = _json_bytes(
+            [entity.model_dump(mode="json") for entity in entities]
+        )
+    artifacts = [
+        artifact
+        for artifact in entities_by_model.get(Artifact, {}).values()
+        if isinstance(artifact, Artifact)
+    ]
     payloads["events.json"] = _json_bytes(
         [event.model_dump(mode="json") for event in events]
     )

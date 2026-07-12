@@ -5,7 +5,16 @@ import zipfile
 import pytest
 
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.domain import AgentRun, Engagement, Evidence
+from nebula.v3.domain import (
+    Advisory,
+    AgentRun,
+    Correlation,
+    Engagement,
+    Evidence,
+    OperatorProfile,
+    ProviderProfile,
+    SourceSnapshot,
+)
 from nebula.v3.exporter import ExportError, export_engagement
 from nebula.v3.storage import NebulaStore
 
@@ -104,3 +113,159 @@ def test_export_is_atomic_on_integrity_failure_and_refuses_overwrite(tmp_path):
             artifact_store=artifacts,
         )
     assert destination.read_bytes() == b"existing export"
+
+
+def test_export_includes_only_referenced_global_entities_and_system_blobs(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    operator = store.create(OperatorProfile(display_name="Export Owner"))
+    store.create(OperatorProfile(display_name="Unrelated Operator"))
+    provider = store.create(
+        ProviderProfile(name="Export Provider", provider_type="openai")
+    )
+    store.create(ProviderProfile(name="Unrelated Provider", provider_type="openai"))
+    engagement = store.create(
+        Engagement(name="Referenced globals", owner_id=operator.id)
+    )
+    store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Use the configured provider",
+            supervisor_provider_id=provider.id,
+        )
+    )
+    system_artifact = artifacts.put_bytes(
+        b"raw advisory feed",
+        engagement_id="system:vulnerability-intelligence",
+        filename="feed.json",
+    )
+    store.create(system_artifact)
+    snapshot = store.create(
+        SourceSnapshot(
+            source="test-feed",
+            sha256=system_artifact.sha256,
+            artifact_id=system_artifact.id,
+        )
+    )
+    advisory = store.create(
+        Advisory(
+            advisory_id="CVE-2099-0001",
+            source="test-feed",
+            title="Referenced advisory",
+            source_snapshot_id=snapshot.id,
+        )
+    )
+    store.create(
+        Advisory(
+            advisory_id="CVE-2099-9999",
+            source="test-feed",
+            title="Unrelated advisory",
+        )
+    )
+    store.create(
+        Correlation(
+            engagement_id=engagement.id,
+            advisory_id=advisory.advisory_id,
+            method="purl",
+            confidence=1,
+            rationale="Exact package match",
+            analyst_id=operator.id,
+        )
+    )
+    destination = tmp_path / "globals.zip"
+
+    manifest = export_engagement(
+        engagement_id=engagement.id,
+        destination=destination,
+        store=store,
+        artifact_store=artifacts,
+    )
+
+    assert manifest.entity_counts["operator_profiles"] == 1
+    assert manifest.entity_counts["providers"] == 1
+    assert manifest.entity_counts["advisories"] == 1
+    assert manifest.entity_counts["source_snapshots"] == 1
+    assert manifest.entity_counts["artifacts"] == 1
+    with zipfile.ZipFile(destination) as archive:
+        assert [
+            item["id"]
+            for item in json.loads(archive.read("entities/operator_profiles.json"))
+        ] == [operator.id]
+        assert [
+            item["id"] for item in json.loads(archive.read("entities/providers.json"))
+        ] == [provider.id]
+        assert [
+            item["id"] for item in json.loads(archive.read("entities/advisories.json"))
+        ] == [advisory.id]
+        assert archive.read(f"blobs/sha256/{system_artifact.sha256}") == (
+            b"raw advisory feed"
+        )
+
+
+def test_export_global_advisory_lookup_is_paginated(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Paginated intelligence"))
+    store.create_many(
+        [
+            Advisory(
+                advisory_id=f"CVE-2098-{index:04d}",
+                source="unrelated",
+                title=f"Unrelated advisory {index}",
+            )
+            for index in range(1_001)
+        ]
+    )
+    referenced = store.create(
+        Advisory(
+            advisory_id="CVE-2099-4242",
+            source="last-page",
+            title="Referenced advisory",
+        )
+    )
+    store.create(
+        Correlation(
+            engagement_id=engagement.id,
+            advisory_id=referenced.advisory_id,
+            method="purl",
+            confidence=1,
+            rationale="Exact match",
+        )
+    )
+    destination = tmp_path / "paginated.zip"
+
+    manifest = export_engagement(
+        engagement_id=engagement.id,
+        destination=destination,
+        store=store,
+        artifact_store=artifacts,
+    )
+
+    assert manifest.entity_counts["advisories"] == 1
+    with zipfile.ZipFile(destination) as archive:
+        archived = json.loads(archive.read("entities/advisories.json"))
+    assert [item["id"] for item in archived] == [referenced.id]
+
+
+def test_export_rejects_missing_required_global_reference_without_output(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Dangling provider"))
+    store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Cannot be made portable",
+            supervisor_provider_id="missing-provider",
+        )
+    )
+    destination = tmp_path / "dangling.zip"
+
+    with pytest.raises(ExportError, match="missing providers entity"):
+        export_engagement(
+            engagement_id=engagement.id,
+            destination=destination,
+            store=store,
+            artifact_store=artifacts,
+        )
+
+    assert not destination.exists()

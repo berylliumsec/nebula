@@ -243,14 +243,12 @@ class ArtifactStore:
                 yield path.name
 
     def discard_new_blob(self, stored: StoredArtifact) -> None:
-        """Compensate a failed cross-store transaction without deleting deduped data."""
+        """Retain a failed-write blob so concurrent committed references stay valid.
 
-        if not stored.created_blob:
-            return
-        path = self.path_for(stored.artifact)
-        path.unlink(missing_ok=True)
-        for parent in (path.parent, path.parent.parent):
-            try:
-                parent.rmdir()
-            except OSError:
-                break
+        Blob creation and relational commits cannot share one transaction. Removing
+        a blob here can race another writer that already deduplicated the digest but
+        has not committed its Artifact row yet. Unreferenced blobs are therefore
+        retained for a future serialized garbage-collection pass.
+        """
+
+        del stored

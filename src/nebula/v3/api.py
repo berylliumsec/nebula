@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import hmac
+import json
+import re
 import secrets
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,45 +26,119 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import Field, ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
+from starlette.types import Scope
 
 from .artifacts import ArtifactStore, ArtifactStoreError
+from .api_validation import ApiEntityValidator
+from .chat import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatConfigurationError,
+    ChatError,
+    ChatHistoryConflict,
+    ChatPrivacyError,
+    ChatService,
+)
 from .database import Database
 from .domain import (
     ENTITY_MODEL_BY_KIND,
+    AgentRun,
     Approval,
     ApprovalStatus,
     Artifact,
+    ChatMessage,
+    Engagement,
     Entity,
+    Evidence,
+    KnowledgeSource,
     NebulaModel,
+    OperatorProfile,
     ProviderProfile,
+    RunBudget,
     RunEvent,
     utc_now,
 )
+from .evidence import (
+    EvidenceReferenceError,
+    EvidenceTooLargeError,
+    EvidenceUploadRequest,
+    InvalidEvidenceUploadError,
+    upload_evidence,
+)
+from .knowledge import (
+    MAX_DOCUMENT_BYTES,
+    DocumentTooLargeError,
+    InvalidDocumentError,
+    UnsupportedDocumentError,
+    ingest_document,
+    knowledge_summary,
+    reindex_document,
+)
+from .missions import (
+    MAX_API_MISSION_COST_USD,
+    MAX_API_MISSION_DURATION_SECONDS,
+    MAX_API_MISSION_RETRIES,
+    MAX_API_MISSION_TOKENS,
+    MissionCapacityError,
+    MissionConfigurationError,
+    MissionService,
+    MissionServiceUnavailable,
+    MissionStateError,
+)
+from .operators import OperatorProfileService
 from .providers import (
     PROVIDER_CATALOG,
+    ProviderError,
     ProviderHealth,
     provider_from_profile,
 )
 from .pty import HumanPtyService
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .version import __version__, build_metadata
 
 READ_ONLY_RESOURCES = {
     "agent_attempts",
     "approvals",
     "artifacts",
+    "chat_messages",
+    "chat_sessions",
+    "evidence",
+    "knowledge",
     "runs",
     "source_snapshots",
     "tasks",
     "tool_calls",
 }
-APPEND_ONLY_RESOURCES = {"evidence"}
+APPEND_ONLY_RESOURCES: set[str] = set()
+CUSTOM_RESOURCES = {"operator_profiles"}
 
 API_PREFIX = "/api/v1"
+
+
+class SpaStaticFiles(StaticFiles):
+    """Serve the workspace index for extensionless browser navigation routes."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            is_navigation = (
+                exc.status_code == 404
+                and scope.get("method") in {"GET", "HEAD"}
+                and path != "api"
+                and not path.startswith("api/")
+                and not Path(path).suffix
+            )
+            if not is_navigation:
+                raise
+            return await super().get_response("index.html", scope)
 
 
 class EventAppendRequest(NebulaModel):
@@ -86,6 +164,52 @@ class ApprovalDecisionRequest(NebulaModel):
     edited_arguments: dict[str, Any] | None = None
 
 
+class KnowledgeIngestRequest(NebulaModel):
+    engagement_id: str = Field(min_length=1, max_length=200)
+    filename: str = Field(min_length=1, max_length=1024)
+    media_type: str | None = Field(default=None, max_length=200)
+    content_base64: str = Field(
+        min_length=1,
+        max_length=4 * ((MAX_DOCUMENT_BYTES + 2) // 3),
+    )
+
+
+class MissionStartRequest(NebulaModel):
+    engagement_id: str = Field(min_length=1, max_length=200)
+    objective: str = Field(min_length=1, max_length=10_000)
+    provider_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
+    max_duration_seconds: int = Field(
+        default=900, ge=1, le=MAX_API_MISSION_DURATION_SECONDS
+    )
+    max_tokens: int = Field(default=32_000, ge=1, le=MAX_API_MISSION_TOKENS)
+    max_cost_usd: float | None = Field(default=None, ge=0, le=MAX_API_MISSION_COST_USD)
+    max_retries: int = Field(default=1, ge=0, le=MAX_API_MISSION_RETRIES)
+
+
+class MissionStopRequest(NebulaModel):
+    reason: str = Field(default="Stopped by operator", max_length=1_000)
+
+
+class OperatorProfileCreateRequest(NebulaModel):
+    display_name: str = Field(min_length=1, max_length=200)
+    email: str | None = Field(default=None, max_length=320)
+    role: str | None = Field(default=None, max_length=200)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class OperatorProfileUpdateRequest(NebulaModel):
+    display_name: str | None = Field(default=None, max_length=200)
+    email: str | None = Field(default=None, max_length=320)
+    role: str | None = Field(default=None, max_length=200)
+    metadata: dict[str, Any] | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class OperatorProfileActivateRequest(NebulaModel):
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
 def create_app(
     store: NebulaStore | None = None,
     *,
@@ -98,6 +222,8 @@ def create_app(
     static_dir: str | Path | None = None,
     enable_human_pty: bool = False,
     human_pty_root: str | Path | None = None,
+    mission_service: MissionService | None = None,
+    mission_checkpoint_path: str | Path | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -113,16 +239,39 @@ def create_app(
     token = auth_token or secrets.token_urlsafe(32)
     if not token and not allow_unauthenticated:
         raise ValueError("auth_token cannot be empty")
+    if mission_service is not None and mission_checkpoint_path is not None:
+        raise ValueError(
+            "pass either mission_service or mission_checkpoint_path, not both"
+        )
+
+    missions = mission_service or MissionService(
+        store, checkpoint_path=mission_checkpoint_path
+    )
+    if missions.store is not store:
+        raise ValueError("mission_service must use the API store")
+    entity_validator = ApiEntityValidator(store)
+    operators = OperatorProfileService(store)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        await missions.startup()
+        try:
+            yield
+        finally:
+            await missions.shutdown()
 
     app = FastAPI(
         title="Nebula 3 Core API",
-        version="3.0.0-alpha.1",
+        version=__version__,
         description="Local-first, UI-independent security engagement control plane.",
+        lifespan=lifespan,
     )
     app.state.store = store
     app.state.artifact_store = artifact_store
     app.state.auth_token = token
     app.state.allow_unauthenticated = allow_unauthenticated
+    app.state.mission_service = missions
+    app.state.operator_profile_service = operators
     pty_service = (
         HumanPtyService(human_pty_root)
         if enable_human_pty and human_pty_root is not None
@@ -188,17 +337,61 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
+    @app.exception_handler(MissionConfigurationError)
+    async def mission_configuration_handler(
+        _: Request, exc: MissionConfigurationError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(MissionCapacityError)
+    async def mission_capacity_handler(
+        _: Request, exc: MissionCapacityError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=429, content={"detail": str(exc)})
+
+    @app.exception_handler(MissionStateError)
+    async def mission_state_handler(_: Request, exc: MissionStateError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(MissionServiceUnavailable)
+    async def mission_unavailable_handler(
+        _: Request, exc: MissionServiceUnavailable
+    ) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+    @app.exception_handler(ChatHistoryConflict)
+    @app.exception_handler(ChatPrivacyError)
+    async def chat_conflict_handler(_: Request, exc: ChatError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(ChatConfigurationError)
+    async def chat_configuration_handler(
+        _: Request, exc: ChatConfigurationError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(ChatError)
+    @app.exception_handler(ProviderError)
+    async def chat_provider_handler(_: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
+
     @app.get(f"{API_PREFIX}/health", tags=["system"])
-    async def health() -> dict[str, Any]:
+    async def health(_: str = Depends(require_auth)) -> dict[str, Any]:
+        identity = build_metadata()
         return {
             "status": "ok",
-            "version": app.version,
+            **identity,
             "mode": "local"
             if store.database.engine.dialect.name == "sqlite"
             else "team",
             # Runner health belongs to the separately configured worker. The
             # API never assumes that presence of a container CLI makes it safe.
             "runner": "unavailable",
+            "human_pty": (
+                "ready"
+                if pty_service is not None and pty_service.available
+                else "unavailable"
+            ),
             "api_version": "v1",
             **store.database.health(),
         }
@@ -215,8 +408,9 @@ def create_app(
         approval = store.get(Approval, approval_id)
         if approval.status != ApprovalStatus.PENDING:
             raise ConflictError("approval has already been resolved")
+        store.get(AgentRun, approval.run_id)
         if approval.expires_at is not None and approval.expires_at <= utc_now():
-            expired = store.update(
+            expired, _ = store.update_with_event(
                 Approval,
                 approval.id,
                 {
@@ -226,11 +420,12 @@ def create_app(
                     "decision_note": "approval expired before an operator decision",
                 },
                 expected_revision=approval.revision,
-            )
-            store.append_event(
-                approval.run_id,
-                "approval.expired",
-                {"approval_id": approval.id, "status": expired.status.value},
+                run_id=approval.run_id,
+                event_type="approval.expired",
+                event_payload={
+                    "approval_id": approval.id,
+                    "status": ApprovalStatus.EXPIRED.value,
+                },
                 actor_id="system",
                 idempotency_key=f"approval:{approval.id}:expired",
             )
@@ -244,9 +439,11 @@ def create_app(
             "reject": ApprovalStatus.REJECTED,
             "stop": ApprovalStatus.CANCELLED,
         }
+        active_operator = operators.active_profile_or_none()
+        operator_id = active_operator.id if active_operator is not None else "operator"
         changes: dict[str, Any] = {
             "status": status_by_decision[request.decision],
-            "decided_by": "operator",
+            "decided_by": operator_id,
             "decided_at": utc_now(),
             "decision_note": request.reason,
         }
@@ -254,21 +451,19 @@ def create_app(
             exact = dict(approval.exact_request)
             exact["arguments"] = request.edited_arguments
             changes["exact_request"] = exact
-        updated = store.update(
+        updated, _ = store.update_with_event(
             Approval,
             approval.id,
             changes,
             expected_revision=approval.revision,
-        )
-        store.append_event(
-            approval.run_id,
-            "approval.resolved",
-            {
+            run_id=approval.run_id,
+            event_type="approval.resolved",
+            event_payload={
                 "approval_id": approval.id,
-                "status": updated.status.value,
-                "decided_by": updated.decided_by,
+                "status": changes["status"].value,
+                "decided_by": operator_id,
             },
-            actor_id=updated.decided_by,
+            actor_id=operator_id,
             idempotency_key=f"approval:{approval.id}:resolved",
         )
         return updated
@@ -287,7 +482,262 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def engagement_overview(engagement_id: str) -> dict[str, Any]:
+        store.get(Engagement, engagement_id)
         return store.overview(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/operator-profiles",
+        response_model=list[OperatorProfile],
+        tags=["operator-profiles"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_operator_profiles() -> list[OperatorProfile]:
+        return operators.list_profiles()
+
+    @app.get(
+        f"{API_PREFIX}/operator-profiles/active",
+        response_model=OperatorProfile,
+        tags=["operator-profiles"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def active_operator_profile() -> OperatorProfile:
+        return operators.active_profile()
+
+    @app.post(
+        f"{API_PREFIX}/operator-profiles",
+        response_model=OperatorProfile,
+        status_code=201,
+        tags=["operator-profiles"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_operator_profile(
+        request: OperatorProfileCreateRequest,
+    ) -> OperatorProfile:
+        return operators.create_profile(
+            display_name=request.display_name,
+            email=request.email,
+            role=request.role,
+            metadata=request.metadata,
+        )
+
+    @app.patch(
+        f"{API_PREFIX}/operator-profiles/{{profile_id}}",
+        response_model=OperatorProfile,
+        tags=["operator-profiles"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_operator_profile(
+        profile_id: str,
+        request: OperatorProfileUpdateRequest,
+    ) -> OperatorProfile:
+        changes: dict[str, Any] = {}
+        for field in ("display_name", "email", "role", "metadata"):
+            if field in request.model_fields_set:
+                changes[field] = getattr(request, field)
+        if changes.get("display_name", "present") is None:
+            raise ValueError("display_name cannot be null")
+        if changes.get("metadata", {}) is None:
+            raise ValueError("metadata cannot be null")
+        return operators.update_profile(
+            profile_id,
+            changes,
+            expected_revision=request.expected_revision,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/operator-profiles/{{profile_id}}/activate",
+        response_model=OperatorProfile,
+        tags=["operator-profiles"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def activate_operator_profile(
+        profile_id: str,
+        request: OperatorProfileActivateRequest,
+    ) -> OperatorProfile:
+        return operators.activate_profile(
+            profile_id,
+            expected_revision=request.expected_revision,
+        )
+
+    @app.delete(
+        f"{API_PREFIX}/operator-profiles/{{profile_id}}",
+        status_code=204,
+        tags=["operator-profiles"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_operator_profile(
+        profile_id: str,
+        if_match: int | None = Header(default=None, alias="If-Match"),
+    ) -> Response:
+        operators.delete_profile(profile_id, expected_revision=if_match)
+        return Response(status_code=204)
+
+    @app.post(
+        f"{API_PREFIX}/evidence/upload",
+        response_model=Evidence,
+        status_code=201,
+        tags=["evidence"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def upload_evidence_artifact(request: EvidenceUploadRequest) -> Evidence:
+        if artifact_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="evidence upload requires an artifact store",
+            )
+        if request.captured_by is not None:
+            try:
+                operators.get_profile(request.captured_by)
+            except NotFoundError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "captured_by references a missing operator profile: "
+                        f"{request.captured_by}"
+                    ),
+                ) from exc
+        try:
+            return await asyncio.to_thread(
+                upload_evidence,
+                store=store,
+                artifact_store=artifact_store,
+                request=request,
+            )
+        except EvidenceTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except InvalidEvidenceUploadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except EvidenceReferenceError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        f"{API_PREFIX}/missions",
+        response_model=AgentRun,
+        status_code=202,
+        tags=["runs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_mission(request: MissionStartRequest) -> AgentRun:
+        active_operator = operators.active_profile_or_none()
+        operator_id = active_operator.id if active_operator is not None else "operator"
+        budget = RunBudget(
+            max_concurrency=1,
+            max_delegation_depth=0,
+            max_duration_seconds=request.max_duration_seconds,
+            max_tokens=request.max_tokens,
+            max_cost_usd=request.max_cost_usd,
+            max_tool_calls=0,
+            max_retries=request.max_retries,
+            per_target_active_operations=1,
+        )
+        return await missions.start_mission(
+            engagement_id=request.engagement_id,
+            objective=request.objective,
+            provider_id=request.provider_id,
+            model=request.model,
+            budget=budget,
+            actor_id=operator_id,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/stop",
+        response_model=AgentRun,
+        tags=["runs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stop_mission(run_id: str, request: MissionStopRequest) -> AgentRun:
+        active_operator = operators.active_profile_or_none()
+        operator_id = active_operator.id if active_operator is not None else "operator"
+        return await missions.stop_mission(
+            run_id,
+            reason=request.reason,
+            actor_id=operator_id,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/knowledge/ingest",
+        response_model=KnowledgeSource,
+        status_code=201,
+        tags=["knowledge"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def ingest_knowledge(request: KnowledgeIngestRequest) -> KnowledgeSource:
+        if artifact_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="knowledge ingestion requires an artifact store",
+            )
+        try:
+            content = base64.b64decode(request.content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="content_base64 must be valid base64",
+            ) from exc
+        if len(content) > MAX_DOCUMENT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"document exceeds the "
+                    f"{MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB limit"
+                ),
+            )
+        try:
+            created = await asyncio.to_thread(
+                ingest_document,
+                store=store,
+                artifact_store=artifact_store,
+                engagement_id=request.engagement_id,
+                filename=request.filename,
+                data=content,
+                media_type=request.media_type,
+            )
+            return knowledge_summary(created)
+        except DocumentTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except UnsupportedDocumentError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        except InvalidDocumentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post(
+        f"{API_PREFIX}/knowledge/{{knowledge_id}}/reindex",
+        response_model=KnowledgeSource,
+        tags=["knowledge"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def reindex_knowledge(knowledge_id: str) -> KnowledgeSource:
+        if artifact_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="knowledge reindexing requires an artifact store",
+            )
+        try:
+            updated = await asyncio.to_thread(
+                reindex_document,
+                store=store,
+                artifact_store=artifact_store,
+                source_id=knowledge_id,
+            )
+            return knowledge_summary(updated)
+        except DocumentTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except UnsupportedDocumentError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        except InvalidDocumentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete(
+        f"{API_PREFIX}/knowledge/{{knowledge_id}}",
+        status_code=204,
+        tags=["knowledge"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_knowledge(knowledge_id: str) -> Response:
+        """Remove a retrieval source while retaining its immutable artifact."""
+
+        store.delete(KnowledgeSource, knowledge_id)
+        return Response(status_code=204)
 
     @app.get(
         f"{API_PREFIX}/admin/schema",
@@ -322,7 +772,7 @@ def create_app(
     )
     async def refresh_provider_health(provider_id: str) -> ProviderHealth:
         profile = store.get(ProviderProfile, provider_id)
-        return await provider_from_profile(profile).health()
+        return await _provider_health(profile)
 
     @app.post(
         f"{API_PREFIX}/provider-health/refresh",
@@ -331,12 +781,69 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def refresh_all_provider_health() -> list[ProviderHealth]:
-        profiles = store.list_entities(ProviderProfile, limit=1000)
-        return list(
-            await asyncio.gather(
-                *(provider_from_profile(profile).health() for profile in profiles)
+        profiles: list[ProviderProfile] = []
+        offset = 0
+        while True:
+            page = store.list_entities(
+                ProviderProfile,
+                offset=offset,
+                limit=1_000,
             )
+            profiles.extend(page)
+            if len(page) < 1_000:
+                break
+            offset += len(page)
+        semaphore = asyncio.Semaphore(8)
+
+        async def checked(profile: ProviderProfile) -> ProviderHealth:
+            async with semaphore:
+                return await _provider_health(profile)
+
+        return list(await asyncio.gather(*(checked(profile) for profile in profiles)))
+
+    @app.post(
+        f"{API_PREFIX}/chat/completions",
+        response_model=ChatCompletionResponse,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_chat_completion(request: ChatCompletionRequest) -> Any:
+        service = ChatService(store)
+        prepared = service.prepare(request)
+        if not request.stream:
+            return await service.complete(prepared)
+
+        async def event_stream() -> Any:
+            try:
+                async for event, payload in service.stream(prepared):
+                    yield _server_sent_event(event, payload)
+            except asyncio.CancelledError:
+                raise
+            except (ChatError, ProviderError, ConflictError) as exc:
+                yield _server_sent_event("error", {"type": "error", "detail": str(exc)})
+            except Exception:
+                yield _server_sent_event(
+                    "error",
+                    {"type": "error", "detail": "chat stream failed"},
+                )
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
         )
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",
+        response_model=list[ChatMessage],
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_chat_session_messages(session_id: str) -> list[ChatMessage]:
+        return ChatService(store).session_messages(session_id)
 
     if allow_internal_event_append:
 
@@ -350,6 +857,7 @@ def create_app(
         async def append_run_event(
             run_id: str, request: EventAppendRequest
         ) -> RunEvent:
+            store.get(AgentRun, run_id)
             return store.append_event(
                 run_id,
                 request.event_type,
@@ -369,6 +877,7 @@ def create_app(
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=1000, ge=1, le=10_000),
     ) -> EventList:
+        store.get(AgentRun, run_id)
         events = store.replay_events(run_id, after_sequence=after, limit=limit)
         return EventList(
             events=events,
@@ -415,6 +924,11 @@ def create_app(
             not supplied or not hmac.compare_digest(supplied, token)
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
+            return
+        try:
+            store.get(AgentRun, run_id)
+        except NotFoundError:
+            await websocket.close(code=4404, reason="agent run not found")
             return
         event_protocol = (
             "nebula.events.v1" if "nebula.events.v1" in offered_protocols else None
@@ -471,9 +985,9 @@ def create_app(
                 supplied = authorization[7:]
             offered = [
                 value.strip()
-                for value in websocket.headers.get(
-                    "sec-websocket-protocol", ""
-                ).split(",")
+                for value in websocket.headers.get("sec-websocket-protocol", "").split(
+                    ","
+                )
                 if value.strip()
             ]
             protocol_token: str | None = None
@@ -487,10 +1001,14 @@ def create_app(
                     except (ValueError, UnicodeDecodeError):
                         protocol_token = None
                     break
-            if supplied and protocol_token and not hmac.compare_digest(
-                supplied, protocol_token
+            if (
+                supplied
+                and protocol_token
+                and not hmac.compare_digest(supplied, protocol_token)
             ):
-                await websocket.close(code=4401, reason="conflicting authentication tokens")
+                await websocket.close(
+                    code=4401, reason="conflicting authentication tokens"
+                )
                 return
             supplied = protocol_token or supplied
             if not allow_unauthenticated and (
@@ -529,30 +1047,96 @@ def create_app(
                 path,
                 media_type=artifact.media_type,
                 filename=artifact.filename,
+                headers={
+                    "Cache-Control": "private, no-store",
+                    "Content-Security-Policy": "sandbox; default-src 'none'",
+                    "X-Content-Type-Options": "nosniff",
+                },
             )
 
     for resource, model in ENTITY_MODEL_BY_KIND.items():
+        if resource in CUSTOM_RESOURCES:
+            continue
         _register_crud_routes(
             app,
             store,
             require_auth,
+            entity_validator,
             resource,
             model,
             read_only=resource in READ_ONLY_RESOURCES,
             append_only=resource in APPEND_ONLY_RESOURCES,
         )
+    _assert_unique_api_operations(app)
 
     if static_dir is not None:
         frontend = Path(static_dir).expanduser().resolve()
         if not (frontend / "index.html").is_file():
             raise ValueError("static_dir must contain a built index.html")
-        app.mount("/", StaticFiles(directory=frontend, html=True), name="workspace")
+        app.mount("/", SpaStaticFiles(directory=frontend, html=True), name="workspace")
 
     return app
+
+
+def _server_sent_event(event: str, payload: dict[str, Any]) -> bytes:
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {encoded}\n\n".encode()
+
+
+async def _provider_health(profile: ProviderProfile) -> ProviderHealth:
+    """Return bounded, allowlisted health without reviving disabled profiles."""
+
+    if not profile.enabled:
+        return ProviderHealth(
+            provider_id=profile.id,
+            healthy=False,
+            detail="provider profile is disabled",
+        )
+    try:
+        health = await provider_from_profile(profile).health()
+    except (ProviderError, ValueError) as exc:
+        return ProviderHealth(
+            provider_id=profile.id,
+            healthy=False,
+            detail=str(exc),
+        )
+    except Exception as exc:
+        return ProviderHealth(
+            provider_id=profile.id,
+            healthy=False,
+            detail=f"provider health check failed ({type(exc).__name__})",
+        )
+    models = health.models
+    if profile.model_allowlist:
+        allowed = set(profile.model_allowlist)
+        models = [model for model in models if model in allowed]
+    return health.model_copy(update={"models": list(dict.fromkeys(models))})
+
+
+def _assert_unique_api_operations(app: FastAPI) -> None:
+    """Fail startup when path-parameter names hide duplicate operations."""
+
+    seen: dict[tuple[str, str], str] = {}
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or not route.path.startswith(API_PREFIX):
+            continue
+        shape = re.sub(r"\{[^}]+\}", "{}", route.path)
+        for method in route.methods:
+            key = (method, shape)
+            previous = seen.get(key)
+            if previous is not None:
+                raise RuntimeError(
+                    f"duplicate API operation {method} {shape}: "
+                    f"{previous} and {route.path}"
+                )
+            seen[key] = route.path
+
+
 def _register_crud_routes(
     app: FastAPI,
     store: NebulaStore,
     require_auth: Callable[..., Any],
+    entity_validator: ApiEntityValidator,
     resource: str,
     model: type[Entity],
     *,
@@ -563,6 +1147,14 @@ def _register_crud_routes(
 
     def make_create() -> Callable[..., Any]:
         async def create_entity(entity: Any) -> Entity:
+            protected = {"id", "created_at", "updated_at", "revision"}.intersection(
+                entity.model_fields_set
+            )
+            if protected:
+                raise ValueError(
+                    f"cannot set server-managed fields: {sorted(protected)}"
+                )
+            entity_validator.validate_create(entity)
             return store.create(entity)
 
         create_entity.__name__ = f"create_{resource.replace('-', '_')}"
@@ -575,12 +1167,19 @@ def _register_crud_routes(
             offset: int = Query(default=0, ge=0),
             limit: int = Query(default=100, ge=1, le=1000),
         ) -> list[Entity]:
-            return store.list_entities(
+            entities = store.list_entities(
                 model,
                 engagement_id=engagement_id,
                 offset=offset,
                 limit=limit,
             )
+            if model is KnowledgeSource:
+                return [
+                    knowledge_summary(entity)
+                    for entity in entities
+                    if isinstance(entity, KnowledgeSource)
+                ]
+            return entities
 
         list_entities.__name__ = f"list_{resource.replace('-', '_')}"
         list_entities.__annotations__["return"] = list[model]  # type: ignore[valid-type]
@@ -588,7 +1187,12 @@ def _register_crud_routes(
 
     def make_get() -> Callable[..., Any]:
         async def get_entity(entity_id: str) -> Entity:
-            return store.get(model, entity_id)
+            entity = store.get(model, entity_id)
+            return (
+                knowledge_summary(entity)
+                if isinstance(entity, KnowledgeSource)
+                else entity
+            )
 
         get_entity.__name__ = f"get_{resource.replace('-', '_')}"
         get_entity.__annotations__["return"] = model
@@ -600,7 +1204,20 @@ def _register_crud_routes(
             entity: Any,
             if_match: int | None = Header(default=None, alias="If-Match"),
         ) -> Entity:
-            return store.replace(model, entity_id, entity, expected_revision=if_match)
+            if entity.id != entity_id:
+                raise ValueError("replacement id must match the resource id")
+            current = store.get(model, entity_id)
+            if if_match is not None and current.revision != if_match:
+                raise ConflictError(
+                    f"revision conflict: expected {if_match}, found {current.revision}"
+                )
+            entity_validator.validate_update(current, entity)
+            return store.replace(
+                model,
+                entity_id,
+                entity,
+                expected_revision=current.revision if if_match is None else if_match,
+            )
 
         replace_entity.__name__ = f"replace_{resource.replace('-', '_')}"
         replace_entity.__annotations__["entity"] = model
@@ -609,11 +1226,33 @@ def _register_crud_routes(
 
     def make_patch() -> Callable[..., Any]:
         async def patch_entity(entity_id: str, patch: PatchRequest) -> Entity:
+            protected = {"id", "created_at", "updated_at", "revision"}.intersection(
+                patch.changes
+            )
+            if protected:
+                raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
+            current = store.get(model, entity_id)
+            if (
+                patch.expected_revision is not None
+                and current.revision != patch.expected_revision
+            ):
+                raise ConflictError(
+                    f"revision conflict: expected {patch.expected_revision}, "
+                    f"found {current.revision}"
+                )
+            payload = current.model_dump(mode="python")
+            payload.update(patch.changes)
+            candidate = model.model_validate(payload)
+            entity_validator.validate_update(current, candidate)
             return store.update(
                 model,
                 entity_id,
                 patch.changes,
-                expected_revision=patch.expected_revision,
+                expected_revision=(
+                    current.revision
+                    if patch.expected_revision is None
+                    else patch.expected_revision
+                ),
             )
 
         patch_entity.__name__ = f"patch_{resource.replace('-', '_')}"
@@ -621,8 +1260,31 @@ def _register_crud_routes(
         return patch_entity
 
     def make_delete() -> Callable[..., Any]:
-        async def delete_entity(entity_id: str) -> Response:
-            store.delete(model, entity_id)
+        async def delete_entity(
+            entity_id: str,
+            if_match: int | None = Header(default=None, alias="If-Match"),
+        ) -> Response:
+            current = store.get(model, entity_id)
+            if if_match is not None and current.revision != if_match:
+                raise ConflictError(
+                    f"revision conflict: expected {if_match}, found {current.revision}"
+                )
+            if model is Engagement:
+                if store.engagement_has_dependents(entity_id):
+                    raise ConflictError(
+                        "engagement cannot be deleted while owned entities exist; "
+                        "archive it instead"
+                    )
+            if model is ProviderProfile:
+                if store.provider_has_history_references(entity_id):
+                    raise ConflictError(
+                        "provider profile cannot be deleted while durable chat or run "
+                        "history references it"
+                    )
+            entity_validator.validate_delete(current)
+            # Always guard the final delete with the revision we validated so a
+            # concurrent update cannot be removed using stale relationship data.
+            store.delete(model, entity_id, expected_revision=current.revision)
             return Response(status_code=204)
 
         delete_entity.__name__ = f"delete_{resource.replace('-', '_')}"

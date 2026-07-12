@@ -3,7 +3,6 @@ import {
   Activity,
   Bot,
   Check,
-  ChevronRight,
   Clock3,
   FileCheck2,
   ShieldAlert,
@@ -35,12 +34,16 @@ interface ActivityCenterProps {
 export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
   const [tab, setTab] = useState<CenterTab>("activity");
   const [busyId, setBusyId] = useState<string>();
+  const [decisionError, setDecisionError] = useState<string>();
   const { events, approvals, previewMode, resolveApproval, streamState } = useWorkspace();
 
   const decide = async (id: string, decision: ApprovalDecision) => {
     setBusyId(id);
+    setDecisionError(undefined);
     try {
       await resolveApproval(id, decision);
+    } catch (error) {
+      setDecisionError(error instanceof Error ? error.message : "Could not record the approval decision.");
     } finally {
       setBusyId(undefined);
     }
@@ -98,7 +101,6 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
                       {event.actor ?? "Nebula"} · {shortTime(event.occurredAt)} · #{event.sequence}
                     </small>
                   </div>
-                  <ChevronRight size={14} aria-hidden="true" />
                 </li>
               );
             })}
@@ -108,6 +110,7 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
           </ol>
         ) : (
           <div className="approval-list">
+            {decisionError && <p className="activity-error" role="alert">{decisionError}</p>}
             {approvals.map((approval) => (
               <article className="approval-card" key={approval.id}>
                 <div className="approval-card-heading">
@@ -137,7 +140,7 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
                   <button
                     className="button danger-quiet"
                     type="button"
-                    disabled={busyId === approval.id}
+                    disabled={previewMode || busyId === approval.id}
                     onClick={() => void decide(approval.id, "reject")}
                   >
                     <X size={15} aria-hidden="true" /> Reject
@@ -145,7 +148,7 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
                   <button
                     className="button primary"
                     type="button"
-                    disabled={busyId === approval.id}
+                    disabled={previewMode || busyId === approval.id}
                     onClick={() => void decide(approval.id, "approve")}
                   >
                     <Check size={15} aria-hidden="true" /> Approve once

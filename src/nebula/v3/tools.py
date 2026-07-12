@@ -501,8 +501,8 @@ class StoreToolLedger:
         return await asyncio.to_thread(self.store.get, Approval, approval_id)
 
     async def expire_approval(self, approval: Approval) -> Approval:
-        return await asyncio.to_thread(
-            self.store.update,
+        updated, _ = await asyncio.to_thread(
+            self.store.update_with_event,
             Approval,
             approval.id,
             {
@@ -512,7 +512,16 @@ class StoreToolLedger:
                 "decision_note": "approval expired before execution",
             },
             expected_revision=approval.revision,
+            run_id=approval.run_id,
+            event_type="approval.expired",
+            event_payload={
+                "approval_id": approval.id,
+                "status": ApprovalStatus.EXPIRED.value,
+            },
+            actor_id="system",
+            idempotency_key=f"approval:{approval.id}:expired",
         )
+        return updated
 
 
 class StoreToolEvidenceRecorder:

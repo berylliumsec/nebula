@@ -163,6 +163,18 @@ class Database:
             cursor.execute("PRAGMA busy_timeout=30000")
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
+            database_rows = cursor.execute("PRAGMA database_list").fetchall()
+            for _, name, location in database_rows:
+                if name != "main" or not location:
+                    continue
+                database_path = Path(location)
+                for path in (
+                    database_path,
+                    Path(f"{database_path}-wal"),
+                    Path(f"{database_path}-shm"),
+                ):
+                    if path.exists():
+                        path.chmod(0o600)
         finally:
             cursor.close()
 

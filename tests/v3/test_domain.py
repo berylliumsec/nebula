@@ -97,6 +97,22 @@ def test_confirmed_findings_require_evidence_and_verifier():
     assert finding.status is FindingStatus.CONFIRMED
 
 
+def test_findings_require_a_title_and_normalize_standard_identifiers():
+    finding = Finding(
+        engagement_id="eng-1",
+        title="Candidate",
+        cve_ids=["cve-2026-1234", "CVE-2026-1234"],
+        cwe_ids=["cwe-79", "CWE-79"],
+    )
+
+    assert finding.cve_ids == ["CVE-2026-1234"]
+    assert finding.cwe_ids == ["CWE-79"]
+    with pytest.raises(ValidationError, match="at least 1 character"):
+        Finding(engagement_id="eng-1", title="   ")
+    with pytest.raises(ValidationError, match="CVE identifiers"):
+        Finding(engagement_id="eng-1", title="Candidate", cve_ids=["GHSA-test"])
+
+
 def test_fuzzy_correlation_requires_human_confirmation():
     with pytest.raises(ValidationError):
         Correlation(

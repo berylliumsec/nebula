@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
 import secrets
 import socket
 import sys
 import tempfile
+import threading
 import webbrowser
 from pathlib import Path
 from typing import Annotated, Any
@@ -22,7 +24,7 @@ from sqlalchemy.engine import make_url
 from .api import create_app
 from .artifacts import ArtifactStore
 from .database import Database
-from .domain import Engagement, ProviderProfile, RunBudget
+from .domain import Artifact, Engagement, ProviderProfile, RunBudget
 from .exporter import export_engagement
 from .importer import import_2x_engagement
 from .orchestration import (
@@ -35,6 +37,7 @@ from .orchestration import (
 from .providers import ProviderRegistry, provider_from_profile
 from .sandbox import ContainerSandboxRunner
 from .storage import NebulaStore
+from .version import build_metadata
 
 app = typer.Typer(
     name="nebula3",
@@ -51,7 +54,8 @@ def _data_dir(value: Path | None = None) -> Path:
         )
     )
     path = configured.expanduser().resolve()
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.chmod(0o700)
     return path
 
 
@@ -71,9 +75,21 @@ def _is_loopback(host: str) -> bool:
     if host.lower() == "localhost":
         return True
     try:
-        return socket.gethostbyname(host).startswith("127.") or host == "::1"
-    except socket.gaierror:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        pass
+    try:
+        addresses = {
+            ipaddress.ip_address(sockaddr[0])
+            for _family, _type, _protocol, _canonical, sockaddr in socket.getaddrinfo(
+                host,
+                None,
+                type=socket.SOCK_STREAM,
+            )
+        }
+    except (socket.gaierror, ValueError):
         return False
+    return bool(addresses) and all(address.is_loopback for address in addresses)
 
 
 @app.command()
@@ -134,7 +150,16 @@ def serve(
         enable_human_pty=_is_loopback(host),
         human_pty_root=_data_dir(data_dir) / "human-sessions",
     )
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        bind_address = ipaddress.ip_address(host)
+    except ValueError:
+        bind_address = None
+    family = (
+        socket.AF_INET6
+        if bind_address is not None and bind_address.version == 6
+        else socket.AF_INET
+    )
+    listener = socket.socket(family, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind((host, port))
     listener.listen(2048)
@@ -154,10 +179,11 @@ def serve(
         )
         sys.stdout.flush()
     else:
+        display_host = f"[{host}]" if family == socket.AF_INET6 else host
         _print(
             {
                 "kind": "nebula-api-ready",
-                "url": f"http://{host}:{port}",
+                "url": f"http://{display_host}:{port}",
                 "token": auth_token,
                 "local_only": _is_loopback(host),
             }
@@ -165,7 +191,22 @@ def serve(
     if open_browser:
         webbrowser.open(f"http://127.0.0.1:{port}/#token={auth_token}")
     config = uvicorn.Config(api, host=host, port=port, log_level="info")
-    uvicorn.Server(config).run(sockets=[listener])
+    server = uvicorn.Server(config)
+    if handshake_stdout:
+
+        def stop_when_desktop_disconnects() -> None:
+            try:
+                while sys.stdin.buffer.read(4096):
+                    pass
+            finally:
+                server.should_exit = True
+
+        threading.Thread(
+            target=stop_when_desktop_disconnects,
+            name="nebula-desktop-lifetime",
+            daemon=True,
+        ).start()
+    server.run(sockets=[listener])
 
 
 @app.command()
@@ -178,7 +219,9 @@ def ui(
     port = _free_port()
     token = secrets.token_urlsafe(32)
     configured_ui = os.getenv("NEBULA_V3_UI_DIR")
-    frozen_root = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "frozen", False) else None
+    frozen_root = (
+        Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "frozen", False) else None
+    )
     frontend = (
         Path(configured_ui).expanduser().resolve()
         if configured_ui
@@ -278,6 +321,10 @@ def run_mission(
 ) -> None:
     """Run a durable analysis mission with an optional explicit model provider."""
 
+    if max_tool_calls != 0:
+        raise typer.BadParameter(
+            "executable mission tools are release-gated; use --max-tool-calls 0"
+        )
     root, store, _ = _services(data_dir)
     store.get(Engagement, engagement_id)
     selected_provider = None
@@ -344,7 +391,10 @@ def worker(
 ) -> None:
     """Validate the dedicated rootless worker boundary."""
 
-    del once  # Durable PostgreSQL job claiming lands with the team profile.
+    if not once:
+        raise typer.BadParameter(
+            "durable worker mode is release-gated; use --once for a capability check"
+        )
 
     async def check() -> tuple[bool, str]:
         return await ContainerSandboxRunner().available()
@@ -383,8 +433,17 @@ def migrate(
 @app.command()
 def doctor(
     data_dir: Annotated[Path | None, typer.Option()] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Emit the machine-readable report (the default output format).",
+        ),
+    ] = False,
 ) -> None:
     """Check storage, API schema, artifact integrity, and runner isolation."""
+
+    del json_output  # Retained explicitly for stable release automation.
 
     root, store, artifacts = _services(data_dir)
 
@@ -402,12 +461,41 @@ def doctor(
     finally:
         if artifact_probe:
             artifact_probe.unlink(missing_ok=True)
+    checked_artifacts = 0
+    corrupt_artifacts: list[str] = []
+    referenced_digests: set[str] = set()
+    offset = 0
+    while True:
+        page = store.list_entities(Artifact, offset=offset, limit=1_000)
+        for artifact in page:
+            checked_artifacts += 1
+            referenced_digests.add(artifact.sha256)
+            try:
+                valid = artifacts.verify(artifact)
+            except Exception:
+                valid = False
+            if not valid:
+                corrupt_artifacts.append(artifact.id)
+        if len(page) < 1_000:
+            break
+        offset += len(page)
+    orphan_digests = sorted(set(artifacts.iter_digests()) - referenced_digests)
     api = create_app(store, artifact_store=artifacts, auth_token="doctor")
+    healthy = artifact_ok and not corrupt_artifacts
     report = {
-        "status": "ok" if artifact_ok else "error",
+        "status": "ok" if healthy else "error",
+        **build_metadata(),
         "data_dir": str(root),
         "database": store.database.health(),
-        "artifacts": {"writable": artifact_ok, "path": str(artifacts.root)},
+        "artifacts": {
+            "writable": artifact_ok,
+            "path": str(artifacts.root),
+            "checked": checked_artifacts,
+            "corrupt": len(corrupt_artifacts),
+            "corrupt_ids": corrupt_artifacts[:100],
+            "orphan_blobs": len(orphan_digests),
+            "orphan_digests": orphan_digests[:100],
+        },
         "api": {"openapi_version": api.openapi().get("openapi"), "version": "v1"},
         "sandbox": {
             "available": sandbox_available,

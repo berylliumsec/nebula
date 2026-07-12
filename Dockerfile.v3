@@ -1,8 +1,22 @@
+FROM python:3.12-slim-bookworm@sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b AS core-dependencies
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /build
+
+COPY pyproject.toml poetry.lock ./
+
+RUN python -m pip install --no-cache-dir "poetry==2.1.3" \
+    && poetry config virtualenvs.create true \
+    && poetry config virtualenvs.in-project true \
+    && poetry install --only main --no-root --no-interaction
+
 FROM python:3.12-slim-bookworm@sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH=/opt/nebula-venv/bin:$PATH \
     PYTHONPATH=/app/src \
     NEBULA_V3_DATA_DIR=/data \
     LANGGRAPH_STRICT_MSGPACK=true
@@ -12,21 +26,7 @@ RUN groupadd --gid 10001 nebula \
 
 WORKDIR /app
 
-RUN python -m pip install --no-cache-dir \
-    "fastapi==0.135.3" \
-    "uvicorn[standard]==0.34.0" \
-    "pydantic==2.9.2" \
-    "sqlalchemy==2.0.37" \
-    "psycopg[binary]==3.3.4" \
-    "alembic==1.18.5" \
-    "boto3==1.36.11" \
-    "httpx==0.28.1" \
-    "typer==0.26.8" \
-    "filelock==3.20.3" \
-    "langgraph==1.1.6" \
-    "langgraph-checkpoint-sqlite==3.1.0" \
-    "jsonschema==4.26.0" \
-    "semantic-version==2.10.0"
+COPY --from=core-dependencies /build/.venv /opt/nebula-venv
 
 COPY --chown=nebula:nebula src /app/src
 
@@ -37,7 +37,7 @@ USER nebula
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
+  CMD python -c "import os,urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/api/v1/health', headers={'Authorization':'Bearer '+os.environ['NEBULA_V3_API_TOKEN']}); urllib.request.urlopen(request, timeout=3)"
 
 ENTRYPOINT ["python", "-m", "nebula.v3.cli"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "8000", "--allow-remote"]
