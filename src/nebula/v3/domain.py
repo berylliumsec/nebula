@@ -861,6 +861,16 @@ class ProviderProfile(Entity):
             and default_model not in self.model_allowlist
         ):
             raise ValueError("default model must be present in model_allowlist")
+        options = self.metadata.get("options", {})
+        if isinstance(options, dict):
+            for key in ("context_window", "max_output_tokens"):
+                value = options.get(key)
+                if value is not None and (
+                    isinstance(value, bool) or not isinstance(value, int) or value < 1
+                ):
+                    raise ValueError(
+                        f"provider option {key} must be a positive integer"
+                    )
         return self
 
 
@@ -908,6 +918,75 @@ class ChatTokenUsage(NebulaModel):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     total_tokens: int = Field(default=0, ge=0)
+
+
+class ContextOwnerType(StringEnum):
+    CHAT_SESSION = "chat_session"
+    AGENT_RUN = "agent_run"
+
+
+class ContextSnapshotStatus(StringEnum):
+    READY = "ready"
+    FAILED = "failed"
+
+
+class ContextSourceReference(NebulaModel):
+    """A provenance pointer into an authoritative transcript or mission ledger."""
+
+    source_kind: str = Field(min_length=1, max_length=80)
+    source_id: str = Field(min_length=1, max_length=200)
+    sequence: int | None = Field(default=None, ge=1)
+
+
+class ContextMemoryItem(NebulaModel):
+    text: str = Field(min_length=1, max_length=4_000)
+    sources: list[ContextSourceReference] = Field(min_length=1, max_length=64)
+
+
+class ContextMemory(NebulaModel):
+    """Structured, derived working memory. It is never authoritative evidence."""
+
+    objective: str | None = Field(default=None, max_length=10_000)
+    summary: str = Field(min_length=1, max_length=20_000)
+    confirmed_facts: list[ContextMemoryItem] = Field(default_factory=list)
+    decisions: list[ContextMemoryItem] = Field(default_factory=list)
+    constraints: list[ContextMemoryItem] = Field(default_factory=list)
+    corrections: list[ContextMemoryItem] = Field(default_factory=list)
+    open_questions: list[ContextMemoryItem] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+
+
+class ContextSnapshot(Entity):
+    """Immutable derived context with complete canonical-source provenance."""
+
+    entity_kind: ClassVar[str] = "context_snapshots"
+    engagement_id: str
+    owner_type: ContextOwnerType
+    owner_id: str
+    version: int = Field(default=1, ge=1)
+    status: ContextSnapshotStatus
+    compacted_through: int = Field(default=0, ge=0)
+    memory: ContextMemory | None = None
+    source_references: list[ContextSourceReference] = Field(default_factory=list)
+    provider_profile_id: str
+    model: str
+    prompt_version: str = Field(min_length=1, max_length=100)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    cost_usd: float = Field(default=0.0, ge=0)
+    error: str | None = Field(default=None, max_length=1_000)
+
+    @model_validator(mode="after")
+    def result_is_coherent(self) -> "ContextSnapshot":
+        if self.status == ContextSnapshotStatus.READY:
+            if self.memory is None or not self.source_references:
+                raise ValueError("ready context snapshots require memory and sources")
+            if self.error is not None:
+                raise ValueError("ready context snapshots cannot contain an error")
+        elif not self.error:
+            raise ValueError("failed context snapshots require an error")
+        return self
 
 
 class ChatSession(Entity):
@@ -1005,6 +1084,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     KnowledgeSource,
     ChatSession,
     ChatMessage,
+    ContextSnapshot,
     Report,
 )
 
