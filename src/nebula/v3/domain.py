@@ -24,7 +24,7 @@ def utc_now() -> datetime:
 
 
 class StringEnum(str, Enum):
-    """A Python 3.10-compatible string enum."""
+    """A string-valued enum with stable JSON serialization."""
 
 
 class EngagementStatus(StringEnum):

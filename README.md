@@ -13,7 +13,7 @@ Nebula is an advanced, AI-powered penetration testing open-source tool that revo
 
 ## Important upgrade notice
 
-Nebula 2.0.0 is now available. Because earlier releases were published as beta versions, pip may have kept some existing installations on an older version even when `--upgrade` was used. Users running Python 3.10 through 3.13 should upgrade with:
+Nebula 2.0.0 is now available. Because earlier releases were published as beta versions, pip may have kept some existing installations on an older version even when `--upgrade` was used. Users running Python 3.11 through 3.13 should upgrade with:
 
 ```bash
 python -m pip install --upgrade nebula-ai
@@ -50,7 +50,7 @@ Nebula is a cutting-edge, AI-powered penetration testing tool designed for cyber
 
 For CPU-Based Inference(Ollama)(Note that Ollama Supports GPU too):
 - At least 16GB of RAM 
-- Python 3.10 – 3.13.9
+- Python 3.11 – 3.13
 - [Ollama](https://ollama.com/)
 
 **Installation Command:**
