@@ -422,8 +422,13 @@ jobs:
           install -d -m 0755 "$pages/toolbox"
           cp -a "$RUNNER_TEMP/toolbox-site/." "$pages/toolbox/"
           touch "$pages/.nojekyll"
-          if [ ! -f "$pages/index.html" ]; then
-            printf '<!doctype html><title>Nebula releases</title><p>Nebula signed release metadata.</p>\n' > "$pages/index.html"
+          if [ ! -f "$pages/index.html" ] \
+            || grep -Fq 'Nebula signed release metadata.' "$pages/index.html" \
+            || grep -Fq 'Nebula signed update manifests.' "$pages/index.html"; then
+            install -m 0644 index.html "$pages/index.html"
+          fi
+          if [ ! -d "$pages/images" ]; then
+            cp -a images "$pages/images"
           fi
           (
             cd "$pages"

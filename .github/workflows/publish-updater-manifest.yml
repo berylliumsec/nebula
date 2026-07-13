@@ -98,14 +98,19 @@ jobs:
           install -d -m 0755 "$pages/updates/$CHANNEL"
           install -m 0644 "$RUNNER_TEMP/latest.json" "$pages/updates/$CHANNEL/latest.json"
           touch "$pages/.nojekyll"
-          if [ ! -f "$pages/index.html" ]; then
-            printf '<!doctype html><title>Nebula releases</title><p>Nebula signed update manifests.</p>\n' > "$pages/index.html"
+          if [ ! -f "$pages/index.html" ] \
+            || grep -Fq 'Nebula signed release metadata.' "$pages/index.html" \
+            || grep -Fq 'Nebula signed update manifests.' "$pages/index.html"; then
+            install -m 0644 index.html "$pages/index.html"
+          fi
+          if [ ! -d "$pages/images" ]; then
+            cp -a images "$pages/images"
           fi
           (
             cd "$pages"
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add .nojekyll index.html "updates/$CHANNEL/latest.json"
+            git add .nojekyll index.html images "updates/$CHANNEL/latest.json"
             if ! git diff --cached --quiet; then
               git commit -m "Publish ${{ github.event.release.tag_name }} $CHANNEL updater manifest"
               git push origin HEAD:gh-pages

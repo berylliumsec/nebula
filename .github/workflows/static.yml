@@ -2,12 +2,17 @@
 name: Deploy static content to Pages
 
 on:
-  # Release publication deploys automatically. This is the recovery path.
+  push:
+    branches: ["main"]
+    paths:
+      - "index.html"
+      - "images/**"
+      - ".github/workflows/static.yml"
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -25,17 +30,47 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Check out the website source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: gh-pages
+          fetch-depth: 0
+          ref: main
+      - name: Update the durable Pages website
+        run: |
+          pages="$RUNNER_TEMP/gh-pages"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages:gh-pages
+            git worktree add "$pages" gh-pages
+          else
+            git worktree add --detach "$pages" HEAD
+            (
+              cd "$pages"
+              git checkout --orphan gh-pages
+              git rm -rf .
+            )
+          fi
+          install -m 0644 index.html "$pages/index.html"
+          rm -rf "$pages/images"
+          cp -a images "$pages/images"
+          touch "$pages/.nojekyll"
+          (
+            cd "$pages"
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add .nojekyll index.html images
+            if ! git diff --cached --quiet; then
+              git commit -m "Publish Nebula website"
+              git push origin HEAD:gh-pages
+            fi
+          )
+          install -d -m 0755 "$RUNNER_TEMP/pages-upload"
+          rsync -a --exclude=.git "$pages/" "$RUNNER_TEMP/pages-upload/"
       - name: Setup Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
       - name: Upload artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
-          # Upload entire repository
-          path: '.'
+          path: ${{ runner.temp }}/pages-upload
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
