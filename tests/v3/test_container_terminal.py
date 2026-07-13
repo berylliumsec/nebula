@@ -267,6 +267,63 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
 
 
 @async_test
+async def test_offline_terminal_works_without_an_engagement_scope_policy(tmp_path):
+    store = NebulaStore(tmp_path / "default-terminal.db")
+    engagement = store.create(Engagement(name="Default Terminal Lab"))
+    runner = RecordingTerminalRunner()
+    platform = StubTerminalPlatform(tmp_path / "workspace", runner)
+    service = ContainerTerminalService(
+        store=store,
+        tool_platform=platform,  # type: ignore[arg-type]
+        operator_id=lambda: "operator-1",
+    )
+    request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+
+    preview = await service.preflight(request)
+
+    assert preview.allowed is True
+    assert preview.policy_rule == "sandbox_default"
+    assert preview.scope_policy_id is None
+    assert preview.scope_policy_revision is None
+    assert preview.network is not None
+    assert preview.network.mode.value == "none"
+    start = ContainerTerminalStartRequest(
+        **request.model_dump(),
+        preview_token=preview.preview_token,
+        preview_fingerprint=preview.preview_fingerprint,
+        client_idempotency_key="default-terminal",
+    )
+    created = await service.start(start)
+    await service.claim(created.session_id, created.websocket_ticket)
+    await service.launch(created.session_id)
+    assert runner.requests[0][0].network == SandboxNetwork.NONE
+    await service.finish(created.session_id, outcome="closed")
+
+
+@async_test
+async def test_scoped_terminal_still_requires_an_engagement_scope_policy(tmp_path):
+    store = NebulaStore(tmp_path / "scoped-terminal.db")
+    engagement = store.create(Engagement(name="Scoped Terminal Lab"))
+    runner = RecordingTerminalRunner()
+    platform = StubTerminalPlatform(tmp_path / "workspace", runner)
+    service = ContainerTerminalService(
+        store=store,
+        tool_platform=platform,  # type: ignore[arg-type]
+    )
+
+    preview = await service.preflight(
+        ContainerTerminalPreflightRequest(
+            engagement_id=engagement.id,
+            network={"mode": "scoped", "target": "10.20.30.40", "ports": [443]},
+        )
+    )
+
+    assert preview.allowed is False
+    assert preview.error_code == "policy_denied"
+    assert "scope policy" in preview.detail
+
+
+@async_test
 async def test_scoped_terminal_pins_one_policy_approved_target(tmp_path):
     _store, engagement, _policy, runner, _platform, service = fixture(tmp_path)
     request = ContainerTerminalPreflightRequest(

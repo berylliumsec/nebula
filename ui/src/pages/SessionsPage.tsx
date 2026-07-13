@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Square,
   SquareTerminal,
+  Trash2,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type {
@@ -108,6 +109,7 @@ export function SessionsPage() {
   const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
   const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [deletingSessionId, setDeletingSessionId] = useState<string>();
   const [sessionId, setSessionId] = useState("");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
@@ -271,6 +273,28 @@ export function SessionsPage() {
     setToolsEnabled(true);
     setToolCards([]);
     setPendingResponse(undefined);
+  };
+
+  const deleteConversation = async (session: ChatSessionSummary) => {
+    if (!api || deletingSessionId) return;
+    const approved = await confirm({
+      title: `Delete ${session.title}?`,
+      message: "This permanently deletes the conversation, its messages, and its saved working memory.",
+      confirmLabel: "Delete conversation",
+      tone: "danger",
+    });
+    if (!approved) return;
+    setDeletingSessionId(session.id);
+    setChatError(undefined);
+    try {
+      await api.deleteChatSession(session.id);
+      setSessions((current) => current.filter((item) => item.id !== session.id));
+      if (sessionId === session.id) newConversation();
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "Could not delete the conversation.");
+    } finally {
+      setDeletingSessionId(undefined);
+    }
   };
 
   const selectProvider = (id: string) => {
@@ -698,7 +722,7 @@ export function SessionsPage() {
           <header><div><span>Conversations</span><strong>{previewMode ? "Preview" : `${sessions.length} saved`}</strong></div><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={previewMode || !engagement} onClick={newConversation}><Plus size={16} /></button></header>
           <nav>
             <button className={!sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{selectedProvider?.name ?? "Choose a provider"}</small></span></button>
-            {sessions.map((session) => <button className={session.id === sessionId ? "active" : undefined} type="button" key={session.id} onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button>)}
+            {sessions.map((session) => <div className={`session-list-item${session.id === sessionId ? " active" : ""}`} key={session.id}><button className="session-select" type="button" onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><button className="icon-button subtle" type="button" aria-label={`Delete conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Delete ${session.title}`} onClick={() => void deleteConversation(session)}>{deletingSessionId === session.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></div>)}
             {previewMode && <button className="active" type="button" onClick={() => setMobileListOpen(false)}><MessageSquare size={16} /><span><strong>Gateway applicability review</strong><small>Local preview</small></span></button>}
           </nav>
         </aside>}

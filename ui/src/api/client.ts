@@ -2614,6 +2614,12 @@ export class ApiClient {
       .then((items) => page(items.map(mapChatSession)));
   }
 
+  async deleteChatSession(sessionId: string): Promise<void> {
+    await this.request<void>(`chat-sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+  }
+
   listChatMessages(sessionId: string, signal?: AbortSignal): Promise<PersistedChatMessage[]> {
     return this.request<WirePersistedChatMessage[]>(
       `chat/sessions/${encodeURIComponent(sessionId)}/messages`,

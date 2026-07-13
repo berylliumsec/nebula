@@ -347,6 +347,13 @@ body {
 .session-list nav > button:hover { background: var(--surface-hover); }
 .session-list nav > button.active { color: var(--text); background: var(--blue-muted); }
 .session-list nav > button > span { display: flex; min-width: 0; flex-direction: column; }
+.session-list-item { display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; border-radius: 9px; color: var(--muted); }
+.session-list-item:hover { background: var(--surface-hover); }
+.session-list-item.active { color: var(--text); background: var(--blue-muted); }
+.session-list-item > .session-select { display: grid; min-width: 0; min-height: 54px; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: start; padding: 10px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.session-list-item > .session-select > span { display: flex; min-width: 0; flex-direction: column; }
+.session-list-item > .icon-button { opacity: .68; }
+.session-list-item:hover > .icon-button, .session-list-item > .icon-button:focus-visible { opacity: 1; }
 .session-list nav strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .session-list nav small { overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .session-workspace { padding: 12px; background: color-mix(in srgb, var(--canvas) 75%, var(--surface-muted)); }

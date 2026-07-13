@@ -141,8 +141,8 @@ class _PreparedTerminal:
     sandbox_request: SandboxRequest
     policy_rule: str
     policy_detail: str
-    scope_policy_id: str
-    scope_policy_revision: int
+    scope_policy_id: str | None
+    scope_policy_revision: int | None
 
 
 @dataclass
@@ -697,13 +697,13 @@ class ContainerTerminalService:
                 "scoped terminal requires a certified per-invocation egress helper",
                 status_code=503,
             )
-        if not engagement.scope_policy_id:
-            raise ContainerTerminalError(
-                "policy_denied",
-                "engagement requires a scope policy before opening a terminal",
-            )
-        policy = self.store.get(ScopePolicy, engagement.scope_policy_id)
         if network_enabled:
+            if not engagement.scope_policy_id:
+                raise ContainerTerminalError(
+                    "policy_denied",
+                    "scoped network terminals require an engagement scope policy",
+                )
+            policy = self.store.get(ScopePolicy, engagement.scope_policy_id)
             assert request.network.target is not None
             try:
                 addresses = await asyncio.to_thread(
@@ -732,19 +732,32 @@ class ContainerTerminalService:
             )
         else:
             addresses = []
-            decision = PolicyEngine().evaluate(
-                policy,
-                PolicyRequest(
-                    tool_name="environment.shell_local",
-                    risk_class=RiskClass.WORKSPACE_WRITE,
-                    action="operator_terminal",
-                ),
-            )
             network = ExecutionNetworkSnapshot()
-        if decision.effect == PolicyEffect.REQUIRE_APPROVAL:
-            raise ContainerTerminalError("approval_required", decision.reason)
-        if decision.effect != PolicyEffect.ALLOW:
-            raise ContainerTerminalError("policy_denied", decision.reason)
+            if engagement.scope_policy_id:
+                policy = self.store.get(ScopePolicy, engagement.scope_policy_id)
+                decision = PolicyEngine().evaluate(
+                    policy,
+                    PolicyRequest(
+                        tool_name="environment.shell_local",
+                        risk_class=RiskClass.WORKSPACE_WRITE,
+                        action="operator_terminal",
+                    ),
+                )
+            else:
+                policy = None
+                decision = None
+        if decision is not None:
+            if decision.effect == PolicyEffect.REQUIRE_APPROVAL:
+                raise ContainerTerminalError("approval_required", decision.reason)
+            if decision.effect != PolicyEffect.ALLOW:
+                raise ContainerTerminalError("policy_denied", decision.reason)
+
+        policy_rule = decision.rule if decision is not None else "sandbox_default"
+        policy_detail = (
+            decision.reason
+            if decision is not None
+            else "offline terminal is confined to the engagement workspace"
+        )
 
         runtime = _runtime_snapshot(resolution)
         egress_rules = [
@@ -783,10 +796,10 @@ class ContainerTerminalService:
             runtime=runtime,
             network=network,
             sandbox_request=sandbox_request,
-            policy_rule=decision.rule,
-            policy_detail=decision.reason,
-            scope_policy_id=policy.id,
-            scope_policy_revision=policy.revision,
+            policy_rule=policy_rule,
+            policy_detail=policy_detail,
+            scope_policy_id=policy.id if policy is not None else None,
+            scope_policy_revision=policy.revision if policy is not None else None,
         )
 
     def _resolve(

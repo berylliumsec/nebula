@@ -10,6 +10,8 @@ from nebula.v3.domain import (
     ContextSnapshot,
     ContextSnapshotStatus,
     ContextSourceReference,
+    ChatSession,
+    ChatTurn,
     Engagement,
     ProviderProfile,
     Task,
@@ -151,6 +153,15 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         client.post("/api/v1/chat-sessions", headers=_auth(), json={}).status_code
         == 405
     )
+    deleted = client.delete(f"/api/v1/chat-sessions/{session_id}", headers=_auth())
+    assert deleted.status_code == 204
+    assert client.get(
+        f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+    ).status_code == 404
+    assert client.get(
+        f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
+    ).json() == []
+    assert store.list_entities(ContextSnapshot, engagement_id=engagement.id) == []
 
     streamed = client.post(
         "/api/v1/chat/completions",
@@ -208,6 +219,43 @@ def test_chat_api_rejects_system_injection_and_disallowed_model(tmp_path, monkey
     )
     assert disallowed.status_code == 422
     assert "not allowed" in disallowed.json()["detail"]
+
+
+def test_chat_delete_rejects_an_active_response(tmp_path):
+    store = NebulaStore(tmp_path / "active-chat-delete.db")
+    engagement = store.create(Engagement(name="Active chat"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Do not interrupt",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    response = client.delete(
+        f"/api/v1/chat-sessions/{session.id}", headers=_auth()
+    )
+
+    assert response.status_code == 409
+    assert "response is active" in response.json()["detail"]
+    assert store.get(ChatSession, session.id).id == session.id
 
 
 def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):

@@ -599,6 +599,61 @@ class NebulaStore:
                     f"{model.entity_kind} entity not found: {entity_id}"
                 )
 
+    def delete_chat_session(
+        self, session_id: str, *, expected_revision: int | None = None
+    ) -> None:
+        """Atomically remove one conversation and its private derived records."""
+
+        with self.database.session() as session:
+            row = session.scalar(
+                select(EntityRow).where(
+                    EntityRow.id == session_id,
+                    EntityRow.kind == "chat_sessions",
+                )
+            )
+            if row is None:
+                raise NotFoundError(f"chat_sessions entity not found: {session_id}")
+            if expected_revision is not None and row.revision != expected_revision:
+                raise ConflictError(
+                    f"revision conflict: expected {expected_revision}, found {row.revision}"
+                )
+            active_turn = and_(
+                EntityRow.kind == "chat_turns",
+                EntityRow.payload["session_id"].as_string() == session_id,
+                EntityRow.payload["status"].as_string().in_(
+                    ("routing", "waiting_approval", "finalizing")
+                ),
+            )
+            if session.scalar(select(exists().where(active_turn))):
+                raise ConflictError(
+                    "conversation cannot be deleted while a response is active"
+                )
+            owned_records = or_(
+                and_(
+                    EntityRow.kind.in_(("chat_messages", "chat_turns")),
+                    EntityRow.payload["session_id"].as_string() == session_id,
+                ),
+                and_(
+                    EntityRow.kind == "context_snapshots",
+                    EntityRow.payload["owner_type"].as_string() == "chat_session",
+                    EntityRow.payload["owner_id"].as_string() == session_id,
+                ),
+                and_(
+                    EntityRow.kind.in_(("tool_calls", "approvals")),
+                    EntityRow.payload["chat_session_id"].as_string() == session_id,
+                ),
+            )
+            session.execute(delete(EntityRow).where(owned_records))
+            result = session.execute(
+                delete(EntityRow).where(
+                    EntityRow.id == session_id,
+                    EntityRow.kind == "chat_sessions",
+                    EntityRow.revision == row.revision,
+                )
+            )
+            if result.rowcount != 1:
+                raise ConflictError("conversation changed while it was being deleted")
+
     def engagement_has_dependents(self, engagement_id: str) -> bool:
         """Return whether any persisted child is owned by this engagement."""
 

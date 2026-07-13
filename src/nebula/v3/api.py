@@ -82,6 +82,7 @@ from .domain import (
     ApprovalStatus,
     Artifact,
     ChatMessage,
+    ChatSession,
     ChatTurn,
     ChatTurnStatus,
     ChatTokenUsage,
@@ -2581,6 +2582,20 @@ def create_app(
         return ChatService(store, tool_platform=tool_platform).context_status(
             session_id
         )
+
+    @app.delete(
+        f"{API_PREFIX}/chat-sessions/{{session_id}}",
+        status_code=204,
+        tags=["chat-sessions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_chat_session(
+        session_id: str,
+        if_match: int | None = Header(default=None, alias="If-Match"),
+    ) -> Response:
+        store.get(ChatSession, session_id)
+        store.delete_chat_session(session_id, expected_revision=if_match)
+        return Response(status_code=204)
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/context",

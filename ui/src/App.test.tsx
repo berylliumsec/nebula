@@ -253,12 +253,14 @@ describe("Nebula workspace", () => {
       updated_at: "2026-07-12T11:00:00Z",
       revision: 1,
     };
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+    let chatPresent = true;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
       if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Memory review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
       if (path.endsWith("/providers")) return new Response(JSON.stringify([{ ...entity, id: "provider-1", name: "Local analyst", provider_type: "vllm", endpoint: null, enabled: true, is_local: true, secret_ref: null, model_allowlist: ["model-1"], capabilities: { streaming: true }, privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "model-1" } }]), { status: 200 });
-      if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify([{ ...entity, id: "session-1", engagement_id: "engagement-1", title: "Saved context", provider_profile_id: "provider-1", model: "model-1", metadata: { message_count: 2 } }]), { status: 200 });
+      if (path.endsWith("/chat-sessions/session-1") && init?.method === "DELETE") { chatPresent = false; return new Response(null, { status: 204 }); }
+      if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify(chatPresent ? [{ ...entity, id: "session-1", engagement_id: "engagement-1", title: "Saved context", provider_profile_id: "provider-1", model: "model-1", metadata: { message_count: 2 } }] : []), { status: 200 });
       if (path.endsWith("/chat/sessions/session-1/messages")) return new Response(JSON.stringify([
         { ...entity, id: "message-1", engagement_id: "engagement-1", session_id: "session-1", sequence: 1, role: "user", content: "Use port 8443", citations: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
         { ...entity, id: "message-2", engagement_id: "engagement-1", session_id: "session-1", sequence: 2, role: "assistant", content: "Port retained", citations: [], usage: { input_tokens: 2, output_tokens: 2, total_tokens: 4 } },
@@ -296,12 +298,17 @@ describe("Nebula workspace", () => {
     renderApp("/sessions");
 
     await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }));
-    await user.click(await screen.findByRole("button", { name: /Saved context/ }));
+    await user.click((await screen.findByText("Saved context")).closest("button")!);
     expect(await screen.findByText("The selected service uses port 8443.")).toBeVisible();
     const source = screen.getByRole("button", { name: "Go to transcript message 1" });
     source.focus();
     await user.keyboard("{Enter}");
     expect(screen.getByText("Use port 8443").closest("article")).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Delete conversation Saved context" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete Saved context?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete conversation" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete conversation Saved context" })).not.toBeInTheDocument());
+    expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "DELETE")).toBe(true);
   });
 
   it("starts Terminal automatically inside the reviewed container boundary", async () => {
