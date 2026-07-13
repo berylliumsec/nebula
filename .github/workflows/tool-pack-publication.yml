@@ -183,7 +183,11 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ matrix.component.name }}
           DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
+      - name: Prepare release evidence directory
+        run: install -d -m 0755 release-input
       - name: Generate CycloneDX SBOM
+        env:
+          SYFT_PLATFORM: linux/${{ matrix.architecture }}
         uses: anchore/sbom-action@f8bdd1d8ac5e901a77a92f111440fdb1b593736b # v0.20.6
         with:
           image: ${{ env.REGISTRY }}/${{ matrix.component.name }}@${{ steps.image.outputs.digest }}
