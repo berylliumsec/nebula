@@ -1,0 +1,26 @@
+id: nebula-security-header-observation
+
+info:
+  name: HTTP Security Header Observation
+  author: berylliumsec
+  severity: info
+  description: Records the presence of common defensive HTTP response headers.
+  tags: nebula,headers,passive
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    redirects: false
+    max-redirects: 0
+    matchers-condition: or
+    matchers:
+      - type: word
+        part: header
+        words: ["Content-Security-Policy:"]
+      - type: word
+        part: header
+        words: ["Strict-Transport-Security:"]
+      - type: word
+        part: header
+        words: ["X-Content-Type-Options:"]

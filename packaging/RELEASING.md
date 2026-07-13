@@ -22,17 +22,14 @@ Tool packs have a separate manual, protected release boundary. See the
 [tool-pack operator and author guide](../docs/TOOL_PACKS.md) before preparing
 one.
 
-The **Tool-pack publication readiness** workflow targets the
-`tool-pack-release` environment with read-only repository permissions.
-Repository administrators must configure that environment with required
-reviewers; the workflow file cannot create its protection rules. Source
-validation reports unresolved placeholders without manufacturing values. Its
-candidate mode requires an immutable `nebula-tools-v*` tag, exact image
-digests, and the declared SBOM/provenance files, then emits unsigned archives
-for offline review only.
+The **Publish Safe Foundation tool packs** workflow targets the protected
+`tool-pack-release` environment. `validate-source` remains read-only. `publish`
+requires an immutable `nebula-tools-v*` tag and required-reviewer approval. It
+then builds and signs architecture-specific OCI images, generates SBOMs and
+provenance, signs the catalog with the environment-held Ed25519 key, and
+deploys the verified catalog under the existing Nebula Pages site.
 
-That workflow does not push OCI images, sign manifests/catalogs, or publish a
-catalog. Do not add placeholder keys or digests to make it pass. Enabling real
-publication requires a separately reviewed offline Ed25519 signing ceremony,
-key-distribution and rotation procedure, immutable hosting, provenance policy,
-and clean-machine install verification.
+Never commit the private key, resolved digests, or generated release evidence
+to the source branch. Back up the release key offline before approving the
+first publication. Key rotation requires an overlapping Nebula release that
+trusts both the retiring and replacement public keys.

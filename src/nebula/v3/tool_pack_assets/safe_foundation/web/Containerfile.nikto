@@ -1,4 +1,6 @@
-FROM alpine@{{sha256:alpine-base}}
-RUN apk add --no-cache perl nikto && addgroup -S nebula && adduser -S -G nebula -u 10001 nebula
+FROM ghcr.io/sullo/nikto@sha256:0bb37022ebfadc38d6a9a2755c03bfd1f9e079e01e8946fe548153d9ba0c2012
+USER 0:0
+RUN ln -s /opt/nikto/nikto.pl /usr/local/bin/nikto
+ENV HOME=/tmp
 USER 10001:10001
-ENTRYPOINT ["/usr/bin/nikto"]
+ENTRYPOINT ["/usr/local/bin/nikto"]

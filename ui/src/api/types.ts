@@ -76,6 +76,9 @@ export interface ToolPackCatalogEntry {
   toolNames: string[];
   permissions: string[];
   signed: boolean;
+  collectionId?: string;
+  collectionName?: string;
+  collectionOrder: number;
 }
 
 export interface ToolPackInstallation {

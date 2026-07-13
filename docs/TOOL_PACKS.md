@@ -7,20 +7,23 @@ application bundle.
 
 ## Current release status
 
-The repository contains **Safe Foundation release source**, not released tool
-packs. Its four manifests still contain `{{sha256:...}}` placeholders and refer
-to SBOM and provenance files that have not been generated. There are no
-published image digests, signed catalog, release signatures, or certified
-egress-helper digest in this repository.
+The repository contains hardened Safe Foundation image sources and a protected
+publisher. A `nebula-tools-v*` release builds each platform image, generates its
+SBOM and GitHub provenance, signs the OCI digest through Sigstore, resolves and
+signs every manifest, and publishes the signed catalog at
+`https://berylliumsec.github.io/nebula/tool-packs/`.
 
-Consequently:
+Nebula embeds only the publisher-bound Beryllium Ed25519 public key. The private
+key is never committed and is available only to the protected
+`tool-pack-release` environment. Administrators may add other publisher keys
+with `NEBULA_TOOL_PACK_PUBLIC_KEYS`, but cannot replace an embedded key ID.
 
-- A normal build has no curated trust key unless an administrator supplies
-  `NEBULA_TOOL_PACK_PUBLIC_KEYS`.
-- The curated catalog is empty and signed catalog installation is unavailable
-  without that trust configuration.
-- The bundled Safe Foundation source cannot be packed or installed as a
-  release candidate until every placeholder and release attachment is resolved.
+Source manifests retain `{{sha256:...}}` placeholders. The protected publisher
+resolves them from actual registry outputs without committing generated
+digests, SBOMs, provenance, or signing material back to the source branch.
+
+Current execution constraints:
+
 - Network tools remain unavailable unless a runner also has a digest-pinned
   egress helper that passes runner verification. A configured custom seccomp
   profile must be an existing absolute local file.
@@ -29,14 +32,14 @@ Consequently:
   verification can be exercised without opening this execution gate.
 - Analysis-only chat and missions continue to work.
 
-The intended collection is:
+The Safe Foundation collection is:
 
 | Source pack | Declared tools | Network | Current status |
 | --- | --- | --- | --- |
-| `safe-network` | `nmap.connect_scan`, `nmap.service_scan` | Scoped active scan | Source only |
-| `safe-web` | `nuclei.scan`, `nikto.scan` | Scoped active scan | Source only |
-| `safe-intelligence` | `searchsploit.query` | None | Source only |
-| `safe-code` | `semgrep.scan` | None | Source only |
+| `safe-network` | `nmap.connect_scan`, `nmap.service_scan` | Scoped active scan | Isolated Nmap image |
+| `safe-web` | `nuclei.scan`, `nikto.scan` | Scoped active scan | Separate Nuclei and Nikto images |
+| `safe-intelligence` | `searchsploit.query` | None | Isolated SearchSploit image |
+| `safe-code` | `semgrep.scan` | None | Isolated Semgrep image |
 
 Masscan, raw SYN scanning, exploitation, credentials, persistence, and
 destructive tools are not part of Safe Foundation.
@@ -124,10 +127,10 @@ unavailable.
 
 ## Install and manage packs
 
-Signed catalog installation requires a trusted Ed25519 public-key file and a
-signed catalog. The key file is an administrator-owned JSON document with a
-`keys` object mapping release key IDs to their public-key encodings. Symbolic
-example only:
+Nebula embeds the Beryllium catalog's publisher-bound Ed25519 public key. An
+administrator-owned key file is needed only for additional trusted publishers
+or a self-hosted catalog. It contains a `keys` object mapping release key IDs to
+their public-key encodings. Symbolic example only:
 
 ```json
 {
@@ -159,6 +162,8 @@ After reviewing permissions:
 
 ```bash
 nebula3 tools catalog
+nebula3 tools install-collection safe-foundation \
+  --runner local-podman --yes
 nebula3 tools install berylliumsec/safe-network@0.1.0 \
   --runner local-podman --yes
 nebula3 tools list
@@ -170,8 +175,10 @@ nebula3 tools remove INSTALLATION_ID --yes
 Place `--json` immediately after `tools` for the stable machine-readable CLI
 contract, for example `nebula3 tools --json list`.
 
-These commands will not work for Safe Foundation until its release artifacts
-and signed catalog actually exist. Installation is separate from execution: it
+The desktop presents the four independently versioned packs as one **Safe
+Foundation** collection. One action installs its latest signed members; if a
+new member fails, Core disables the members newly installed by that operation.
+Installation is separate from execution: it
 pulls exact digests, verifies the manifest and platform, runs bounded smoke
 tests, and records the installation. Missions use `--pull=never` and cannot
 download a missing or newer image.
@@ -184,6 +191,7 @@ The REST equivalents are authenticated:
 | `GET` | `/api/v1/tool-packs` | List installation records |
 | `GET` | `/api/v1/tools` | List tools with availability reasons |
 | `POST` | `/api/v1/tool-packs/install` | Install a catalog ID for a runner |
+| `POST` | `/api/v1/tool-collections/install` | Install the latest members of a signed collection |
 | `POST` | `/api/v1/tool-packs/install-local` | Upload an explicitly confirmed local bundle |
 | `POST` | `/api/v1/tool-packs/{id}/verify` | Reverify images and smoke tests |
 | `POST` | `/api/v1/tool-packs/{id}/update` | Install a newer signed version side by side |
@@ -359,18 +367,17 @@ third-party parser code is never imported into Core.
 
 ## Safe Foundation release gate
 
-The manual **Tool-pack publication readiness** workflow is deliberately
-read-only and targets the `tool-pack-release` GitHub environment. Repository
-administrators must configure that environment with required reviewers before
-using the workflow; declaring its name in YAML does not create protection rules.
+The **Publish Safe Foundation tool packs** workflow has two modes:
 
-- `validate-source` validates the current manifests and uploads a report. It
-  succeeds while truthfully listing unresolved release blockers.
-- `stage-release-candidate` requires an immutable `nebula-tools-v*` tag, no
-  unresolved digest tokens, and every declared SBOM/provenance file. It creates
-  deterministic **unsigned** archives and checksums for offline review.
-- The workflow has no package or contents write permission, receives no signing
-  key, and cannot publish images, manifests, signatures, or a catalog.
+- `validate-source` performs read-only source validation from any selected ref.
+- `publish` requires an immutable `nebula-tools-v*` tag and approval through the
+  protected `tool-pack-release` environment.
+
+Publication builds `linux/amd64` and `linux/arm64` images independently,
+records exact Kali package versions, generates per-platform CycloneDX SBOMs and
+in-toto provenance, creates Sigstore signatures and GitHub attestations, then
+assembles the Ed25519-signed catalog and deterministic `.nebula-toolpack`
+bundles. Pages deployment occurs only after signature verification passes.
 
 Run the same gate locally:
 
@@ -380,11 +387,11 @@ poetry run python -m scripts.validate_tool_pack_release \
   --require-candidate-ready --json
 ```
 
-Before real publication can be enabled, release owners must separately define
-and review image builds, SBOM/provenance generation, offline Ed25519 manifest
-and catalog signing, public-key distribution/rotation, immutable hosting, and a
-post-publication clean-machine installation test. No release key or digest
-should ever be added merely to make the scaffold pass.
+Release owners must back up the Ed25519 private key outside GitHub and preserve
+required-reviewer protection on `tool-pack-release`. Key rotation requires an
+overlapping Nebula release containing both old and new public keys. Do not
+promote a release if clean-machine installation, smoke tests, signatures,
+catalog verification, or runner-isolation checks fail.
 
 ## Fail-closed guarantees
 

@@ -272,6 +272,9 @@ interface WireToolPackCatalogEntry extends JsonObject {
   tool_names?: string[];
   permissions?: string[];
   signed?: boolean;
+  collection_id?: string | null;
+  collection_name?: string | null;
+  collection_order?: number;
 }
 
 interface WireToolPackInstallation extends JsonObject {
@@ -833,6 +836,9 @@ function mapToolCatalogEntry(value: WireToolPackCatalogEntry): ToolPackCatalogEn
     toolNames: value.tool_names ?? [],
     permissions: value.permissions ?? [],
     signed: value.signed !== false,
+    collectionId: value.collection_id ?? undefined,
+    collectionName: value.collection_name ?? undefined,
+    collectionOrder: numberField(value.collection_order),
   };
 }
 
@@ -1140,6 +1146,13 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify({ catalog_id: catalogId, version, runtime_profile_id: runtimeProfileId }),
     }).then(mapToolPackInstallation);
+  }
+
+  installToolCollection(collectionId: string, runtimeProfileId: string): Promise<ToolPackInstallation[]> {
+    return this.request<WireToolPackInstallation[]>("tool-collections/install", {
+      method: "POST",
+      body: JSON.stringify({ collection_id: collectionId, runtime_profile_id: runtimeProfileId }),
+    }).then((items) => items.map(mapToolPackInstallation));
   }
 
   installLocalToolPack(bundleBase64: string, runtimeProfileId: string, developerModeConfirmed: boolean): Promise<ToolPackInstallation> {

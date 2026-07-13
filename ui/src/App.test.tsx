@@ -583,6 +583,35 @@ describe("Nebula workspace", () => {
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ tool_names: ["nmap.connect_scan"], max_tool_calls: 20, max_concurrency: 2 });
   });
 
+  it("installs the signed Safe Foundation collection with one action", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const catalog = ["safe-network", "safe-web", "safe-intelligence", "safe-code"].map((name, index) => ({
+      id: `berylliumsec/${name}@0.1.0`, publisher: "berylliumsec", name, version: "0.1.0", description: `${name} tools`,
+      manifest_digest: String(index + 1).repeat(64), licenses: [], platforms: ["linux/amd64", "linux/arm64"],
+      tool_names: [`${name}.run`], permissions: index < 2 ? ["network"] : [], signed: true,
+      collection_id: "safe-foundation", collection_name: "Safe Foundation", collection_order: index,
+    }));
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Collection review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/runner-profiles")) return new Response(JSON.stringify([{ ...entity, id: "runner-1", name: "Podman", runtime: "podman", executable: "/usr/bin/podman", platform: "linux/amd64", isolation: "rootless", healthy: true, state: "ready" }]), { status: 200 });
+      if (path.endsWith("/tool-catalog")) return new Response(JSON.stringify(catalog), { status: 200 });
+      if (path.endsWith("/tool-collections/install") && init?.method === "POST") return new Response(JSON.stringify([]), { status: 201 });
+      if (path.endsWith("/scope")) return new Response(JSON.stringify({ ...entity, id: "scope:engagement-1", engagement_id: "engagement-1", allowed_cidrs: [], allowed_domains: [], allowed_urls: [], allowed_ports: [], prohibited_actions: [], local_only: true, max_concurrency: 1, grants: [] }), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    const button = await screen.findByRole("button", { name: "Install Safe Foundation" });
+    await user.click(button);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-collections/install") && request?.method === "POST")).toBe(true));
+    const call = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-collections/install") && request?.method === "POST");
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ collection_id: "safe-foundation", runtime_profile_id: "runner-1" });
+  });
+
   it("shows replayed tool-pack progress in Settings", async () => {
     class ToolPackWebSocket extends EventTarget {
       static instance?: ToolPackWebSocket;

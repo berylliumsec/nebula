@@ -127,6 +127,19 @@ export function ToolPackSettings() {
 
   const readyRunner = runners.find((runner) => runner.state === "ready");
   const installedDigests = useMemo(() => new Set(packs.map((pack) => pack.manifestDigest)), [packs]);
+  const collections = useMemo(() => {
+    const grouped = new Map<string, { id: string; name: string; entries: ToolPackCatalogEntry[] }>();
+    for (const entry of catalog) {
+      if (!entry.collectionId || !entry.collectionName) continue;
+      const collection = grouped.get(entry.collectionId) ?? { id: entry.collectionId, name: entry.collectionName, entries: [] };
+      collection.entries.push(entry);
+      grouped.set(entry.collectionId, collection);
+    }
+    return [...grouped.values()].map((collection) => ({
+      ...collection,
+      entries: collection.entries.sort((left, right) => left.collectionOrder - right.collectionOrder),
+    }));
+  }, [catalog]);
 
   const action = async (id: string, operation: () => Promise<unknown>) => {
     setBusy(id);
@@ -146,6 +159,11 @@ export function ToolPackSettings() {
   const install = (entry: ToolPackCatalogEntry) => {
     if (!api || !readyRunner) return;
     void action(entry.id, () => api.installToolPack(entry.id, readyRunner.id, entry.version));
+  };
+
+  const installCollection = (collectionId: string) => {
+    if (!api || !readyRunner) return;
+    void action(`collection:${collectionId}`, () => api.installToolCollection(collectionId, readyRunner.id));
   };
 
   const installLocal = async () => {
@@ -173,6 +191,12 @@ export function ToolPackSettings() {
         <header><div><strong>Installation progress</strong><small>Authenticated replay stream</small></div><span className={`progress-stream-state ${progressStreamState}`}><span className="status-dot" /> {progressStreamLabel(progressStreamState)}</span></header>
         {progressEvents.length ? <div className="tool-progress-list">{progressEvents.map((event) => <article className={event.phase} key={event.operationId}><div><strong>{event.packIdentity ?? event.operation.replaceAll("_", " ")}</strong><small>{event.operation.replaceAll("_", " ")}{event.manifestDigest ? ` · ${event.manifestDigest.slice(0, 12)}…` : ""}</small></div><span>{event.resultStatus ?? event.phase}</span><div className="progress-track small" aria-hidden="true"><span style={{ width: progressWidth(event.phase) }} /></div><time dateTime={event.occurredAt}>{new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" }).format(new Date(event.occurredAt))}</time></article>)}</div> : <p>{progressStreamState === "unsupported" ? "Live progress is unavailable in this Core. Pack status can still be refreshed manually." : "No tool-pack operations have been observed in this session."}</p>}
       </section>
+      {collections.length > 0 && <section className="tool-collections" aria-label="Tool collections"><div className="section-heading"><div><h3>Collections</h3><p>Install a reviewed capability set with one action; engagement access remains tool-specific.</p></div></div><div className="tool-pack-list">{collections.map((collection) => {
+        const complete = collection.entries.every((entry) => installedDigests.has(entry.manifestDigest));
+        const busyId = `collection:${collection.id}`;
+        const toolCount = collection.entries.reduce((count, entry) => count + entry.toolNames.length, 0);
+        return <article className="tool-pack-card collection" key={collection.id}><header><div><strong>{collection.name}</strong><small>{collection.entries.length} isolated packs · {toolCount} typed tools</small></div><span className="signed-badge"><ShieldCheck size={12} /> Signed</span></header><p>{collection.entries.map((entry) => entry.name).join(" · ")}</p><div className="scope-chip-list">{[...new Set(collection.entries.flatMap((entry) => entry.permissions))].map((permission) => <span key={permission}>{permission.replaceAll("_", " ")}</span>)}</div><footer><span>Installs exact platform digests</span><button className="button primary" type="button" disabled={!readyRunner || complete || busy === busyId || previewMode} onClick={() => installCollection(collection.id)}>{complete ? "Installed" : busy === busyId ? "Installing…" : `Install ${collection.name}`}</button></footer></article>;
+      })}</div></section>}
       <div className="tooling-grid">
         <div className="tooling-column">
           <h3>Installed packs</h3>

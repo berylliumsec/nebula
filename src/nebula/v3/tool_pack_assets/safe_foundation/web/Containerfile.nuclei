@@ -1,7 +1,6 @@
-FROM alpine@{{sha256:alpine-base}}
-ARG NUCLEI_VERSION
-COPY nuclei /usr/local/bin/nuclei
-COPY curated-templates /opt/nebula/nuclei-templates
-RUN addgroup -S nebula && adduser -S -G nebula -u 10001 nebula && chown -R nebula:nebula /opt/nebula
+FROM projectdiscovery/nuclei@sha256:e677842fb1f50f29747565ba274a1d35dcf8c684132a42b0cb406e71fccae9fc
+USER 0:0
+COPY --chown=10001:10001 curated-templates /opt/nebula/nuclei-templates
+ENV HOME=/tmp
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/nuclei"]

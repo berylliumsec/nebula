@@ -1,5 +1,6 @@
-FROM semgrep/semgrep@{{sha256:semgrep-base}}
-COPY curated-rules /opt/nebula/rules
-RUN addgroup -S nebula && adduser -S -G nebula -u 10001 nebula && chown -R nebula:nebula /opt/nebula
+FROM semgrep/semgrep@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942
+USER 0:0
+COPY --chown=10001:10001 curated-rules /opt/nebula/rules
+ENV HOME=/tmp SEMGREP_SEND_METRICS=off
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/semgrep"]

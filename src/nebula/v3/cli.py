@@ -496,6 +496,26 @@ def tools_install_local(
     _print(installed.model_dump(mode="json"))
 
 
+@tools_app.command("install-collection")
+def tools_install_collection(
+    collection_id: Annotated[str, typer.Argument()],
+    runner: Annotated[str, typer.Option("--runner")],
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Confirm all collection permissions.")
+    ] = False,
+) -> None:
+    """Install the latest signed members of one curated collection."""
+
+    if not yes:
+        raise typer.BadParameter("review all collection permissions and pass --yes")
+    platform, _ = _tool_services(data_dir)
+    installed = asyncio.run(
+        platform.install_collection(collection_id, runtime_profile_id=runner)
+    )
+    _print({"installations": [item.model_dump(mode="json") for item in installed]})
+
+
 @tools_app.command("verify")
 def tools_verify(
     installation_id: Annotated[str, typer.Argument()],

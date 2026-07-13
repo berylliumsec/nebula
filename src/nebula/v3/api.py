@@ -245,6 +245,13 @@ class ToolPackInstallRequest(NebulaModel):
     runtime_profile_id: str = Field(min_length=1, max_length=200)
 
 
+class ToolCollectionInstallRequest(NebulaModel):
+    collection_id: str = Field(
+        min_length=1, max_length=128, pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$"
+    )
+    runtime_profile_id: str = Field(min_length=1, max_length=200)
+
+
 class LocalToolPackInstallRequest(NebulaModel):
     bundle_base64: str = Field(min_length=1, max_length=24_000_000)
     runtime_profile_id: str = Field(min_length=1, max_length=200)
@@ -906,6 +913,25 @@ def create_app(
             request.catalog_id,
             runtime_profile_id=request.runtime_profile_id,
             version=request.version,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/tool-collections/install",
+        response_model=list[ToolPackInstallation],
+        status_code=201,
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def install_catalog_tool_collection(
+        request: ToolCollectionInstallRequest,
+    ) -> list[ToolPackInstallation]:
+        if tool_platform is None:
+            raise HTTPException(
+                status_code=501, detail="tool-pack platform is not configured"
+            )
+        return await tool_platform.install_collection(
+            request.collection_id,
+            runtime_profile_id=request.runtime_profile_id,
         )
 
     @app.post(

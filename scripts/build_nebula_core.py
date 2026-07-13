@@ -117,6 +117,11 @@ def main() -> None:
     license_file = root / "LICENSE.md"
     if not license_file.is_file():
         raise RuntimeError("LICENSE.md is required for a distributable Core")
+    tool_pack_trust = (
+        root / "src" / "nebula" / "v3" / "tool_pack_assets" / "trust"
+    )
+    if not (tool_pack_trust / "berylliumsec.json").is_file():
+        raise RuntimeError("the embedded tool-pack trust root is required")
 
     target = target_triple()
     metadata_root = root / "build" / "nebula-core-metadata"
@@ -154,6 +159,8 @@ def main() -> None:
         f"{license_file}:licenses",
         "--add-data",
         f"{notices}:licenses",
+        "--add-data",
+        f"{tool_pack_trust}:nebula/v3/tool_pack_assets/trust",
     ]
     # Release environments omit the legacy dependency group. These exclusions
     # are a second defense for developer/QA builds created in a full checkout;

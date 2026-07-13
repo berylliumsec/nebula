@@ -669,6 +669,14 @@ def test_approval_decision_resumes_the_same_executable_run(tmp_path):
         ),
         (
             "post",
+            "/api/v1/tool-collections/install",
+            {
+                "collection_id": "safe-foundation",
+                "runtime_profile_id": "runner-test",
+            },
+        ),
+        (
+            "post",
             "/api/v1/tool-packs/install-local",
             {
                 "bundle_base64": "e30=",

@@ -149,10 +149,11 @@ Executable tools are disabled unless all of these are present:
 Missing isolation results in analysis-only mode. There is no host execution
 fallback.
 
-The Safe Foundation manifests currently bundled with this repository are
-unresolved release source, not installable signed packs. They contain digest
-placeholders and have no published SBOM/provenance payloads or trust key. Do not
-substitute example digests to enable them.
+The Safe Foundation sources retain release digest placeholders intentionally.
+The protected `nebula-tools-v*` publisher resolves them from actual registry
+outputs, creates SBOM/provenance evidence and OCI signatures, and publishes an
+Ed25519-signed catalog. Nebula embeds only the Beryllium public trust key; never
+substitute example digests or commit the private release key.
 
 ## Current release boundary
 

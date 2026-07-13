@@ -73,9 +73,9 @@ from .tools import (
 from .version import build_metadata
 
 
-DEFAULT_CATALOG_URL = "https://berylliumsec.github.io/nebula-tools/catalog-v1.json"
+DEFAULT_CATALOG_URL = "https://berylliumsec.github.io/nebula/tool-packs/catalog-v1.json"
 DEFAULT_CATALOG_SIGNATURE_URL = (
-    "https://berylliumsec.github.io/nebula-tools/catalog-v1.json.signature.json"
+    "https://berylliumsec.github.io/nebula/tool-packs/catalog-v1.json.signature.json"
 )
 MAX_REMOTE_MANIFEST_BYTES = 2_000_000
 MAX_LOCAL_BUNDLE_BYTES = 18_000_000
@@ -84,7 +84,12 @@ MAX_EVENT_RETENTION = 10_000
 
 
 ToolPackOperation = Literal[
-    "install_catalog", "install_local", "verify", "update", "disable"
+    "install_catalog",
+    "install_collection",
+    "install_local",
+    "verify",
+    "update",
+    "disable",
 ]
 ToolPackEventPhase = Literal["pending", "pulling", "verifying", "ready", "failed"]
 
@@ -242,9 +247,7 @@ class ToolPlatformError(RuntimeError):
     """Operator-safe tool-platform configuration or lifecycle failure."""
 
 
-def _load_public_keys(path: Path | None) -> dict[str, Any]:
-    if path is None:
-        return {}
+def _load_public_keys(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -253,6 +256,28 @@ def _load_public_keys(path: Path | None) -> dict[str, Any]:
     if not isinstance(keys, dict) or any(not isinstance(key, str) for key in keys):
         raise ToolPlatformError("tool-pack public-key file must contain a keys object")
     return dict(keys)
+
+
+def _trusted_public_keys(configured_path: Path | None = None) -> dict[str, Any]:
+    """Load the release-embedded keyring plus optional administrator keys."""
+
+    embedded_path = (
+        Path(__file__).resolve().parent
+        / "tool_pack_assets"
+        / "trust"
+        / "berylliumsec.json"
+    )
+    embedded = _load_public_keys(embedded_path)
+    if configured_path is None:
+        return embedded
+    configured = _load_public_keys(configured_path)
+    collisions = sorted(set(embedded).intersection(configured))
+    if collisions:
+        raise ToolPlatformError(
+            "administrator tool-pack keys cannot replace embedded release keys: "
+            + ", ".join(collisions)
+        )
+    return {**embedded, **configured}
 
 
 class ToolPlatform:
@@ -395,6 +420,69 @@ class ToolPlatform:
                 raise
             raise ToolPlatformError(str(exc)) from exc
 
+    async def install_collection(
+        self, collection_id: str, *, runtime_profile_id: str
+    ) -> list[ToolPackInstallation]:
+        """Install one signed collection, disabling new members on failure."""
+
+        if not self.has_trusted_keys:
+            raise ToolPlatformError(
+                "this build does not contain a curated tool-pack trust key"
+            )
+        loaded = await self.catalog_client.fetch()
+        candidates = [
+            entry
+            for entry in loaded.catalog.entries
+            if entry.collection_id == collection_id
+        ]
+        if not candidates:
+            raise ToolPlatformError(
+                "tool collection is not present in the signed catalog"
+            )
+        latest: dict[tuple[str, str], ToolCatalogEntry] = {}
+        for entry in candidates:
+            identity = (entry.publisher, entry.name)
+            current = latest.get(identity)
+            if current is None or Version(entry.version) > Version(current.version):
+                latest[identity] = entry
+        entries = sorted(
+            latest.values(), key=lambda entry: (entry.collection_order, entry.name)
+        )
+        existing = {
+            (item.manifest_digest, item.runtime_profile_id): item
+            for item in self.store.list_entities(ToolPackInstallation, limit=1_000)
+            if item.status == ToolPackInstallationStatus.READY
+        }
+        installed: list[ToolPackInstallation] = []
+        created: list[ToolPackInstallation] = []
+        progress: _OperationProgress | None = None
+        try:
+            for entry in entries:
+                locked = existing.get((entry.manifest_digest, runtime_profile_id))
+                if locked is not None:
+                    installed.append(locked)
+                    continue
+                progress = self._begin_operation("install_collection")
+                installation = await self._install_catalog_entry(
+                    entry,
+                    runtime_profile_id=runtime_profile_id,
+                    progress=progress,
+                )
+                installed.append(installation)
+                created.append(installation)
+            return installed
+        except Exception as exc:
+            if progress is not None:
+                progress.emit("failed", result_status=ToolPackInstallationStatus.FAILED)
+            for installation in reversed(created):
+                try:
+                    self.disable(installation.id)
+                except Exception:
+                    pass
+            if isinstance(exc, ToolPlatformError):
+                raise
+            raise ToolPlatformError(str(exc)) from exc
+
     async def _install_catalog_operation(
         self,
         catalog_id: str,
@@ -409,6 +497,17 @@ class ToolPlatform:
             )
         loaded = await self.catalog_client.fetch()
         entry = self._select_entry(loaded.catalog.entries, catalog_id, version)
+        return await self._install_catalog_entry(
+            entry, runtime_profile_id=runtime_profile_id, progress=progress
+        )
+
+    async def _install_catalog_entry(
+        self,
+        entry: ToolCatalogEntry,
+        *,
+        runtime_profile_id: str,
+        progress: _OperationProgress,
+    ) -> ToolPackInstallation:
         manifest, signature = await self._fetch_manifest(entry)
         if manifest_digest(manifest) != entry.manifest_digest:
             raise ToolPlatformError("catalog manifest digest does not match its entry")
@@ -849,7 +948,7 @@ def default_tool_platform(
         store=store,
         artifact_store=artifact_store,
         data_root=data_root,
-        public_keys=_load_public_keys(Path(key_path)) if key_path else {},
+        public_keys=_trusted_public_keys(Path(key_path) if key_path else None),
         catalog_url=os.getenv("NEBULA_TOOL_CATALOG_URL", DEFAULT_CATALOG_URL),
         catalog_signature_url=os.getenv(
             "NEBULA_TOOL_CATALOG_SIGNATURE_URL",

@@ -1,0 +1,14 @@
+rules:
+  - id: nebula.python.subprocess-shell-true
+    message: Avoid invoking a shell with untrusted input; pass an argument vector instead.
+    severity: WARNING
+    languages: [python]
+    patterns:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+  - id: nebula.javascript.dynamic-code-execution
+    message: Dynamic code evaluation can turn untrusted data into executable code.
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)

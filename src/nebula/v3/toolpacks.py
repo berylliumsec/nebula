@@ -460,6 +460,16 @@ class ToolCatalogEntry(StrictModel):
     manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     manifest_url: str
     signature_url: str
+    collection_id: str | None = Field(
+        default=None, pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$"
+    )
+    collection_name: str | None = Field(default=None, min_length=1, max_length=200)
+    collection_order: int = Field(default=0, ge=0, le=10_000)
+    minimum_nebula_version: str | None = None
+    licenses: list[str] = Field(default_factory=list, max_length=100)
+    platforms: list[str] = Field(default_factory=list, max_length=20)
+    tool_names: list[str] = Field(default_factory=list, max_length=500)
+    permissions: list[str] = Field(default_factory=list, max_length=100)
 
     @field_validator("version")
     @classmethod
@@ -469,6 +479,31 @@ class ToolCatalogEntry(StrictModel):
         except InvalidVersion as exc:
             raise ValueError("catalog versions must be valid versions") from exc
         return value
+
+    @field_validator("minimum_nebula_version")
+    @classmethod
+    def minimum_version_is_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            Version(value)
+        except InvalidVersion as exc:
+            raise ValueError("minimum Nebula version must be a valid version") from exc
+        return value
+
+    @model_validator(mode="after")
+    def collection_metadata_is_consistent(self) -> "ToolCatalogEntry":
+        if (self.collection_id is None) != (self.collection_name is None):
+            raise ValueError("collection ID and name must be supplied together")
+        if len(self.licenses) != len(set(self.licenses)):
+            raise ValueError("catalog licenses must be unique")
+        if len(self.platforms) != len(set(self.platforms)):
+            raise ValueError("catalog platforms must be unique")
+        if len(self.tool_names) != len(set(self.tool_names)):
+            raise ValueError("catalog tool names must be unique")
+        if len(self.permissions) != len(set(self.permissions)):
+            raise ValueError("catalog permissions must be unique")
+        return self
 
     @field_validator("manifest_url", "signature_url")
     @classmethod

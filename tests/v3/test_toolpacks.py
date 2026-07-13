@@ -176,6 +176,28 @@ def test_manifest_compilation_is_canonical_and_builds_declarative_specs():
         build_declared_command(positional, {"query": "--arbitrary-flag"})
 
 
+def test_catalog_collection_metadata_must_be_complete():
+    common = {
+        "publisher": "berylliumsec",
+        "name": "safe-network",
+        "version": "0.1.0",
+        "description": "Network tools",
+        "manifest_digest": DIGEST_A,
+        "manifest_url": "https://catalog.example/network.json",
+        "signature_url": "https://catalog.example/network.signature.json",
+    }
+    with pytest.raises(ValidationError, match="collection ID and name"):
+        ToolCatalogEntry(**common, collection_id="safe-foundation")
+    entry = ToolCatalogEntry(
+        **common,
+        collection_id="safe-foundation",
+        collection_name="Safe Foundation",
+        tool_names=["nmap.connect_scan"],
+        platforms=["linux/amd64", "linux/arm64"],
+    )
+    assert entry.collection_order == 0
+
+
 @pytest.mark.parametrize(
     "old,new",
     [
@@ -737,6 +759,7 @@ def test_public_distribution_channels_cannot_enable_qa_tool_execution(
         data_root=tmp_path / "public-core",
     )
     assert platform.execution_enabled is False
+    assert platform.has_trusted_keys is True
 
     metadata["distribution_channel"] = "qa"
     qa_platform = default_tool_platform(
