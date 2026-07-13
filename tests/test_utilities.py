@@ -421,12 +421,15 @@ def test_process_text_token_helpers_and_initial_help(tmp_path, monkeypatch):
     assert utilities.process_text("") == ""
     assert utilities.process_text(None) is None
 
-    monkeypatch.setattr(
-        utilities.re,
-        "compile",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("regex failed")),
-    )
-    assert utilities.process_text("fallback text") == "fallback text"
+    with monkeypatch.context() as regex_patch:
+        regex_patch.setattr(
+            utilities.re,
+            "compile",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                RuntimeError("regex failed")
+            ),
+        )
+        assert utilities.process_text("fallback text") == "fallback text"
 
     monkeypatch.setattr(
         utilities.tiktoken, "get_encoding", lambda name: FakeEncoding(name)
