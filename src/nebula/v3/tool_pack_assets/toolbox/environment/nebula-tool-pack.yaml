@@ -276,7 +276,7 @@ tools:
                   minLength: 1
                   maxLength: 200
                 value:
-                  oneOf:
+                  anyOf:
                   - type: string
                     maxLength: 4096
                   - type: integer
@@ -286,7 +286,7 @@ tools:
                   - type: array
                     maxItems: 256
                     items:
-                      oneOf:
+                      anyOf:
                       - type: string
                         maxLength: 4096
                       - type: integer
@@ -307,7 +307,7 @@ tools:
                   minLength: 1
                   maxLength: 200
                 value:
-                  oneOf:
+                  anyOf:
                   - type: string
                     maxLength: 4096
                   - type: integer
@@ -317,7 +317,7 @@ tools:
                   - type: array
                     maxItems: 256
                     items:
-                      oneOf:
+                      anyOf:
                       - type: string
                         maxLength: 4096
                       - type: integer
@@ -483,7 +483,7 @@ tools:
                   minLength: 1
                   maxLength: 200
                 value:
-                  oneOf:
+                  anyOf:
                   - type: string
                     maxLength: 4096
                   - type: integer
@@ -493,7 +493,7 @@ tools:
                   - type: array
                     maxItems: 256
                     items:
-                      oneOf:
+                      anyOf:
                       - type: string
                         maxLength: 4096
                       - type: integer
@@ -514,7 +514,7 @@ tools:
                   minLength: 1
                   maxLength: 200
                 value:
-                  oneOf:
+                  anyOf:
                   - type: string
                     maxLength: 4096
                   - type: integer
@@ -524,7 +524,7 @@ tools:
                   - type: array
                     maxItems: 256
                     items:
-                      oneOf:
+                      anyOf:
                       - type: string
                         maxLength: 4096
                       - type: integer
@@ -652,7 +652,7 @@ tools:
         - id: pn
           value: null
         - id: p
-          value: '1'
+          value: 1
         positionals:
         - id: targets
           value:
@@ -719,7 +719,7 @@ tools:
                   minLength: 1
                   maxLength: 200
                 value:
-                  oneOf:
+                  anyOf:
                   - type: string
                     maxLength: 4096
                   - type: integer
@@ -729,7 +729,7 @@ tools:
                   - type: array
                     maxItems: 256
                     items:
-                      oneOf:
+                      anyOf:
                       - type: string
                         maxLength: 4096
                       - type: integer
@@ -750,7 +750,7 @@ tools:
                   minLength: 1
                   maxLength: 200
                 value:
-                  oneOf:
+                  anyOf:
                   - type: string
                     maxLength: 4096
                   - type: integer
@@ -760,7 +760,7 @@ tools:
                   - type: array
                     maxItems: 256
                     items:
-                      oneOf:
+                      anyOf:
                       - type: string
                         maxLength: 4096
                       - type: integer
@@ -888,7 +888,7 @@ tools:
         - id: pn
           value: null
         - id: p
-          value: '1'
+          value: 1
         positionals:
         - id: targets
           value:

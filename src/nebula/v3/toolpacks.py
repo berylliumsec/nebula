@@ -1264,8 +1264,25 @@ class ToolPackInstaller:
                     timeout_seconds=smoke.timeout_seconds,
                 )
                 if result.exit_code != smoke.expected_exit_code:
+                    detail = result.stderr.strip()
+                    if not detail and result.stdout.strip():
+                        detail = result.stdout.strip()
+                        try:
+                            payload = json.loads(detail)
+                        except json.JSONDecodeError:
+                            pass
+                        else:
+                            if isinstance(payload, dict):
+                                embedded = payload.get("stderr") or payload.get(
+                                    "stdout"
+                                )
+                                if isinstance(embedded, str) and embedded.strip():
+                                    detail = embedded.strip()
+                    detail = " ".join(detail.split())[:500]
+                    suffix = f": {detail}" if detail else ""
                     raise ToolPackInstallError(
-                        f"smoke test failed for {tool.name}: exit {result.exit_code}"
+                        f"smoke test failed for {tool.name}: "
+                        f"exit {result.exit_code}{suffix}"
                     )
                 parsed = await self._parse_smoke_output(tool, result.stdout)
                 errors = list(

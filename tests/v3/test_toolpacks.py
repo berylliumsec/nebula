@@ -308,10 +308,18 @@ def test_immutable_manifest_store_detects_conflicts_and_tampering(tmp_path):
 
 
 class FakeRuntime:
-    def __init__(self, *, smoke_exit=0, digest=None, smoke_stdout='{"result":"ok"}'):
+    def __init__(
+        self,
+        *,
+        smoke_exit=0,
+        digest=None,
+        smoke_stdout='{"result":"ok"}',
+        smoke_stderr="",
+    ):
         self.smoke_exit = smoke_exit
         self.digest = digest
         self.smoke_stdout = smoke_stdout
+        self.smoke_stderr = smoke_stderr
         self.pulled = []
         self.commands = []
 
@@ -329,7 +337,11 @@ class FakeRuntime:
 
     async def smoke_test(self, *, image, command, timeout_seconds):
         self.commands.append((image, command, timeout_seconds))
-        return RuntimeSmokeResult(exit_code=self.smoke_exit, stdout=self.smoke_stdout)
+        return RuntimeSmokeResult(
+            exit_code=self.smoke_exit,
+            stdout=self.smoke_stdout,
+            stderr=self.smoke_stderr,
+        )
 
 
 def installer(tmp_path, runtime, *, developer_mode=True, parser_executor=None):
@@ -432,8 +444,14 @@ def test_installer_rejects_unsigned_remote_curated_and_failed_smoke(tmp_path):
             )
         )
 
-    failed = installer(tmp_path / "failed", FakeRuntime(smoke_exit=2))
-    with pytest.raises(ToolPackInstallError, match="smoke test failed"):
+    failed = installer(
+        tmp_path / "failed",
+        FakeRuntime(smoke_exit=2, smoke_stderr="invalid smoke request"),
+    )
+    with pytest.raises(
+        ToolPackInstallError,
+        match="smoke test failed.*exit 2: invalid smoke request",
+    ):
         asyncio.run(
             failed.install(
                 manifest,

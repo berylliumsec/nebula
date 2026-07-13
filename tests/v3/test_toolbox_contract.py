@@ -80,6 +80,29 @@ def test_toolbox_install_smoke_tests_allow_cold_desktop_start():
         for tool in manifest["tools"]
         for smoke in tool["smoke_tests"]
     )
+    network_tools = {
+        tool["name"]: tool
+        for tool in manifest["tools"]
+        if tool["name"] in {"environment.run_network", "environment.run_invasive"}
+    }
+    assert set(network_tools) == {
+        "environment.run_network",
+        "environment.run_invasive",
+    }
+    for tool in network_tools.values():
+        options = tool["smoke_tests"][0]["arguments"]["invocation"]["options"]
+        port = next(option["value"] for option in options if option["id"] == "p")
+        assert port == 1
+        assert isinstance(port, int)
+
+        value_schema = tool["input_schema"]["properties"]["invocation"]["properties"][
+            "options"
+        ]["items"]["properties"]["value"]
+        assert "oneOf" not in value_schema
+        assert {branch["type"] for branch in value_schema["anyOf"]} >= {
+            "integer",
+            "number",
+        }
 
 
 def _option(identifier: str, flag: str, *, value: str | None = None):
