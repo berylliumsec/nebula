@@ -12,6 +12,7 @@ import type {
   ToolSummary,
 } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { notifyToolPacksChanged } from "../state/toolPackChanges";
 import { useConfirmation } from "./DialogSystem";
 
 function unavailable(error: unknown): boolean {
@@ -120,7 +121,9 @@ export function ToolPackSettings() {
         setProgressEvents((current) => [event, ...current.filter((item) => item.operationId !== event.operationId)]
           .sort((left, right) => right.sequence - left.sequence)
           .slice(0, 8));
-        if (event.phase === "ready" || event.phase === "failed") void load();
+        if (event.phase === "ready" || event.phase === "failed") {
+          void load().then(notifyToolPacksChanged);
+        }
       },
     });
     stream.connect();
@@ -149,6 +152,7 @@ export function ToolPackSettings() {
     try {
       await operation();
       await load();
+      notifyToolPacksChanged();
       return true;
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "The execution-environment operation failed.");
@@ -183,7 +187,7 @@ export function ToolPackSettings() {
   const removePack = async (pack: ToolPackInstallation) => {
     if (!api || !await confirm({
       title: `Remove ${pack.name}?`,
-      message: "The environment will be disabled and removed. Historical manifest locks and evidence will be retained.",
+      message: "The environment will be removed from Nebula. Historical manifest locks and evidence will be retained for audit integrity.",
       confirmLabel: "Remove environment",
       tone: "danger",
     })) return;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { Play, ShieldCheck, Square, Wrench, X } from "lucide-react";
 import type { ToolSummary } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useToolPackRevision } from "../state/toolPackChanges";
 import { useConfirmation } from "./DialogSystem";
 
 interface NewMissionButtonProps {
@@ -28,6 +29,7 @@ export function NewMissionButton({ className = "button primary", children }: New
   const [maxConcurrency, setMaxConcurrency] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const toolPackRevision = useToolPackRevision();
 
   useEffect(() => {
     if (availableProviders.some((item) => item.id === providerId)) return;
@@ -46,11 +48,16 @@ export function NewMissionButton({ className = "button primary", children }: New
       setToolConfigurationAvailable(false);
       return () => { active = false; };
     }
-    void Promise.all([api.listEngagementToolAssignments(engagement.id), api.listTools()])
-      .then(([assignments, tools]) => {
+    void Promise.all([api.listEngagementToolAssignments(engagement.id), api.listTools(), api.listToolPacks()])
+      .then(([assignments, tools, packs]) => {
         if (!active) return;
+        const readyDigests = new Set(packs
+          .filter((pack) => pack.status === "ready")
+          .map((pack) => pack.manifestDigest));
         setToolConfigurationAvailable(true);
         setAssignedTools(tools.filter((tool) => assignments.some((assignment) => assignment.enabled
+          && assignment.manifestDigest !== undefined
+          && readyDigests.has(assignment.manifestDigest)
           && assignment.manifestDigest === tool.packManifestDigest
           && assignment.toolNames.includes(tool.name))));
       })
@@ -60,7 +67,7 @@ export function NewMissionButton({ className = "button primary", children }: New
         setToolConfigurationAvailable(false);
       });
     return () => { active = false; };
-  }, [api, coreState, engagement?.id]);
+  }, [api, coreState, engagement?.id, toolPackRevision]);
 
   const providerSupportsTools = provider?.capabilities.includes("tool calling") === true
     && provider.capabilities.includes("strict structured output");

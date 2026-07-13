@@ -798,7 +798,10 @@ describe("ApiClient", () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/tool-catalog")) return new Response(JSON.stringify({ items: [{ id: "safe-network", publisher: "berylliumsec", name: "network", version: "1.0.0", description: "Safe network tools", manifest_digest: "sha256:catalog", licenses: ["Apache-2.0"], platforms: ["linux/amd64", "linux/arm64"], tool_names: ["nmap.connect_scan"], permissions: ["network"], signed: true }] }), { status: 200 });
-      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{ id: "pack-1", catalog_id: "safe-network", publisher: "berylliumsec", name: "network", version: "1.0.0", manifest_digest: "sha256:catalog", source: "catalog", trust_state: "trusted", runtime_profile_id: "local", image_locks: { nmap: "sha256:image" }, status: "ready", tool_names: ["nmap.connect_scan"], permissions: ["network"], verified_at: "2026-07-12T12:00:00Z" }]), { status: 200 });
+      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([
+        { id: "pack-1", catalog_id: "safe-network", publisher: "berylliumsec", name: "network", version: "1.0.0", manifest_digest: "sha256:catalog", source: "catalog", trust_state: "trusted", runtime_profile_id: "local", image_locks: { nmap: "sha256:image" }, status: "ready", tool_names: ["nmap.connect_scan"], permissions: ["network"], verified_at: "2026-07-12T12:00:00Z" },
+        { id: "pack-disabled", catalog_id: "old-network", publisher: "berylliumsec", name: "old-network", version: "0.9.0", manifest_digest: "sha256:disabled", source: "catalog", trust_state: "trusted", runtime_profile_id: "local", image_locks: {}, status: "disabled", tool_names: ["old.scan"], permissions: ["network"] },
+      ]), { status: 200 });
       if (path.endsWith("/tools")) return new Response(JSON.stringify([{ name: "nmap.connect_scan", pack_id: "pack-1", pack_manifest_digest: "sha256:catalog", description: "TCP connect scan", risk_class: "active_scan", requires_network: true, requires_approval: true, available: true }]), { status: 200 });
       if (path.endsWith("/runner-profiles")) return new Response(JSON.stringify([{ id: "local", name: "Podman Machine", runtime: "podman", executable: "/opt/homebrew/bin/podman", platform: "linux/arm64", isolation: "podman_machine", enabled: true, healthy: false, last_health_at: "2026-07-12T12:00:00Z", last_health_detail: "Podman machine is stopped", revision: 2 }]), { status: 200 });
       if (path.endsWith("/engagements/engagement-1/scope")) return new Response(JSON.stringify({ id: "scope-1", engagement_id: "engagement-1", allowed_cidrs: ["192.0.2.0/24"], allowed_domains: ["app.example.test"], allowed_urls: [], allowed_ports: [443], not_before: null, not_after: "2026-07-13T12:00:00Z", prohibited_actions: ["exploitation"], local_only: true, max_concurrency: 1, grants: [], revision: 3 }), { status: 200 });
@@ -816,6 +819,7 @@ describe("ApiClient", () => {
     const saved = await client.updateEngagementToolAssignment("engagement-1", { manifestDigest: "sha256:catalog", toolNames: ["nmap.connect_scan"], enabled: true });
 
     expect(catalog[0]).toMatchObject({ id: "safe-network", manifestDigest: "sha256:catalog", signed: true });
+    expect(packs).toHaveLength(1);
     expect(packs[0]).toMatchObject({ status: "ready", trustState: "trusted", imageLocks: { nmap: "sha256:image" } });
     expect(tools[0]).toMatchObject({ riskClass: "active_scan", requiresApproval: true, available: true });
     expect(runners[0]).toMatchObject({ runtimeType: "podman", isolationMode: "podman_machine", executable: "/opt/homebrew/bin/podman", state: "degraded", detail: "Podman machine is stopped" });

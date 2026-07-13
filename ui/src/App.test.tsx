@@ -670,6 +670,7 @@ describe("Nebula workspace", () => {
       if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Tool review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
       if (path.endsWith("/providers")) return new Response(JSON.stringify([{ ...entity, id: "provider-1", name: "Structured provider", provider_type: "vllm", enabled: true, is_local: true, model_allowlist: ["model-1"], capabilities: { streaming: true, tool_calling: true, strict_structured_output: true }, privacy: { local_only: true, residency: [] }, metadata: { default_model: "model-1" } }]), { status: 200 });
       if (path.endsWith("/tool-assignment")) return new Response(JSON.stringify([{ id: "assignment-1", engagement_id: "engagement-1", manifest_digest: "sha256:toolbox", tool_names: ["environment.run_network"], enabled: true, revision: 1 }]), { status: 200 });
+      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{ id: "toolbox", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", manifest_digest: "sha256:toolbox", source: "catalog", trust_state: "trusted", runtime_profile_id: "runner-1", image_locks: {}, status: "ready", tool_names: ["environment.run_network"], permissions: ["network"] }]), { status: 200 });
       if (path.endsWith("/tools")) return new Response(JSON.stringify([{ name: "environment.run_network", pack_id: "toolbox", pack_manifest_digest: "sha256:toolbox", description: "Run an indexed network command", risk_class: "active_scan", requires_network: true, requires_approval: false, available: true }]), { status: 200 });
       if (path.endsWith("/missions") && init?.method === "POST") {
         const body = JSON.parse(String(init.body));
@@ -727,6 +728,61 @@ describe("Nebula workspace", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-collections/install") && request?.method === "POST")).toBe(true));
     const call = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-collections/install") && request?.method === "POST");
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ collection_id: "nebula-toolbox", runtime_profile_id: "runner-1" });
+  });
+
+  it("removes disabled environments completely from active UI and permits reinstall", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const digest = "1".repeat(64);
+    const catalog = [{
+      id: "berylliumsec/nebula-toolbox@0.1.0", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", description: "Nebula Toolbox",
+      manifest_digest: digest, licenses: [], platforms: ["linux/amd64", "linux/arm64"], tool_names: ["environment.shell_local"], permissions: ["workspace_write"], signed: true,
+      collection_id: "nebula-toolbox", collection_name: "Nebula Toolbox", collection_order: 0,
+    }];
+    let status: "ready" | "disabled" = "ready";
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Removal review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/runner-profiles")) return new Response(JSON.stringify([{ ...entity, id: "runner-1", name: "Podman", runtime: "podman", executable: "/usr/bin/podman", platform: "linux/amd64", isolation: "rootless", healthy: true, state: "ready" }]), { status: 200 });
+      if (path.endsWith("/tool-catalog")) return new Response(JSON.stringify(catalog), { status: 200 });
+      if (path.endsWith("/tool-packs/pack-1") && init?.method === "DELETE") {
+        status = "disabled";
+        return new Response(null, { status: 204 });
+      }
+      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{
+        id: "pack-1", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", manifest_digest: digest,
+        source: "catalog", trust_state: "trusted", runtime_profile_id: "runner-1", image_locks: {}, status,
+        tool_names: ["environment.shell_local"], permissions: ["workspace_write"], verified_at: entity.updated_at,
+      }]), { status: 200 });
+      if (path.endsWith("/tool-assignment")) return new Response(JSON.stringify([{
+        id: "assignment-1", engagement_id: "engagement-1", manifest_digest: digest,
+        tool_names: ["environment.shell_local"], enabled: true, revision: 1,
+      }]), { status: 200 });
+      if (path.endsWith("/tools")) return new Response(JSON.stringify([{
+        name: "environment.shell_local", pack_id: "pack-1", pack_manifest_digest: digest,
+        description: "Run local code", risk_class: "workspace_write", requires_network: false,
+        requires_approval: false, available: status === "ready", unavailable_reason: status === "disabled" ? "pack is disabled" : null,
+      }]), { status: 200 });
+      if (path.endsWith("/scope")) return new Response(JSON.stringify({ ...entity, id: "scope:engagement-1", engagement_id: "engagement-1", allowed_cidrs: [], allowed_domains: [], allowed_urls: [], allowed_ports: [], prohibited_actions: [], local_only: true, max_concurrency: 1, grants: [] }), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    const remove = await screen.findByRole("button", { name: "Remove nebula-toolbox" });
+    expect(screen.getAllByRole("button", { name: "Installed" }).length).toBeGreaterThan(0);
+    await user.click(remove);
+    const dialog = screen.getByRole("dialog", { name: "Remove nebula-toolbox?" });
+    await user.click(within(dialog).getByRole("button", { name: "Remove environment" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-packs/pack-1") && request?.method === "DELETE")).toBe(true));
+    expect(await screen.findByText("No execution environment installed")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Remove nebula-toolbox" })).not.toBeInTheDocument();
+    expect(screen.queryByText("disabled")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install Nebula Toolbox" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Assigned execution environment" })).toHaveValue(""));
+    expect(screen.queryByText("environment.shell_local")).not.toBeInTheDocument();
   });
 
   it("shows replayed tool-pack progress in Settings", async () => {

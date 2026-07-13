@@ -1711,7 +1711,9 @@ export class ApiClient {
 
   listToolPacks(signal?: AbortSignal): Promise<ToolPackInstallation[]> {
     return this.request<WireToolPackInstallation[] | { items?: WireToolPackInstallation[] }>("tool-packs", { signal })
-      .then((value) => wireItems(value).map(mapToolPackInstallation));
+      .then((value) => wireItems(value)
+        .map(mapToolPackInstallation)
+        .filter((installation) => installation.status !== "disabled"));
   }
 
   listTools(signal?: AbortSignal): Promise<ToolSummary[]> {

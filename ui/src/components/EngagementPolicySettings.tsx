@@ -3,6 +3,7 @@ import { Clock3, Save, ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react"
 import { ApiError } from "../api/client";
 import type { EngagementScopePolicy, EngagementToolAssignment, MissionGrant, ToolPackInstallation, ToolSummary } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useToolPackRevision } from "../state/toolPackChanges";
 
 function featureMissing(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 404 || error.status === 501);
@@ -66,6 +67,7 @@ export function EngagementPolicySettings() {
   const [grantTargets, setGrantTargets] = useState("");
   const [grantExpires, setGrantExpires] = useState("");
   const [grantError, setGrantError] = useState<string>();
+  const toolPackRevision = useToolPackRevision();
 
   const applyScope = (next: EngagementScopePolicy) => {
     setScope(next); setAllowedCidrs(next.allowedCidrs.join("\n")); setAllowedDomains(next.allowedDomains.join("\n")); setAllowedUrls(next.allowedUrls.join("\n")); setAllowedPorts(next.allowedPorts.join(", ")); setNotBefore(inputDate(next.notBefore)); setNotAfter(inputDate(next.notAfter)); setProhibitedActions(next.prohibitedActions.join("\n")); setLocalOnly(next.localOnly); setMaxConcurrency(next.maxConcurrency); setGrants(next.grants);
@@ -84,28 +86,39 @@ export function EngagementPolicySettings() {
     if (scopeResult.status === "fulfilled") { setScopeAvailable(true); applyScope(scopeResult.value); }
     else if (featureMissing(scopeResult.reason)) { setScopeAvailable(false); applyScope(emptyScope(engagement.id)); }
     else setError(scopeResult.reason instanceof Error ? scopeResult.reason.message : "Could not load the engagement scope.");
-    if (assignmentResult.status === "fulfilled") { setAssignmentAvailable(true); setAssignments(assignmentResult.value); setSelectedDigest(assignmentResult.value[0]?.manifestDigest ?? ""); }
+    if (assignmentResult.status === "fulfilled") { setAssignmentAvailable(true); setAssignments(assignmentResult.value); }
     else if (featureMissing(assignmentResult.reason)) { setAssignmentAvailable(false); setAssignments([]); applyAssignment(emptyAssignment(engagement.id)); }
     else setError(assignmentResult.reason instanceof Error ? assignmentResult.reason.message : "Could not load tool assignments.");
     if (packsResult.status === "fulfilled") setPacks(packsResult.value);
     if (toolsResult.status === "fulfilled") setTools(toolsResult.value);
   }, [api, coreState, engagement?.id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, toolPackRevision]);
 
   const readyPacks = useMemo(() => packs.filter((pack) => pack.status === "ready"), [packs]);
   const selectedPack = readyPacks.find((pack) => pack.manifestDigest === selectedDigest);
-  const packTools = tools.filter((tool) => tool.packManifestDigest === selectedDigest || tool.packId === selectedPack?.id);
+  const readyDigests = useMemo(() => new Set(readyPacks.map((pack) => pack.manifestDigest)), [readyPacks]);
+  const packTools = selectedPack
+    ? tools.filter((tool) => tool.packManifestDigest === selectedDigest || tool.packId === selectedPack.id)
+    : [];
   const grantableToolNames = useMemo(() => [...new Set(assignments
-    .filter((item) => item.enabled)
-    .flatMap((item) => item.toolNames))].sort(), [assignments]);
+    .filter((item) => item.enabled && item.manifestDigest !== undefined && readyDigests.has(item.manifestDigest))
+    .flatMap((item) => item.toolNames))].sort(), [assignments, readyDigests]);
 
   useEffect(() => {
-    if (!selectedDigest && readyPacks[0]) setSelectedDigest(readyPacks[0].manifestDigest);
-  }, [readyPacks, selectedDigest]);
+    if (selectedDigest && readyDigests.has(selectedDigest)) return;
+    const assignedReadyDigest = assignments
+      .map((item) => item.manifestDigest)
+      .find((digest): digest is string => digest !== undefined && readyDigests.has(digest));
+    setSelectedDigest(assignedReadyDigest ?? readyPacks[0]?.manifestDigest ?? "");
+  }, [assignments, readyDigests, readyPacks, selectedDigest]);
 
   useEffect(() => {
-    if (!engagement || !selectedDigest) return;
+    if (!engagement) return;
+    if (!selectedDigest) {
+      applyAssignment(emptyAssignment(engagement.id));
+      return;
+    }
     applyAssignment(assignments.find((item) => item.manifestDigest === selectedDigest)
       ?? { ...emptyAssignment(engagement.id), manifestDigest: selectedDigest });
   }, [assignments, engagement?.id, selectedDigest]);
