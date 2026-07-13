@@ -29,6 +29,12 @@ then builds and signs architecture-specific OCI images, generates SBOMs and
 provenance, signs the catalog with the environment-held Ed25519 key, and
 deploys the verified catalog under the existing Nebula Pages site.
 
+For the first release of each GHCR component, an organization owner must make
+the new package public in GitHub's Package settings. GitHub does not provide a
+public API for this visibility transition. The anonymous-pull gate must pass
+before catalog signing or Pages deployment; rerun failed jobs after completing
+the one-time visibility change.
+
 Never commit the private key, resolved digests, or generated release evidence
 to the source branch. Back up the release key offline before approving the
 first publication. Key rotation requires an overlapping Nebula release that

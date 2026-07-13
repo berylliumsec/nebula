@@ -270,16 +270,6 @@ jobs:
               --tag "$REGISTRY/$component:$PACK_VERSION" \
               "$REGISTRY/$component@$amd64" "$REGISTRY/$component@$arm64"
           done
-      - name: Make curated packages publicly readable
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for component in nmap nuclei nikto searchsploit semgrep; do
-            gh api --method PATCH \
-              "/orgs/berylliumsec/packages/container/nebula-tools%2F$component" \
-              -f visibility=public --silent
-          done
       - name: Require anonymous image access before catalog publication
         run: |
           docker logout ghcr.io
