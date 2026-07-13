@@ -678,14 +678,14 @@ export function SessionsPage() {
       <PageHeader
         eyebrow="Operator workspace"
         title="Sessions"
-        description="Cited analyst chat, a human-operated container terminal, reviewed code execution, durable history, and the engagement workspace share one controlled surface."
+        description="Cited analyst chat, an isolated terminal, reviewed code execution, durable history, and the engagement workspace share one controlled surface."
         actions={view === "chat" ? <button className="button primary" type="button" disabled={previewMode || !engagement} title={!engagement ? "Create or select an engagement before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : undefined}
       />
 
       <div className="session-toolbar">
         <div className="session-tabs" role="tablist" aria-label="Session views">
           <button type="button" role="tab" aria-selected={view === "chat"} onClick={() => setView("chat")}><MessageSquare size={16} /> Analyst chat</button>
-          <button type="button" role="tab" aria-selected={view === "terminal"} onClick={() => setView("terminal")}><SquareTerminal size={16} /> Human terminal</button>
+          <button type="button" role="tab" aria-selected={view === "terminal"} onClick={() => setView("terminal")}><SquareTerminal size={16} /> Terminal</button>
           <button type="button" role="tab" aria-selected={view === "executions"} onClick={() => setView("executions")}><FileClock size={16} /> Executions</button>
           <button type="button" role="tab" aria-selected={view === "workspace"} onClick={() => setView("workspace")}><FolderOpen size={16} /> Workspace</button>
         </div>
@@ -704,13 +704,13 @@ export function SessionsPage() {
         </aside>}
         <section className="session-workspace">
           {view === "terminal" && api && engagement ? (
-            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading container terminal…</strong></div>}><ContainerTerminalPanel api={api} engagementId={engagement.id} engagementName={engagement.name} /></Suspense>
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel api={api} engagementId={engagement.id} engagementName={engagement.name} /></Suspense>
           ) : view === "executions" && api && engagement ? (
             <ExecutionHistory api={api} engagementId={engagement.id} refreshKey={executionRefresh} onRerun={setRunCandidate} providers={providers} onChatAttached={openAttachedChat} />
           ) : view === "workspace" && api && engagement ? (
             <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} />
           ) : view !== "chat" ? (
-            <div className="empty-state"><FolderOpen size={24} /><strong>Select an engagement</strong><p>The container terminal, execution history, and workspace files are engagement-scoped.</p></div>
+            <div className="empty-state"><FolderOpen size={24} /><strong>Select an engagement</strong><p>Terminal, execution history, and workspace files are engagement-scoped.</p></div>
           ) : (
             <div className="chat-panel">
               {!previewMode && <div className="chat-context-bar">

@@ -429,6 +429,12 @@ body {
 .terminal-review-placeholder svg { margin-bottom: 12px; color: var(--muted); }
 .terminal-review-placeholder strong { font-size: 13px; }
 .terminal-review-placeholder p { max-width: 440px; margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.terminal-auto-start { display: grid; min-height: 487px; place-content: center; justify-items: center; padding: 24px; text-align: center; }
+.terminal-auto-start > svg { margin-bottom: 12px; color: var(--green); }
+.terminal-auto-start > strong { font-size: 13px; }
+.terminal-auto-start > p { max-width: 460px; margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.terminal-auto-start > .terminal-error { color: var(--red); }
+.terminal-auto-start > .button { margin-top: 15px; }
 .container-terminal-live { display: grid; grid-template-rows: auto auto minmax(420px, 1fr) auto; background: #071017; }
 .container-terminal-live > header { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px 9px 16px; border-bottom: 1px solid #20303a; background: #0c171e; }
 .container-terminal-live > header strong { color: #e4eef2; font-size: 12px; text-transform: capitalize; }

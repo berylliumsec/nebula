@@ -63,7 +63,7 @@ export class ContainerTerminalSocket {
     socket.addEventListener("message", (event) => this.receive(event));
     socket.addEventListener("error", () => {
       this.setState("error");
-      this.options.onError?.("connection_error", "Container terminal connection failed.");
+      this.options.onError?.("connection_error", "Terminal connection failed.");
     });
     socket.addEventListener("close", () => {
       this.socket = undefined;
@@ -146,7 +146,7 @@ export class ContainerTerminalSocket {
     if (value.type === "error") {
       this.options.onError?.(
         typeof value.code === "string" ? value.code : "terminal_error",
-        typeof value.detail === "string" ? value.detail : "Container terminal failed.",
+        typeof value.detail === "string" ? value.detail : "Terminal failed.",
       );
       return;
     }
