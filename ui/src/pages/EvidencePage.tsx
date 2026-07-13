@@ -112,8 +112,8 @@ export function EvidencePage() {
 
   return (
     <div className="page evidence-page">
-      <PageHeader eyebrow="Immutable provenance" title="Evidence" description="Content-addressed artifacts preserve source, timestamps, hashes, and finding links." actions={<><button className="button secondary" type="button" disabled title="Desktop screenshot capture is release-gated"><Camera size={16} /> Capture unavailable</button><button className="button primary" type="button" disabled={previewMode || !engagement} onClick={() => { setError(undefined); setAdding(true); }}><Upload size={16} /> Add evidence</button></>} />
-      <div className="evidence-callout callout"><LockKeyhole size={18} /><div><strong>Originals are immutable</strong><p>Uploaded bytes are content-addressed and downloaded as attachments; active content is never rendered inline.</p></div><span>SHA-256</span></div>
+      <PageHeader title="Evidence" description="Immutable artifacts with hashes and provenance." actions={<><button className="button secondary" type="button" disabled title="Desktop screenshot capture is release-gated"><Camera size={16} /> Capture unavailable</button><button className="button primary" type="button" disabled={previewMode || !engagement} onClick={() => { setError(undefined); setAdding(true); }}><Upload size={16} /> Add evidence</button></>} />
+      <div className="evidence-callout callout"><LockKeyhole size={18} /><div><strong>Immutable originals</strong><p>Stored by hash and never rendered inline.</p></div><span>SHA-256</span></div>
       {message && <div className="knowledge-status" role="status">{saving && <LoaderCircle className="spin" size={15} />}{message}</div>}
       {error && <div className="knowledge-status error" role="alert">{error}</div>}
       <section className="panel data-panel evidence-panel">

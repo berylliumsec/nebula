@@ -378,7 +378,7 @@ export function SettingsPage() {
   const dialogAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
   return (
     <div className="page settings-page">
-      <PageHeader eyebrow="Workspace configuration" title="Settings" description="Provider, sandbox runner, Toolbox environment, engagement policy, attribution, and privacy controls." />
+      <PageHeader title="Settings" description="Providers, execution, policy, identity, and privacy." />
       <div className="settings-workspace">
       <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label]) => <a className={settingsSection === id ? "active" : undefined} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={() => setSettingsSection(id)}>{label}</a>)}</nav>
       <div className="settings-detail" data-section={settingsSection}>
@@ -407,7 +407,7 @@ export function SettingsPage() {
               <button key={value} type="button" aria-pressed={preference === value} onClick={() => setPreference(value)}><span><Icon size={18} /></span><strong>{label}</strong>{preference === value && <small>Active</small>}</button>
             ))}
           </div>
-          <p className="appearance-help">All themes preserve visible keyboard focus. High contrast strengthens boundaries and meets system forced-color expectations.</p>
+          <p className="appearance-help">Choose a theme for this device.</p>
         </section>
         <section className="panel secrets-panel" id="security-settings">
           <header className="panel-header compact"><div><h2>Credential references</h2><p>Secrets never enter agent context</p></div><KeyRound size={19} /></header>

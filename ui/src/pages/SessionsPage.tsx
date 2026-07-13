@@ -700,9 +700,8 @@ export function SessionsPage() {
   return (
     <div className="page sessions-page">
       <PageHeader
-        eyebrow="Operator workspace"
         title="Sessions"
-        description="Cited analyst chat, an isolated terminal, reviewed code execution, durable history, and the engagement workspace share one controlled surface."
+        description="Chat, terminal, execution history, and files."
         actions={view === "chat" ? <button className="button primary" type="button" disabled={previewMode || !engagement} title={!engagement ? "Create or select an engagement before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : undefined}
       />
 

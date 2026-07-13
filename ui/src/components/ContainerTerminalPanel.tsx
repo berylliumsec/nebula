@@ -129,8 +129,11 @@ function LiveContainerTerminal({
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(fitTerminal);
     observer?.observe(host);
     globalThis.addEventListener("resize", fitTerminal);
-    socket.connect();
+    // The ticket is one-use. Deferring the connection lets React StrictMode
+    // discard its development-only effect pass without consuming that ticket.
+    const connectTimer = globalThis.setTimeout(() => socket.connect(), 0);
     return () => {
+      globalThis.clearTimeout(connectTimer);
       if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame);
       observer?.disconnect();
       globalThis.removeEventListener("resize", fitTerminal);

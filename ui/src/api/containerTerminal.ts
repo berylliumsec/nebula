@@ -45,31 +45,42 @@ function decodeBase64(value: string): Uint8Array {
 export class ContainerTerminalSocket {
   private socket?: WebSocket;
   private exitReceived = false;
+  private readyReceived = false;
+  private disposed = false;
 
   constructor(private readonly options: ContainerTerminalSocketOptions) {}
 
   connect(): void {
-    if (this.socket) return;
+    if (this.socket || this.disposed) return;
     this.setState("connecting");
     const protocols = [TERMINAL_PROTOCOL];
     if (this.options.token) protocols.push(websocketAuthProtocol(this.options.token));
     protocols.push(`nebula.ticket.${this.options.session.websocketTicket}`);
     const factory = this.options.websocketFactory ?? ((url, offered) => new WebSocket(url, offered));
-    const socket = factory(
-      socketUrl(this.options.apiBaseUrl, this.options.session.websocketPath),
-      protocols,
-    );
+    let socket: WebSocket;
+    try {
+      socket = factory(
+        socketUrl(this.options.apiBaseUrl, this.options.session.websocketPath),
+        protocols,
+      );
+    } catch (reason) {
+      this.setState("error");
+      const suffix = reason instanceof Error && reason.message ? `: ${reason.message}` : ".";
+      this.options.onError?.("connection_error", `Terminal connection failed${suffix}`);
+      return;
+    }
     this.socket = socket;
     socket.addEventListener("message", (event) => this.receive(event));
     socket.addEventListener("error", () => {
       this.setState("error");
-      this.options.onError?.("connection_error", "Terminal connection failed.");
     });
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       this.socket = undefined;
+      if (this.disposed) return;
       this.setState("closed");
       if (!this.exitReceived) {
         this.exitReceived = true;
+        this.options.onError?.("connection_error", this.closeDetail(event));
         this.options.onExit?.({ outcome: "disconnected" });
       }
     });
@@ -90,6 +101,7 @@ export class ContainerTerminalSocket {
   }
 
   dispose(): void {
+    this.disposed = true;
     const socket = this.socket;
     this.socket = undefined;
     if (!socket) return;
@@ -124,6 +136,7 @@ export class ContainerTerminalSocket {
     }
     const value = frame as Record<string, unknown>;
     if (value.type === "ready") {
+      this.readyReceived = true;
       this.setState("ready");
       this.options.onReady?.({
         maxDurationSeconds: typeof value.max_duration_seconds === "number" ? value.max_duration_seconds : 0,
@@ -162,5 +175,19 @@ export class ContainerTerminalSocket {
 
   private setState(state: ContainerTerminalSocketState): void {
     this.options.onState?.(state);
+  }
+
+  private closeDetail(event: CloseEvent): string {
+    const phase = this.readyReceived ? "closed unexpectedly" : "failed";
+    const reason = event.reason.trim();
+    if (reason) {
+      return `Terminal connection ${phase}: ${reason} (WebSocket close code ${event.code}).`;
+    }
+    if (event.code === 1006) {
+      return this.readyReceived
+        ? "Terminal connection closed unexpectedly (close code 1006). Check that Core is reachable and that the HTTP proxy allows WebSocket upgrades."
+        : "Terminal connection failed before Core completed the WebSocket handshake (close code 1006). Check that Core is reachable and that the HTTP proxy allows WebSocket upgrades.";
+    }
+    return `Terminal connection ${phase} (WebSocket close code ${event.code}).`;
   }
 }

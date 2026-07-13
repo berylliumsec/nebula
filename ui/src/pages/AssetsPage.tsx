@@ -72,18 +72,17 @@ export function AssetsPage() {
   return (
     <div className="page assets-page">
       <PageHeader
-        eyebrow="Attack surface"
         title="Assets"
-        description="Scoped asset records with identity, exposure, criticality, tags, and observation metadata."
+        description="Assets in scope and their observed exposure."
         actions={<>
           <button className="button secondary" type="button" disabled title="Scanner inventory normalization is release-gated"><Upload size={16} /> Import inventory</button>
           <button className="button primary" type="button" disabled={previewMode || !engagement} onClick={() => { setError(undefined); setAdding(true); }}><Plus size={16} /> Add asset</button>
         </>}
       />
       <section className="summary-strip" aria-label="Asset totals">
-        <div><span className="summary-icon blue"><Network size={18} /></span><span><strong>{assets.length}</strong><small>Loaded assets</small></span></div>
-        <div><span className="summary-icon violet"><Server size={18} /></span><span><strong>{knownServiceCounts.length ? serviceCount : "—"}</strong><small>Recorded services</small></span></div>
-        <div><span className="summary-icon green"><span className="status-dot healthy" /></span><span><strong>{observedCount}</strong><small>With observation time</small></span></div>
+        <div><span className="summary-icon blue"><Network size={18} /></span><span><strong>{assets.length}</strong><small>Assets</small></span></div>
+        <div><span className="summary-icon violet"><Server size={18} /></span><span><strong>{knownServiceCounts.length ? serviceCount : "—"}</strong><small>Services</small></span></div>
+        <div><span className="summary-icon green"><span className="status-dot healthy" /></span><span><strong>{observedCount}</strong><small>Observed</small></span></div>
         <div><span className="summary-icon red"><span className="status-dot critical" /></span><span><strong>{withFindings}</strong><small>With findings</small></span></div>
       </section>
 
@@ -106,7 +105,7 @@ export function AssetsPage() {
             </tbody>
           </table>
         </div>
-        <footer className="table-footer"><span>Showing {visibleAssets.length} of {assets.length} loaded assets</span></footer>
+        <footer className="table-footer"><span>{visibleAssets.length} of {assets.length} assets</span></footer>
       </section>
 
       {adding && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="asset-dialog-title" onSubmit={(event) => void submit(event)}><header><div><small>Engagement asset</small><h2 id="asset-dialog-title">Add asset</h2></div><button className="icon-button subtle" type="button" aria-label="Close asset dialog" onClick={() => setAdding(false)}><X size={17} /></button></header><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Kind<select value={assetKind} onChange={(event) => setAssetKind(event.target.value as AssetSummary["kind"])}>{(["host", "domain", "url", "cloud", "repository", "other"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label><div className="resource-form-grid"><label>Address<input value={address} placeholder="IP, CIDR, or URL" onChange={(event) => setAddress(event.target.value)} /></label><label>Hostname<input value={hostname} onChange={(event) => setHostname(event.target.value)} /></label><label>Criticality<select value={criticality} onChange={(event) => setCriticality(event.target.value as AssetSummary["criticality"])}>{(["critical", "high", "medium", "low", "info"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label>Exposure<select value={assetExposure} onChange={(event) => setAssetExposure(event.target.value as AssetSummary["exposure"])}>{(["unknown", "external", "internal"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label></div><label>Tags<input value={tags} placeholder="production, api (comma-separated)" onChange={(event) => setTags(event.target.value)} /></label>{error && <p className="form-error" role="alert">{error}</p>}<footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim()}>{saving ? "Adding…" : "Add asset"}</button></footer></form></div>}

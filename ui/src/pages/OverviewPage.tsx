@@ -41,9 +41,11 @@ export function OverviewPage() {
   const validatedFindings = findings.filter((finding) => ["validated", "confirmed"].includes(finding.status));
   const criticalFindings = findings.filter((finding) => finding.severity === "critical").length;
   const highFindings = findings.filter((finding) => finding.severity === "high").length;
-  const completedTasks = run?.completedTasks ?? 0;
-  const totalTasks = run?.totalTasks ?? 0;
+  const completedTasks = previewMode ? missionSteps.filter((step) => step.state === "complete").length : run?.completedTasks ?? 0;
+  const totalTasks = previewMode ? missionSteps.length : run?.totalTasks ?? 0;
   const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  const missionTitle = previewMode ? "External attack surface review" : run?.title;
+  const missionStatus = previewMode ? "running" : run?.status.replace("_", " ");
   const priorityFinding = findings.find((finding) => finding.severity === "critical") ?? findings[0];
   return (
     <div className="page overview-page">
@@ -51,10 +53,10 @@ export function OverviewPage() {
         eyebrow={engagement?.clientName ?? (previewMode ? "Acme external assessment" : "Nebula engagement")}
         title={previewMode ? "Good afternoon, Jordan" : engagement?.name ?? "No engagement available"}
         description={previewMode
-          ? "Your supervised mission is progressing within scope. One action needs review."
+          ? "Mission status and findings at a glance."
           : run
-            ? `${run.title} is ${run.status.replace("_", " ")}. ${approvals.length} approval request${approvals.length === 1 ? "" : "s"} pending.`
-            : "Core is online. Create an analysis-only mission to begin supervised work."}
+            ? `${run.title} · ${run.status.replace("_", " ")}`
+            : "Start a supervised mission when you’re ready."}
         actions={
           <>
             <button className="button secondary" type="button" disabled title="Scanner normalization is release-gated">Import scan unavailable</button>
@@ -67,8 +69,8 @@ export function OverviewPage() {
         <div className="callout preview-callout" role="status">
           <CircleAlert size={18} aria-hidden="true" />
           <div>
-            <strong>Exploring the Nebula 3 workspace</strong>
-            <p>Representative engagement data is visible until the versioned Nebula Core API connects.</p>
+            <strong>Preview workspace</strong>
+            <p>Connect Core to work with live data.</p>
           </div>
         </div>
       )}
@@ -84,23 +86,19 @@ export function OverviewPage() {
       <section className="metric-grid" aria-label="Engagement summary">
         <article className="metric-card accent-blue">
           <span className="metric-icon"><Target size={19} /></span>
-          <div><small>Loaded assets</small><strong>{assets.length}</strong><span>Current engagement</span></div>
-          <span className="metric-trend">Core data</span>
+          <div><small>Assets</small><strong>{assets.length}</strong><span>In this engagement</span></div>
         </article>
         <article className="metric-card accent-violet">
           <span className="metric-icon"><Bot size={19} /></span>
-          <div><small>Mission status</small><strong>{run ? run.status.replace("_", " ") : "—"}</strong><span>{run ? run.title : "No run selected"}</span></div>
-          <span className="metric-trend positive">{events.length} events</span>
+          <div><small>Mission</small><strong>{missionStatus ?? "—"}</strong><span>{missionTitle ?? "No active run"}</span></div>
         </article>
         <article className="metric-card accent-red">
           <span className="metric-icon"><FileCheck2 size={19} /></span>
-          <div><small>Validated findings</small><strong>{validatedFindings.length}</strong><span>{criticalFindings} critical · {highFindings} high</span></div>
-          <span className="metric-trend warning">{findings.length} total</span>
+          <div><small>Findings</small><strong>{validatedFindings.length}</strong><span>{findings.length} total · {criticalFindings + highFindings} priority</span></div>
         </article>
         <article className="metric-card accent-green">
           <span className="metric-icon"><DollarSign size={19} /></span>
-          <div><small>Recorded model cost</small><strong>{run?.spentUsd === undefined ? "—" : `$${run.spentUsd.toFixed(2)}`}</strong><span>Persisted run metadata</span></div>
-          <span className="metric-trend positive">auditable</span>
+          <div><small>Model cost</small><strong>{run?.spentUsd === undefined ? "—" : `$${run.spentUsd.toFixed(2)}`}</strong><span>Recorded for this mission</span></div>
         </article>
       </section>
 
@@ -108,23 +106,23 @@ export function OverviewPage() {
         <section className="panel mission-panel">
           <header className="panel-header">
             <div>
-              <span className="section-kicker"><span className="pulse-dot" /> {run ? `Mission ${run.status.replace("_", " ")}` : "No active mission"}</span>
-              <h2>{run?.title ?? "Start an analysis-only supervised mission"}</h2>
-              <p>{run?.startedAt ? `Started ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(run.startedAt))}` : "No start time recorded"}</p>
+              {missionStatus && <span className="section-kicker"><span className="pulse-dot" /> {missionStatus}</span>}
+              <h2>{missionTitle ?? "No active mission"}</h2>
+              <p>{run?.startedAt ? `Started ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(run.startedAt))}` : previewMode ? "Supervised preview" : "Start a supervised analysis when you’re ready."}</p>
             </div>
             <div className="panel-header-actions">
-              <StopMissionButton className="button quiet" />
-              <Link className="button secondary" to="/agents">Open mission <ArrowUpRight size={15} /></Link>
+              {run && <StopMissionButton className="button quiet" />}
+              <Link className="button secondary" to="/agents">{run ? "Open mission" : "View missions"} <ArrowUpRight size={15} /></Link>
             </div>
           </header>
-          <div className="progress-row">
+          {totalTasks > 0 && <div className="progress-row">
             <div>
               <span>Mission progress</span>
-              <strong>{totalTasks > 0 ? `${progress}%` : "—"}</strong>
+              <strong>{progress}%</strong>
             </div>
             <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
-            <small>{totalTasks > 0 ? `${completedTasks} of ${totalTasks} bounded tasks complete` : "Task totals are not present in run metadata"}</small>
-          </div>
+            <small>{completedTasks} of {totalTasks} tasks complete</small>
+          </div>}
           {previewMode ? (
             <ol className="mission-steps">
               {missionSteps.map((step) => (
@@ -137,7 +135,7 @@ export function OverviewPage() {
                 </li>
               ))}
             </ol>
-          ) : (
+          ) : events.length > 0 ? (
             <ol className="mission-steps">
               {events.slice(0, 5).map((event) => { const state = eventStepState(event.kind); return (
                 <li className={state} key={event.id}>
@@ -146,9 +144,8 @@ export function OverviewPage() {
                   <span className="step-label">#{event.sequence}</span>
                 </li>
               ); })}
-              {events.length === 0 && <li><div><strong>No persisted run events yet</strong><small>Activity appears after Core records a transition.</small></div></li>}
             </ol>
-          )}
+          ) : <div className="mission-events-empty"><Clock3 size={18} aria-hidden="true" /><div><strong>No mission activity</strong><small>Events appear after Core records a transition.</small></div></div>}
         </section>
 
         <section className="panel risk-panel">
