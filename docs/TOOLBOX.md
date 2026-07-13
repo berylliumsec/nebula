@@ -162,6 +162,16 @@ it implements the same paths, wrapper protocol, catalog, non-root user, and
 generic capability manifest. Historical missions remain locked to the original
 manifest and image digest when a replacement is installed.
 
+### Testing the official Toolbox before publication
+
+Pushes to the `nebula-3-modernization` branch run the non-publishing
+**Build Nebula Toolbox Staging Bundle** workflow. It uses a separate staging
+GHCR package and uploads a digest-resolved unsigned bundle for end-to-end Mac
+installation tests without creating a release tag, using the release signing
+key, or deploying the official catalog. Follow the
+[staging installation guide](TOOLBOX-STAGING.md) to download and install the
+artifact.
+
 ## Reproducibility and version updates
 
 `tool-versions.env` is the single reviewed version ledger. The current image
