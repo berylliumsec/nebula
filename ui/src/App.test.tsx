@@ -685,7 +685,11 @@ describe("Nebula workspace", () => {
     await screen.findByRole("heading", { name: "Tool review" });
     await user.click(screen.getByRole("button", { name: "New mission" }));
     let dialog = screen.getByRole("dialog", { name: "New mission" });
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
     expect(within(dialog).getByText(/ordinary in-scope commands run without per-command approval/i)).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Start mission" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Enter a mission objective.");
+    expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/missions") && request?.method === "POST")).toBe(false);
     await user.type(within(dialog).getByRole("textbox", { name: "Objective" }), "Scan the assigned target");
     expect(await within(dialog).findByRole("checkbox", { name: /environment\.run_network/i })).toBeChecked();
     expect(within(dialog).getByRole("spinbutton", { name: "Maximum tool calls" })).toHaveValue(50);
