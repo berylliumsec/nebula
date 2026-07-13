@@ -198,9 +198,8 @@ def serve(
         artifact_store=artifacts,
         auth_token=auth_token,
         static_dir=static_dir,
-        enable_human_pty=_is_loopback(host),
-        human_pty_root=_data_dir(data_dir) / "human-sessions",
         tool_platform=tool_platform,
+        execution_data_root=root,
     )
     try:
         bind_address = ipaddress.ip_address(host)

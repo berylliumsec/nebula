@@ -14,7 +14,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import Any, Literal
+from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -504,6 +504,24 @@ class SandboxRunner(ABC):
     async def run(self, request: SandboxRequest) -> SandboxResult:
         raise NotImplementedError
 
+    async def run_stream(
+        self,
+        request: SandboxRequest,
+        *,
+        input_bytes: bytes = b"",
+        on_chunk: Callable[[str, bytes], Awaitable[None]] | None = None,
+        container_name: str | None = None,
+    ) -> SandboxResult:
+        if input_bytes:
+            raise SandboxUnavailable("this sandbox runner does not accept source input")
+        result = await self.run(request)
+        if on_chunk is not None:
+            if result.stdout:
+                await on_chunk("stdout", result.stdout.encode("utf-8"))
+            if result.stderr:
+                await on_chunk("stderr", result.stderr.encode("utf-8"))
+        return result
+
 
 class AnalysisOnlyRunner(SandboxRunner):
     """Explicitly represents a deployment without executable isolation."""
@@ -842,6 +860,7 @@ class ContainerSandboxRunner(SandboxRunner):
         *,
         container_name: str = "nebula-tool",
         network_mode: str | None = None,
+        interactive: bool = False,
     ) -> list[str]:
         if not self.runtime or self.profile is None:
             raise SandboxUnavailable("no container runtime is configured")
@@ -861,6 +880,8 @@ class ContainerSandboxRunner(SandboxRunner):
             "--user=65532:65532",
             "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m",
         ]
+        if interactive:
+            argv.append("--interactive")
         if self.profile.seccomp_profile is not None:
             argv.append(f"--security-opt=seccomp={self.profile.seccomp_profile}")
         if workspace is None:
@@ -894,6 +915,16 @@ class ContainerSandboxRunner(SandboxRunner):
         return argv
 
     async def run(self, request: SandboxRequest) -> SandboxResult:
+        return await self.run_stream(request)
+
+    async def run_stream(
+        self,
+        request: SandboxRequest,
+        *,
+        input_bytes: bytes = b"",
+        on_chunk: Callable[[str, bytes], Awaitable[None]] | None = None,
+        container_name: str | None = None,
+    ) -> SandboxResult:
         healthy, detail = await self.available()
         if not healthy:
             raise SandboxUnavailable(detail)
@@ -905,7 +936,9 @@ class ContainerSandboxRunner(SandboxRunner):
                 "workspace tool execution requires explicitly configured workspace roots"
             )
         workspace = self._validate(request)
-        container_name = f"nebula-{uuid4().hex}"
+        selected_name = container_name or f"nebula-{uuid4().hex}"
+        if not re.fullmatch(r"nebula-[a-z0-9][a-z0-9_.-]{0,62}", selected_name):
+            raise SandboxError("container name is outside the Nebula namespace")
         lease: EgressLease | None = None
         if request.network == SandboxNetwork.SCOPED:
             if not request.egress_rules:
@@ -920,21 +953,26 @@ class ContainerSandboxRunner(SandboxRunner):
                 runtime_argv=self._runtime_argv(),
                 runtime_environment=_runtime_environment(),
                 request=request,
-                container_name=container_name,
+                container_name=selected_name,
                 seccomp_profile=self.profile.seccomp_profile if self.profile else None,
             )
         argv = self._argv(
             request,
             workspace,
-            container_name=container_name,
+            container_name=selected_name,
             network_mode=lease.network_mode if lease else None,
+            interactive=bool(input_bytes),
         )
         started_at = utc_now()
         started = monotonic()
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=(
+                    asyncio.subprocess.PIPE
+                    if input_bytes
+                    else asyncio.subprocess.DEVNULL
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=_runtime_environment(),
@@ -948,11 +986,34 @@ class ContainerSandboxRunner(SandboxRunner):
 
         assert process.stdout is not None
         assert process.stderr is not None
+        if input_bytes:
+            assert process.stdin is not None
+            try:
+                process.stdin.write(input_bytes)
+                await process.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                process.stdin.close()
+                try:
+                    await process.stdin.wait_closed()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
         stdout_task = asyncio.create_task(
-            _read_limited(process.stdout, request.limits.output_bytes)
+            _read_limited_stream(
+                process.stdout,
+                request.limits.output_bytes,
+                stream="stdout",
+                on_chunk=on_chunk,
+            )
         )
         stderr_task = asyncio.create_task(
-            _read_limited(process.stderr, request.limits.output_bytes)
+            _read_limited_stream(
+                process.stderr,
+                request.limits.output_bytes,
+                stream="stderr",
+                on_chunk=on_chunk,
+            )
         )
         timed_out = False
         try:
@@ -964,11 +1025,11 @@ class ContainerSandboxRunner(SandboxRunner):
                 timed_out = True
                 process.kill()
                 await process.wait()
-                await self._force_remove(container_name)
+                await self._force_remove(selected_name)
             except asyncio.CancelledError:
                 process.kill()
                 await process.wait()
-                await self._force_remove(container_name)
+                await self._force_remove(selected_name)
                 stdout_task.cancel()
                 stderr_task.cancel()
                 raise
@@ -1190,6 +1251,32 @@ async def _read_limited(stream: asyncio.StreamReader, limit: int) -> tuple[bytes
         if remaining:
             chunks.append(chunk[:remaining])
             retained += min(len(chunk), remaining)
+        if len(chunk) > remaining:
+            truncated = True
+    return b"".join(chunks), truncated
+
+
+async def _read_limited_stream(
+    reader: asyncio.StreamReader,
+    limit: int,
+    *,
+    stream: str,
+    on_chunk: Callable[[str, bytes], Awaitable[None]] | None,
+) -> tuple[bytes, bool]:
+    chunks: list[bytes] = []
+    retained = 0
+    truncated = False
+    while True:
+        chunk = await reader.read(32_768)
+        if not chunk:
+            break
+        remaining = max(0, limit - retained)
+        captured = chunk[:remaining]
+        if captured:
+            chunks.append(captured)
+            retained += len(captured)
+            if on_chunk is not None:
+                await on_chunk(stream, captured)
         if len(chunk) > remaining:
             truncated = True
     return b"".join(chunks), truncated

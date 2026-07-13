@@ -79,7 +79,9 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
 
     assert response.status_code == 200
     completion = response.json()
-    assert completion["message"] == {"role": "assistant", "content": "API chat works."}
+    assert completion["message"]["role"] == "assistant"
+    assert completion["message"]["content"] == "API chat works."
+    assert completion["message"]["id"]
     assert completion["usage"]["total_tokens"] == 5
     session_id = completion["session_id"]
     history = client.get(
@@ -90,6 +92,7 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         (1, "user"),
         (2, "assistant"),
     ]
+    assert history.json()[1]["id"] == completion["message"]["id"]
     sessions = client.get(
         f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
     )

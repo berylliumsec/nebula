@@ -303,6 +303,7 @@ export interface ReportSummary {
   status: string;
   executiveSummary: string;
   findingIds: string[];
+  observationIds: string[];
   artifactIds: string[];
   signedOffBy?: string;
   signedOffAt?: string;
@@ -317,6 +318,7 @@ export interface ReportCreateRequest {
   status?: string;
   executiveSummary?: string;
   findingIds?: string[];
+  observationIds?: string[];
 }
 
 export interface ReportUpdateRequest {
@@ -324,7 +326,70 @@ export interface ReportUpdateRequest {
   status?: string;
   executiveSummary?: string;
   findingIds?: string[];
+  observationIds?: string[];
   expectedRevision: number;
+}
+
+export interface ObservationSummary {
+  id: Identifier;
+  engagementId: Identifier;
+  observationType: string;
+  title: string;
+  body: string;
+  evidenceIds: Identifier[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReportRender {
+  id: Identifier;
+  engagementId: Identifier;
+  reportId: Identifier;
+  reportRevision: number;
+  inputFingerprint: string;
+  templateVersion: string;
+  rendererVersion: string;
+  status: "queued" | "rendering" | "completed" | "failed" | "interrupted";
+  warnings: string[];
+  generatedAt?: string;
+  errorDetail?: string;
+  revision: number;
+}
+
+export interface PotentialFindingDraft {
+  title: string;
+  rationale: string;
+}
+
+export interface GeneratedDraftContent {
+  title: string;
+  summary: string;
+  observations: string[];
+  potentialFindings: PotentialFindingDraft[];
+  evidenceIds: Identifier[];
+}
+
+export interface GeneratedDraft {
+  id: Identifier;
+  engagementId: Identifier;
+  executionId: Identifier;
+  providerProfileId: Identifier;
+  model: string;
+  promptVersion: string;
+  contextFingerprint: string;
+  status: "generating" | "ready" | "accepted" | "rejected" | "failed";
+  content?: GeneratedDraftContent;
+  observationId?: Identifier;
+  providerRequestId?: string;
+  errorDetail?: string;
+  metadata: Record<string, unknown>;
+  revision: number;
+}
+
+export interface ExecutionChatAttachment {
+  sessionId: Identifier;
+  contextFingerprint: string;
+  categories: string[];
 }
 
 export interface EvidenceSummary {
@@ -335,6 +400,7 @@ export interface EvidenceSummary {
   description: string;
   artifactId?: Identifier;
   findingId?: Identifier;
+  executionId?: Identifier;
   assetIds: Identifier[];
   sha256?: string;
   capturedAt: string;
@@ -472,6 +538,7 @@ export interface ProviderUpdateRequest {
 export type ChatRole = "user" | "assistant";
 
 export interface ChatMessage {
+  id?: Identifier;
   role: ChatRole;
   content: string;
 }
@@ -580,7 +647,178 @@ export interface HealthResponse {
   version: string;
   mode: "local" | "team";
   runner: "ready" | "unavailable" | "degraded";
-  humanPty: "ready" | "unavailable";
+}
+
+export type ExecutionLanguage = "bash" | "sh" | "python";
+export type ExecutionStatus =
+  | "queued"
+  | "running"
+  | "cancelling"
+  | "completed"
+  | "denied"
+  | "timed_out"
+  | "cancelled"
+  | "failed"
+  | "interrupted";
+
+export interface ExecutionOrigin {
+  kind: "assistant_message" | "rerun";
+  messageId?: Identifier;
+  blockOrdinal?: number;
+  blockSha256?: string;
+  selectionStartByte?: number;
+  selectionEndByte?: number;
+  executionId?: Identifier;
+}
+
+export interface ExecutionNetworkRequest {
+  mode: "none" | "scoped";
+  target?: string;
+  ports: number[];
+}
+
+export interface ExecutionRequest {
+  engagementId: Identifier;
+  language: string;
+  source: string;
+  origin: ExecutionOrigin;
+  network: ExecutionNetworkRequest;
+}
+
+export interface ExecutionRuntimeSnapshot {
+  language: ExecutionLanguage;
+  interpreter: string;
+  arguments: string[];
+  toolPackInstallationId: Identifier;
+  manifestDigest: string;
+  image: string;
+  runnerProfileId: Identifier;
+  runnerProfileRevision: number;
+  runnerRuntime: "docker" | "podman";
+  runnerIsolation: string;
+  runnerExecutable: string;
+  runnerPlatform: string;
+  runnerContext?: string;
+  runnerSocket?: string;
+  trusted: boolean;
+}
+
+export interface ExecutionNetworkSnapshot {
+  mode: "none" | "scoped";
+  target?: string;
+  ports: number[];
+  resolvedAddresses: string[];
+  scopePolicyId?: Identifier;
+  scopePolicyRevision?: number;
+}
+
+export interface ExecutionLimits {
+  cpuCount: number;
+  memoryMb: number;
+  pids: number;
+  timeoutSeconds: number;
+  outputBytesPerStream: number;
+}
+
+export interface ExecutionPreflight {
+  allowed: boolean;
+  errorCode?: string;
+  detail: string;
+  canonicalLanguage?: ExecutionLanguage;
+  sourceSha256?: string;
+  runtime?: ExecutionRuntimeSnapshot;
+  network?: ExecutionNetworkSnapshot;
+  limits: ExecutionLimits;
+  workspace: "/workspace";
+  policyRule?: string;
+  previewFingerprint?: string;
+  previewToken?: string;
+  expiresAt?: string;
+}
+
+export interface ExecutionCapability {
+  language: ExecutionLanguage;
+  aliases: string[];
+  offline: boolean;
+  scopedNetwork: boolean;
+  detail?: string;
+}
+
+export interface ExecutionCapabilities {
+  engagementId: Identifier;
+  ready: boolean;
+  runtimes: ExecutionCapability[];
+  limits: ExecutionLimits;
+  workspace: "/workspace";
+}
+
+export interface WorkspaceChange {
+  path: string;
+  change: "added" | "modified" | "deleted";
+  size?: number;
+}
+
+export interface OperatorExecution {
+  id: Identifier;
+  engagementId: Identifier;
+  operatorId: Identifier;
+  origin: ExecutionOrigin;
+  language: ExecutionLanguage;
+  sourceSha256: string;
+  sourceArtifactId: Identifier;
+  sourcePreview: string;
+  runtime: ExecutionRuntimeSnapshot;
+  network: ExecutionNetworkSnapshot;
+  limits: ExecutionLimits;
+  workspace: "/workspace";
+  policyDecision: string;
+  status: ExecutionStatus;
+  errorCode?: string;
+  errorDetail?: string;
+  queuedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  exitCode?: number;
+  outputTruncated: boolean;
+  evidenceId?: Identifier;
+  workspaceChanges: WorkspaceChange[];
+}
+
+export interface ExecutionOutputPage {
+  text: string;
+  totalBytes: number;
+  nextOffset: number;
+}
+
+export interface WorkspaceEntry {
+  path: string;
+  name: string;
+  kind: "file" | "directory" | "symlink" | "other";
+  size: number;
+  modifiedAt: string;
+}
+
+export interface WorkspaceListing {
+  engagementId: Identifier;
+  path: string;
+  entries: WorkspaceEntry[];
+  offset: number;
+  nextOffset?: number;
+  total: number;
+}
+
+export interface WorkspacePreview {
+  engagementId: Identifier;
+  path: string;
+  text: string;
+  bytesReturned: number;
+  truncated: boolean;
+  previewSha256: string;
+}
+
+export interface WorkspaceResetResult {
+  engagementId: Identifier;
+  removedEntries: number;
 }
 
 export type RunEventKind =

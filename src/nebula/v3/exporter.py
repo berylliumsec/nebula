@@ -27,10 +27,13 @@ from .domain import (
     Entity,
     Evidence,
     Finding,
+    GeneratedDraft,
     KnowledgeSource,
+    OperatorExecution,
     OperatorProfile,
     ProviderProfile,
     Report,
+    ReportRender,
     SourceSnapshot,
     utc_now,
 )
@@ -43,11 +46,13 @@ class ExportError(RuntimeError):
 
 class ExportManifest(BaseModel):
     format: str = "nebula-engagement-bundle"
-    format_version: int = 1
+    format_version: int = 2
     engagement_id: str
     exported_at: str
     entity_counts: dict[str, int] = Field(default_factory=dict)
     event_count: int = 0
+    run_event_count: int = 0
+    operation_event_count: int = 0
     files: dict[str, str] = Field(default_factory=dict)
 
 
@@ -125,7 +130,7 @@ def _include_referenced_globals(
                 required_operator_ids.add(entity.owner_id)
             elif isinstance(entity, Evidence):
                 if entity.captured_by:
-                    required_operator_ids.add(entity.captured_by)
+                    possible_operator_ids.add(entity.captured_by)
                 if entity.artifact_id:
                     artifact_ids.add(entity.artifact_id)
             elif isinstance(entity, Finding) and entity.verifier_id:
@@ -146,6 +151,31 @@ def _include_referenced_globals(
                 provider_ids.add(entity.supervisor_provider_id)
             elif isinstance(entity, AgentAttempt) and entity.provider_profile_id:
                 provider_ids.add(entity.provider_profile_id)
+            elif isinstance(entity, OperatorExecution):
+                possible_operator_ids.add(entity.operator_id)
+                artifact_ids.add(entity.source_artifact_id)
+                artifact_ids.update(
+                    artifact_id
+                    for artifact_id in (
+                        entity.stdout_artifact_id,
+                        entity.stderr_artifact_id,
+                        entity.redacted_stdout_artifact_id,
+                        entity.redacted_stderr_artifact_id,
+                        entity.manifest_artifact_id,
+                    )
+                    if artifact_id
+                )
+            elif isinstance(entity, GeneratedDraft):
+                provider_ids.add(entity.provider_profile_id)
+            elif isinstance(entity, ReportRender):
+                artifact_ids.update(
+                    artifact_id
+                    for artifact_id in (
+                        entity.snapshot_artifact_id,
+                        entity.pdf_artifact_id,
+                    )
+                    if artifact_id
+                )
             elif isinstance(entity, ChatSession):
                 provider_ids.add(entity.provider_profile_id)
             elif isinstance(entity, ChatMessage):
@@ -255,22 +285,33 @@ def export_engagement(
             continue
         entities_by_model[model] = {entity.id: entity for entity in entities}
 
-    events = []
+    run_events = []
     for run in entities_by_model.get(AgentRun, {}).values():
         if not isinstance(run, AgentRun):
             continue
         cursor = 0
         while True:
-            page = store.replay_events(run.id, after_sequence=cursor, limit=10_000)
-            events.extend(page)
-            if not page or len(page) < 10_000:
+            run_page = store.replay_events(run.id, after_sequence=cursor, limit=10_000)
+            run_events.extend(run_page)
+            if not run_page or len(run_page) < 10_000:
                 break
-            cursor = page[-1].sequence
+            cursor = run_page[-1].sequence
+
+    operation_events = []
+    offset = 0
+    while True:
+        operation_page = store.list_operation_events(
+            engagement_id, offset=offset, limit=10_000
+        )
+        operation_events.extend(operation_page)
+        if len(operation_page) < 10_000:
+            break
+        offset += len(operation_page)
 
     _include_referenced_globals(
         store=store,
         entities=entities_by_model,
-        events=events,
+        events=[*run_events, *operation_events],
     )
     for model in ENTITY_MODELS:
         model_entities = entities_by_model.get(model)
@@ -289,14 +330,19 @@ def export_engagement(
         if isinstance(artifact, Artifact)
     ]
     payloads["events.json"] = _json_bytes(
-        [event.model_dump(mode="json") for event in events]
+        [event.model_dump(mode="json") for event in run_events]
+    )
+    payloads["operation_events.json"] = _json_bytes(
+        [event.model_dump(mode="json") for event in operation_events]
     )
 
     manifest = ExportManifest(
         engagement_id=engagement_id,
         exported_at=utc_now().isoformat(),
         entity_counts=counts,
-        event_count=len(events),
+        event_count=len(run_events) + len(operation_events),
+        run_event_count=len(run_events),
+        operation_event_count=len(operation_events),
         files={
             name: hashlib.sha256(content).hexdigest()
             for name, content in payloads.items()

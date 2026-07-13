@@ -13,7 +13,7 @@ license = "BSD"
 homepage = "https://github.com/berylliumsec/nebula"
 keywords = [ "AI", "ethical hacking", "nmap", "zap", "crackmapexec",]
 classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Developers", "License :: OSI Approved :: BSD License", "Programming Language :: Python :: 3",]
-include = [ "src/nebula/images/*", "src/nebula/v3/tool_pack_assets/**/*",]
+include = [ "src/nebula/images/*", "src/nebula/v3/tool_pack_assets/**/*", "src/nebula/v3/report_assets/**/*",]
 [[tool.poetry.packages]]
 include = "nebula"
 from = "src"
@@ -47,6 +47,8 @@ pypdf = ">=6,<7"
 # application. Nebula 3 release environments use `poetry install --without
 # legacy`, giving the frozen Core a dependency boundary instead of relying on
 # freezer exclusions.
+reportlab = ">=5,<6"
+pillow = ">=11,<13"
 [tool.poetry.group.legacy]
 optional = false
 
@@ -123,6 +125,10 @@ pytest-qt = ">=4.4,<5"
 testpaths = [ "tests",]
 addopts = "--import-mode=importlib"
 pythonpath = [ ".", "src" ]
+
+[[tool.mypy.overrides]]
+module = ["reportlab", "reportlab.*"]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 source = [ "src/nebula",]

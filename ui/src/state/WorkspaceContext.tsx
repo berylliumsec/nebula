@@ -27,6 +27,7 @@ import type {
   KnowledgeIngestRequest,
   KnowledgeSource,
   MissionCreateRequest,
+  ObservationSummary,
   OperatorProfile,
   OperatorProfileCreateRequest,
   OperatorProfileUpdateRequest,
@@ -94,6 +95,7 @@ interface WorkspaceContextValue {
   assets: AssetSummary[];
   findings: FindingSummary[];
   evidence: EvidenceSummary[];
+  observations: ObservationSummary[];
   reports: ReportSummary[];
   providers: ProviderHealth[];
   providerCatalog: ProviderCatalogEntry[];
@@ -142,6 +144,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [assets, setAssets] = useState<AssetSummary[]>(previewAssets);
   const [findings, setFindings] = useState<FindingSummary[]>(previewFindings);
   const [evidence, setEvidence] = useState<EvidenceSummary[]>([]);
+  const [observations, setObservations] = useState<ObservationSummary[]>([]);
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [providers, setProviders] = useState<ProviderHealth[]>(previewProviders);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
@@ -200,12 +203,13 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         setOperatorProfiles(nextOperatorProfiles);
 
         if (nextEngagement) {
-          const [runPage, approvalPage, assetPage, findingPage, evidencePage, knowledgePage, reportPage] = await Promise.all([
+          const [runPage, approvalPage, assetPage, findingPage, evidencePage, observationPage, knowledgePage, reportPage] = await Promise.all([
             nextApi.listRuns(nextEngagement.id, controller.signal),
             nextApi.listApprovals(nextEngagement.id, controller.signal),
             nextApi.listAssets(nextEngagement.id, controller.signal),
             nextApi.listFindings(nextEngagement.id, controller.signal),
             nextApi.listEvidence(nextEngagement.id, controller.signal),
+            nextApi.listObservations(nextEngagement.id, controller.signal),
             nextApi.listKnowledgeSources(nextEngagement.id, controller.signal),
             nextApi.listReports(nextEngagement.id, controller.signal),
           ]);
@@ -215,6 +219,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           setAssets(assetPage.items);
           setFindings(findingPage.items);
           setEvidence(evidencePage.items);
+          setObservations(observationPage.items);
           setKnowledgeSources(knowledgePage.items);
           setReports(reportPage.items);
         } else {
@@ -222,6 +227,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           setAssets([]);
           setFindings([]);
           setEvidence([]);
+          setObservations([]);
           setKnowledgeSources([]);
           setReports([]);
         }
@@ -552,6 +558,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       assets,
       findings,
       evidence,
+      observations,
       reports,
       providers,
       providerCatalog,
@@ -593,6 +600,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       events,
       findings,
       evidence,
+      observations,
       reports,
       health,
       providers,

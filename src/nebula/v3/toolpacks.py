@@ -128,6 +128,43 @@ class ToolPackPermissions(StrictModel):
     credentials: list[str] = Field(default_factory=list)
 
 
+class ToolPackOperatorRuntime(StrictModel):
+    """Signed declaration for operator-reviewed source execution."""
+
+    language: Literal["bash", "sh", "python"]
+    aliases: list[str] = Field(min_length=1, max_length=10)
+    image: str = Field(pattern=r"^[a-z][a-z0-9._-]{0,127}$")
+    adapter: str
+    interpreter: str
+    arguments: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("aliases")
+    @classmethod
+    def aliases_are_safe_and_unique(cls, values: list[str]) -> list[str]:
+        normalized = [value.casefold() for value in values]
+        if any(
+            not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", value) for value in normalized
+        ):
+            raise ValueError("runtime aliases must be simple lowercase identifiers")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("runtime aliases must be unique")
+        return normalized
+
+    @field_validator("adapter", "interpreter")
+    @classmethod
+    def runtime_paths_are_absolute(cls, value: str) -> str:
+        if not value.startswith("/") or "\x00" in value:
+            raise ValueError("runtime paths must be absolute container paths")
+        return value
+
+    @field_validator("arguments")
+    @classmethod
+    def runtime_arguments_have_no_nul(cls, values: list[str]) -> list[str]:
+        if any("\x00" in value for value in values):
+            raise ValueError("runtime arguments cannot contain NUL bytes")
+        return values
+
+
 class ToolPolicyContract(StrictModel):
     risk_class: RiskClass
     target_argument: str | None = None
@@ -263,6 +300,7 @@ class ToolPackManifestV1(StrictModel):
     metadata: ToolPackMetadata
     images: list[ToolPackImage] = Field(min_length=1)
     permissions: ToolPackPermissions
+    operator_runtimes: list[ToolPackOperatorRuntime] = Field(default_factory=list)
     tools: list[ToolPackTool] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -289,6 +327,17 @@ class ToolPackManifestV1(StrictModel):
                 > workspace_rank[self.permissions.workspace]
             ):
                 raise ValueError("tool filesystem access exceeds pack permission")
+        runtime_languages = [runtime.language for runtime in self.operator_runtimes]
+        if len(runtime_languages) != len(set(runtime_languages)):
+            raise ValueError("operator runtime languages must be unique")
+        aliases = [
+            alias for runtime in self.operator_runtimes for alias in runtime.aliases
+        ]
+        if len(aliases) != len(set(aliases)):
+            raise ValueError("operator runtime aliases must be globally unique")
+        image_names = {image.name for image in self.images}
+        if any(runtime.image not in image_names for runtime in self.operator_runtimes):
+            raise ValueError("operator runtime references an unknown image component")
         return self
 
     def ensure_curated_multiarch(self) -> None:

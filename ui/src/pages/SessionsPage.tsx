@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
   Braces,
+  FileClock,
+  FolderOpen,
   LoaderCircle,
   MessageSquare,
   Plus,
   Send,
   ShieldCheck,
   Square,
-  SquareTerminal,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type {
@@ -15,15 +16,19 @@ import type {
   ChatMessage,
   ChatSessionSummary,
   ChatUsage,
+  ExecutionCapabilities,
+  ExecutionLanguage,
   PersistedChatMessage,
 } from "../api/types";
-import { ApiTerminalTransport } from "../api/terminal";
+import { AssistantMarkdown, type FencedRunCandidate } from "../components/AssistantMarkdown";
+import { ExecutionHistory } from "../components/ExecutionHistory";
+import { ExecutionReviewDialog } from "../components/ExecutionReviewDialog";
 import { PageHeader } from "../components/PageHeader";
 import { useConfirmation } from "../components/DialogSystem";
-import { TerminalPanel } from "../components/TerminalPanel";
+import { WorkspacePanel } from "../components/WorkspacePanel";
 import { useWorkspace } from "../state/WorkspaceContext";
 
-type SessionView = "terminal" | "chat";
+type SessionView = "chat" | "executions" | "workspace";
 type MessageState = "complete" | "streaming" | "error" | "cancelled";
 
 interface ConversationMessage extends ChatMessage {
@@ -63,23 +68,18 @@ export function SessionsPage() {
   const confirm = useConfirmation();
   const [view, setView] = useState<SessionView>("chat");
   const [mobileListOpen, setMobileListOpen] = useState(false);
-  const [terminalSessionId, setTerminalSessionId] = useState(() => makeId("human"));
   const {
     api,
     activeOperator,
     coreState,
     engagement,
-    health,
     knowledgeSources,
     previewMode,
     providers,
   } = useWorkspace();
-  const terminalTransport = useMemo(
-    () => (api && coreState === "online" && health?.humanPty === "ready"
-      ? new ApiTerminalTransport(api.baseUrl, api.getToken())
-      : undefined),
-    [api, coreState, health?.humanPty],
-  );
+  const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
+  const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
+  const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [sessionId, setSessionId] = useState("");
   const [providerId, setProviderId] = useState("");
@@ -128,8 +128,20 @@ export function SessionsPage() {
     setMessages([]);
     setDraft("");
     setChatError(undefined);
-    setTerminalSessionId(makeId("human"));
+    setRunCandidate(undefined);
   }, [engagement?.id]);
+
+  useEffect(() => {
+    if (!api || coreState !== "online" || !engagement) {
+      setExecutionCapabilities(undefined);
+      return;
+    }
+    const controller = new AbortController();
+    void api.executionCapabilities(engagement.id, controller.signal)
+      .then(setExecutionCapabilities)
+      .catch(() => setExecutionCapabilities(undefined));
+    return () => controller.abort();
+  }, [api, coreState, engagement]);
 
   useEffect(() => {
     if (!api || coreState !== "online" || !engagement) {
@@ -199,6 +211,33 @@ export function SessionsPage() {
       setMobileListOpen(false);
     } catch (error) {
       setChatError(error instanceof Error ? error.message : "Could not load the selected conversation.");
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const openAttachedChat = async (id: string) => {
+    if (!api || !engagement) return;
+    setLoadingHistory(true);
+    setChatError(undefined);
+    try {
+      const [page, history] = await Promise.all([
+        api.listChatSessions(engagement.id),
+        api.listChatMessages(id),
+      ]);
+      const ordered = page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      const summary = ordered.find((session) => session.id === id);
+      setSessions(ordered);
+      setSessionId(id);
+      setMessages(history.map(persistedMessage));
+      if (summary) {
+        setProviderId(summary.providerId);
+        setModel(summary.model ?? "");
+      }
+      setView("chat");
+      setMobileListOpen(false);
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "Could not open the execution conversation.");
     } finally {
       setLoadingHistory(false);
     }
@@ -287,11 +326,12 @@ export function SessionsPage() {
             if (message.id !== assistantId) return message;
             return {
               ...message,
+              id: streamEvent.message.id ?? message.id,
               content: streamEvent.message.content,
               citations: streamEvent.citations,
               usage: streamEvent.usage,
               state: "complete",
-              durable: true,
+              durable: Boolean(streamEvent.message.id),
             };
           }));
         }
@@ -332,22 +372,26 @@ export function SessionsPage() {
   };
 
   const canSend = Boolean(api && coreState === "online" && engagement && selectedProvider && model.trim() && draft.trim() && !sending);
+  const runnableLanguages = useMemo(() => new Set<ExecutionLanguage>(
+    executionCapabilities?.runtimes
+      .filter((runtime) => runtime.offline && runtime.scopedNetwork)
+      .map((runtime) => runtime.language) ?? [],
+  ), [executionCapabilities]);
 
   return (
     <div className="page sessions-page">
       <PageHeader
         eyebrow="Operator workspace"
         title="Sessions"
-        description="Human-operated terminals and cited analyst conversations stay separate from sandboxed tool calls."
-        actions={view === "terminal"
-          ? <button className="button primary" type="button" disabled={previewMode || health?.humanPty !== "ready"} onClick={() => setTerminalSessionId(makeId("human"))}><Plus size={16} /> New terminal</button>
-          : <button className="button primary" type="button" disabled={previewMode || !engagement} title={!engagement ? "Create or select an engagement before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button>}
+        description="Cited analyst chat, reviewed disposable code execution, durable history, and the engagement workspace share one controlled surface."
+        actions={view === "chat" ? <button className="button primary" type="button" disabled={previewMode || !engagement} title={!engagement ? "Create or select an engagement before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : undefined}
       />
 
       <div className="session-toolbar">
         <div className="session-tabs" role="tablist" aria-label="Session views">
-          <button type="button" role="tab" aria-selected={view === "terminal"} onClick={() => setView("terminal")}><SquareTerminal size={16} /> Human terminal</button>
           <button type="button" role="tab" aria-selected={view === "chat"} onClick={() => setView("chat")}><MessageSquare size={16} /> Analyst chat</button>
+          <button type="button" role="tab" aria-selected={view === "executions"} onClick={() => setView("executions")}><FileClock size={16} /> Executions</button>
+          <button type="button" role="tab" aria-selected={view === "workspace"} onClick={() => setView("workspace")}><FolderOpen size={16} /> Workspace</button>
         </div>
         {view === "chat" && <button className="session-mobile-list" type="button" aria-pressed={mobileListOpen} onClick={() => setMobileListOpen((value) => !value)}><MessageSquare size={15} /> {mobileListOpen ? "Current chat" : "Conversations"}</button>}
         <div className="session-scope"><ShieldCheck size={15} /> Human controlled · {engagement?.name ?? (previewMode ? "ACME-EXT preview" : "no engagement")}</div>
@@ -363,8 +407,12 @@ export function SessionsPage() {
           </nav>
         </aside>}
         <section className="session-workspace">
-          {view === "terminal" ? (
-            <TerminalPanel sessionId={terminalSessionId} transport={terminalTransport} />
+          {view === "executions" && api && engagement ? (
+            <ExecutionHistory api={api} engagementId={engagement.id} refreshKey={executionRefresh} onRerun={setRunCandidate} providers={providers} onChatAttached={openAttachedChat} />
+          ) : view === "workspace" && api && engagement ? (
+            <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} />
+          ) : view !== "chat" ? (
+            <div className="empty-state"><FolderOpen size={24} /><strong>Select an engagement</strong><p>Execution history and workspace files are engagement-scoped.</p></div>
           ) : (
             <div className="chat-panel">
               {!previewMode && <div className="chat-context-bar">
@@ -374,14 +422,14 @@ export function SessionsPage() {
               </div>}
               <div className="chat-scroll" ref={scrollRef} aria-live="polite">
                 {previewMode ? <>
-                  <article className="chat-message assistant"><span className="chat-avatar">N</span><div><header><strong>Nebula assistant</strong><span>19:07</span></header><p>I found two prior observations relevant to the gateway. Both are cited below; no command was executed.</p><span className="citation-chip"><Braces size={13} /> Observation #184 · Nmap import</span><span className="citation-chip"><Braces size={13} /> Advisory · CVE record</span></div></article>
+                  <article className="chat-message assistant"><span className="chat-avatar">N</span><div><header><strong>Nebula assistant</strong><span>19:07</span></header><AssistantMarkdown content="I found two prior observations relevant to the gateway. Both are cited below; no command was executed." durable={false} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /><span className="citation-chip"><Braces size={13} /> Observation #184 · Nmap import</span><span className="citation-chip"><Braces size={13} /> Advisory · CVE record</span></div></article>
                   <article className="chat-message operator"><span className="chat-avatar">JD</span><div><header><strong>You</strong><span>19:08</span></header><p>Summarize the applicability evidence and list what still needs independent verification.</p></div></article>
                 </> : loadingHistory ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? messages.map((message) => (
                   <article className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`} key={message.id}>
                     <span className="chat-avatar">{message.role === "user" ? "You" : "N"}</span>
-                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && <p>{message.content}</p>}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.detail && <p className="chat-message-error" role="alert">{message.detail}</p>}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
+                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.detail && <p className="chat-message-error" role="alert">{message.detail}</p>}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
                   </article>
-                )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Select a configured provider and exact model. Chat is analysis-only; executable tools stay disabled.</p></div>}
+                )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Chat is analysis-only. Commands remain inert fenced text until you choose Run and complete exact review.</p></div>}
               </div>
               {chatError && <p className="chat-error" role="alert">{chatError}</p>}
               <form className="chat-composer" onSubmit={(event) => void submit(event)}>
@@ -393,12 +441,13 @@ export function SessionsPage() {
           )}
         </section>
 
-        <aside className="session-inspector" aria-label="Session inspector">
+        {view === "chat" && <aside className="session-inspector" aria-label="Session inspector">
           <header><div><span>Context</span><strong>Session details</strong></div></header>
-          <dl><div><dt>Active operator</dt><dd>{previewMode ? "Jordan Diaz" : activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>{view === "chat" ? "Conversation" : "Terminal"}</dt><dd>{view === "chat" ? sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat" : terminalSessionId}</dd></div><div><dt>Provider</dt><dd>{view === "chat" ? selectedProvider?.name ?? "Not selected" : "Not applicable"}</dd></div><div><dt>Human PTY</dt><dd><span className={`status-dot ${health?.humanPty === "ready" ? "healthy" : "unavailable"}`} /> {health?.humanPty ?? "Core unavailable"}</dd></div></dl>
-          {view === "chat" ? <><section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"}</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section><section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Citations identify ingested chunks and open the matching source record. Chat cannot execute tools.</p></div></section></> : <section><h3>Human terminal boundary</h3><div className="empty-state mini"><SquareTerminal size={19} /><p>The terminal is human-operated and does not use a model provider or knowledge retrieval. Output is not evidence until explicitly captured.</p></div></section>}
-        </aside>
+          <dl><div><dt>Active operator</dt><dd>{previewMode ? "Jordan Diaz" : activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat"}</dd></div><div><dt>Provider</dt><dd>{selectedProvider?.name ?? "Not selected"}</dd></div><div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl>
+          <section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"}</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section><section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>Chat has no tools. A completed, persisted supported fence can be copied or separately reviewed for a disposable container.</p></div></section>
+        </aside>}
       </div>
+      {runCandidate && api && engagement && <ExecutionReviewDialog api={api} engagementId={engagement.id} candidate={runCandidate} capabilities={executionCapabilities} onClose={() => setRunCandidate(undefined)} onStarted={() => { setExecutionRefresh((value) => value + 1); setView("executions"); }} />}
     </div>
   );
 }

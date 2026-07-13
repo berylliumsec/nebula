@@ -23,6 +23,11 @@ team release.
   broker-owned DNS resolution, scope enforcement, and rootless OCI execution.
 - React/TypeScript workspace and Tauri shell with a loopback-only sidecar token
   handshake.
+- Reviewed assistant code execution in a fresh disposable Toolbox container,
+  with exact-source confirmation, offline or single-target scoped egress,
+  durable redacted history, and engagement workspace controls.
+- Deterministic server-rendered PDF reports, operator-triggered AI execution
+  notes, and integrity-manifested engagement bundle v2 export.
 
 ## Run the Core
 
@@ -130,6 +135,39 @@ Import records before/after checksums and does not write to the source folder.
 An external Chroma directory is skipped unless the operator supplies
 `--allow-external-knowledge` explicitly.
 
+The report workspace exports a saved report revision as a server-rendered PDF.
+The separate **Export engagement bundle (.nebula.zip)** action produces bundle
+format v2 with entity records, run and operation events, execution streams,
+generated drafts, report snapshots/PDFs, and their content-addressed artifacts.
+Bundles may contain unredacted evidence and raw execution output and are not
+described as backups because Nebula 3 does not yet provide a restore path.
+Scratch workspace files are excluded unless an operator promoted them to an
+artifact.
+
+## Reviewed code execution and workspace limits
+
+Nebula does not provide a host terminal. A supported completed assistant fence
+(`bash`/`shell`, `sh`, or `python`/`python3`/`py`) can be copied or sent through
+an exact review. Every run starts a new non-root container with fixed v1 limits:
+1 CPU, 512 MiB RAM, 128 PIDs, 300 seconds, and independent 2,000,000-byte stdout
+and stderr capture limits. The program has no interactive stdin. Only the
+engagement workspace is mounted at `/workspace`; containers are never resumed.
+
+Offline execution is the default. Scoped execution accepts one explicit
+policy-approved target and selected ports, resolves and pins its addresses at
+confirmation, and uses the per-invocation egress helper. Run is exposed as one
+release-gated feature only when both offline and scoped paths are ready. There
+is no bridge/host network mode, host shell fallback, or runtime socket exposed
+to the webview.
+
+The persistent scratch workspace is limited to 5 GiB total allocated data,
+50,000 entries, and 1 GiB per file. Core rejects an already-over-limit
+workspace before launch and terminates an execution that crosses a limit.
+These are application-enforced limits: portable bind mounts do not provide a
+universal filesystem hard quota. The browser is read-only; promotion copies
+and verifies exact bytes into immutable artifacts, while reset never follows
+symlinks and never removes promoted evidence.
+
 ## Tool safety model
 
 Operator setup, installation locations, CLI/API examples, extension authoring,
@@ -154,11 +192,28 @@ outputs, creates SBOM/provenance evidence and OCI signatures, and publishes an
 Ed25519-signed catalog. Nebula embeds only the Beryllium public trust key; never
 substitute example digests or commit the private release key.
 
+## Operator-workflow release verification
+
+CI exercises the migration upgrade/downgrade cycle and immutable operation
+ledger on SQLite and PostgreSQL, the raw code adapter in Linux Docker, a real
+rootless Podman execution with workspace persistence, macOS Docker Desktop and
+Podman Machine command/profile boundaries, the frozen-Core package audit, the
+UI accessibility/visual suite, and the full v3 backend suite.
+
+Before a release, manually smoke-test the signed digest-pinned Toolbox on
+Docker Desktop or a rootless Podman Machine. Confirm an offline run, a scoped
+single-target run and blocked out-of-scope connection, cancellation cleanup,
+Core-restart interruption, workspace promotion/reset, raw-output warning,
+Draft note/Discuss in chat, cached PDF export, and sensitive bundle v2 export.
+The release is blocked if Run appears without both execution modes, a runtime
+socket or host terminal reaches the webview, or any runner failure falls back
+to host execution.
+
 ## Current release boundary
 
 This developer preview is the Phase 0/1 foundation plus a connected Phase 2 UI
 shell. PostgreSQL team authorization, OIDC/RBAC, remote workers, full scanner
-normalization, production report rendering, generated-client drift enforcement,
+normalization, generated-client drift enforcement, report signing/design tools,
 MCP/A2A, signed plugins, and advanced specialist environments remain release-gated.
 
 Nebula 2 remains a separately triggered legacy distribution. Its PyQt licensing

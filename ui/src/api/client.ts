@@ -11,16 +11,25 @@ import type {
   ChatStreamEvent,
   EngagementSummary,
   EngagementCreateRequest,
+  ExecutionCapabilities,
+  ExecutionChatAttachment,
+  ExecutionOutputPage,
+  ExecutionPreflight,
+  ExecutionRequest,
   EvidenceSummary,
   EvidenceUploadRequest,
   EngagementScopePolicy,
   EngagementScopeUpdateRequest,
   FindingCreateRequest,
   FindingSummary,
+  GeneratedDraft,
+  GeneratedDraftContent,
   HealthResponse,
   KnowledgeIngestRequest,
   KnowledgeSource,
   MissionCreateRequest,
+  OperatorExecution,
+  ObservationSummary,
   OperatorProfile,
   OperatorProfileCreateRequest,
   OperatorProfileUpdateRequest,
@@ -32,6 +41,7 @@ import type {
   ProviderRuntimeHealth,
   ProviderUpdateRequest,
   ReportCreateRequest,
+  ReportRender,
   ReportSummary,
   ReportUpdateRequest,
   RunStopRequest,
@@ -42,6 +52,9 @@ import type {
   ToolPackCatalogEntry,
   ToolPackInstallation,
   ToolSummary,
+  WorkspaceListing,
+  WorkspacePreview,
+  WorkspaceResetResult,
 } from "./types";
 
 type JsonObject = Record<string, unknown>;
@@ -120,10 +133,59 @@ interface WireReport extends WireEntity {
   status: string;
   executive_summary?: string;
   finding_ids?: string[];
+  observation_ids?: string[];
   artifact_ids?: string[];
   signed_off_by?: string | null;
   signed_off_at?: string | null;
   metadata?: JsonObject;
+}
+
+interface WireObservation extends WireEntity {
+  engagement_id: string;
+  observation_type: string;
+  title: string;
+  body?: string;
+  evidence_ids?: string[];
+}
+
+interface WireReportRender extends WireEntity {
+  engagement_id: string;
+  report_id: string;
+  report_revision: number;
+  input_fingerprint: string;
+  template_version: string;
+  renderer_version: string;
+  status: ReportRender["status"];
+  warnings?: string[];
+  generated_at?: string | null;
+  error_detail?: string | null;
+}
+
+interface WireGeneratedDraft extends WireEntity {
+  engagement_id: string;
+  execution_id: string;
+  provider_profile_id: string;
+  model: string;
+  prompt_version: string;
+  context_fingerprint: string;
+  status: GeneratedDraft["status"];
+  content?: {
+    title: string;
+    summary?: string;
+    observations?: string[];
+    potential_findings?: Array<{ title: string; rationale?: string }>;
+    evidence_ids?: string[];
+  } | null;
+  observation_id?: string | null;
+  provider_request_id?: string | null;
+  error_detail?: string | null;
+  metadata?: JsonObject;
+}
+
+interface WireExecutionChatAttachment extends JsonObject {
+  session: { id: string };
+  context_fingerprint: string;
+  categories: string[];
 }
 
 interface WireEvidence extends WireEntity {
@@ -133,6 +195,7 @@ interface WireEvidence extends WireEntity {
   description?: string;
   artifact_id?: string | null;
   finding_id?: string | null;
+  execution_id?: string | null;
   asset_ids?: string[];
   sha256?: string | null;
   captured_at: string;
@@ -212,7 +275,7 @@ interface WireChatCompletion extends JsonObject {
   session_id?: string | null;
   provider_id: string;
   model: string;
-  message: { role: "assistant"; content: string };
+  message: { id?: string | null; role: "assistant"; content: string };
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -256,6 +319,134 @@ interface WirePersistedChatMessage extends WireEntity {
   provider_request_id?: string | null;
   citations?: WireChatCitation[];
   metadata?: JsonObject;
+}
+
+interface WireExecutionLimits extends JsonObject {
+  cpu_count: number;
+  memory_mb: number;
+  pids: number;
+  timeout_seconds: number;
+  output_bytes_per_stream: number;
+}
+
+interface WireExecutionRuntime extends JsonObject {
+  language: "bash" | "sh" | "python";
+  interpreter: string;
+  arguments?: string[];
+  tool_pack_installation_id: string;
+  manifest_digest: string;
+  image: string;
+  runner_profile_id: string;
+  runner_profile_revision: number;
+  runner_runtime: "docker" | "podman";
+  runner_isolation: string;
+  runner_executable: string;
+  runner_platform: string;
+  runner_context?: string | null;
+  runner_socket?: string | null;
+  trusted: boolean;
+}
+
+interface WireExecutionNetwork extends JsonObject {
+  mode: "none" | "scoped";
+  target?: string | null;
+  ports?: number[];
+  resolved_addresses?: string[];
+  scope_policy_id?: string | null;
+  scope_policy_revision?: number | null;
+}
+
+interface WireExecutionOrigin extends JsonObject {
+  kind: "assistant_message" | "rerun";
+  message_id?: string | null;
+  block_ordinal?: number | null;
+  block_sha256?: string | null;
+  selection_start_byte?: number | null;
+  selection_end_byte?: number | null;
+  execution_id?: string | null;
+}
+
+interface WireOperatorExecution extends WireEntity {
+  engagement_id: string;
+  operator_id: string;
+  origin: WireExecutionOrigin;
+  language: "bash" | "sh" | "python";
+  source_sha256: string;
+  source_artifact_id: string;
+  source_preview?: string;
+  runtime: WireExecutionRuntime;
+  network: WireExecutionNetwork;
+  limits: WireExecutionLimits;
+  workspace: "/workspace";
+  policy_decision: string;
+  status: OperatorExecution["status"];
+  error_code?: string | null;
+  error_detail?: string | null;
+  queued_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  exit_code?: number | null;
+  output_truncated?: boolean;
+  evidence_id?: string | null;
+  workspace_changes?: Array<{
+    path: string;
+    change: "added" | "modified" | "deleted";
+    size?: number | null;
+  }>;
+}
+
+interface WireExecutionPreflight extends JsonObject {
+  allowed: boolean;
+  error_code?: string | null;
+  detail: string;
+  canonical_language?: "bash" | "sh" | "python" | null;
+  source_sha256?: string | null;
+  runtime?: WireExecutionRuntime | null;
+  network?: WireExecutionNetwork | null;
+  limits: WireExecutionLimits;
+  workspace: "/workspace";
+  policy_rule?: string | null;
+  preview_fingerprint?: string | null;
+  preview_token?: string | null;
+  expires_at?: string | null;
+}
+
+interface WireExecutionCapabilities extends JsonObject {
+  engagement_id: string;
+  ready: boolean;
+  runtimes: Array<{
+    language: "bash" | "sh" | "python";
+    aliases: string[];
+    offline: boolean;
+    scoped_network: boolean;
+    detail?: string | null;
+  }>;
+  limits: WireExecutionLimits;
+  workspace: "/workspace";
+}
+
+interface WireWorkspaceListing extends JsonObject {
+  engagement_id: string;
+  path: string;
+  entries: Array<{
+    path: string;
+    name: string;
+    kind: "file" | "directory" | "symlink" | "other";
+    size: number;
+    modified_at: string;
+  }>;
+  offset: number;
+  next_offset?: number | null;
+  total: number;
+}
+
+interface WireWorkspacePreview extends JsonObject {
+  engagement_id: string;
+  path: string;
+  text: string;
+  bytes_returned: number;
+  truncated: boolean;
+  preview_sha256: string;
 }
 
 interface WireToolPackCatalogEntry extends JsonObject {
@@ -584,12 +775,84 @@ function mapReport(value: WireReport): ReportSummary {
     status: value.status,
     executiveSummary: value.executive_summary ?? "",
     findingIds: value.finding_ids ?? [],
+    observationIds: value.observation_ids ?? [],
     artifactIds: value.artifact_ids ?? [],
     signedOffBy: value.signed_off_by ?? undefined,
     signedOffAt: value.signed_off_at ?? undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     revision: value.revision,
+  };
+}
+
+function mapObservation(value: WireObservation): ObservationSummary {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    observationType: value.observation_type,
+    title: value.title,
+    body: value.body ?? "",
+    evidenceIds: value.evidence_ids ?? [],
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  };
+}
+
+function mapReportRender(value: WireReportRender): ReportRender {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    reportId: value.report_id,
+    reportRevision: value.report_revision,
+    inputFingerprint: value.input_fingerprint,
+    templateVersion: value.template_version,
+    rendererVersion: value.renderer_version,
+    status: value.status,
+    warnings: value.warnings ?? [],
+    generatedAt: value.generated_at ?? undefined,
+    errorDetail: value.error_detail ?? undefined,
+    revision: value.revision,
+  };
+}
+
+function mapGeneratedDraft(value: WireGeneratedDraft): GeneratedDraft {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    executionId: value.execution_id,
+    providerProfileId: value.provider_profile_id,
+    model: value.model,
+    promptVersion: value.prompt_version,
+    contextFingerprint: value.context_fingerprint,
+    status: value.status,
+    content: value.content ? {
+      title: value.content.title,
+      summary: value.content.summary ?? "",
+      observations: value.content.observations ?? [],
+      potentialFindings: (value.content.potential_findings ?? []).map((item) => ({
+        title: item.title,
+        rationale: item.rationale ?? "",
+      })),
+      evidenceIds: value.content.evidence_ids ?? [],
+    } : undefined,
+    observationId: value.observation_id ?? undefined,
+    providerRequestId: value.provider_request_id ?? undefined,
+    errorDetail: value.error_detail ?? undefined,
+    metadata: value.metadata ?? {},
+    revision: value.revision,
+  };
+}
+
+function wireDraftContent(content: GeneratedDraftContent): JsonObject {
+  return {
+    title: content.title,
+    summary: content.summary,
+    observations: content.observations,
+    potential_findings: content.potentialFindings.map((item) => ({
+      title: item.title,
+      rationale: item.rationale,
+    })),
+    evidence_ids: content.evidenceIds,
   };
 }
 
@@ -603,6 +866,7 @@ function mapEvidence(value: WireEvidence): EvidenceSummary {
     description: value.description ?? "",
     artifactId: value.artifact_id ?? undefined,
     findingId: value.finding_id ?? undefined,
+    executionId: value.execution_id ?? undefined,
     assetIds: value.asset_ids ?? [],
     sha256: value.sha256 ?? undefined,
     capturedAt: value.captured_at,
@@ -754,7 +1018,11 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
     sessionId: value.session_id ?? undefined,
     providerId: value.provider_id,
     model: value.model,
-    message: value.message,
+    message: {
+      id: value.message.id ?? undefined,
+      role: value.message.role,
+      content: value.message.content,
+    },
     usage: {
       inputTokens,
       outputTokens,
@@ -765,6 +1033,159 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
     finishReason: value.finish_reason ?? undefined,
     providerRequestId: value.provider_request_id ?? undefined,
     citations: (value.citations ?? []).map(mapChatCitation),
+  };
+}
+
+function mapExecutionLimits(value: WireExecutionLimits) {
+  return {
+    cpuCount: value.cpu_count,
+    memoryMb: value.memory_mb,
+    pids: value.pids,
+    timeoutSeconds: value.timeout_seconds,
+    outputBytesPerStream: value.output_bytes_per_stream,
+  };
+}
+
+function mapExecutionRuntime(value: WireExecutionRuntime) {
+  return {
+    language: value.language,
+    interpreter: value.interpreter,
+    arguments: value.arguments ?? [],
+    toolPackInstallationId: value.tool_pack_installation_id,
+    manifestDigest: value.manifest_digest,
+    image: value.image,
+    runnerProfileId: value.runner_profile_id,
+    runnerProfileRevision: value.runner_profile_revision,
+    runnerRuntime: value.runner_runtime,
+    runnerIsolation: value.runner_isolation,
+    runnerExecutable: value.runner_executable,
+    runnerPlatform: value.runner_platform,
+    runnerContext: value.runner_context ?? undefined,
+    runnerSocket: value.runner_socket ?? undefined,
+    trusted: value.trusted,
+  };
+}
+
+function mapExecutionNetwork(value: WireExecutionNetwork) {
+  return {
+    mode: value.mode,
+    target: value.target ?? undefined,
+    ports: value.ports ?? [],
+    resolvedAddresses: value.resolved_addresses ?? [],
+    scopePolicyId: value.scope_policy_id ?? undefined,
+    scopePolicyRevision: value.scope_policy_revision ?? undefined,
+  };
+}
+
+function mapExecutionOrigin(value: WireExecutionOrigin) {
+  return {
+    kind: value.kind,
+    messageId: value.message_id ?? undefined,
+    blockOrdinal: value.block_ordinal ?? undefined,
+    blockSha256: value.block_sha256 ?? undefined,
+    selectionStartByte: value.selection_start_byte ?? undefined,
+    selectionEndByte: value.selection_end_byte ?? undefined,
+    executionId: value.execution_id ?? undefined,
+  };
+}
+
+function mapOperatorExecution(value: WireOperatorExecution): OperatorExecution {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    operatorId: value.operator_id,
+    origin: mapExecutionOrigin(value.origin),
+    language: value.language,
+    sourceSha256: value.source_sha256,
+    sourceArtifactId: value.source_artifact_id,
+    sourcePreview: value.source_preview ?? "",
+    runtime: mapExecutionRuntime(value.runtime),
+    network: mapExecutionNetwork(value.network),
+    limits: mapExecutionLimits(value.limits),
+    workspace: value.workspace,
+    policyDecision: value.policy_decision,
+    status: value.status,
+    errorCode: value.error_code ?? undefined,
+    errorDetail: value.error_detail ?? undefined,
+    queuedAt: value.queued_at,
+    startedAt: value.started_at ?? undefined,
+    completedAt: value.completed_at ?? undefined,
+    exitCode: value.exit_code ?? undefined,
+    outputTruncated: value.output_truncated === true,
+    evidenceId: value.evidence_id ?? undefined,
+    workspaceChanges: (value.workspace_changes ?? []).map((change) => ({
+      path: change.path,
+      change: change.change,
+      size: change.size ?? undefined,
+    })),
+  };
+}
+
+function mapExecutionPreflight(value: WireExecutionPreflight): ExecutionPreflight {
+  return {
+    allowed: value.allowed,
+    errorCode: value.error_code ?? undefined,
+    detail: value.detail,
+    canonicalLanguage: value.canonical_language ?? undefined,
+    sourceSha256: value.source_sha256 ?? undefined,
+    runtime: value.runtime ? mapExecutionRuntime(value.runtime) : undefined,
+    network: value.network ? mapExecutionNetwork(value.network) : undefined,
+    limits: mapExecutionLimits(value.limits),
+    workspace: value.workspace,
+    policyRule: value.policy_rule ?? undefined,
+    previewFingerprint: value.preview_fingerprint ?? undefined,
+    previewToken: value.preview_token ?? undefined,
+    expiresAt: value.expires_at ?? undefined,
+  };
+}
+
+function executionBody(value: ExecutionRequest): JsonObject {
+  return {
+    engagement_id: value.engagementId,
+    language: value.language,
+    source: value.source,
+    origin: {
+      kind: value.origin.kind,
+      message_id: value.origin.messageId,
+      block_ordinal: value.origin.blockOrdinal,
+      block_sha256: value.origin.blockSha256,
+      selection_start_byte: value.origin.selectionStartByte,
+      selection_end_byte: value.origin.selectionEndByte,
+      execution_id: value.origin.executionId,
+    },
+    network: {
+      mode: value.network.mode,
+      target: value.network.target,
+      ports: value.network.ports,
+    },
+  };
+}
+
+function mapWorkspaceListing(value: WireWorkspaceListing): WorkspaceListing {
+  return {
+    engagementId: value.engagement_id,
+    path: value.path,
+    entries: value.entries.map((entry) => ({
+      path: entry.path,
+      name: entry.name,
+      kind: entry.kind,
+      size: entry.size,
+      modifiedAt: entry.modified_at,
+    })),
+    offset: value.offset,
+    nextOffset: value.next_offset ?? undefined,
+    total: value.total,
+  };
+}
+
+function mapWorkspacePreview(value: WireWorkspacePreview): WorkspacePreview {
+  return {
+    engagementId: value.engagement_id,
+    path: value.path,
+    text: value.text,
+    bytesReturned: value.bytes_returned,
+    truncated: value.truncated,
+    previewSha256: value.preview_sha256,
   };
 }
 
@@ -1037,14 +1458,12 @@ export class ApiClient {
       Partial<HealthResponse> & {
         api_version?: string;
         dialect?: string;
-        human_pty?: HealthResponse["humanPty"];
       }
     >("health", { signal }).then((health) => ({
       status: health.status === "degraded" ? "degraded" : "ok",
       version: health.version ?? health.api_version ?? "unknown",
       mode: health.mode ?? (health.dialect?.startsWith("postgres") ? "team" : "local"),
       runner: health.runner ?? "unavailable",
-      humanPty: health.humanPty ?? health.human_pty ?? "unavailable",
     }));
   }
 
@@ -1373,6 +1792,7 @@ export class ApiClient {
         status: body.status ?? "draft",
         executive_summary: body.executiveSummary ?? "",
         finding_ids: body.findingIds ?? [],
+        observation_ids: body.observationIds ?? [],
         artifact_ids: [],
         metadata: {},
       }),
@@ -1389,9 +1809,54 @@ export class ApiClient {
           ...(body.status === undefined ? {} : { status: body.status }),
           ...(body.executiveSummary === undefined ? {} : { executive_summary: body.executiveSummary }),
           ...(body.findingIds === undefined ? {} : { finding_ids: body.findingIds }),
+          ...(body.observationIds === undefined ? {} : { observation_ids: body.observationIds }),
         },
       }),
     }).then(mapReport);
+  }
+
+  listObservations(engagementId: string, signal?: AbortSignal): Promise<Page<ObservationSummary>> {
+    return this.listAll<WireObservation>("observations", signal, engagementId)
+      .then((items) => page(items.map(mapObservation)));
+  }
+
+  renderReport(id: string, reportRevision: number): Promise<ReportRender> {
+    return this.request<WireReportRender>(`reports/${encodeURIComponent(id)}/renders`, {
+      method: "POST",
+      body: JSON.stringify({ report_revision: reportRevision }),
+    }).then(mapReportRender);
+  }
+
+  getReportRender(id: string, signal?: AbortSignal): Promise<ReportRender> {
+    return this.request<WireReportRender>(`report-renders/${encodeURIComponent(id)}`, { signal })
+      .then(mapReportRender);
+  }
+
+  async downloadReportPdf(id: string, signal?: AbortSignal): Promise<Blob> {
+    const headers = new Headers({ Accept: "application/pdf" });
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/report-renders/${encodeURIComponent(id)}/pdf`,
+      { headers, signal, credentials: "same-origin" },
+    );
+    if (!response.ok) throw await responseError(response);
+    return response.blob();
+  }
+
+  async exportEngagementBundle(engagementId: string, signal?: AbortSignal): Promise<Blob> {
+    const headers = new Headers({
+      Accept: "application/zip",
+      "X-Nebula-Sensitive-Data-Acknowledged": "true",
+    });
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/engagements/${encodeURIComponent(engagementId)}/export-bundle`,
+      { method: "POST", headers, signal, credentials: "same-origin" },
+    );
+    if (!response.ok) throw await responseError(response);
+    return response.blob();
   }
 
   listProviders(signal?: AbortSignal): Promise<Page<ProviderHealth>> {
@@ -1530,6 +1995,231 @@ export class ApiClient {
     if (token) headers.set("Authorization", `Bearer ${token}`);
     const response = await this.fetchImpl(
       `${this.baseUrl}/artifacts/${encodeURIComponent(id)}/content`,
+      { headers, signal, credentials: "same-origin" },
+    );
+    if (!response.ok) throw await responseError(response);
+    return response.blob();
+  }
+
+  executionCapabilities(engagementId: string, signal?: AbortSignal): Promise<ExecutionCapabilities> {
+    return this.request<WireExecutionCapabilities>(
+      `engagements/${encodeURIComponent(engagementId)}/execution-capabilities`,
+      { signal },
+    ).then((value) => ({
+      engagementId: value.engagement_id,
+      ready: value.ready,
+      runtimes: value.runtimes.map((runtime) => ({
+        language: runtime.language,
+        aliases: runtime.aliases,
+        offline: runtime.offline,
+        scopedNetwork: runtime.scoped_network,
+        detail: runtime.detail ?? undefined,
+      })),
+      limits: mapExecutionLimits(value.limits),
+      workspace: value.workspace,
+    }));
+  }
+
+  preflightExecution(body: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionPreflight> {
+    return this.request<WireExecutionPreflight>("executions/preflight", {
+      method: "POST",
+      signal,
+      body: JSON.stringify(executionBody(body)),
+    }).then(mapExecutionPreflight);
+  }
+
+  startExecution(
+    body: ExecutionRequest,
+    preview: Pick<ExecutionPreflight, "previewToken" | "previewFingerprint">,
+    clientIdempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<OperatorExecution> {
+    return this.request<WireOperatorExecution>("executions", {
+      method: "POST",
+      signal,
+      body: JSON.stringify({
+        ...executionBody(body),
+        preview_token: preview.previewToken,
+        preview_fingerprint: preview.previewFingerprint,
+        client_idempotency_key: clientIdempotencyKey,
+      }),
+    }).then(mapOperatorExecution);
+  }
+
+  listExecutions(
+    engagementId: string,
+    options: { offset?: number; limit?: number; status?: string; language?: string; operatorId?: string; dateFrom?: string; dateTo?: string; query?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<Page<OperatorExecution>> {
+    const parameters = new URLSearchParams({
+      offset: String(options.offset ?? 0),
+      limit: String(options.limit ?? 100),
+    });
+    if (options.status) parameters.set("status", options.status);
+    if (options.language) parameters.set("language", options.language);
+    if (options.operatorId) parameters.set("operator_id", options.operatorId);
+    if (options.dateFrom) parameters.set("date_from", options.dateFrom);
+    if (options.dateTo) parameters.set("date_to", options.dateTo);
+    if (options.query) parameters.set("query", options.query);
+    return this.request<WireOperatorExecution[]>(
+      `engagements/${encodeURIComponent(engagementId)}/executions?${parameters}`,
+      { signal },
+    ).then((items) => page(items.map(mapOperatorExecution)));
+  }
+
+  getExecution(id: string, signal?: AbortSignal): Promise<OperatorExecution> {
+    return this.request<WireOperatorExecution>(`executions/${encodeURIComponent(id)}`, { signal })
+      .then(mapOperatorExecution);
+  }
+
+  cancelExecution(id: string, signal?: AbortSignal): Promise<OperatorExecution> {
+    return this.request<WireOperatorExecution>(`executions/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+      signal,
+    }).then(mapOperatorExecution);
+  }
+
+  generateExecutionDraft(
+    executionId: string,
+    providerId: string,
+    model: string,
+    cloudConfirmed: boolean,
+  ): Promise<GeneratedDraft> {
+    return this.request<WireGeneratedDraft>(
+      `executions/${encodeURIComponent(executionId)}/draft-notes`,
+      {
+        method: "POST",
+        body: JSON.stringify({ provider_id: providerId, model, cloud_confirmed: cloudConfirmed }),
+      },
+    ).then(mapGeneratedDraft);
+  }
+
+  getGeneratedDraft(id: string, signal?: AbortSignal): Promise<GeneratedDraft> {
+    return this.request<WireGeneratedDraft>(`generated-drafts/${encodeURIComponent(id)}`, { signal })
+      .then(mapGeneratedDraft);
+  }
+
+  editGeneratedDraft(
+    id: string,
+    content: GeneratedDraftContent,
+    expectedRevision: number,
+  ): Promise<GeneratedDraft> {
+    return this.request<WireGeneratedDraft>(`generated-drafts/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ content: wireDraftContent(content), expected_revision: expectedRevision }),
+    }).then(mapGeneratedDraft);
+  }
+
+  transitionGeneratedDraft(
+    id: string,
+    transition: "accept" | "reject",
+    expectedRevision: number,
+  ): Promise<GeneratedDraft> {
+    return this.request<WireGeneratedDraft>(
+      `generated-drafts/${encodeURIComponent(id)}/${transition}`,
+      { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }) },
+    ).then(mapGeneratedDraft);
+  }
+
+  attachExecutionToChat(
+    executionId: string,
+    providerId: string,
+    model: string,
+    cloudConfirmed: boolean,
+  ): Promise<ExecutionChatAttachment> {
+    return this.request<WireExecutionChatAttachment>(
+      `executions/${encodeURIComponent(executionId)}/chat-attachments`,
+      {
+        method: "POST",
+        body: JSON.stringify({ provider_id: providerId, model, cloud_confirmed: cloudConfirmed }),
+      },
+    ).then((value) => ({
+      sessionId: value.session.id,
+      contextFingerprint: value.context_fingerprint,
+      categories: value.categories,
+    }));
+  }
+
+  async executionOutput(
+    id: string,
+    stream: "stdout" | "stderr",
+    offset = 0,
+    signal?: AbortSignal,
+  ): Promise<ExecutionOutputPage> {
+    const headers = new Headers({ Accept: "text/plain" });
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/executions/${encodeURIComponent(id)}/output/${stream}?offset=${offset}&limit=${256 * 1024}`,
+      { headers, signal, credentials: "same-origin" },
+    );
+    if (!response.ok) throw await responseError(response);
+    return {
+      text: await response.text(),
+      totalBytes: Number(response.headers.get("x-nebula-output-total") ?? 0),
+      nextOffset: Number(response.headers.get("x-nebula-output-next") ?? offset),
+    };
+  }
+
+  listWorkspace(
+    engagementId: string,
+    path = "",
+    offset = 0,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceListing> {
+    const parameters = new URLSearchParams({ path, offset: String(offset), limit: "100" });
+    return this.request<WireWorkspaceListing>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace?${parameters}`,
+      { signal },
+    ).then(mapWorkspaceListing);
+  }
+
+  previewWorkspaceFile(
+    engagementId: string,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<WorkspacePreview> {
+    return this.request<WireWorkspacePreview>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/preview?path=${encodeURIComponent(path)}`,
+      { signal },
+    ).then(mapWorkspacePreview);
+  }
+
+  promoteWorkspaceFile(
+    engagementId: string,
+    path: string,
+    title?: string,
+    description?: string,
+  ): Promise<EvidenceSummary> {
+    return this.request<WireEvidence>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/promote`,
+      {
+        method: "POST",
+        body: JSON.stringify({ path, title, description: description ?? "" }),
+      },
+    ).then(mapEvidence);
+  }
+
+  resetWorkspace(engagementId: string, engagementName: string): Promise<WorkspaceResetResult> {
+    return this.request<{ engagement_id: string; removed_entries: number }>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/reset`,
+      { method: "POST", body: JSON.stringify({ engagement_name: engagementName }) },
+    ).then((value) => ({
+      engagementId: value.engagement_id,
+      removedEntries: value.removed_entries,
+    }));
+  }
+
+  async downloadWorkspaceFile(
+    engagementId: string,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const headers = new Headers({ Accept: "*/*" });
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/engagements/${encodeURIComponent(engagementId)}/workspace/download?path=${encodeURIComponent(path)}`,
       { headers, signal, credentials: "same-origin" },
     );
     if (!response.ok) throw await responseError(response);

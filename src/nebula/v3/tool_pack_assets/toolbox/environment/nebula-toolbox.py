@@ -6,8 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -397,12 +400,85 @@ def _parser() -> argparse.ArgumentParser:
     shell.add_argument("--target")
     shell.add_argument("--ports-json")
     shell.add_argument("--script", required=True)
+    code = subparsers.add_parser("code")
+    code.add_argument("--language", choices=("bash", "sh", "python"), required=True)
     return parser
+
+
+def _execute_code(language: str) -> int:
+    """Run reviewed UTF-8 source with fixed argv and no interactive stdin."""
+
+    source = sys.stdin.buffer.read(200_001)
+    if not source:
+        raise ValueError("code source cannot be empty")
+    if len(source) > 200_000:
+        raise ValueError("code source exceeds 200000 bytes")
+    source.decode("utf-8", errors="strict")
+    suffix = ".py" if language == "python" else ".sh"
+    descriptor, name = tempfile.mkstemp(prefix="nebula-code-", suffix=suffix)
+    path = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(source)
+            stream.flush()
+            os.fsync(stream.fileno())
+        path.chmod(0o400)
+        commands = {
+            "bash": [
+                "/bin/bash",
+                "--noprofile",
+                "--norc",
+                "-eu",
+                "-o",
+                "pipefail",
+                str(path),
+            ],
+            "sh": [
+                "/bin/bash",
+                "--noprofile",
+                "--norc",
+                "--posix",
+                "-eu",
+                "-o",
+                "pipefail",
+                str(path),
+            ],
+            "python": [
+                "/opt/nebula/venv/bin/python",
+                "-E",
+                "-s",
+                "-u",
+                str(path),
+            ],
+        }
+        environment = {
+            "HOME": "/tmp",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PATH": "/opt/nebula/venv/bin:/opt/nebula/nmap/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
+            "NEBULA_TARGET": os.getenv("NEBULA_TARGET", ""),
+            "NEBULA_PORTS": os.getenv("NEBULA_PORTS", "[]"),
+            "NUCLEI_TEMPLATES": "/opt/nebula/nuclei-templates",
+            "SEMGREP_ENABLE_VERSION_CHECK": "0",
+            "SEMGREP_SEND_METRICS": "off",
+        }
+        completed = subprocess.run(
+            commands[language],
+            cwd="/workspace",
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+        return int(completed.returncode)
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
     try:
         options = _parser().parse_args(argv)
+        if options.operation == "code":
+            return _execute_code(options.language)
         index = _load_catalog()
         if options.operation == "search":
             query = options.query.casefold()

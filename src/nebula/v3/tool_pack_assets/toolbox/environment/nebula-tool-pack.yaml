@@ -30,6 +30,25 @@ permissions:
   network: true
   workspace: workspace_write
   credentials: []
+operator_runtimes:
+- language: bash
+  aliases: [bash, shell]
+  image: toolbox
+  adapter: /opt/nebula/bin/nebula-toolbox
+  interpreter: /bin/bash
+  arguments: [--noprofile, --norc, -eu, -o, pipefail]
+- language: sh
+  aliases: [sh]
+  image: toolbox
+  adapter: /opt/nebula/bin/nebula-toolbox
+  interpreter: /bin/bash
+  arguments: [--noprofile, --norc, --posix, -eu, -o, pipefail]
+- language: python
+  aliases: [python, python3, py]
+  image: toolbox
+  adapter: /opt/nebula/bin/nebula-toolbox
+  interpreter: /opt/nebula/venv/bin/python
+  arguments: [-E, -s, -u]
 tools:
 - name: environment.search
   description: Search exact-version interfaces and the runtime executable inventory.
