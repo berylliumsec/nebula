@@ -26,7 +26,11 @@ from nebula.v3.domain import (
 )
 from nebula.v3.sandbox import PreparedContainerImage
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tool_platform import ToolPlatform, ToolPlatformError, default_tool_platform
+from nebula.v3.tool_platform import (
+    ToolPlatform,
+    ToolPlatformError,
+    default_tool_platform,
+)
 from nebula.v3.toolpacks import (
     CatalogLoadResult,
     Ed25519Keyring,
@@ -829,9 +833,7 @@ def test_human_terminal_image_is_prepared_once_per_runner_revision(
             assert kwargs["source_reference"] == (
                 "docker.io/kalilinux/kali-rolling:latest"
             )
-            assert kwargs["expected_repository"] == (
-                "docker.io/kalilinux/kali-rolling"
-            )
+            assert kwargs["expected_repository"] == ("docker.io/kalilinux/kali-rolling")
 
         async def prepare(self):
             nonlocal calls

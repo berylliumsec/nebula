@@ -741,7 +741,7 @@ def create_app(
             "runner": "unavailable",
             # Compatibility field; the host-backed terminal implementation is gone.
             "human_pty": "unavailable",
-            # This is a reviewed OCI-container terminal, never the legacy host PTY.
+            # This is the human-operated Kali container, never the legacy host PTY.
             "container_terminal": (
                 "configured" if container_terminals is not None else "unavailable"
             ),

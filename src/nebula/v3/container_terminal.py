@@ -1,4 +1,4 @@
-"""Reviewed, ephemeral interactive terminals in the approved Toolbox container."""
+"""Ephemeral human-operated terminals in the fixed official Kali container."""
 
 from __future__ import annotations
 

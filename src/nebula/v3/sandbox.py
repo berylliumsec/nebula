@@ -295,7 +295,9 @@ class SandboxRequest(BaseModel):
             if self.container_user != SandboxContainerUser.NON_ROOT:
                 raise ValueError("only human terminals may use the container root user")
             if self.root_filesystem != SandboxRootFilesystem.READ_ONLY:
-                raise ValueError("only human terminals may use a writable root filesystem")
+                raise ValueError(
+                    "only human terminals may use a writable root filesystem"
+                )
         if (
             self.execution_kind == SandboxExecutionKind.PARSER
             and self.workspace_access
@@ -1379,7 +1381,9 @@ class ContainerImagePreparer:
         pull_timeout_seconds: int = 900,
     ) -> None:
         if platform not in {"linux/amd64", "linux/arm64"}:
-            raise ValueError("container image platform must be linux/amd64 or linux/arm64")
+            raise ValueError(
+                "container image platform must be linux/amd64 or linux/arm64"
+            )
         if pull_timeout_seconds < 1 or pull_timeout_seconds > 3600:
             raise ValueError("pull timeout must be between 1 and 3600 seconds")
         if runner.profile is None:
@@ -1388,7 +1392,9 @@ class ContainerImagePreparer:
             r"[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+:[A-Za-z0-9_.-]+",
             source_reference,
         ):
-            raise ValueError("container image source must be a fully qualified tagged image")
+            raise ValueError(
+                "container image source must be a fully qualified tagged image"
+            )
         if "@" in expected_repository or ":" in expected_repository.rsplit("/", 1)[-1]:
             raise ValueError("expected image repository cannot contain a tag or digest")
         if _normalized_repository(expected_repository) != expected_repository:
@@ -1416,7 +1422,9 @@ class ContainerImagePreparer:
             if return_code == 0:
                 refreshed = True
             else:
-                pull_detail = (stderr.strip() or stdout.strip() or str(return_code))[:1000]
+                pull_detail = (stderr.strip() or stdout.strip() or str(return_code))[
+                    :1000
+                ]
         except (OSError, SandboxError) as exc:
             pull_detail = str(exc)[:1000]
 
@@ -1429,7 +1437,9 @@ class ContainerImagePreparer:
             timeout_seconds=30,
         )
         if return_code != 0:
-            inspect_detail = (stderr.strip() or stdout.strip() or str(return_code))[:1000]
+            inspect_detail = (stderr.strip() or stdout.strip() or str(return_code))[
+                :1000
+            ]
             if pull_detail:
                 raise SandboxUnavailable(
                     f"Kali image pull failed ({pull_detail}); no verified cached image is available ({inspect_detail})"
@@ -1440,7 +1450,9 @@ class ContainerImagePreparer:
         try:
             document = _first_document(json.loads(stdout))
         except json.JSONDecodeError as exc:
-            raise SandboxUnavailable("Kali image inspection returned invalid JSON") from exc
+            raise SandboxUnavailable(
+                "Kali image inspection returned invalid JSON"
+            ) from exc
 
         repo_digests = _mapping_get(document, "RepoDigests", "repoDigests")
         matching: list[str] = []
@@ -1471,7 +1483,9 @@ class ContainerImagePreparer:
         config = _mapping_get(document, "Config", "config")
         user = _mapping_get(config, "User", "user")
         if not isinstance(user, str):
-            raise SandboxUnavailable("Kali image did not declare a valid container config")
+            raise SandboxUnavailable(
+                "Kali image did not declare a valid container config"
+            )
         return PreparedContainerImage(
             source_reference=self.source_reference,
             resolved_reference=f"{self.expected_repository}@{digest}",

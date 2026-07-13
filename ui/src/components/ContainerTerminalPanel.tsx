@@ -210,7 +210,7 @@ export function ContainerTerminalPanel({ api, engagementId, engagementName }: Co
   return <div className="container-terminal-panel">
     <section className="container-terminal-intro">
       <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
-      <div><small>Automatic human-operated Kali shell</small><h2>Terminal</h2><p>A fresh official minimal Kali Rolling container starts for <strong>{engagementName}</strong> as root with a writable disposable filesystem and unrestricted outbound networking. It includes no security tools by default; packages installed with <code>apt</code> disappear when the session closes, while <code>/workspace</code> persists.</p></div>
+      <div><small>Kali shell</small><h2>Terminal</h2><p>A fresh official minimal Kali Rolling container starts for <strong>{engagementName}</strong> as root with a writable disposable filesystem and unrestricted outbound networking. It includes no security tools by default; packages installed with <code>apt</code> disappear when the session closes, while <code>/workspace</code> persists.</p></div>
       <span className="terminal-boundary"><AlertTriangle size={15} /> Root + network</span>
     </section>
     <section className="terminal-auto-start" aria-live="polite">

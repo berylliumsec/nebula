@@ -112,9 +112,7 @@ class StubTerminalPlatform:
         )
         self.image = PreparedContainerImage(
             source_reference="docker.io/kalilinux/kali-rolling:latest",
-            resolved_reference=(
-                "docker.io/kalilinux/kali-rolling@sha256:" + "b" * 64
-            ),
+            resolved_reference=("docker.io/kalilinux/kali-rolling@sha256:" + "b" * 64),
             digest="sha256:" + "b" * 64,
             platform="linux/amd64",
             configured_user="",

@@ -134,7 +134,9 @@ def test_human_terminal_alone_can_be_root_writable_and_unrestricted(tmp_path):
     assert "--read-only" not in argv
     assert "--cap-drop=ALL" in argv
     assert "--security-opt=no-new-privileges" in argv
-    assert not any(value.startswith("--publish") or value == "--privileged" for value in argv)
+    assert not any(
+        value.startswith("--publish") or value == "--privileged" for value in argv
+    )
 
     for changes in (
         {"network": SandboxNetwork.UNRESTRICTED},
@@ -142,7 +144,9 @@ def test_human_terminal_alone_can_be_root_writable_and_unrestricted(tmp_path):
         {"root_filesystem": SandboxRootFilesystem.WRITABLE},
     ):
         with pytest.raises(ValidationError):
-            _request(tmp_path, execution_kind=SandboxExecutionKind.LOCAL_TOOL, **changes)
+            _request(
+                tmp_path, execution_kind=SandboxExecutionKind.LOCAL_TOOL, **changes
+            )
 
 
 def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeypatch):

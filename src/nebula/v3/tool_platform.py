@@ -367,9 +367,7 @@ class ToolPlatform:
         self.developer_mode = developer_mode
         self.execution_enabled = execution_enabled
         self.events = ToolPackEventJournal(event_retention)
-        self._human_terminal_images: dict[
-            tuple[str, int], PreparedContainerImage
-        ] = {}
+        self._human_terminal_images: dict[tuple[str, int], PreparedContainerImage] = {}
         self._human_terminal_image_locks: dict[tuple[str, int], asyncio.Lock] = {}
         self.catalog_client = ToolCatalogClient(
             catalog_url=catalog_url,
@@ -443,9 +441,7 @@ class ToolPlatform:
             raise ToolPlatformError(
                 f"tools are not declared by the selected pack: {unknown}"
             )
-        return sorted(
-            set(tool_names) | (declared & IMPLICIT_ENVIRONMENT_TOOL_NAMES)
-        )
+        return sorted(set(tool_names) | (declared & IMPLICIT_ENVIRONMENT_TOOL_NAMES))
 
     def validate_assignment(
         self, manifest_digest_value: str, tool_names: list[str]
@@ -1115,9 +1111,7 @@ class ToolPlatform:
             image=image,
         )
 
-    def resolve_human_terminal_profile(
-        self, engagement_id: str
-    ) -> StoredRunnerProfile:
+    def resolve_human_terminal_profile(self, engagement_id: str) -> StoredRunnerProfile:
         """Select the one configured runner eligible for the human terminal."""
 
         if not self.execution_enabled:
@@ -1125,9 +1119,7 @@ class ToolPlatform:
         self.store.get(Engagement, engagement_id)
         profiles = [
             profile
-            for profile in self.store.list_entities(
-                StoredRunnerProfile, limit=1_000
-            )
+            for profile in self.store.list_entities(StoredRunnerProfile, limit=1_000)
             if profile.enabled and profile.healthy
         ]
         local = next((profile for profile in profiles if profile.id == "local"), None)

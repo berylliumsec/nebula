@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import { ContainerTerminalPanel } from "./ContainerTerminalPanel";
@@ -89,5 +89,8 @@ describe("ContainerTerminalPanel", () => {
 
     await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(1));
     expect(socketSpies.dispose).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Unrestricted outbound · root · writable/)).toBeVisible();
+    expect(screen.getByText(/Bridge networking can reach the public Internet/)).toBeVisible();
+    expect(screen.getByTitle(`docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`)).toBeVisible();
   });
 });
