@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Download, FileJson, FileText, Plus, Save, ShieldCheck, X } from "lucide-react";
+import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
 
@@ -17,6 +18,7 @@ function downloadFile(filename: string, content: string, type: string): void {
 }
 
 export function ReportsPage() {
+  const confirm = useConfirmation();
   const { createReport, engagement, findings, previewMode, reports, updateReport } = useWorkspace();
   const [selectedId, setSelectedId] = useState("");
   const selected = reports.find((report) => report.id === selectedId);
@@ -101,12 +103,17 @@ export function ReportsPage() {
     setDirty(true);
   };
 
-  const allowDiscard = () => !dirty || window.confirm("Discard the unsaved changes to this report?");
-  const selectReport = (id: string) => {
-    if (id !== selectedId && allowDiscard()) setSelectedId(id);
+  const allowDiscard = async () => !dirty || confirm({
+    title: "Discard unsaved changes?",
+    message: "Changes to this report have not been persisted and cannot be recovered.",
+    confirmLabel: "Discard changes",
+    tone: "danger",
+  });
+  const selectReport = async (id: string) => {
+    if (id !== selectedId && await allowDiscard()) setSelectedId(id);
   };
-  const openCreate = () => {
-    if (!allowDiscard()) return;
+  const openCreate = async () => {
+    if (!await allowDiscard()) return;
     setError(undefined);
     setCreating(true);
   };
@@ -123,12 +130,12 @@ export function ReportsPage() {
 
   return (
     <div className="page reports-page">
-      <PageHeader eyebrow="Defensible deliverables" title="Reports" description="Compose executive narratives from persisted report data and selected findings." actions={<button className="button primary" type="button" disabled={previewMode || !engagement} onClick={openCreate}><Plus size={16} /> New report</button>} />
+      <PageHeader eyebrow="Defensible deliverables" title="Reports" description="Compose executive narratives from persisted report data and selected findings." actions={<button className="button primary" type="button" disabled={previewMode || !engagement} onClick={() => void openCreate()}><Plus size={16} /> New report</button>} />
       {error && <div className="knowledge-status error" role="alert">{error}</div>}
       {!selected ? <section className="panel empty-state"><FileText size={28} /><strong>{previewMode ? "Core unavailable" : "No reports yet"}</strong><p>{previewMode ? "Connect Nebula Core to create and edit persisted reports." : "Create a draft report to begin composing an executive summary."}</p></section> : <div className="report-layout">
         <aside className="panel report-outline">
           <header><div><span>{reports.length} report{reports.length === 1 ? "" : "s"}</span><strong>{engagement?.name}</strong></div></header>
-          <nav aria-label="Reports">{reports.map((report) => <button className={report.id === selected.id ? "active" : undefined} type="button" key={report.id} onClick={() => selectReport(report.id)}><FileText size={15} /><span className="report-list-label">{report.title}<small>{report.status} · revision {report.revision}</small></span></button>)}</nav>
+          <nav aria-label="Reports">{reports.map((report) => <button className={report.id === selected.id ? "active" : undefined} type="button" key={report.id} onClick={() => void selectReport(report.id)}><FileText size={15} /><span className="report-list-label">{report.title}<small>{report.status} · revision {report.revision}</small></span></button>)}</nav>
           <footer><span>Persisted by Core</span><strong>{reports.length}</strong></footer>
         </aside>
         <section className="panel report-editor" aria-readonly={readOnly || undefined}>

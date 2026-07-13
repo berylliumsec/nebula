@@ -8,6 +8,7 @@ import {
   type AvailableUpdate,
   type ReleaseInfo,
 } from "../api/updater";
+import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
 import { EngagementPolicySettings } from "../components/EngagementPolicySettings";
@@ -22,12 +23,31 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
   { value: "high-contrast", label: "High contrast", icon: Contrast },
 ];
 
+const settingsSections = [
+  ["general-settings", "General"],
+  ["provider-settings", "AI Providers"],
+  ["tool-pack-settings", "Tool Packs"],
+  ["runtime-settings", "Runners"],
+  ["engagement-policy-settings", "Engagement Policy"],
+  ["operator-settings", "Operators"],
+  ["security-settings", "Privacy & Security"],
+] as const;
+
+type SettingsSection = typeof settingsSections[number][0];
+
+function sectionFromHash(): SettingsSection {
+  const hash = window.location.hash.slice(1);
+  if (hash === "appearance-settings") return "general-settings";
+  return settingsSections.some(([id]) => id === hash) ? hash as SettingsSection : "general-settings";
+}
+
 function providerOption(provider: ProviderHealth, key: string): string {
   const value = provider.options[key];
   return typeof value === "string" ? value : "";
 }
 
 export function SettingsPage() {
+  const confirm = useConfirmation();
   const { preference, setPreference } = useTheme();
   const {
     previewMode,
@@ -67,7 +87,7 @@ export function SettingsPage() {
   const [operatorRole, setOperatorRole] = useState("");
   const [operatorBusy, setOperatorBusy] = useState<string>();
   const [operatorError, setOperatorError] = useState<string>();
-  const [settingsSection, setSettingsSection] = useState("provider-settings");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(sectionFromHash);
   const [release, setRelease] = useState<ReleaseInfo>();
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
   const [updateState, setUpdateState] = useState<"idle" | "checking" | "installing" | "current" | "restart" | "error">("idle");
@@ -85,6 +105,12 @@ export function SettingsPage() {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const syncSection = () => setSettingsSection(sectionFromHash());
+    window.addEventListener("hashchange", syncSection);
+    return () => window.removeEventListener("hashchange", syncSection);
   }, []);
 
   const checkUpdates = async () => {
@@ -244,7 +270,12 @@ export function SettingsPage() {
   };
 
   const removeProvider = async (provider: ProviderHealth) => {
-    if (!window.confirm(`Delete provider profile “${provider.name}”? Profiles referenced by chat or mission history cannot be deleted.`)) return;
+    if (!await confirm({
+      title: `Delete ${provider.name}?`,
+      message: "This provider profile will be removed. Profiles referenced by chat or mission history remain protected by Core.",
+      confirmLabel: "Delete provider",
+      tone: "danger",
+    })) return;
     setProviderBusy(provider.id);
     setProviderActionError(undefined);
     try {
@@ -296,7 +327,12 @@ export function SettingsPage() {
   };
 
   const removeOperator = async (profile: OperatorProfile) => {
-    if (!window.confirm(`Delete the local operator profile “${profile.displayName}”?`)) return;
+    if (!await confirm({
+      title: `Delete ${profile.displayName}?`,
+      message: "The local attribution profile will be removed. Persisted evidence keeps its original attribution record.",
+      confirmLabel: "Delete operator",
+      tone: "danger",
+    })) return;
     setOperatorBusy(profile.id);
     setOperatorError(undefined);
     try {
@@ -314,7 +350,9 @@ export function SettingsPage() {
   return (
     <div className="page settings-page">
       <PageHeader eyebrow="Workspace configuration" title="Settings" description="Provider, sandbox runner, tool-pack, engagement policy, attribution, and privacy controls." />
-      <nav className="settings-tabs" aria-label="Settings sections">{[["provider-settings", "Providers"], ["tool-pack-settings", "Tool packs"], ["runtime-settings", "Runners"], ["engagement-policy-settings", "Engagement policy"], ["operator-settings", "Operators"], ["security-settings", "Security"]].map(([id, label]) => <a className={settingsSection === id ? "active" : undefined} aria-current={settingsSection === id ? "location" : undefined} href={`#${id}`} key={id} onClick={() => setSettingsSection(id)}>{label}</a>)}<a className={settingsSection === "appearance-settings" ? "active" : undefined} aria-current={settingsSection === "appearance-settings" ? "location" : undefined} href="#appearance-settings" onClick={() => setSettingsSection("appearance-settings")}>Appearance</a></nav>
+      <div className="settings-workspace">
+      <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label]) => <a className={settingsSection === id ? "active" : undefined} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={() => setSettingsSection(id)}>{label}</a>)}</nav>
+      <div className="settings-detail" data-section={settingsSection}>
       <section className="settings-section" id="provider-settings">
         <div className="section-heading"><div><h2>Model providers</h2><p>Configured provider profiles and their declared capabilities.</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <div className="knowledge-status error" role="alert">{providerActionError}</div>}
@@ -332,7 +370,7 @@ export function SettingsPage() {
         {operatorError && <div className="knowledge-status error" role="alert">{operatorError}</div>}
         {operatorProfiles.length ? <div className="operator-profile-list">{operatorProfiles.map((profile) => <article className={profile.active ? "active" : undefined} key={profile.id}><span className="operator-profile-avatar">{profile.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "OP"}</span><div><h3>{profile.displayName}</h3><p>{profile.role || "Local operator"}{profile.email ? ` · ${profile.email}` : ""}</p></div>{profile.active ? <span className="operator-active"><Check size={13} /> Active</span> : <button className="button quiet" type="button" disabled={operatorBusy === profile.id} onClick={() => void activateOperator(profile)}>Activate</button>}<button className="icon-button subtle" type="button" aria-label={`Edit ${profile.displayName}`} disabled={operatorBusy === profile.id} onClick={() => openOperator(profile)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete ${profile.displayName}`} title={profile.active ? "Activate another profile before deleting this one" : operatorProfiles.length <= 1 ? "The last operator profile cannot be deleted" : "Delete operator profile"} disabled={operatorBusy === profile.id || profile.active || operatorProfiles.length <= 1} onClick={() => void removeOperator(profile)}><Trash2 size={14} /></button></article>)}</div> : <div className="empty-state compact"><UserRound size={23} /><strong>No durable operator profile</strong><p>Create a local profile so new evidence has explicit attribution and the workspace can show who is active.</p></div>}
       </section>
-      <div className="settings-bottom-grid">
+      <div className="settings-bottom-grid" id="general-settings">
         <section className="panel appearance-panel" id="appearance-settings">
           <header className="panel-header compact"><div><h2>Appearance</h2><p>Saved on this device</p></div><Contrast size={19} /></header>
           <div className="theme-options">
@@ -375,6 +413,8 @@ export function SettingsPage() {
             {updateState === "error" && <p className="form-error" role="alert">{updateMessage}</p>}
           </div>
         </section>
+      </div>
+      </div>
       </div>
       {adding && (selected || editingProvider) && (
         <div className="dialog-backdrop">

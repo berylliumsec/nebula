@@ -12,8 +12,10 @@ import {
   ShieldAlert,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import type { KnowledgeSource } from "../api/types";
+import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
 
@@ -53,6 +55,7 @@ function encodeBase64(buffer: ArrayBuffer): string {
 }
 
 export function KnowledgePage() {
+  const confirm = useConfirmation();
   const [searchParams] = useSearchParams();
   const {
     api,
@@ -70,6 +73,7 @@ export function KnowledgePage() {
   const [uploading, setUploading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string>();
   const [error, setError] = useState<string>();
+  const [selected, setSelected] = useState<KnowledgeSource>();
   const sources = previewMode ? previewSources : knowledgeSources;
   const requestedSourceId = searchParams.get("source");
   const visibleSources = useMemo(() => {
@@ -81,7 +85,10 @@ export function KnowledgePage() {
   useEffect(() => {
     if (!requestedSourceId) return;
     const requested = sources.find((source) => source.id === requestedSourceId);
-    if (requested) setQuery(requested.name);
+    if (requested) {
+      setQuery(requested.name);
+      setSelected(requested);
+    }
   }, [requestedSourceId, sources]);
 
   const setSourceBusy = (id: string, busy: boolean) => {
@@ -158,7 +165,12 @@ export function KnowledgePage() {
   };
 
   const remove = async (source: KnowledgeSource) => {
-    if (!window.confirm(`Remove “${source.name}” from retrieval? The immutable source artifact will be retained.`)) return;
+    if (!await confirm({
+      title: `Remove ${source.name}?`,
+      message: "This source will no longer be used for retrieval. The immutable source artifact will be retained.",
+      confirmLabel: "Remove source",
+      tone: "danger",
+    })) return;
     setSourceBusy(source.id, true);
     setError(undefined);
     try {
@@ -222,6 +234,7 @@ export function KnowledgePage() {
                   <span className={`source-state ${busy ? "indexing" : source.status}`}>{busy && <RefreshCw className="spin" size={13} />}{busy ? "working" : source.status}</span>
                   <span className="source-updated">{displayTime(source.updatedAt)}</span>
                   <div className="source-actions">
+                    <button className="text-link" type="button" onClick={() => setSelected(source)}>Inspect</button>
                     <button className="icon-button subtle" type="button" title="Reindex source" aria-label={`Reindex ${source.name}`} disabled={!canMutate || busy} onClick={() => void reindex(source)}><RefreshCw size={14} /></button>
                     <button className="icon-button subtle" type="button" title="Download original" aria-label={`Download ${source.name}`} disabled={!source.artifactId || !api || busy || previewMode} onClick={() => void download(source)}><Download size={14} /></button>
                     <button className="icon-button subtle" type="button" title="Remove from retrieval" aria-label={`Remove ${source.name}`} disabled={!canMutate || busy} onClick={() => void remove(source)}><Trash2 size={14} /></button>
@@ -237,6 +250,7 @@ export function KnowledgePage() {
           <ul><li>Source identity included with every chunk</li><li>Cloud retrieval stays off until the operator explicitly consents</li><li>Local-only sources are never sent to cloud providers</li><li>Retrieval index can be rebuilt from authoritative data</li></ul>
         </aside>
       </div>
+      {selected && <aside className="resource-inspector" role="complementary" aria-labelledby="knowledge-detail-title"><header><div><small>{sourceType(selected)}</small><h2 id="knowledge-detail-title">{selected.name}</h2></div><button className="icon-button subtle" type="button" aria-label="Close knowledge details" onClick={() => setSelected(undefined)}><X size={17} /></button></header><dl className="resource-details"><div><dt>Status</dt><dd>{selected.status}</dd></div><div><dt>Chunks</dt><dd>{selected.documentCount || "Not indexed"}</dd></div><div><dt>Citation</dt><dd>{selected.citation || selected.name}</dd></div><div><dt>Updated</dt><dd>{displayTime(selected.updatedAt)}</dd></div><div><dt>Source type</dt><dd>{sourceType(selected)}</dd></div></dl><section><h3>Retrieval boundary</h3><p>Content is untrusted data and cannot grant tools, expand scope, or modify system policy.</p></section><div className="inspector-actions"><button className="button secondary full" type="button" disabled={!canMutate || busyIds.has(selected.id)} onClick={() => void reindex(selected)}><RefreshCw size={14} /> Reindex source</button></div></aside>}
     </div>
   );
 }

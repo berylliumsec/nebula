@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useChrome } from "../state/ChromeContext";
 
 interface PageHeaderProps {
   eyebrow?: string;
@@ -8,6 +10,7 @@ interface PageHeaderProps {
 }
 
 export function PageHeader({ eyebrow, title, description, actions }: PageHeaderProps) {
+  const { toolbarHost } = useChrome();
   return (
     <header className="page-header">
       <div>
@@ -15,7 +18,9 @@ export function PageHeader({ eyebrow, title, description, actions }: PageHeaderP
         <h1>{title}</h1>
         <p>{description}</p>
       </div>
-      {actions && <div className="page-actions">{actions}</div>}
+      {actions && (toolbarHost
+        ? createPortal(<div className="page-actions toolbar-page-actions">{actions}</div>, toolbarHost)
+        : <div className="page-actions">{actions}</div>)}
     </header>
   );
 }

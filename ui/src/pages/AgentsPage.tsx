@@ -13,6 +13,7 @@ import {
 import { PageHeader } from "../components/PageHeader";
 import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useChrome } from "../state/ChromeContext";
 
 const agents = [
   { name: "Scope planner", detail: "Policy and mission decomposition", state: "complete", icon: ShieldCheck, tools: "No executable tools" },
@@ -24,16 +25,18 @@ const agents = [
 ];
 
 export function AgentsPage() {
+  const { setActivityOpen } = useChrome();
   const { approvals, events, previewMode, run } = useWorkspace();
   if (!previewMode) {
     return (
       <div className="page agents-page">
         <PageHeader
           eyebrow="Supervised execution"
-          title="Agents"
+          title="Missions"
           description="Persisted run state and activity from Nebula Core. Specialist task details appear when the tasks resource is connected."
           actions={<><StopMissionButton /><NewMissionButton /></>}
         />
+        {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission waiting for operator review</strong><p>{approvals.length} exact request{approvals.length === 1 ? "" : "s"} must be reviewed before bounded work can continue.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
         <section className="mission-hero panel">
           <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replace("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{approvals.length} pending approval request{approvals.length === 1 ? "" : "s"}.</p></div>
           <div className="mission-hero-progress"><span><strong>{run?.completedTasks ?? 0}</strong><small>complete</small></span><span><strong>{run?.totalTasks ?? 0}</strong><small>recorded tasks</small></span><span><strong>{events.length}</strong><small>events loaded</small></span></div>
@@ -49,7 +52,7 @@ export function AgentsPage() {
     <div className="page agents-page">
       <PageHeader
         eyebrow="Supervised execution"
-        title="Agents"
+        title="Missions"
         description="One supervisor coordinates bounded specialists. Every transition is persisted before it is streamed."
         actions={
           <>
@@ -58,6 +61,8 @@ export function AgentsPage() {
           </>
         }
       />
+
+      {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Approval required</strong><p>Review the exact target, arguments, and expected effects before this mission continues.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
 
       <section className="mission-hero panel">
         <div>

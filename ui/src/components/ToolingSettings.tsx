@@ -12,6 +12,7 @@ import type {
   ToolSummary,
 } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useConfirmation } from "./DialogSystem";
 
 function unavailable(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 404 || error.status === 501);
@@ -61,6 +62,7 @@ function progressWidth(phase: ToolPackProgressEvent["phase"]): string {
 }
 
 export function ToolPackSettings() {
+  const confirm = useConfirmation();
   const { api, coreState, previewMode } = useWorkspace();
   const [catalog, setCatalog] = useState<ToolPackCatalogEntry[]>([]);
   const [packs, setPacks] = useState<ToolPackInstallation[]>([]);
@@ -178,6 +180,16 @@ export function ToolPackSettings() {
     }
   };
 
+  const removePack = async (pack: ToolPackInstallation) => {
+    if (!api || !await confirm({
+      title: `Remove ${pack.name}?`,
+      message: "The environment will be disabled and removed. Historical manifest locks and evidence will be retained.",
+      confirmLabel: "Remove environment",
+      tone: "danger",
+    })) return;
+    await action(pack.id, () => api.removeToolPack(pack.id));
+  };
+
   if (!featureAvailable) {
     return <section className="settings-section" id="tool-pack-settings"><div className="feature-unavailable" role="status"><Package size={22} /><div><strong>Tool packs are not available in this Core build</strong><p>Missions remain analysis-only. Upgrade Core when the signed tool-pack API is available.</p></div></div></section>;
   }
@@ -203,7 +215,7 @@ export function ToolPackSettings() {
           {packs.length ? <div className="tool-pack-list">{packs.map((pack) => {
             const packTools = tools.filter((tool) => tool.packId === pack.id || tool.packManifestDigest === pack.manifestDigest);
             const declaredToolNames = pack.toolNames.length ? pack.toolNames : packTools.map((tool) => tool.name);
-            return <article className="tool-pack-card" key={pack.id}><header><div><strong>{packLabel(pack)}</strong><code title={pack.manifestDigest}>{pack.manifestDigest.slice(0, 18)}…</code></div><span className={`pack-status ${pack.status}`}>{pack.status}</span></header><p>{declaredToolNames.length ? declaredToolNames.join(", ") : "No tools declared"}</p><div className="pack-facts"><span>{pack.trustState === "trusted" ? <ShieldCheck size={13} /> : <AlertTriangle size={13} />}{pack.trustState}</span><span>{packTools.filter((tool) => tool.available).length}/{packTools.length || pack.toolNames.length} available</span></div>{pack.failureDetail && <small className="form-error">{pack.failureDetail}</small>}<footer><button className="button quiet" type="button" disabled={busy === pack.id || previewMode} onClick={() => api && void action(pack.id, () => api.verifyToolPack(pack.id))}><CheckCircle2 size={13} /> Verify</button><button className="button quiet" type="button" disabled={busy === pack.id || previewMode || pack.source.startsWith("local")} title={pack.source.startsWith("local") ? "Local packs are replaced by uploading a new bundle" : undefined} onClick={() => api && void action(pack.id, () => api.updateToolPack(pack.id))}><RefreshCw size={13} /> Update</button><button className="icon-button subtle" type="button" aria-label={`Remove ${pack.name}`} disabled={busy === pack.id || previewMode} onClick={() => api && window.confirm(`Disable and remove “${pack.name}”? Historical manifest locks will be retained.`) && void action(pack.id, () => api.removeToolPack(pack.id))}><Trash2 size={13} /></button></footer></article>;
+            return <article className="tool-pack-card" key={pack.id}><header><div><strong>{packLabel(pack)}</strong><code title={pack.manifestDigest}>{pack.manifestDigest.slice(0, 18)}…</code></div><span className={`pack-status ${pack.status}`}>{pack.status}</span></header><p>{declaredToolNames.length ? declaredToolNames.join(", ") : "No tools declared"}</p><div className="pack-facts"><span>{pack.trustState === "trusted" ? <ShieldCheck size={13} /> : <AlertTriangle size={13} />}{pack.trustState}</span><span>{packTools.filter((tool) => tool.available).length}/{packTools.length || pack.toolNames.length} available</span></div>{pack.failureDetail && <small className="form-error">{pack.failureDetail}</small>}<footer><button className="button quiet" type="button" disabled={busy === pack.id || previewMode} onClick={() => api && void action(pack.id, () => api.verifyToolPack(pack.id))}><CheckCircle2 size={13} /> Verify</button><button className="button quiet" type="button" disabled={busy === pack.id || previewMode || pack.source.startsWith("local")} title={pack.source.startsWith("local") ? "Local packs are replaced by uploading a new bundle" : undefined} onClick={() => api && void action(pack.id, () => api.updateToolPack(pack.id))}><RefreshCw size={13} /> Update</button><button className="icon-button subtle" type="button" aria-label={`Remove ${pack.name}`} disabled={busy === pack.id || previewMode} onClick={() => void removePack(pack)}><Trash2 size={13} /></button></footer></article>;
           })}</div> : <div className="empty-state compact"><Package size={22} /><strong>{loading ? "Loading installed packs…" : "No tool packs installed"}</strong><p>Install a curated pack after a verified runner is configured.</p></div>}
         </div>
         <div className="tooling-column">

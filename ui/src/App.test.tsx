@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { DialogProvider } from "./components/DialogSystem";
 import { ThemeProvider } from "./state/ThemeContext";
 import { WorkspaceProvider } from "./state/WorkspaceContext";
 
@@ -11,7 +12,9 @@ function renderApp(route = "/") {
     <MemoryRouter initialEntries={[route]}>
       <ThemeProvider>
         <WorkspaceProvider>
-          <App />
+          <DialogProvider>
+            <App />
+          </DialogProvider>
         </WorkspaceProvider>
       </ThemeProvider>
     </MemoryRouter>,
@@ -20,6 +23,7 @@ function renderApp(route = "/") {
 
 describe("Nebula workspace", () => {
   beforeEach(() => {
+    window.history.replaceState({}, "", "/");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Core offline")));
   });
 
@@ -27,7 +31,7 @@ describe("Nebula workspace", () => {
 
   it("exposes every primary workspace destination", async () => {
     renderApp();
-    for (const label of ["Overview", "Sessions", "Agents", "Assets", "Findings", "Evidence", "Knowledge", "Reports", "Settings"]) {
+    for (const label of ["Home", "Sessions", "Missions", "Assets", "Findings", "Evidence", "Knowledge", "Reports", "Settings"]) {
       expect(screen.getByRole("link", { name: label })).toBeVisible();
     }
     expect(await screen.findByRole("heading", { name: "Good afternoon, Jordan" })).toBeVisible();
@@ -50,6 +54,48 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("button", { name: /High contrast/ }));
     expect(document.documentElement).toHaveAttribute("data-theme", "high-contrast");
     expect(localStorage.getItem("nebula.theme")).toBe("high-contrast");
+  });
+
+  it("persists the collapsible sidebar and exposes legacy labels through command search", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(screen.getByRole("button", { name: "Hide sidebar" }));
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toBeVisible();
+    expect(localStorage.getItem("nebula.sidebar.collapsed")).toBe("true");
+    await user.keyboard("{Control>}k{/Control}");
+    await user.type(screen.getByRole("textbox", { name: "Search commands" }), "Overview");
+    expect(screen.getByRole("option", { name: /Go to Home/ })).toBeVisible();
+  });
+
+  it("routes browser and desktop global shortcuts through the shared shell commands", async () => {
+    const user = userEvent.setup();
+    renderApp("/findings");
+    expect(await screen.findByRole("heading", { name: "Findings" })).toBeVisible();
+    await user.keyboard("{Control>},{/Control}");
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
+    await user.keyboard("{Control>}1{/Control}");
+    expect(await screen.findByRole("heading", { name: "Good afternoon, Jordan" })).toBeVisible();
+  });
+
+  it("reviews exact approval details in a focused decision sheet", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(screen.getByRole("button", { name: /Show activity inspector/ }));
+    await user.click(screen.getByRole("tab", { name: /Approvals/ }));
+    await user.click(screen.getByRole("button", { name: "Review exact request" }));
+    const dialog = screen.getByRole("dialog", { name: "Review nmap.service_detection" });
+    expect(within(dialog).getByText("Exact arguments")).toBeVisible();
+    expect(within(dialog).getAllByText(/api\.acme\.test/)[0]).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Approve once" })).toBeDisabled();
+  });
+
+  it("preserves settings categories as navigable deep links", async () => {
+    window.history.replaceState({}, "", "/settings#security-settings");
+    const user = userEvent.setup();
+    renderApp("/settings");
+    expect(await screen.findByRole("link", { name: "Privacy & Security" })).toHaveAttribute("aria-current", "page");
+    await user.click(screen.getByRole("link", { name: "AI Providers" }));
+    expect(screen.getByRole("link", { name: "AI Providers" })).toHaveAttribute("aria-current", "page");
   });
 
   it("selects the newest Core run and opens its replay stream", async () => {
@@ -96,7 +142,7 @@ describe("Nebula workspace", () => {
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "Live engagement" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Show activity center" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Show activity inspector/ })).toBeVisible();
     expect(OnlineWebSocket.lastUrl).toContain("/api/v1/runs/run-newest/events/ws?after=0");
     const approvalLoads = fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith("/approvals")).length;
     act(() => OnlineWebSocket.instance?.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ kind: "event", event: { id: "event-live", run_id: "run-newest", sequence: 1, event_type: "approval.requested", payload: { summary: "Approval requested" }, occurred_at: "2026-07-12T12:01:00Z" } }) })));
@@ -168,9 +214,7 @@ describe("Nebula workspace", () => {
       }
       return new Response(JSON.stringify([]), { status: 200 });
     });
-    const confirm = vi.fn(() => true);
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("confirm", confirm);
     const user = userEvent.setup();
 
     renderApp("/sessions");
@@ -179,9 +223,9 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("combobox", { name: "Chat model" })).toHaveValue("model-1");
     await user.type(screen.getByRole("textbox", { name: "Message the analyst assistant" }), "Review the scope");
     await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.click(await screen.findByRole("button", { name: "Allow this request" }));
 
     expect(await screen.findByText("Bounded answer")).toBeVisible();
-    expect(confirm).toHaveBeenCalledOnce();
     const chatCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/chat/completions"));
     expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({
       provider_id: "provider-1",
@@ -254,7 +298,7 @@ describe("Nebula workspace", () => {
     await user.type(search, "missing");
     expect(screen.getByText("No assets match the current search and filters.")).toBeVisible();
     await user.clear(search);
-    await user.click(screen.getByRole("button", { name: "Add asset" }));
+    await user.keyboard("{Control>}n{/Control}");
     const dialog = screen.getByRole("dialog", { name: "Add asset" });
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "new.example.test");
     await user.selectOptions(within(dialog).getByRole("combobox", { name: "Kind" }), "domain");
@@ -265,7 +309,7 @@ describe("Nebula workspace", () => {
     const row = screen.getByText("new.example.test").closest("tr");
     expect(row).not.toBeNull();
     await user.click(within(row!).getByRole("button", { name: "Inspect" }));
-    expect(screen.getByRole("dialog", { name: "new.example.test" })).toBeVisible();
+    expect(screen.getByRole("complementary", { name: "new.example.test" })).toBeVisible();
   });
 
   it("refreshes operator revisions after activation before editing the former active profile", async () => {
@@ -413,7 +457,6 @@ describe("Nebula workspace", () => {
       return new Response(JSON.stringify([]), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("confirm", vi.fn(() => true));
     const user = userEvent.setup();
     renderApp("/settings");
 
@@ -434,7 +477,14 @@ describe("Nebula workspace", () => {
     await screen.findByRole("button", { name: "Enable Anthropic review" });
     patchCalls = fetchMock.mock.calls.filter(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-anthropic") && init?.method === "PATCH");
     expect(JSON.parse(String(patchCalls[1][1]?.body))).toEqual({ changes: { enabled: false }, expected_revision: 4 });
-    await user.click(screen.getByRole("button", { name: "Delete Anthropic review" }));
+    const deleteProvider = screen.getByRole("button", { name: "Delete Anthropic review" });
+    await user.click(deleteProvider);
+    const confirmDelete = await screen.findByRole("button", { name: "Delete provider" });
+    await waitFor(() => expect(confirmDelete).toHaveFocus());
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(deleteProvider).toHaveFocus());
+    await user.click(deleteProvider);
+    await user.click(await screen.findByRole("button", { name: "Delete provider" }));
     expect(await screen.findByText("No provider profiles")).toBeVisible();
     const deleteCall = fetchMock.mock.calls.find(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-anthropic") && init?.method === "DELETE");
     expect(new Headers(deleteCall?.[1]?.headers).get("If-Match")).toBe("5");

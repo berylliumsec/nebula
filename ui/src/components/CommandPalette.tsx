@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Command, Contrast, Moon, Search, Sun } from "lucide-react";
+import { Command, Contrast, Moon, PanelLeft, PanelRight, Search, Sun } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { navigationItems } from "../navigation";
 import { useTheme } from "../state/ThemeContext";
@@ -8,6 +8,7 @@ interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   onToggleActivity: () => void;
+  onToggleSidebar: () => void;
 }
 
 interface PaletteAction {
@@ -19,7 +20,7 @@ interface PaletteAction {
   run: () => void;
 }
 
-export function CommandPalette({ open, onClose, onToggleActivity }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onToggleActivity, onToggleSidebar }: CommandPaletteProps) {
   const navigate = useNavigate();
   const { setPreference } = useTheme();
   const [query, setQuery] = useState("");
@@ -29,11 +30,11 @@ export function CommandPalette({ open, onClose, onToggleActivity }: CommandPalet
   const actions = useMemo<PaletteAction[]>(
     () => [
       ...navigationItems.map((item) => ({
-        id: `go-${item.path}`,
+        id: item.commandId,
         label: `Go to ${item.label}`,
         description: item.description,
         icon: item.icon,
-        keywords: `${item.label} ${item.description}`,
+        keywords: `${item.label} ${item.legacyLabel ?? ""} ${item.aliases.join(" ")} ${item.description}`,
         run: () => navigate(item.path),
       })),
       {
@@ -61,15 +62,23 @@ export function CommandPalette({ open, onClose, onToggleActivity }: CommandPalet
         run: () => setPreference("high-contrast"),
       },
       {
+        id: "sidebar",
+        label: "Toggle sidebar",
+        description: "Show or hide workspace navigation",
+        icon: PanelLeft,
+        keywords: "sidebar navigation hide show",
+        run: onToggleSidebar,
+      },
+      {
         id: "activity",
-        label: "Toggle activity center",
+        label: "Toggle activity inspector",
         description: "Show run events and approval requests",
-        icon: Command,
-        keywords: "activity approvals drawer panel",
+        icon: PanelRight,
+        keywords: "activity approvals inspector drawer panel",
         run: onToggleActivity,
       },
     ],
-    [navigate, onToggleActivity, setPreference],
+    [navigate, onToggleActivity, onToggleSidebar, setPreference],
   );
 
   const results = useMemo(() => {

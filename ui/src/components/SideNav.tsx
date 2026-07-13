@@ -1,10 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { Check, ChevronDown, LockKeyhole, Orbit, Plus, ShieldCheck, X } from "lucide-react";
 import { NavLink } from "react-router-dom";
-import { navigationItems } from "../navigation";
+import { navigationGroups, navigationItems } from "../navigation";
 import { useWorkspace } from "../state/WorkspaceContext";
 
-export function SideNav() {
+interface SideNavProps {
+  collapsed: boolean;
+  onNavigate: () => void;
+}
+
+export function SideNav({ collapsed, onNavigate }: SideNavProps) {
   const {
     coreState,
     createEngagement,
@@ -76,20 +81,41 @@ export function SideNav() {
       </div>
 
       <nav className="nav-list">
-        {navigationItems.map(({ path, label, icon: Icon }) => (
+        {navigationGroups.map((group) => (
+          <section className="nav-group" aria-labelledby={`nav-group-${group.id}`} key={group.id}>
+            <h2 id={`nav-group-${group.id}`}>{group.label}</h2>
+            {navigationItems.filter((item) => item.group === group.id).map(({ path, label, icon: Icon }) => (
+              <NavLink
+                key={path}
+                to={path}
+                end={path === "/"}
+                title={collapsed ? label : undefined}
+                aria-label={label}
+                onClick={onNavigate}
+                className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
+              >
+                <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
+                <span>{label}</span>
+              </NavLink>
+            ))}
+          </section>
+        ))}
+      </nav>
+
+      <div className="side-nav-footer">
+        {navigationItems.filter((item) => item.group === "settings").map(({ path, label, icon: Icon }) => (
           <NavLink
             key={path}
             to={path}
-            end={path === "/"}
-            className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
+            title={collapsed ? label : undefined}
+            aria-label={label}
+            onClick={onNavigate}
+            className={({ isActive }) => `nav-item settings-nav-item${isActive ? " active" : ""}`}
           >
             <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
             <span>{label}</span>
           </NavLink>
         ))}
-      </nav>
-
-      <div className="side-nav-footer">
         <div className="local-first-note">
           <ShieldCheck size={17} aria-hidden="true" />
           <span>

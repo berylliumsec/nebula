@@ -19,6 +19,7 @@ import type {
 } from "../api/types";
 import { ApiTerminalTransport } from "../api/terminal";
 import { PageHeader } from "../components/PageHeader";
+import { useConfirmation } from "../components/DialogSystem";
 import { TerminalPanel } from "../components/TerminalPanel";
 import { useWorkspace } from "../state/WorkspaceContext";
 
@@ -59,7 +60,9 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
 }
 
 export function SessionsPage() {
+  const confirm = useConfirmation();
   const [view, setView] = useState<SessionView>("chat");
+  const [mobileListOpen, setMobileListOpen] = useState(false);
   const [terminalSessionId, setTerminalSessionId] = useState(() => makeId("human"));
   const {
     api,
@@ -165,6 +168,7 @@ export function SessionsPage() {
     setDraft("");
     setChatError(undefined);
     setView("chat");
+    setMobileListOpen(false);
   };
 
   const selectProvider = (id: string) => {
@@ -192,6 +196,7 @@ export function SessionsPage() {
         setModel(summary.model ?? "");
       }
       setView("chat");
+      setMobileListOpen(false);
     } catch (error) {
       setChatError(error instanceof Error ? error.message : "Could not load the selected conversation.");
     } finally {
@@ -211,9 +216,11 @@ export function SessionsPage() {
         setChatError("This provider profile is text-only. Enable engagement/document data in Settings or turn off knowledge retrieval.");
         return;
       }
-      allowCloudKnowledge = window.confirm(
-        `Allow this request to send redacted excerpts from ${knowledgeSources.length} knowledge source${knowledgeSources.length === 1 ? "" : "s"} to ${selectedProvider.name}? Local-only sources will remain blocked.`,
-      );
+      allowCloudKnowledge = await confirm({
+        title: "Share cited excerpts?",
+        message: `Allow this request to send redacted excerpts from ${knowledgeSources.length} knowledge source${knowledgeSources.length === 1 ? "" : "s"} to ${selectedProvider.name}? Local-only sources will remain blocked.`,
+        confirmLabel: "Allow this request",
+      });
       if (!allowCloudKnowledge) {
         setChatError("Message not sent because cloud knowledge transfer was not approved.");
         return;
@@ -342,17 +349,25 @@ export function SessionsPage() {
           <button type="button" role="tab" aria-selected={view === "terminal"} onClick={() => setView("terminal")}><SquareTerminal size={16} /> Human terminal</button>
           <button type="button" role="tab" aria-selected={view === "chat"} onClick={() => setView("chat")}><MessageSquare size={16} /> Analyst chat</button>
         </div>
+        {view === "chat" && <button className="session-mobile-list" type="button" aria-pressed={mobileListOpen} onClick={() => setMobileListOpen((value) => !value)}><MessageSquare size={15} /> {mobileListOpen ? "Current chat" : "Conversations"}</button>}
         <div className="session-scope"><ShieldCheck size={15} /> Human controlled · {engagement?.name ?? (previewMode ? "ACME-EXT preview" : "no engagement")}</div>
       </div>
 
-      <div className="session-layout">
+      <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}`}>
+        {view === "chat" && <aside className="session-list" aria-label="Conversations">
+          <header><div><span>Conversations</span><strong>{previewMode ? "Preview" : `${sessions.length} saved`}</strong></div><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={previewMode || !engagement} onClick={newConversation}><Plus size={16} /></button></header>
+          <nav>
+            <button className={!sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{selectedProvider?.name ?? "Choose a provider"}</small></span></button>
+            {sessions.map((session) => <button className={session.id === sessionId ? "active" : undefined} type="button" key={session.id} onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong>{session.title}</strong><small>{session.model || "Saved conversation"}</small></span></button>)}
+            {previewMode && <button className="active" type="button" onClick={() => setMobileListOpen(false)}><MessageSquare size={16} /><span><strong>Gateway applicability review</strong><small>Local preview</small></span></button>}
+          </nav>
+        </aside>}
         <section className="session-workspace">
           {view === "terminal" ? (
             <TerminalPanel sessionId={terminalSessionId} transport={terminalTransport} />
           ) : (
             <div className="chat-panel">
               {!previewMode && <div className="chat-context-bar">
-                <label><span>Conversation</span><select aria-label="Conversation" value={sessionId} disabled={sending || loadingHistory} onChange={(event) => void selectSession(event.target.value)}><option value="">New conversation</option>{sessions.map((session) => <option value={session.id} key={session.id}>{session.title}</option>)}</select></label>
                 <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label>
                 <label><span>Model</span><input aria-label="Chat model" value={model} disabled={sending || Boolean(sessionId)} list="chat-models" placeholder="Exact model ID" onChange={(event) => setModel(event.target.value)} /><datalist id="chat-models">{selectedProvider?.models.map((item) => <option value={item} key={item} />)}</datalist></label>
                 <label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? cloudKnowledgeAllowed ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label>

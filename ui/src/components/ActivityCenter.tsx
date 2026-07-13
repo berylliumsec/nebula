@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { ApprovalDecisionRequest, RunEventKind } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { ModalSurface } from "./DialogSystem";
 
 type CenterTab = "activity" | "approvals";
 
@@ -37,7 +38,9 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
   const [decisionError, setDecisionError] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
   const [editedArguments, setEditedArguments] = useState("");
+  const [selectedApprovalId, setSelectedApprovalId] = useState<string>();
   const { events, approvals, previewMode, resolveApproval, streamState } = useWorkspace();
+  const selectedApproval = approvals.find((approval) => approval.id === selectedApprovalId);
 
   const decide = async (id: string, request: ApprovalDecisionRequest) => {
     setBusyId(id);
@@ -45,6 +48,7 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
     try {
       await resolveApproval(id, request);
       setEditingId(undefined);
+      setSelectedApprovalId(undefined);
     } catch (error) {
       setDecisionError(error instanceof Error ? error.message : "Could not record the approval decision.");
     } finally {
@@ -71,18 +75,19 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
   };
 
   return (
-    <aside id="activity-center" className={`activity-center${open ? " open" : ""}`} aria-label="Activity center">
+    <>
+    <aside id="activity-center" className={`activity-center${open ? " open" : ""}`} aria-label="Activity inspector">
       <header className="activity-center-header">
         <div>
           <span className={`live-dot ${streamState}`} aria-hidden="true" />
-          <strong>Activity center</strong>
+          <strong>Activity</strong>
         </div>
         <button className="icon-button subtle" type="button" onClick={onClose} aria-label="Close activity center">
           <X size={17} aria-hidden="true" />
         </button>
       </header>
 
-      <div className="segmented-control" role="tablist" aria-label="Activity center views">
+      <div className="segmented-control" role="tablist" aria-label="Activity inspector views">
         <button
           type="button"
           role="tab"
@@ -156,64 +161,17 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
                   </div>}
                 </dl>
                 <p>{approval.rationale}</p>
-                <details>
-                  <summary>Exact arguments and effects</summary>
-                  <pre>{JSON.stringify(approval.arguments, null, 2)}</pre>
-                  {approval.command && <><strong>Command argv</strong><pre>{JSON.stringify(approval.command, null, 2)}</pre></>}
-                  {approval.image && <p><strong>Image:</strong> <code>{approval.image}</code></p>}
-                  {approval.manifestDigest && <p><strong>Manifest:</strong> <code>{approval.manifestDigest}</code></p>}
-                  <p>{approval.expectedEffects}</p>
-                </details>
-                {editingId === approval.id && <div className="approval-editor">
-                  <label htmlFor={`approval-arguments-${approval.id}`}>Edited arguments</label>
-                  <textarea
-                    id={`approval-arguments-${approval.id}`}
-                    rows={7}
-                    spellCheck={false}
-                    value={editedArguments}
-                    onChange={(event) => setEditedArguments(event.target.value)}
-                  />
-                  <div className="approval-editor-actions">
-                    <button className="button quiet" type="button" onClick={() => setEditingId(undefined)}>Cancel edit</button>
-                    <button className="button primary" type="button" disabled={busyId === approval.id} onClick={() => void approveEdited(approval.id)}>Approve edited</button>
-                  </div>
-                </div>}
                 <div className="approval-actions">
                   <button
-                    className="button danger-quiet"
+                    className="button secondary full"
                     type="button"
-                    disabled={previewMode || busyId === approval.id}
-                    onClick={() => void decide(approval.id, { decision: "reject" })}
-                  >
-                    <X size={15} aria-hidden="true" /> Reject
-                  </button>
-                  <button
-                    className="button quiet"
-                    type="button"
-                    disabled={previewMode || busyId === approval.id}
                     onClick={() => {
                       setDecisionError(undefined);
-                      setEditingId(approval.id);
-                      setEditedArguments(JSON.stringify(approval.arguments, null, 2));
+                      setEditingId(undefined);
+                      setSelectedApprovalId(approval.id);
                     }}
                   >
-                    Edit
-                  </button>
-                  <button
-                    className="button primary"
-                    type="button"
-                    disabled={previewMode || busyId === approval.id}
-                    onClick={() => void decide(approval.id, { decision: "approve" })}
-                  >
-                    <Check size={15} aria-hidden="true" /> Approve once
-                  </button>
-                  <button
-                    className="button danger-quiet"
-                    type="button"
-                    disabled={previewMode || busyId === approval.id}
-                    onClick={() => void decide(approval.id, { decision: "stop" })}
-                  >
-                    Stop mission
+                    Review exact request
                   </button>
                 </div>
               </article>
@@ -229,5 +187,50 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
         )}
       </div>
     </aside>
+    {selectedApproval && (
+      <ModalSurface labelledBy="approval-review-title" className="approval-review-dialog" onClose={() => setSelectedApprovalId(undefined)}>
+        <header className="approval-review-header">
+          <div>
+            <span className={`risk-badge ${selectedApproval.risk}`}>{selectedApproval.risk}</span>
+            <h2 id="approval-review-title">Review {selectedApproval.toolName}</h2>
+            <p>{selectedApproval.rationale}</p>
+          </div>
+          <button className="icon-button subtle" type="button" aria-label="Close approval review" onClick={() => setSelectedApprovalId(undefined)}><X size={17} /></button>
+        </header>
+        <div className="approval-review-body">
+          {decisionError && <p className="activity-error" role="alert">{decisionError}</p>}
+          <dl className="approval-review-facts">
+            <div><dt>Agent</dt><dd>{selectedApproval.agentName}</dd></div>
+            <div><dt>Target</dt><dd>{selectedApproval.target}</dd></div>
+            {selectedApproval.credentialClass && <div><dt>Credential</dt><dd>{selectedApproval.credentialClass}</dd></div>}
+            {selectedApproval.image && <div><dt>Image</dt><dd><code>{selectedApproval.image}</code></dd></div>}
+            {selectedApproval.manifestDigest && <div><dt>Manifest</dt><dd><code>{selectedApproval.manifestDigest}</code></dd></div>}
+          </dl>
+          <section>
+            <h3>Exact arguments</h3>
+            {editingId === selectedApproval.id ? (
+              <div className="approval-editor">
+                <label htmlFor={`approval-arguments-${selectedApproval.id}`}>Edited arguments</label>
+                <textarea id={`approval-arguments-${selectedApproval.id}`} rows={9} spellCheck={false} value={editedArguments} onChange={(event) => setEditedArguments(event.target.value)} />
+                <div className="approval-editor-actions">
+                  <button className="button quiet" type="button" onClick={() => setEditingId(undefined)}>Cancel edit</button>
+                  <button className="button primary" type="button" disabled={busyId === selectedApproval.id || previewMode} onClick={() => void approveEdited(selectedApproval.id)}>Approve edited</button>
+                </div>
+              </div>
+            ) : <pre>{JSON.stringify(selectedApproval.arguments, null, 2)}</pre>}
+          </section>
+          {selectedApproval.command && <section><h3>Command argv</h3><pre>{JSON.stringify(selectedApproval.command, null, 2)}</pre></section>}
+          <section><h3>Expected effects</h3><p>{selectedApproval.expectedEffects}</p></section>
+        </div>
+        {editingId !== selectedApproval.id && <footer className="approval-review-actions">
+          <button className="button danger-quiet" type="button" disabled={previewMode || busyId === selectedApproval.id} onClick={() => void decide(selectedApproval.id, { decision: "reject" })}><X size={15} /> Reject</button>
+          <button className="button quiet" type="button" disabled={previewMode || busyId === selectedApproval.id} onClick={() => { setDecisionError(undefined); setEditingId(selectedApproval.id); setEditedArguments(JSON.stringify(selectedApproval.arguments, null, 2)); }}>Edit request</button>
+          <span />
+          <button className="button danger-quiet" type="button" disabled={previewMode || busyId === selectedApproval.id} onClick={() => void decide(selectedApproval.id, { decision: "stop" })}>Stop mission</button>
+          <button className="button primary" type="button" disabled={previewMode || busyId === selectedApproval.id} onClick={() => void decide(selectedApproval.id, { decision: "approve" })}><Check size={15} /> Approve once</button>
+        </footer>}
+      </ModalSurface>
+    )}
+    </>
   );
 }

@@ -11,3 +11,5 @@ suggestions_notes/suggestions.html
 poetry.lock
 src/.DS_Store
 nmap_output
+ui/playwright-report/
+ui/test-results/

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { Play, ShieldCheck, Square, Wrench, X } from "lucide-react";
 import type { ToolSummary } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useConfirmation } from "./DialogSystem";
 
 interface NewMissionButtonProps {
   className?: string;
@@ -105,12 +106,18 @@ export function NewMissionButton({ className = "button primary", children }: New
 const terminalStatuses = new Set(["failed", "complete", "cancelled"]);
 
 export function StopMissionButton({ className = "button secondary" }: { className?: string }) {
+  const confirm = useConfirmation();
   const { previewMode, run, stopMission } = useWorkspace();
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string>();
   const disabled = previewMode || !run || terminalStatuses.has(run.status) || run.status === "cancelling";
   const stop = async () => {
-    if (!run || !window.confirm(`Stop “${run.title}”? Active analysis will be cancelled after the current safe boundary.`)) return;
+    if (!run || !await confirm({
+      title: "Stop this mission?",
+      message: `“${run.title}” will be cancelled after the current safe boundary. Persisted events and evidence will be retained.`,
+      confirmLabel: "Stop mission",
+      tone: "danger",
+    })) return;
     setStopping(true);
     setError(undefined);
     try {

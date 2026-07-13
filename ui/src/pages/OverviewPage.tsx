@@ -14,6 +14,7 @@ import { Link } from "react-router-dom";
 import { PageHeader } from "../components/PageHeader";
 import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useChrome } from "../state/ChromeContext";
 
 const missionSteps = [
   { label: "Validate scope and policy", state: "complete", actor: "Scope planner" },
@@ -35,6 +36,7 @@ function eventStepState(kind: string): EventStepState {
 }
 
 export function OverviewPage() {
+  const { setActivityOpen } = useChrome();
   const { approvals, assets, engagement, events, findings, health, previewMode, run } = useWorkspace();
   const validatedFindings = findings.filter((finding) => ["validated", "confirmed"].includes(finding.status));
   const criticalFindings = findings.filter((finding) => finding.severity === "critical").length;
@@ -68,6 +70,14 @@ export function OverviewPage() {
             <strong>Exploring the Nebula 3 workspace</strong>
             <p>Representative engagement data is visible until the versioned Nebula Core API connects.</p>
           </div>
+        </div>
+      )}
+
+      {!previewMode && approvals.length > 0 && (
+        <div className="callout approval-callout" role="status">
+          <Clock3 size={19} aria-hidden="true" />
+          <div><strong>{approvals.length} approval{approvals.length === 1 ? "" : "s"} waiting</strong><p>Mission work is paused until an operator reviews the exact request and expected effects.</p></div>
+          <button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button>
         </div>
       )}
 
