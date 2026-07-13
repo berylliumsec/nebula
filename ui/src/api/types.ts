@@ -837,41 +837,69 @@ export interface ExecutionCapabilities {
 
 export interface ContainerTerminalRequest {
   engagementId: Identifier;
-  network: ExecutionNetworkRequest;
   columns: number;
   rows: number;
+}
+
+export interface ContainerTerminalRuntimeSnapshot {
+  sourceImage: string;
+  image: string;
+  imageDigest: string;
+  interpreter: string;
+  arguments: string[];
+  runnerProfileId: Identifier;
+  runnerProfileRevision: number;
+  runnerRuntime: "docker" | "podman";
+  runnerIsolation: string;
+  runnerExecutable: string;
+  runnerPlatform: string;
+  runnerContext?: string;
+}
+
+export interface ContainerTerminalNetworkSnapshot {
+  mode: "unrestricted";
+  runtimeNetwork: "bridge";
+  publishedPorts: number[];
+}
+
+export interface ContainerTerminalSecuritySnapshot {
+  containerUser: "root";
+  rootFilesystem: "writable";
+  linuxCapabilities: string[];
+  noNewPrivileges: boolean;
+  hostNetwork: boolean;
+  runtimeSocket: boolean;
+  hostShell: boolean;
 }
 
 export interface ContainerTerminalCapabilities {
   engagementId: Identifier;
   ready: boolean;
-  offline: boolean;
-  scopedNetwork: boolean;
   detail?: string;
+  sourceImage: string;
+  network: ContainerTerminalNetworkSnapshot;
+  security: ContainerTerminalSecuritySnapshot;
   workspace: "/workspace";
   limits: ExecutionLimits;
   idleTimeoutSeconds: number;
   freshContainer: true;
-  hostAccess: false;
 }
 
 export interface ContainerTerminalPreflight {
   allowed: boolean;
   errorCode?: string;
   detail: string;
-  runtime?: ExecutionRuntimeSnapshot;
-  network?: ExecutionNetworkSnapshot;
+  runtime?: ContainerTerminalRuntimeSnapshot;
+  network: ContainerTerminalNetworkSnapshot;
+  security: ContainerTerminalSecuritySnapshot;
   limits: ExecutionLimits;
   workspace: "/workspace";
   policyRule?: string;
-  scopePolicyId?: Identifier;
-  scopePolicyRevision?: number;
   previewFingerprint?: string;
   previewToken?: string;
   expiresAt?: string;
   idleTimeoutSeconds: number;
   freshContainer: true;
-  hostAccess: false;
 }
 
 export interface ContainerTerminalSession {

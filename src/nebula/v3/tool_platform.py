@@ -39,13 +39,16 @@ from .policy import PolicyEngine
 from .providers import ModelProvider
 from .sandbox import (
     ContainerEgressController,
+    ContainerImagePreparer,
     ContainerRuntimeType,
     ContainerSandboxRunner,
     ContainerToolPackRuntimeAdapter,
     NoEgressController,
+    PreparedContainerImage,
     RunnerIsolationMode,
     RunnerPlatform,
     RunnerProfile,
+    SandboxError,
 )
 from .storage import NebulaStore
 from .toolpack_sdk import ToolPackSDKError, read_tool_pack
@@ -86,6 +89,8 @@ DEFAULT_CATALOG_URL = "https://berylliumsec.github.io/nebula/toolbox/catalog-v1.
 DEFAULT_CATALOG_SIGNATURE_URL = (
     "https://berylliumsec.github.io/nebula/toolbox/catalog-v1.json.signature.json"
 )
+DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE = "docker.io/kalilinux/kali-rolling:latest"
+DEFAULT_HUMAN_TERMINAL_REPOSITORY = "docker.io/kalilinux/kali-rolling"
 MAX_REMOTE_MANIFEST_BYTES = 2_000_000
 MAX_LOCAL_BUNDLE_BYTES = 100_000_000
 DEFAULT_EVENT_RETENTION = 256
@@ -103,6 +108,14 @@ class ChatToolComponents:
     specs: Mapping[str, ToolSpec]
     tool_pack_digests: tuple[str, ...]
     interface_catalog_digests: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class HumanTerminalRuntimeResolution:
+    profile: StoredRunnerProfile
+    runner: ContainerSandboxRunner
+    workspace: Path
+    image: PreparedContainerImage
 
 
 ToolPackOperation = Literal[
@@ -354,6 +367,10 @@ class ToolPlatform:
         self.developer_mode = developer_mode
         self.execution_enabled = execution_enabled
         self.events = ToolPackEventJournal(event_retention)
+        self._human_terminal_images: dict[
+            tuple[str, int], PreparedContainerImage
+        ] = {}
+        self._human_terminal_image_locks: dict[tuple[str, int], asyncio.Lock] = {}
         self.catalog_client = ToolCatalogClient(
             catalog_url=catalog_url,
             signature_url=catalog_signature_url,
@@ -1064,6 +1081,70 @@ class ToolPlatform:
         workspace.chmod(0o777)
         return workspace
 
+    async def resolve_human_terminal_runtime(
+        self, engagement_id: str
+    ) -> HumanTerminalRuntimeResolution:
+        """Resolve the fixed human-only Kali environment without a Toolbox grant."""
+
+        profile = self.resolve_human_terminal_profile(engagement_id)
+        key = (profile.id, profile.revision)
+        image = self._human_terminal_images.get(key)
+        if image is None:
+            lock = self._human_terminal_image_locks.setdefault(key, asyncio.Lock())
+            async with lock:
+                image = self._human_terminal_images.get(key)
+                if image is None:
+                    runner = self._runner(profile)
+                    try:
+                        image = await ContainerImagePreparer(
+                            runner=runner,
+                            platform=cast(
+                                Literal["linux/amd64", "linux/arm64"],
+                                profile.platform,
+                            ),
+                            source_reference=DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE,
+                            expected_repository=DEFAULT_HUMAN_TERMINAL_REPOSITORY,
+                        ).prepare()
+                    except (SandboxError, ValueError) as exc:
+                        raise ToolPlatformError(str(exc)) from exc
+                    self._human_terminal_images[key] = image
+        return HumanTerminalRuntimeResolution(
+            profile=profile,
+            runner=self._runner(profile),
+            workspace=self.workspace_for(engagement_id),
+            image=image,
+        )
+
+    def resolve_human_terminal_profile(
+        self, engagement_id: str
+    ) -> StoredRunnerProfile:
+        """Select the one configured runner eligible for the human terminal."""
+
+        if not self.execution_enabled:
+            raise ToolPlatformError("operator execution is disabled in this Core")
+        self.store.get(Engagement, engagement_id)
+        profiles = [
+            profile
+            for profile in self.store.list_entities(
+                StoredRunnerProfile, limit=1_000
+            )
+            if profile.enabled and profile.healthy
+        ]
+        local = next((profile for profile in profiles if profile.id == "local"), None)
+        if local is not None:
+            profile = local
+        elif len(profiles) == 1:
+            profile = profiles[0]
+        elif not profiles:
+            raise ToolPlatformError(
+                "human terminal requires an enabled, verified healthy runner profile"
+            )
+        else:
+            raise ToolPlatformError(
+                "human terminal runner is ambiguous; name the preferred runner profile 'local'"
+            )
+        return profile
+
     async def cleanup_operator_terminals(self) -> None:
         """Best-effort cleanup for terminal containers orphaned by Core exit."""
 
@@ -1368,6 +1449,9 @@ def default_tool_platform(
 
 __all__ = [
     "DEFAULT_EVENT_RETENTION",
+    "DEFAULT_HUMAN_TERMINAL_REPOSITORY",
+    "DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE",
+    "HumanTerminalRuntimeResolution",
     "MAX_EVENT_RETENTION",
     "OperatorRuntimeResolution",
     "ToolPackEventJournal",

@@ -55,15 +55,25 @@ describe("ContainerTerminalPanel", () => {
       getToken: () => "test-token",
       containerTerminalCapabilities: vi.fn().mockResolvedValue({
         ready: true,
-        offline: true,
       }),
       preflightContainerTerminal: vi.fn().mockResolvedValue({
         allowed: true,
         detail: "approved",
         previewToken: "preview-token",
         previewFingerprint: "preview-fingerprint",
-        runtime: {},
-        network: {},
+        runtime: {
+          sourceImage: "docker.io/kalilinux/kali-rolling:latest",
+          image: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
+          imageDigest: `sha256:${"b".repeat(64)}`,
+          interpreter: "/bin/bash",
+          arguments: ["--noprofile", "--norc", "-i"],
+          runnerProfileId: "local",
+          runnerProfileRevision: 1,
+          runnerRuntime: "podman",
+          runnerIsolation: "rootless",
+          runnerExecutable: "/usr/bin/podman",
+          runnerPlatform: "linux/amd64",
+        },
       }),
       startContainerTerminal: vi.fn().mockResolvedValue({
         sessionId: "terminal-1",

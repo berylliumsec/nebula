@@ -13,6 +13,7 @@ from nebula.v3.database import Database
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     AgentRun,
+    Engagement,
     EngagementToolAssignment,
     RunnerIsolation,
     RunnerProfile,
@@ -23,8 +24,9 @@ from nebula.v3.domain import (
     ToolPackTrust,
     utc_now,
 )
+from nebula.v3.sandbox import PreparedContainerImage
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tool_platform import ToolPlatform, default_tool_platform
+from nebula.v3.tool_platform import ToolPlatform, ToolPlatformError, default_tool_platform
 from nebula.v3.toolpacks import (
     CatalogLoadResult,
     Ed25519Keyring,
@@ -755,6 +757,110 @@ def test_tool_platform_uses_fixed_pack_root_with_test_override(tmp_path, monkeyp
     assert default_tool_pack_root() == (
         tmp_path / "home/Library/Application Support/io.nebula.security/tool-packs"
     )
+
+
+def test_human_terminal_runner_prefers_local_and_rejects_ambiguity(tmp_path):
+    store = NebulaStore(Database(tmp_path / "human-runner.db"))
+    engagement = store.create(Engagement(name="Kali lab"))
+    platform = ToolPlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "core-data",
+        tool_pack_root=tmp_path / "packs",
+        execution_enabled=True,
+    )
+
+    def profile(profile_id):
+        return store.create(
+            RunnerProfile(
+                id=profile_id,
+                name=profile_id,
+                runtime=RunnerRuntime.PODMAN,
+                executable="/usr/bin/podman",
+                platform="linux/amd64",
+                isolation=RunnerIsolation.ROOTLESS,
+                healthy=True,
+            )
+        )
+
+    other = profile("other")
+    local = profile("local")
+    assert platform.resolve_human_terminal_profile(engagement.id).id == local.id
+
+    store.update(
+        RunnerProfile,
+        local.id,
+        {"enabled": False},
+        expected_revision=local.revision,
+    )
+    assert platform.resolve_human_terminal_profile(engagement.id).id == other.id
+    profile("third")
+    with pytest.raises(ToolPlatformError, match="ambiguous"):
+        platform.resolve_human_terminal_profile(engagement.id)
+
+
+def test_human_terminal_image_is_prepared_once_per_runner_revision(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(Database(tmp_path / "human-image.db"))
+    engagement = store.create(Engagement(name="Kali lab"))
+    store.create(
+        RunnerProfile(
+            id="local",
+            name="Local",
+            runtime=RunnerRuntime.PODMAN,
+            executable="/usr/bin/podman",
+            platform="linux/amd64",
+            isolation=RunnerIsolation.ROOTLESS,
+            healthy=True,
+        )
+    )
+    platform = ToolPlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "core-data",
+        tool_pack_root=tmp_path / "packs",
+        execution_enabled=True,
+    )
+    calls = 0
+
+    class FakePreparer:
+        def __init__(self, **kwargs):
+            assert kwargs["source_reference"] == (
+                "docker.io/kalilinux/kali-rolling:latest"
+            )
+            assert kwargs["expected_repository"] == (
+                "docker.io/kalilinux/kali-rolling"
+            )
+
+        async def prepare(self):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0)
+            return PreparedContainerImage(
+                source_reference="docker.io/kalilinux/kali-rolling:latest",
+                resolved_reference=(
+                    "docker.io/kalilinux/kali-rolling@sha256:" + DIGEST_A
+                ),
+                digest="sha256:" + DIGEST_A,
+                platform="linux/amd64",
+                configured_user="",
+                refreshed=True,
+                detail="pulled",
+            )
+
+    monkeypatch.setattr("nebula.v3.tool_platform.ContainerImagePreparer", FakePreparer)
+
+    async def resolve_twice():
+        return await asyncio.gather(
+            platform.resolve_human_terminal_runtime(engagement.id),
+            platform.resolve_human_terminal_runtime(engagement.id),
+        )
+
+    first, second = asyncio.run(resolve_twice())
+    assert calls == 1
+    assert first.image == second.image
+    assert first.image.resolved_reference.endswith(DIGEST_A)
 
 
 def test_tool_platform_includes_declared_shell_capabilities_implicitly(tmp_path):

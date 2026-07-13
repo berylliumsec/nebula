@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from nebula.v3.sandbox import (
     AnalysisOnlyRunner,
     ContainerEgressController,
+    ContainerImagePreparer,
     ContainerRuntimeType,
     ContainerSandboxRunner,
     ContainerToolPackRuntimeAdapter,
@@ -14,10 +15,12 @@ from nebula.v3.sandbox import (
     RunnerIsolationMode,
     RunnerPlatform,
     RunnerProfile,
+    SandboxContainerUser,
     SandboxError,
     SandboxExecutionKind,
     SandboxNetwork,
     SandboxRequest,
+    SandboxRootFilesystem,
     SandboxUnavailable,
     SandboxWorkspaceAccess,
 )
@@ -111,6 +114,35 @@ def test_container_terminal_argv_adds_tty_without_host_shell_fallback(tmp_path):
     assert all(value not in {"-c", "/bin/sh"} for value in argv[:-5])
     with pytest.raises(SandboxError, match="requires interactive"):
         runner._argv(request, workspace, tty=True)
+
+
+def test_human_terminal_alone_can_be_root_writable_and_unrestricted(tmp_path):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
+    request = _request(
+        tmp_path,
+        command=["/bin/bash", "--noprofile", "--norc", "-i"],
+        workspace_access=SandboxWorkspaceAccess.WRITE,
+        network=SandboxNetwork.UNRESTRICTED,
+        execution_kind=SandboxExecutionKind.HUMAN_TERMINAL,
+        container_user=SandboxContainerUser.ROOT,
+        root_filesystem=SandboxRootFilesystem.WRITABLE,
+    )
+    argv = runner._argv(request, runner._validate(request), interactive=True, tty=True)
+
+    assert "--network=bridge" in argv
+    assert "--user=0:0" in argv
+    assert "--read-only" not in argv
+    assert "--cap-drop=ALL" in argv
+    assert "--security-opt=no-new-privileges" in argv
+    assert not any(value.startswith("--publish") or value == "--privileged" for value in argv)
+
+    for changes in (
+        {"network": SandboxNetwork.UNRESTRICTED},
+        {"container_user": SandboxContainerUser.ROOT},
+        {"root_filesystem": SandboxRootFilesystem.WRITABLE},
+    ):
+        with pytest.raises(ValidationError):
+            _request(tmp_path, execution_kind=SandboxExecutionKind.LOCAL_TOOL, **changes)
 
 
 def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeypatch):
@@ -556,6 +588,84 @@ def test_toolpack_runtime_adapter_inspects_exact_digest_platform_and_user(
     assert info.digest == "sha256:" + "c" * 64
     assert info.platform == "linux/amd64"
     assert info.user == "10001:10001"
+
+
+@pytest.mark.parametrize("pull_return_code,refreshed", [(0, True), (1, False)])
+def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
+    monkeypatch, pull_return_code, refreshed
+):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    preparer = ContainerImagePreparer(
+        runner=runner,
+        platform="linux/amd64",
+        source_reference="docker.io/kalilinux/kali-rolling:latest",
+        expected_repository="docker.io/kalilinux/kali-rolling",
+    )
+    calls = []
+
+    async def available():
+        return True, "healthy"
+
+    async def runtime_command(*arguments, timeout_seconds):
+        calls.append((arguments, timeout_seconds))
+        if arguments[0] == "pull":
+            return "", "registry unavailable", pull_return_code
+        return (
+            '{"RepoDigests":["kalilinux/kali-rolling@sha256:'
+            + "e" * 64
+            + '"],"Os":"linux","Architecture":"amd64","Config":{"User":""}}',
+            "",
+            0,
+        )
+
+    monkeypatch.setattr(runner, "available", available)
+    monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
+    image = asyncio.run(preparer.prepare())
+
+    assert calls[0] == (
+        (
+            "pull",
+            "--platform=linux/amd64",
+            "docker.io/kalilinux/kali-rolling:latest",
+        ),
+        900,
+    )
+    assert image.resolved_reference == (
+        "docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64
+    )
+    assert image.refreshed is refreshed
+    if not refreshed:
+        assert "verified cached" in image.detail
+
+
+def test_human_terminal_image_rejects_unproven_repository(monkeypatch):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
+    preparer = ContainerImagePreparer(
+        runner=runner,
+        platform="linux/amd64",
+        source_reference="docker.io/kalilinux/kali-rolling:latest",
+        expected_repository="docker.io/kalilinux/kali-rolling",
+    )
+
+    async def available():
+        return True, "healthy"
+
+    async def runtime_command(*arguments, timeout_seconds):
+        del timeout_seconds
+        if arguments[0] == "pull":
+            return "", "", 0
+        return (
+            '{"RepoDigests":["attacker.invalid/kali@sha256:'
+            + "f" * 64
+            + '"],"Os":"linux","Architecture":"amd64","Config":{"User":""}}',
+            "",
+            0,
+        )
+
+    monkeypatch.setattr(runner, "available", available)
+    monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
+    with pytest.raises(SandboxUnavailable, match="official repository"):
+        asyncio.run(preparer.prepare())
 
 
 def test_toolpack_runtime_adapter_smoke_test_is_offline_hardened_argv(

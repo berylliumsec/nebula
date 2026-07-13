@@ -17,6 +17,11 @@ on the host, the webview must never receive a container-runtime socket, and an
 unavailable runner must leave execution disabled rather than falling back to a
 host shell.
 
+The network restrictions below apply to agent tools and reviewed assistant-code
+execution. The separately documented human-operated Kali terminal is an
+explicit root/writable/unrestricted bridge exception and cannot be requested by
+either of those automation paths.
+
 ## Product decisions required before implementation
 
 - [ ] **D1 — Environment lifetime:** Decide whether one environment is reused

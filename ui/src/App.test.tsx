@@ -324,15 +324,16 @@ describe("Nebula workspace", () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const digest = "a".repeat(64);
     const incompleteDigest = "d".repeat(64);
-    let environmentAssigned = false;
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable", container_terminal: "configured" }), { status: 200 });
       if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Terminal review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
       if (path.endsWith("/container-terminal/capabilities")) return new Response(JSON.stringify({
-        engagement_id: "engagement-1", ready: environmentAssigned, offline: environmentAssigned, scoped_network: environmentAssigned, workspace: "/workspace",
+        engagement_id: "engagement-1", ready: true, source_image: "docker.io/kalilinux/kali-rolling:latest", workspace: "/workspace",
+        network: { mode: "unrestricted", runtime_network: "bridge", published_ports: [] },
+        security: { container_user: "root", root_filesystem: "writable", linux_capabilities: [], no_new_privileges: true, host_network: false, runtime_socket: false, host_shell: false },
         limits: { cpu_count: 1, memory_mb: 512, pids: 128, timeout_seconds: 1800, output_bytes_per_stream: 2_000_000 },
-        idle_timeout_seconds: 900, fresh_container: true, host_access: false, detail: environmentAssigned ? null : "engagement is not assigned environment.shell_local",
+        idle_timeout_seconds: 900, fresh_container: true, detail: null,
       }), { status: 200 });
       if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([
         {
@@ -358,7 +359,6 @@ describe("Nebula workspace", () => {
       ]), { status: 200 });
       if (path.endsWith("/tool-assignment")) {
         if (init?.method === "PUT") {
-          environmentAssigned = true;
           return new Response(JSON.stringify({ ...entity, id: "assignment-1", engagement_id: "engagement-1", manifest_digest: digest, allowed_tool_names: ["environment.shell_local", "environment.shell_network"], enabled: true }), { status: 200 });
         }
         return new Response(JSON.stringify([]), { status: 200 });
@@ -367,16 +367,17 @@ describe("Nebula workspace", () => {
         allowed: true,
         detail: "request is confined to the workspace",
         runtime: {
-          language: "bash", interpreter: "/bin/bash", arguments: ["--noprofile", "--norc", "-i"],
-          tool_pack_installation_id: "pack-1", manifest_digest: digest, image: `example.invalid/toolbox@sha256:${"b".repeat(64)}`,
+          source_image: "docker.io/kalilinux/kali-rolling:latest", interpreter: "/bin/bash", arguments: ["--noprofile", "--norc", "-i"],
+          image: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`, image_digest: `sha256:${"b".repeat(64)}`,
           runner_profile_id: "runner-1", runner_profile_revision: 2, runner_runtime: "podman", runner_isolation: "rootless",
-          runner_executable: "/usr/bin/podman", runner_platform: "linux/amd64", trusted: true,
+          runner_executable: "/usr/bin/podman", runner_platform: "linux/amd64",
         },
-        network: { mode: "none", ports: [], resolved_addresses: [] },
+        network: { mode: "unrestricted", runtime_network: "bridge", published_ports: [] },
+        security: { container_user: "root", root_filesystem: "writable", linux_capabilities: [], no_new_privileges: true, host_network: false, runtime_socket: false, host_shell: false },
         limits: { cpu_count: 1, memory_mb: 512, pids: 128, timeout_seconds: 1800, output_bytes_per_stream: 2_000_000 },
-        workspace: "/workspace", policy_rule: "low_risk", scope_policy_id: "scope-1", scope_policy_revision: 3,
+        workspace: "/workspace", policy_rule: "human_terminal_unrestricted",
         preview_fingerprint: "c".repeat(64), preview_token: "signed.preview", expires_at: "2026-07-13T18:00:00Z",
-        idle_timeout_seconds: 900, fresh_container: true, host_access: false,
+        idle_timeout_seconds: 900, fresh_container: true,
       }), { status: 200 });
       if (path.endsWith("/container-terminal/sessions") && init?.method === "POST") {
         return new Promise<Response>((_resolve, reject) => {
@@ -391,15 +392,15 @@ describe("Nebula workspace", () => {
 
     await user.click(await screen.findByRole("tab", { name: "Terminal" }));
     expect(await screen.findByRole("heading", { name: "Terminal" })).toBeVisible();
-    expect(screen.getByText("No host shell")).toBeVisible();
+    expect(screen.getByText("Root + network")).toBeVisible();
+    expect(screen.getByText(/includes no security tools by default/i)).toBeVisible();
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/sessions") && request?.method === "POST")).toBe(true));
 
-    const assignmentCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-assignment") && request?.method === "PUT");
-    expect(JSON.parse(String(assignmentCall?.[1]?.body))).toMatchObject({ manifest_digest: digest, tool_names: [], enabled: true });
+    expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-assignment") && request?.method === "PUT")).toBe(false);
     const preflightCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/preflight") && request?.method === "POST");
-    expect(JSON.parse(String(preflightCall?.[1]?.body))).toEqual({ engagement_id: "engagement-1", network: { mode: "none", ports: [] }, columns: 100, rows: 30 });
+    expect(JSON.parse(String(preflightCall?.[1]?.body))).toEqual({ engagement_id: "engagement-1", columns: 100, rows: 30 });
     const startCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/sessions") && request?.method === "POST");
-    expect(JSON.parse(String(startCall?.[1]?.body))).toMatchObject({ engagement_id: "engagement-1", network: { mode: "none", ports: [] }, preview_token: "signed.preview", preview_fingerprint: "c".repeat(64) });
+    expect(JSON.parse(String(startCall?.[1]?.body))).toMatchObject({ engagement_id: "engagement-1", preview_token: "signed.preview", preview_fingerprint: "c".repeat(64) });
   });
 
   it("creates and activates a new engagement from the switcher", async () => {

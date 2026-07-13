@@ -40,6 +40,7 @@ class SandboxUnavailable(SandboxError):
 class SandboxNetwork(str, Enum):
     NONE = "none"
     SCOPED = "scoped"
+    UNRESTRICTED = "unrestricted"
 
 
 class SandboxExecutionKind(str, Enum):
@@ -48,6 +49,17 @@ class SandboxExecutionKind(str, Enum):
     LOCAL_TOOL = "local_tool"
     PARSER = "parser"
     NETWORK_TOOL = "network_tool"
+    HUMAN_TERMINAL = "human_terminal"
+
+
+class SandboxContainerUser(str, Enum):
+    NON_ROOT = "65532:65532"
+    ROOT = "0:0"
+
+
+class SandboxRootFilesystem(str, Enum):
+    READ_ONLY = "read_only"
+    WRITABLE = "writable"
 
 
 class EgressProtocol(str, Enum):
@@ -227,6 +239,8 @@ class SandboxRequest(BaseModel):
     environment: dict[str, str] = Field(default_factory=dict)
     network: SandboxNetwork = SandboxNetwork.NONE
     execution_kind: SandboxExecutionKind | None = None
+    container_user: SandboxContainerUser = SandboxContainerUser.NON_ROOT
+    root_filesystem: SandboxRootFilesystem = SandboxRootFilesystem.READ_ONLY
     egress_rules: list[EgressRule] = Field(default_factory=list)
     # Kept for wire compatibility with the earlier prototype. A named bridge
     # is never sufficient authorization for run(); certified egress uses a
@@ -266,8 +280,22 @@ class SandboxRequest(BaseModel):
                     "scoped network execution requires a legacy network_name "
                     "or certified egress rules"
                 )
+        elif self.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL:
+            if self.network != SandboxNetwork.UNRESTRICTED:
+                raise ValueError(
+                    "human terminals require unrestricted bridge networking"
+                )
+            if self.container_user != SandboxContainerUser.ROOT:
+                raise ValueError("human terminals require the container root user")
+            if self.root_filesystem != SandboxRootFilesystem.WRITABLE:
+                raise ValueError("human terminals require a writable root filesystem")
         elif self.network != SandboxNetwork.NONE:
             raise ValueError("local tools and parsers must use network=none")
+        if self.execution_kind != SandboxExecutionKind.HUMAN_TERMINAL:
+            if self.container_user != SandboxContainerUser.NON_ROOT:
+                raise ValueError("only human terminals may use the container root user")
+            if self.root_filesystem != SandboxRootFilesystem.READ_ONLY:
+                raise ValueError("only human terminals may use a writable root filesystem")
         if (
             self.execution_kind == SandboxExecutionKind.PARSER
             and self.workspace_access
@@ -282,6 +310,12 @@ class SandboxRequest(BaseModel):
                 raise ValueError("offline execution cannot declare egress rules")
             if self.pinned_hosts:
                 raise ValueError("offline execution cannot declare pinned hosts")
+        if self.network == SandboxNetwork.UNRESTRICTED and any(
+            (self.network_name, self.egress_rules, self.pinned_hosts)
+        ):
+            raise ValueError(
+                "unrestricted human-terminal networking cannot declare scoped egress"
+            )
         if self.egress_rules:
             allowed_addresses = {rule.address for rule in self.egress_rules}
             if any(
@@ -1000,15 +1034,16 @@ class ContainerSandboxRunner(SandboxRunner):
             "--rm",
             f"--name={container_name}",
             "--pull=never",
-            "--read-only",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
             f"--cpus={limits.cpu_count}",
             f"--memory={limits.memory_mb}m",
             f"--pids-limit={limits.pids}",
-            "--user=65532:65532",
+            f"--user={request.container_user.value}",
             "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m",
         ]
+        if request.root_filesystem == SandboxRootFilesystem.READ_ONLY:
+            argv.append("--read-only")
         if interactive:
             argv.append("--interactive")
         if tty:
@@ -1033,6 +1068,8 @@ class ContainerSandboxRunner(SandboxRunner):
             )
         if request.network == SandboxNetwork.NONE:
             argv.append("--network=none")
+        elif request.network == SandboxNetwork.UNRESTRICTED:
+            argv.append("--network=bridge")
         else:
             selected_network = network_mode or request.network_name
             if not selected_network:
@@ -1316,6 +1353,173 @@ class ContainerSandboxRunner(SandboxRunner):
             await asyncio.wait_for(cleanup.wait(), timeout=10)
         except (OSError, asyncio.TimeoutError):
             return
+
+
+@dataclass(frozen=True)
+class PreparedContainerImage:
+    source_reference: str
+    resolved_reference: str
+    digest: str
+    platform: Literal["linux/amd64", "linux/arm64"]
+    configured_user: str
+    refreshed: bool
+    detail: str
+
+
+class ContainerImagePreparer:
+    """Pull one allowlisted mutable source and resolve it to a local digest."""
+
+    def __init__(
+        self,
+        *,
+        runner: ContainerSandboxRunner,
+        platform: Literal["linux/amd64", "linux/arm64"],
+        source_reference: str,
+        expected_repository: str,
+        pull_timeout_seconds: int = 900,
+    ) -> None:
+        if platform not in {"linux/amd64", "linux/arm64"}:
+            raise ValueError("container image platform must be linux/amd64 or linux/arm64")
+        if pull_timeout_seconds < 1 or pull_timeout_seconds > 3600:
+            raise ValueError("pull timeout must be between 1 and 3600 seconds")
+        if runner.profile is None:
+            raise ValueError("container image preparation requires an explicit runner")
+        if not re.fullmatch(
+            r"[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+:[A-Za-z0-9_.-]+",
+            source_reference,
+        ):
+            raise ValueError("container image source must be a fully qualified tagged image")
+        if "@" in expected_repository or ":" in expected_repository.rsplit("/", 1)[-1]:
+            raise ValueError("expected image repository cannot contain a tag or digest")
+        if _normalized_repository(expected_repository) != expected_repository:
+            raise ValueError("expected image repository must be fully qualified")
+        self.runner = runner
+        self.platform = platform
+        self.source_reference = source_reference
+        self.expected_repository = expected_repository
+        self.pull_timeout_seconds = pull_timeout_seconds
+
+    async def prepare(self) -> PreparedContainerImage:
+        available, detail = await self.runner.available()
+        if not available:
+            raise SandboxUnavailable(detail)
+
+        refreshed = False
+        pull_detail: str | None = None
+        try:
+            stdout, stderr, return_code = await self._runtime_command(
+                "pull",
+                f"--platform={self.platform}",
+                self.source_reference,
+                timeout_seconds=self.pull_timeout_seconds,
+            )
+            if return_code == 0:
+                refreshed = True
+            else:
+                pull_detail = (stderr.strip() or stdout.strip() or str(return_code))[:1000]
+        except (OSError, SandboxError) as exc:
+            pull_detail = str(exc)[:1000]
+
+        stdout, stderr, return_code = await self._runtime_command(
+            "image",
+            "inspect",
+            self.source_reference,
+            "--format",
+            "{{json .}}",
+            timeout_seconds=30,
+        )
+        if return_code != 0:
+            inspect_detail = (stderr.strip() or stdout.strip() or str(return_code))[:1000]
+            if pull_detail:
+                raise SandboxUnavailable(
+                    f"Kali image pull failed ({pull_detail}); no verified cached image is available ({inspect_detail})"
+                )
+            raise SandboxUnavailable(
+                f"pulled Kali image could not be inspected: {inspect_detail}"
+            )
+        try:
+            document = _first_document(json.loads(stdout))
+        except json.JSONDecodeError as exc:
+            raise SandboxUnavailable("Kali image inspection returned invalid JSON") from exc
+
+        repo_digests = _mapping_get(document, "RepoDigests", "repoDigests")
+        matching: list[str] = []
+        if isinstance(repo_digests, list):
+            for value in repo_digests:
+                if not isinstance(value, str) or "@sha256:" not in value:
+                    continue
+                repository, digest = value.rsplit("@", 1)
+                if _normalized_repository(repository) == self.expected_repository:
+                    matching.append(digest)
+        if not matching:
+            raise SandboxUnavailable(
+                "runtime did not prove that the Kali image belongs to the official repository"
+            )
+        digest = sorted(set(matching))[0]
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise SandboxUnavailable("runtime returned an invalid Kali image digest")
+
+        os_name = str(_mapping_get(document, "Os", "OS", "os")).lower()
+        architecture = str(
+            _mapping_get(document, "Architecture", "architecture", "Arch")
+        ).lower()
+        observed_platform = f"{os_name}/{architecture}"
+        if observed_platform != self.platform:
+            raise SandboxUnavailable(
+                f"Kali image platform mismatch: expected {self.platform}, observed {observed_platform}"
+            )
+        config = _mapping_get(document, "Config", "config")
+        user = _mapping_get(config, "User", "user")
+        if not isinstance(user, str):
+            raise SandboxUnavailable("Kali image did not declare a valid container config")
+        return PreparedContainerImage(
+            source_reference=self.source_reference,
+            resolved_reference=f"{self.expected_repository}@{digest}",
+            digest=digest,
+            platform=self.platform,
+            configured_user=user,
+            refreshed=refreshed,
+            detail=(
+                "pulled and verified the latest official Kali image"
+                if refreshed
+                else f"using a verified cached Kali image after refresh failed: {pull_detail}"
+            ),
+        )
+
+    async def _runtime_command(
+        self, *arguments: str, timeout_seconds: int
+    ) -> tuple[str, str, int]:
+        process = await asyncio.create_subprocess_exec(
+            *self.runner._runtime_argv(),
+            *arguments,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        try:
+            stdout, stderr = await _communicate_limited(
+                process, timeout_seconds=timeout_seconds, output_bytes=5_000_000
+            )
+        except asyncio.TimeoutError as exc:
+            raise SandboxUnavailable("container runtime operation timed out") from exc
+        return (
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+            int(process.returncode or 0),
+        )
+
+
+def _normalized_repository(value: str) -> str:
+    repository = value
+    first = repository.split("/", 1)[0]
+    if "." not in first and ":" not in first and first != "localhost":
+        repository = f"docker.io/{repository}"
+    if repository.startswith("index.docker.io/"):
+        repository = "docker.io/" + repository.removeprefix("index.docker.io/")
+    if repository.startswith("docker.io/library/") and value.startswith("library/"):
+        return repository
+    return repository
 
 
 class ContainerToolPackRuntimeAdapter:
@@ -1622,6 +1826,7 @@ def _runtime_environment() -> dict[str, str]:
 __all__ = [
     "AnalysisOnlyRunner",
     "ContainerEgressController",
+    "ContainerImagePreparer",
     "ContainerRuntimeType",
     "ContainerSandboxRunner",
     "ContainerToolPackRuntimeAdapter",
@@ -1630,15 +1835,18 @@ __all__ = [
     "EgressProtocol",
     "EgressRule",
     "NoEgressController",
+    "PreparedContainerImage",
     "RunnerIsolationMode",
     "RunnerPlatform",
     "RunnerProfile",
     "SandboxError",
+    "SandboxContainerUser",
     "SandboxExecutionKind",
     "SandboxLimits",
     "SandboxNetwork",
     "SandboxRequest",
     "SandboxResult",
+    "SandboxRootFilesystem",
     "SandboxRunner",
     "SandboxTerminalProcess",
     "SandboxUnavailable",

@@ -533,33 +533,62 @@ interface WireExecutionCapabilities extends JsonObject {
 interface WireContainerTerminalCapabilities extends JsonObject {
   engagement_id: string;
   ready: boolean;
-  offline: boolean;
-  scoped_network: boolean;
   detail?: string | null;
+  source_image: string;
+  network: WireContainerTerminalNetwork;
+  security: WireContainerTerminalSecurity;
   workspace: "/workspace";
   limits: WireExecutionLimits;
   idle_timeout_seconds: number;
   fresh_container: true;
-  host_access: false;
+}
+
+interface WireContainerTerminalRuntime extends JsonObject {
+  source_image: string;
+  image: string;
+  image_digest: string;
+  interpreter: string;
+  arguments: string[];
+  runner_profile_id: string;
+  runner_profile_revision: number;
+  runner_runtime: "docker" | "podman";
+  runner_isolation: string;
+  runner_executable: string;
+  runner_platform: string;
+  runner_context?: string | null;
+}
+
+interface WireContainerTerminalNetwork extends JsonObject {
+  mode: "unrestricted";
+  runtime_network: "bridge";
+  published_ports: number[];
+}
+
+interface WireContainerTerminalSecurity extends JsonObject {
+  container_user: "root";
+  root_filesystem: "writable";
+  linux_capabilities: string[];
+  no_new_privileges: boolean;
+  host_network: boolean;
+  runtime_socket: boolean;
+  host_shell: boolean;
 }
 
 interface WireContainerTerminalPreflight extends JsonObject {
   allowed: boolean;
   error_code?: string | null;
   detail: string;
-  runtime?: WireExecutionRuntime | null;
-  network?: WireExecutionNetwork | null;
+  runtime?: WireContainerTerminalRuntime | null;
+  network: WireContainerTerminalNetwork;
+  security: WireContainerTerminalSecurity;
   limits: WireExecutionLimits;
   workspace: "/workspace";
   policy_rule?: string | null;
-  scope_policy_id?: string | null;
-  scope_policy_revision?: number | null;
   preview_fingerprint?: string | null;
   preview_token?: string | null;
   expires_at?: string | null;
   idle_timeout_seconds: number;
   fresh_container: true;
-  host_access: false;
 }
 
 interface WireContainerTerminalSession extends JsonObject {
@@ -1385,13 +1414,45 @@ function mapExecutionPreflight(value: WireExecutionPreflight): ExecutionPrefligh
 function terminalBody(value: ContainerTerminalRequest): JsonObject {
   return {
     engagement_id: value.engagementId,
-    network: {
-      mode: value.network.mode,
-      target: value.network.target,
-      ports: value.network.ports,
-    },
     columns: value.columns,
     rows: value.rows,
+  };
+}
+
+function mapContainerTerminalRuntime(value: WireContainerTerminalRuntime) {
+  return {
+    sourceImage: value.source_image,
+    image: value.image,
+    imageDigest: value.image_digest,
+    interpreter: value.interpreter,
+    arguments: value.arguments,
+    runnerProfileId: value.runner_profile_id,
+    runnerProfileRevision: value.runner_profile_revision,
+    runnerRuntime: value.runner_runtime,
+    runnerIsolation: value.runner_isolation,
+    runnerExecutable: value.runner_executable,
+    runnerPlatform: value.runner_platform,
+    runnerContext: value.runner_context ?? undefined,
+  };
+}
+
+function mapContainerTerminalNetwork(value: WireContainerTerminalNetwork) {
+  return {
+    mode: value.mode,
+    runtimeNetwork: value.runtime_network,
+    publishedPorts: value.published_ports,
+  };
+}
+
+function mapContainerTerminalSecurity(value: WireContainerTerminalSecurity) {
+  return {
+    containerUser: value.container_user,
+    rootFilesystem: value.root_filesystem,
+    linuxCapabilities: value.linux_capabilities,
+    noNewPrivileges: value.no_new_privileges,
+    hostNetwork: value.host_network,
+    runtimeSocket: value.runtime_socket,
+    hostShell: value.host_shell,
   };
 }
 
@@ -1402,19 +1463,17 @@ function mapContainerTerminalPreflight(
     allowed: value.allowed,
     errorCode: value.error_code ?? undefined,
     detail: value.detail,
-    runtime: value.runtime ? mapExecutionRuntime(value.runtime) : undefined,
-    network: value.network ? mapExecutionNetwork(value.network) : undefined,
+    runtime: value.runtime ? mapContainerTerminalRuntime(value.runtime) : undefined,
+    network: mapContainerTerminalNetwork(value.network),
+    security: mapContainerTerminalSecurity(value.security),
     limits: mapExecutionLimits(value.limits),
     workspace: value.workspace,
     policyRule: value.policy_rule ?? undefined,
-    scopePolicyId: value.scope_policy_id ?? undefined,
-    scopePolicyRevision: value.scope_policy_revision ?? undefined,
     previewFingerprint: value.preview_fingerprint ?? undefined,
     previewToken: value.preview_token ?? undefined,
     expiresAt: value.expires_at ?? undefined,
     idleTimeoutSeconds: value.idle_timeout_seconds,
     freshContainer: value.fresh_container,
-    hostAccess: value.host_access,
   };
 }
 
@@ -2325,14 +2384,14 @@ export class ApiClient {
     ).then((value) => ({
       engagementId: value.engagement_id,
       ready: value.ready,
-      offline: value.offline,
-      scopedNetwork: value.scoped_network,
       detail: value.detail ?? undefined,
+      sourceImage: value.source_image,
+      network: mapContainerTerminalNetwork(value.network),
+      security: mapContainerTerminalSecurity(value.security),
       workspace: value.workspace,
       limits: mapExecutionLimits(value.limits),
       idleTimeoutSeconds: value.idle_timeout_seconds,
       freshContainer: value.fresh_container,
-      hostAccess: value.host_access,
     }));
   }
 

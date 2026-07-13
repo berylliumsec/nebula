@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 from functools import wraps
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -21,16 +21,20 @@ from nebula.v3.domain import (
     RunnerIsolation,
     RunnerProfile,
     RunnerRuntime,
-    ScopePolicy,
-    ToolPackInstallation,
-    ToolPackInstallationStatus,
-    ToolPackTrust,
-    utc_now,
 )
-from nebula.v3.sandbox import SandboxNetwork, SandboxWorkspaceAccess
+from nebula.v3.sandbox import (
+    PreparedContainerImage,
+    SandboxContainerUser,
+    SandboxExecutionKind,
+    SandboxNetwork,
+    SandboxRootFilesystem,
+    SandboxWorkspaceAccess,
+)
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tool_platform import OperatorRuntimeResolution
-from nebula.v3.toolpacks import ToolPackOperatorRuntime
+from nebula.v3.tool_platform import (
+    HumanTerminalRuntimeResolution,
+    ToolPlatformError,
+)
 from nebula.v3.workspace import WorkspaceService
 
 
@@ -71,8 +75,7 @@ class RecordingTerminalProcess:
 
 
 class RecordingTerminalRunner:
-    def __init__(self, *, certified: bool = True) -> None:
-        self.egress_controller = SimpleNamespace(certified=certified)
+    def __init__(self) -> None:
         self.requests: list[tuple[object, str, int, int]] = []
         self.processes: list[RecordingTerminalProcess] = []
 
@@ -89,10 +92,13 @@ class RecordingTerminalRunner:
 class StubTerminalPlatform:
     execution_enabled = True
 
-    def __init__(self, workspace, runner: RecordingTerminalRunner) -> None:
+    def __init__(
+        self, workspace, runner: RecordingTerminalRunner, *, fail_image: bool = False
+    ) -> None:
         self.workspace = workspace
         self.workspace.mkdir(parents=True)
         self.runner = runner
+        self.fail_image = fail_image
         self.cleanup_calls = 0
         self.profile = RunnerProfile(
             id="runner-1",
@@ -104,20 +110,16 @@ class StubTerminalPlatform:
             enabled=True,
             healthy=True,
         )
-        self.installation = ToolPackInstallation(
-            id="pack-1",
-            publisher="berylliumsec",
-            name="toolbox",
-            version="1",
-            manifest_digest="a" * 64,
-            source="test",
-            trust=ToolPackTrust.CURATED,
-            runtime_profile_id=self.profile.id,
-            image_locks={"linux/amd64": "example.invalid/toolbox@sha256:" + "b" * 64},
-            status=ToolPackInstallationStatus.READY,
-            manifest_path="/tmp/manifest.json",
-            installed_at=utc_now(),
-            verified_at=utc_now(),
+        self.image = PreparedContainerImage(
+            source_reference="docker.io/kalilinux/kali-rolling:latest",
+            resolved_reference=(
+                "docker.io/kalilinux/kali-rolling@sha256:" + "b" * 64
+            ),
+            digest="sha256:" + "b" * 64,
+            platform="linux/amd64",
+            configured_user="",
+            refreshed=True,
+            detail="pulled and verified the latest official Kali image",
         )
 
     async def cleanup_operator_terminals(self) -> None:
@@ -127,56 +129,37 @@ class StubTerminalPlatform:
         del engagement_id
         return self.workspace
 
-    def resolve_operator_runtime(
-        self, engagement_id: str, language: str, *, network: bool
-    ) -> OperatorRuntimeResolution:
-        del engagement_id, network
-        assert language == "bash"
-        runtime = ToolPackOperatorRuntime(
-            language="bash",
-            aliases=["bash", "shell"],
-            image="toolbox",
-            adapter="/opt/nebula/bin/nebula-toolbox",
-            interpreter="/bin/bash",
-            arguments=["--noprofile", "--norc", "-eu", "-o", "pipefail"],
-        )
-        return OperatorRuntimeResolution(
-            canonical_language="bash",
-            runtime=runtime,
-            installation=self.installation,
-            manifest=SimpleNamespace(),  # type: ignore[arg-type]
+    def resolve_human_terminal_profile(self, engagement_id: str) -> RunnerProfile:
+        del engagement_id
+        return self.profile
+
+    async def resolve_human_terminal_runtime(
+        self, engagement_id: str
+    ) -> HumanTerminalRuntimeResolution:
+        del engagement_id
+        if self.fail_image:
+            raise ToolPlatformError("registry unavailable and no cached Kali image")
+        return HumanTerminalRuntimeResolution(
             profile=self.profile,
-            image=self.installation.image_locks["linux/amd64"],
             runner=self.runner,  # type: ignore[arg-type]
             workspace=self.workspace,
-            trusted=True,
+            image=self.image,
         )
 
 
-def fixture(tmp_path, *, certified: bool = True):
+def fixture(tmp_path, *, fail_image: bool = False):
     store = NebulaStore(tmp_path / "nebula.db")
     engagement = store.create(Engagement(name="Container Terminal Lab"))
-    policy = store.create(
-        ScopePolicy(
-            engagement_id=engagement.id,
-            allowed_cidrs=["10.0.0.0/8"],
-            allowed_ports=[443, 8443],
-        )
+    runner = RecordingTerminalRunner()
+    platform = StubTerminalPlatform(
+        tmp_path / "workspace", runner, fail_image=fail_image
     )
-    engagement = store.update(
-        Engagement,
-        engagement.id,
-        {"scope_policy_id": policy.id},
-        expected_revision=engagement.revision,
-    )
-    runner = RecordingTerminalRunner(certified=certified)
-    platform = StubTerminalPlatform(tmp_path / "workspace", runner)
     service = ContainerTerminalService(
         store=store,
         tool_platform=platform,  # type: ignore[arg-type]
         operator_id=lambda: "operator-1",
     )
-    return store, engagement, policy, runner, platform, service
+    return store, engagement, None, runner, platform, service
 
 
 @async_test
@@ -197,19 +180,28 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     assert recovered[-1].payload["status"] == "interrupted"
     capabilities = service.capabilities(engagement.id)
     assert capabilities.ready is True
-    assert capabilities.offline is True
-    assert capabilities.scoped_network is True
-    assert capabilities.host_access is False
+    assert capabilities.source_image == "docker.io/kalilinux/kali-rolling:latest"
+    assert capabilities.network.mode == "unrestricted"
+    assert capabilities.network.runtime_network == "bridge"
+    assert capabilities.security.container_user == "root"
+    assert capabilities.security.linux_capabilities == []
+    assert capabilities.security.host_network is False
+    assert capabilities.security.runtime_socket is False
 
     request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     preview = await service.preflight(request)
     assert preview.allowed is True
     assert preview.runtime is not None
+    assert preview.runtime.source_image == capabilities.source_image
+    assert preview.runtime.image == platform.image.resolved_reference
+    assert preview.runtime.image_digest == platform.image.digest
     assert preview.runtime.interpreter == "/bin/bash"
     assert preview.runtime.arguments == ["--noprofile", "--norc", "-i"]
-    assert preview.network is not None
-    assert preview.network.mode.value == "none"
-    assert preview.host_access is False
+    assert preview.network.mode == "unrestricted"
+    assert preview.network.published_ports == []
+    assert preview.security.root_filesystem == "writable"
+    assert preview.security.no_new_privileges is True
+    assert preview.security.host_shell is False
     assert preview.fresh_container is True
     assert preview.preview_token is not None
     assert preview.preview_fingerprint is not None
@@ -243,7 +235,11 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     ]
     assert sandbox_request.workspace == platform.workspace
     assert sandbox_request.workspace_access == SandboxWorkspaceAccess.WRITE
-    assert sandbox_request.network == SandboxNetwork.NONE
+    assert sandbox_request.image == platform.image.resolved_reference
+    assert sandbox_request.network == SandboxNetwork.UNRESTRICTED
+    assert sandbox_request.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL
+    assert sandbox_request.container_user == SandboxContainerUser.ROOT
+    assert sandbox_request.root_filesystem == SandboxRootFilesystem.WRITABLE
     assert sandbox_request.environment == {
         "LANG": "C.UTF-8",
         "TERM": "xterm-256color",
@@ -263,11 +259,19 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
         "container_terminal.terminal",
     ]
     assert all(event.operation_kind == "container_terminal" for event in events)
+    pending = events[0].payload
+    assert pending["runtime"]["image"] == platform.image.resolved_reference
+    assert pending["network"] == {
+        "mode": "unrestricted",
+        "published_ports": [],
+        "runtime_network": "bridge",
+    }
+    assert pending["security"]["container_user"] == "root"
     await service.shutdown()
 
 
 @async_test
-async def test_offline_terminal_works_without_an_engagement_scope_policy(tmp_path):
+async def test_unrestricted_kali_terminal_needs_no_toolbox_or_scope_policy(tmp_path):
     store = NebulaStore(tmp_path / "default-terminal.db")
     engagement = store.create(Engagement(name="Default Terminal Lab"))
     runner = RecordingTerminalRunner()
@@ -282,11 +286,8 @@ async def test_offline_terminal_works_without_an_engagement_scope_policy(tmp_pat
     preview = await service.preflight(request)
 
     assert preview.allowed is True
-    assert preview.policy_rule == "sandbox_default"
-    assert preview.scope_policy_id is None
-    assert preview.scope_policy_revision is None
-    assert preview.network is not None
-    assert preview.network.mode.value == "none"
+    assert preview.policy_rule == "human_terminal_unrestricted"
+    assert preview.network.mode == "unrestricted"
     start = ContainerTerminalStartRequest(
         **request.model_dump(),
         preview_token=preview.preview_token,
@@ -296,76 +297,29 @@ async def test_offline_terminal_works_without_an_engagement_scope_policy(tmp_pat
     created = await service.start(start)
     await service.claim(created.session_id, created.websocket_ticket)
     await service.launch(created.session_id)
-    assert runner.requests[0][0].network == SandboxNetwork.NONE
+    assert runner.requests[0][0].network == SandboxNetwork.UNRESTRICTED
     await service.finish(created.session_id, outcome="closed")
 
 
-@async_test
-async def test_scoped_terminal_still_requires_an_engagement_scope_policy(tmp_path):
-    store = NebulaStore(tmp_path / "scoped-terminal.db")
-    engagement = store.create(Engagement(name="Scoped Terminal Lab"))
-    runner = RecordingTerminalRunner()
-    platform = StubTerminalPlatform(tmp_path / "workspace", runner)
-    service = ContainerTerminalService(
-        store=store,
-        tool_platform=platform,  # type: ignore[arg-type]
-    )
-
-    preview = await service.preflight(
+def test_terminal_request_rejects_client_selected_network_boundary():
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         ContainerTerminalPreflightRequest(
-            engagement_id=engagement.id,
-            network={"mode": "scoped", "target": "10.20.30.40", "ports": [443]},
+            engagement_id="engagement-1",
+            network={"mode": "none", "ports": []},  # type: ignore[call-arg]
         )
-    )
-
-    assert preview.allowed is False
-    assert preview.error_code == "policy_denied"
-    assert "scope policy" in preview.detail
 
 
 @async_test
-async def test_scoped_terminal_pins_one_policy_approved_target(tmp_path):
-    _store, engagement, _policy, runner, _platform, service = fixture(tmp_path)
-    request = ContainerTerminalPreflightRequest(
-        engagement_id=engagement.id,
-        network={"mode": "scoped", "target": "10.20.30.40", "ports": [8443, 443]},
-    )
-    preview = await service.preflight(request)
-    assert preview.allowed is True
-    assert preview.network is not None
-    assert preview.network.resolved_addresses == ["10.20.30.40"]
-    assert preview.network.ports == [443, 8443]
-    start = ContainerTerminalStartRequest(
-        **request.model_dump(),
-        preview_token=preview.preview_token,
-        preview_fingerprint=preview.preview_fingerprint,
-        client_idempotency_key="scoped-terminal",
-    )
-    created = await service.start(start)
-    await service.claim(created.session_id, created.websocket_ticket)
-    await service.launch(created.session_id)
-    sandbox_request = runner.requests[0][0]
-    assert sandbox_request.network == SandboxNetwork.SCOPED
-    assert sandbox_request.egress_rules[0].address == "10.20.30.40"
-    assert sandbox_request.egress_rules[0].ports == [443, 8443]
-    assert sandbox_request.pinned_hosts == {"10.20.30.40": "10.20.30.40"}
-    await service.finish(created.session_id, outcome="closed")
-
-
-@async_test
-async def test_scoped_terminal_fails_closed_without_certified_egress(tmp_path):
-    _store, engagement, _policy, _runner, _platform, service = fixture(
-        tmp_path, certified=False
+async def test_terminal_reports_image_unavailable_without_verified_cache(tmp_path):
+    _store, engagement, _unused, _runner, _platform, service = fixture(
+        tmp_path, fail_image=True
     )
     preview = await service.preflight(
-        ContainerTerminalPreflightRequest(
-            engagement_id=engagement.id,
-            network={"mode": "scoped", "target": "10.20.30.40", "ports": [443]},
-        )
+        ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     )
     assert preview.allowed is False
-    assert preview.error_code == "runner_unavailable"
-    assert "certified" in preview.detail
+    assert preview.error_code == "image_unavailable"
+    assert "no cached Kali image" in preview.detail
 
 
 def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp_path):
@@ -392,19 +346,24 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
             headers=headers,
             json={
                 "engagement_id": engagement.id,
-                "network": {"mode": "none", "ports": []},
                 "columns": 90,
                 "rows": 24,
             },
         )
         assert preview.status_code == 200
         reviewed = preview.json()
+        assert reviewed["runtime"]["image"] == platform.image.resolved_reference
+        assert reviewed["network"] == {
+            "mode": "unrestricted",
+            "runtime_network": "bridge",
+            "published_ports": [],
+        }
+        assert reviewed["security"]["container_user"] == "root"
         started = client.post(
             "/api/v1/container-terminal/sessions",
             headers=headers,
             json={
                 "engagement_id": engagement.id,
-                "network": {"mode": "none", "ports": []},
                 "columns": 90,
                 "rows": 24,
                 "preview_token": reviewed["preview_token"],

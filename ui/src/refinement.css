@@ -530,6 +530,8 @@ kbd { font-size: 11px; }
 .container-terminal-live > header strong { color: #e4eef2; font-size: 12px; text-transform: capitalize; }
 .container-terminal-live > header small { color: #84979f; }
 .container-terminal-live .terminal-error { padding: 8px 14px; border-bottom: 1px solid #38242a; background: #24151a; }
+.terminal-live-notices:empty { display: none; }
+.terminal-network-warning { display: flex; align-items: center; gap: 7px; margin: 0; padding: 7px 14px; border-bottom: 1px solid #4b3d20; color: #e3c877; background: #211c10; font-size: 11px; line-height: 1.4; }
 .xterm-shell { min-width: 0; min-height: 420px; padding: 10px 12px; overflow: hidden; background: #071017; }
 .xterm-shell .xterm { height: 100%; }
 .xterm-shell .xterm-viewport { scrollbar-color: #40535d #071017; }

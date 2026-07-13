@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
+  AlertTriangle,
   CircleStop,
   LoaderCircle,
   RotateCcw,
@@ -11,41 +12,16 @@ import {
 } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { ContainerTerminalSocket, type ContainerTerminalSocketState } from "../api/containerTerminal";
-import type { ContainerTerminalRequest, ContainerTerminalSession } from "../api/types";
+import type {
+  ContainerTerminalRequest,
+  ContainerTerminalRuntimeSnapshot,
+  ContainerTerminalSession,
+} from "../api/types";
 
 interface ContainerTerminalPanelProps {
   api: ApiClient;
   engagementId: string;
   engagementName: string;
-}
-
-const localShellCapability = "environment.shell_local";
-
-async function ensureTerminalAssignment(api: ApiClient, engagementId: string, signal: AbortSignal): Promise<void> {
-  const [packs, assignments, tools] = await Promise.all([
-    api.listToolPacks(signal),
-    api.listEngagementToolAssignments(engagementId, signal),
-    api.listTools(signal),
-  ]);
-  const availableLocalShellDigests = new Set(tools
-    .filter((tool) => tool.name === localShellCapability && tool.available)
-    .map((tool) => tool.packManifestDigest));
-  const readyShellPacks = packs.filter((pack) => (
-    pack.status === "ready" && availableLocalShellDigests.has(pack.manifestDigest)
-  ));
-  const existing = assignments.find((assignment) => readyShellPacks.some((pack) => pack.manifestDigest === assignment.manifestDigest));
-  const selected = existing
-    ? readyShellPacks.find((pack) => pack.manifestDigest === existing.manifestDigest)
-    : readyShellPacks[0];
-  if (!selected) {
-    throw new Error("Terminal needs a ready installed Toolbox execution environment.");
-  }
-  await api.updateEngagementToolAssignment(engagementId, {
-    manifestDigest: selected.manifestDigest,
-    toolNames: existing?.toolNames ?? [],
-    enabled: true,
-    expectedRevision: existing?.revision,
-  }, signal);
 }
 
 function idempotencyKey(): string {
@@ -55,12 +31,12 @@ function idempotencyKey(): string {
 function LiveContainerTerminal({
   api,
   session,
-  networkLabel,
+  runtime,
   onAnother,
 }: {
   api: ApiClient;
   session: ContainerTerminalSession;
-  networkLabel: string;
+  runtime: ContainerTerminalRuntimeSnapshot;
   onAnother: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -155,20 +131,27 @@ function LiveContainerTerminal({
 
   return <div className="container-terminal-live">
     <header>
-      <div><span className={`status-dot ${state === "ready" ? "healthy" : state === "error" ? "unavailable" : "warning"}`} /><span><strong>{statusLabel}</strong><small>{networkLabel} · disposable Toolbox container · /workspace</small></span></div>
+      <div><span className={`status-dot ${state === "ready" ? "healthy" : state === "error" ? "unavailable" : "warning"}`} /><span><strong>{statusLabel}</strong><small>Unrestricted outbound · root · writable · Kali <code title={runtime.image}>{runtime.imageDigest.slice(0, 19)}…</code></small></span></div>
       {exit ? <button className="button secondary" type="button" onClick={onAnother}><RotateCcw size={15} /> New terminal</button> : <button className="button danger" type="button" disabled={state === "closing" || state === "closed"} onClick={() => socketRef.current?.requestClose()}><CircleStop size={15} /> Stop terminal</button>}
     </header>
-    {error && <p className="terminal-error" role="alert">{error}</p>}
+    <div className="terminal-live-notices">
+      {error && <p className="terminal-error" role="alert">{error}</p>}
+      <p className="terminal-network-warning"><AlertTriangle size={14} /> Bridge networking can reach the public Internet and any host-addressable service. No ports, raw-packet capabilities, host shell, or runtime socket are granted.</p>
+    </div>
     <div className="xterm-shell" ref={hostRef} aria-label="Terminal output" />
-    <footer><ShieldCheck size={14} /> This terminal is inside the pinned container. Leaving this view closes and removes it.{exit?.exitCode !== undefined ? ` Exit code ${exit.exitCode}.` : ""}</footer>
+    <footer><ShieldCheck size={14} /> System changes and packages disappear when this digest-pinned container closes; only <code>/workspace</code> persists.{exit?.exitCode !== undefined ? ` Exit code ${exit.exitCode}.` : ""}</footer>
   </div>;
 }
 
 export function ContainerTerminalPanel({ api, engagementId, engagementName }: ContainerTerminalPanelProps) {
   const instanceKey = useRef(idempotencyKey());
   const [launchAttempt, setLaunchAttempt] = useState(0);
-  const [phase, setPhase] = useState<"checking" | "assigning" | "reviewing" | "starting">("checking");
-  const [session, setSession] = useState<{ engagementId: string; value: ContainerTerminalSession }>();
+  const [phase, setPhase] = useState<"checking" | "preparing" | "starting">("checking");
+  const [session, setSession] = useState<{
+    engagementId: string;
+    value: ContainerTerminalSession;
+    runtime: ContainerTerminalRuntimeSnapshot;
+  }>();
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -177,26 +160,20 @@ export function ContainerTerminalPanel({ api, engagementId, engagementName }: Co
     setError(undefined);
     const request: ContainerTerminalRequest = {
       engagementId,
-      network: { mode: "none", ports: [] },
       columns: 100,
       rows: 30,
     };
     const launch = async () => {
       try {
         setPhase("checking");
-        let capabilities = await api.containerTerminalCapabilities(engagementId, controller.signal);
-        if (!capabilities.ready || !capabilities.offline) {
-          setPhase("assigning");
-          await ensureTerminalAssignment(api, engagementId, controller.signal);
-          capabilities = await api.containerTerminalCapabilities(engagementId, controller.signal);
-        }
-        if (!capabilities.ready || !capabilities.offline) {
-          throw new Error(capabilities.detail ?? "A ready offline Toolbox runtime is required to use Terminal.");
+        const capabilities = await api.containerTerminalCapabilities(engagementId, controller.signal);
+        if (!capabilities.ready) {
+          throw new Error(capabilities.detail ?? "A verified local container runner is required to use Terminal.");
         }
 
-        setPhase("reviewing");
+        setPhase("preparing");
         const preview = await api.preflightContainerTerminal(request, controller.signal);
-        if (!preview.allowed || !preview.previewToken || !preview.previewFingerprint || !preview.runtime || !preview.network) {
+        if (!preview.allowed || !preview.previewToken || !preview.previewFingerprint || !preview.runtime) {
           throw new Error(preview.detail || "Core denied the terminal preflight.");
         }
 
@@ -207,7 +184,7 @@ export function ContainerTerminalPanel({ api, engagementId, engagementName }: Co
           `${instanceKey.current}-${engagementId}-${launchAttempt}`,
           controller.signal,
         );
-        if (!controller.signal.aborted) setSession({ engagementId, value: created });
+        if (!controller.signal.aborted) setSession({ engagementId, value: created, runtime: preview.runtime });
       } catch (reason) {
         if (!controller.signal.aborted) {
           setError(reason instanceof Error ? reason.message : "Could not start Terminal.");
@@ -219,27 +196,25 @@ export function ContainerTerminalPanel({ api, engagementId, engagementName }: Co
   }, [api, engagementId, launchAttempt]);
 
   if (session?.engagementId === engagementId) {
-    return <LiveContainerTerminal api={api} session={session.value} networkLabel="Offline" onAnother={() => {
+    return <LiveContainerTerminal api={api} session={session.value} runtime={session.runtime} onAnother={() => {
       setLaunchAttempt((value) => value + 1);
     }} />;
   }
 
   const status = phase === "checking"
-    ? "Checking the assigned Toolbox runtime…"
-    : phase === "assigning"
-      ? "Assigning the installed Toolbox environment…"
-      : phase === "reviewing"
-        ? "Validating the isolated terminal boundary…"
-        : "Starting Terminal…";
+    ? "Checking the verified container runner…"
+    : phase === "preparing"
+      ? "Preparing the latest official Kali image…"
+      : "Starting the digest-pinned Kali terminal…";
 
   return <div className="container-terminal-panel">
     <section className="container-terminal-intro">
       <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
-      <div><small>Automatic isolated shell</small><h2>Terminal</h2><p>An interactive bash session starts automatically in a fresh, pinned Toolbox container for <strong>{engagementName}</strong>. The only persistent mount is this engagement’s <code>/workspace</code>.</p></div>
-      <span className="terminal-boundary"><ShieldCheck size={15} /> No host shell</span>
+      <div><small>Automatic human-operated Kali shell</small><h2>Terminal</h2><p>A fresh official minimal Kali Rolling container starts for <strong>{engagementName}</strong> as root with a writable disposable filesystem and unrestricted outbound networking. It includes no security tools by default; packages installed with <code>apt</code> disappear when the session closes, while <code>/workspace</code> persists.</p></div>
+      <span className="terminal-boundary"><AlertTriangle size={15} /> Root + network</span>
     </section>
     <section className="terminal-auto-start" aria-live="polite">
-      {error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><p className="terminal-error" role="alert">{error}</p><button className="button primary" type="button" onClick={() => setLaunchAttempt((value) => value + 1)}><RotateCcw size={15} /> Retry</button></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><p>Terminal uses an offline network namespace and opens as soon as Core completes its automatic preflight.</p></>}
+      {error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><p className="terminal-error" role="alert">{error}</p><button className="button primary" type="button" onClick={() => setLaunchAttempt((value) => value + 1)}><RotateCcw size={15} /> Retry</button></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><p>Terminal pulls <code>docker.io/kalilinux/kali-rolling:latest</code> once per Core start, verifies it, and launches the resolved digest with no host shell or runtime socket.</p></>}
     </section>
   </div>;
 }

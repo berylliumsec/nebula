@@ -21,40 +21,38 @@ from pydantic import Field
 from .domain import (
     Engagement,
     ExecutionLimitsSnapshot,
-    ExecutionNetworkMode,
-    ExecutionNetworkSnapshot,
-    ExecutionRuntimeSnapshot,
     NebulaModel,
     OperationEvent,
     OperatorExecution,
     OperatorExecutionStatus,
-    RiskClass,
-    ScopePolicy,
+    RunnerIsolation,
+    RunnerRuntime,
     utc_now,
 )
 from .executions import (
-    ExecutionNetworkRequest,
     ExecutionService,
-    ExecutionServiceError,
     _WorkspaceLimitError,
     _assert_workspace_limits,
     _digest_json,
-    _resolve_target,
-    _target_host,
 )
-from .policy import PolicyEffect, PolicyEngine, PolicyRequest
 from .sandbox import (
-    EgressRule,
+    SandboxContainerUser,
     SandboxExecutionKind,
     SandboxError,
     SandboxLimits,
     SandboxNetwork,
     SandboxRequest,
+    SandboxRootFilesystem,
     SandboxTerminalProcess,
     SandboxWorkspaceAccess,
 )
 from .storage import NebulaStore
-from .tool_platform import OperatorRuntimeResolution, ToolPlatform, ToolPlatformError
+from .tool_platform import (
+    DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE,
+    HumanTerminalRuntimeResolution,
+    ToolPlatform,
+    ToolPlatformError,
+)
 
 PREVIEW_TTL_SECONDS = 300
 TICKET_TTL_SECONDS = 60
@@ -75,7 +73,6 @@ class ContainerTerminalError(RuntimeError):
 
 class ContainerTerminalPreflightRequest(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
-    network: ExecutionNetworkRequest = Field(default_factory=ExecutionNetworkRequest)
     columns: int = Field(default=100, ge=1, le=1_000)
     rows: int = Field(default=30, ge=1, le=1_000)
 
@@ -86,12 +83,48 @@ class ContainerTerminalStartRequest(ContainerTerminalPreflightRequest):
     client_idempotency_key: str = Field(min_length=1, max_length=300)
 
 
+class ContainerTerminalRuntimeSnapshot(NebulaModel):
+    source_image: str = Field(min_length=1, max_length=1_000)
+    image: str = Field(min_length=1, max_length=1_000)
+    image_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    interpreter: str = Field(min_length=1, max_length=500)
+    arguments: list[str] = Field(default_factory=list, max_length=32)
+    runner_profile_id: str = Field(min_length=1, max_length=200)
+    runner_profile_revision: int = Field(ge=1)
+    runner_runtime: RunnerRuntime
+    runner_isolation: RunnerIsolation
+    runner_executable: str = Field(min_length=1, max_length=2_048)
+    runner_platform: str = Field(pattern=r"^linux/(amd64|arm64)$")
+    runner_context: str | None = Field(default=None, max_length=500)
+
+
+class ContainerTerminalNetworkSnapshot(NebulaModel):
+    mode: Literal["unrestricted"] = "unrestricted"
+    runtime_network: Literal["bridge"] = "bridge"
+    published_ports: list[int] = Field(default_factory=list, max_length=0)
+
+
+class ContainerTerminalSecuritySnapshot(NebulaModel):
+    container_user: Literal["root"] = "root"
+    root_filesystem: Literal["writable"] = "writable"
+    linux_capabilities: list[str] = Field(default_factory=list, max_length=0)
+    no_new_privileges: bool = True
+    host_network: bool = False
+    runtime_socket: bool = False
+    host_shell: bool = False
+
+
 class ContainerTerminalCapabilities(NebulaModel):
     engagement_id: str
     ready: bool
-    offline: bool
-    scoped_network: bool
     detail: str | None = None
+    source_image: str = DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE
+    network: ContainerTerminalNetworkSnapshot = Field(
+        default_factory=ContainerTerminalNetworkSnapshot
+    )
+    security: ContainerTerminalSecuritySnapshot = Field(
+        default_factory=ContainerTerminalSecuritySnapshot
+    )
     workspace: str = "/workspace"
     limits: ExecutionLimitsSnapshot = Field(
         default_factory=lambda: ExecutionLimitsSnapshot(
@@ -100,15 +133,19 @@ class ContainerTerminalCapabilities(NebulaModel):
     )
     idle_timeout_seconds: int = TERMINAL_IDLE_TIMEOUT_SECONDS
     fresh_container: bool = True
-    host_access: bool = False
 
 
 class ContainerTerminalPreflightResponse(NebulaModel):
     allowed: bool
     error_code: str | None = None
     detail: str
-    runtime: ExecutionRuntimeSnapshot | None = None
-    network: ExecutionNetworkSnapshot | None = None
+    runtime: ContainerTerminalRuntimeSnapshot | None = None
+    network: ContainerTerminalNetworkSnapshot = Field(
+        default_factory=ContainerTerminalNetworkSnapshot
+    )
+    security: ContainerTerminalSecuritySnapshot = Field(
+        default_factory=ContainerTerminalSecuritySnapshot
+    )
     limits: ExecutionLimitsSnapshot = Field(
         default_factory=lambda: ExecutionLimitsSnapshot(
             timeout_seconds=TERMINAL_MAX_DURATION_SECONDS
@@ -116,14 +153,11 @@ class ContainerTerminalPreflightResponse(NebulaModel):
     )
     workspace: str = "/workspace"
     policy_rule: str | None = None
-    scope_policy_id: str | None = None
-    scope_policy_revision: int | None = None
     preview_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     preview_token: str | None = None
     expires_at: datetime | None = None
     idle_timeout_seconds: int = TERMINAL_IDLE_TIMEOUT_SECONDS
     fresh_container: bool = True
-    host_access: bool = False
 
 
 class ContainerTerminalStartResponse(NebulaModel):
@@ -135,14 +169,13 @@ class ContainerTerminalStartResponse(NebulaModel):
 
 @dataclass(frozen=True)
 class _PreparedTerminal:
-    resolution: OperatorRuntimeResolution
-    runtime: ExecutionRuntimeSnapshot
-    network: ExecutionNetworkSnapshot
+    resolution: HumanTerminalRuntimeResolution
+    runtime: ContainerTerminalRuntimeSnapshot
+    network: ContainerTerminalNetworkSnapshot
+    security: ContainerTerminalSecuritySnapshot
     sandbox_request: SandboxRequest
     policy_rule: str
     policy_detail: str
-    scope_policy_id: str | None
-    scope_policy_revision: int | None
 
 
 @dataclass
@@ -259,29 +292,20 @@ class ContainerTerminalService:
 
     def capabilities(self, engagement_id: str) -> ContainerTerminalCapabilities:
         self.store.get(Engagement, engagement_id)
-        offline = False
-        scoped = False
-        details: list[str] = []
-        for network in (False, True):
+        ready = False
+        detail: str | None = None
+        if self.tool_platform is None:
+            detail = "human terminal container execution is not configured"
+        else:
             try:
-                resolution = self._resolve(engagement_id, network=network)
-                if network and not resolution.runner.egress_controller.certified:
-                    raise ContainerTerminalError(
-                        "runner_unavailable",
-                        "scoped terminal requires a certified egress helper",
-                    )
-                if network:
-                    scoped = True
-                else:
-                    offline = True
-            except (ContainerTerminalError, ToolPlatformError) as exc:
-                details.append(str(exc))
+                self.tool_platform.resolve_human_terminal_profile(engagement_id)
+                ready = True
+            except ToolPlatformError as exc:
+                detail = str(exc)
         return ContainerTerminalCapabilities(
             engagement_id=engagement_id,
-            ready=offline,
-            offline=offline,
-            scoped_network=scoped,
-            detail="; ".join(dict.fromkeys(details)) or None,
+            ready=ready,
+            detail=detail,
         )
 
     async def preflight(
@@ -301,12 +325,6 @@ class ContainerTerminalService:
                 allowed=False,
                 error_code="runtime_unavailable",
                 detail=str(exc),
-            )
-        except ExecutionServiceError as exc:
-            return ContainerTerminalPreflightResponse(
-                allowed=False,
-                error_code=exc.code,
-                detail=exc.detail,
             )
 
     async def start(
@@ -437,6 +455,7 @@ class ContainerTerminalService:
                 "preview_fingerprint": request.preview_fingerprint,
                 "runtime": prepared.runtime.model_dump(mode="json"),
                 "network": prepared.network.model_dump(mode="json"),
+                "security": prepared.security.model_dump(mode="json"),
                 "limits": _terminal_limits().model_dump(mode="json"),
                 "workspace": "/workspace",
             },
@@ -565,7 +584,7 @@ class ContainerTerminalService:
             engagement_id = session.request.engagement_id
         if self.tool_platform is None:
             raise ContainerTerminalError(
-                "runner_unavailable", "Toolbox execution is not configured"
+                "runner_unavailable", "human terminal execution is not configured"
             )
         try:
             await asyncio.to_thread(
@@ -641,31 +660,23 @@ class ContainerTerminalService:
             "operator_id": self.operator_id(),
             "runtime": prepared.runtime.model_dump(mode="json"),
             "network": prepared.network.model_dump(mode="json"),
+            "security": prepared.security.model_dump(mode="json"),
             "limits": _terminal_limits().model_dump(mode="json"),
             "workspace": "/workspace",
             "policy_rule": prepared.policy_rule,
-            "scope_policy_id": prepared.scope_policy_id,
-            "scope_policy_revision": prepared.scope_policy_revision,
             "fresh_container": True,
-            "host_access": False,
             "idle_timeout_seconds": TERMINAL_IDLE_TIMEOUT_SECONDS,
         }
         fingerprint = _digest_json(binding)
         expires = utc_now() + timedelta(seconds=PREVIEW_TTL_SECONDS)
-        trust_detail = (
-            " The selected Toolbox is an unsigned developer-mode pack."
-            if not prepared.resolution.trusted
-            else ""
-        )
         return (
             ContainerTerminalPreflightResponse(
                 allowed=True,
-                detail=prepared.policy_detail + trust_detail,
+                detail=prepared.policy_detail,
                 runtime=prepared.runtime,
                 network=prepared.network,
+                security=prepared.security,
                 policy_rule=prepared.policy_rule,
-                scope_policy_id=prepared.scope_policy_id,
-                scope_policy_revision=prepared.scope_policy_revision,
                 preview_fingerprint=fingerprint,
                 preview_token=self._sign_preview(binding, fingerprint, expires),
                 expires_at=expires,
@@ -676,11 +687,11 @@ class ContainerTerminalService:
     async def _prepare(
         self, request: ContainerTerminalPreflightRequest
     ) -> _PreparedTerminal:
-        engagement = self.store.get(Engagement, request.engagement_id)
+        self.store.get(Engagement, request.engagement_id)
         if self.tool_platform is None:
             raise ContainerTerminalError(
                 "runner_unavailable",
-                "Toolbox container execution is not configured",
+                "human terminal container execution is not configured",
                 status_code=503,
             )
         try:
@@ -689,100 +700,33 @@ class ContainerTerminalService:
             )
         except _WorkspaceLimitError as exc:
             raise ContainerTerminalError("workspace_limit", str(exc)) from exc
-        network_enabled = request.network.mode == ExecutionNetworkMode.SCOPED
-        resolution = self._resolve(request.engagement_id, network=network_enabled)
-        if network_enabled and not resolution.runner.egress_controller.certified:
+        try:
+            self.tool_platform.resolve_human_terminal_profile(request.engagement_id)
+        except ToolPlatformError as exc:
             raise ContainerTerminalError(
-                "runner_unavailable",
-                "scoped terminal requires a certified per-invocation egress helper",
-                status_code=503,
+                "runner_unavailable", str(exc), status_code=503
+            ) from exc
+        try:
+            resolution = await self.tool_platform.resolve_human_terminal_runtime(
+                request.engagement_id
             )
-        if network_enabled:
-            if not engagement.scope_policy_id:
-                raise ContainerTerminalError(
-                    "policy_denied",
-                    "scoped network terminals require an engagement scope policy",
-                )
-            policy = self.store.get(ScopePolicy, engagement.scope_policy_id)
-            assert request.network.target is not None
-            try:
-                addresses = await asyncio.to_thread(
-                    _resolve_target, request.network.target
-                )
-            except ExecutionServiceError as exc:
-                raise ContainerTerminalError(exc.code, exc.detail) from exc
-            decision = PolicyEngine().evaluate(
-                policy,
-                PolicyRequest(
-                    tool_name="environment.shell_network",
-                    risk_class=RiskClass.ACTIVE_SCAN,
-                    target=request.network.target,
-                    ports=request.network.ports,
-                    resolved_ips=addresses,
-                    action="operator_terminal",
-                ),
-            )
-            network = ExecutionNetworkSnapshot(
-                mode=ExecutionNetworkMode.SCOPED,
-                target=request.network.target,
-                ports=request.network.ports,
-                resolved_addresses=addresses,
-                scope_policy_id=policy.id,
-                scope_policy_revision=policy.revision,
-            )
-        else:
-            addresses = []
-            network = ExecutionNetworkSnapshot()
-            if engagement.scope_policy_id:
-                policy = self.store.get(ScopePolicy, engagement.scope_policy_id)
-                decision = PolicyEngine().evaluate(
-                    policy,
-                    PolicyRequest(
-                        tool_name="environment.shell_local",
-                        risk_class=RiskClass.WORKSPACE_WRITE,
-                        action="operator_terminal",
-                    ),
-                )
-            else:
-                policy = None
-                decision = None
-        if decision is not None:
-            if decision.effect == PolicyEffect.REQUIRE_APPROVAL:
-                raise ContainerTerminalError("approval_required", decision.reason)
-            if decision.effect != PolicyEffect.ALLOW:
-                raise ContainerTerminalError("policy_denied", decision.reason)
-
-        policy_rule = decision.rule if decision is not None else "sandbox_default"
-        policy_detail = (
-            decision.reason
-            if decision is not None
-            else "offline terminal is confined to the engagement workspace"
-        )
-
+        except ToolPlatformError as exc:
+            raise ContainerTerminalError(
+                "image_unavailable", str(exc), status_code=503
+            ) from exc
         runtime = _runtime_snapshot(resolution)
-        egress_rules = [
-            EgressRule(address=address, ports=request.network.ports)
-            for address in addresses
-        ]
-        pinned_hosts: dict[str, str] = {}
-        if network_enabled and addresses:
-            host = _target_host(request.network.target or "")
-            if host:
-                pinned_hosts[host] = addresses[0]
+        network = ContainerTerminalNetworkSnapshot()
+        security = ContainerTerminalSecuritySnapshot()
         sandbox_request = SandboxRequest(
-            image=resolution.image,
+            image=resolution.image.resolved_reference,
             command=[runtime.interpreter, *runtime.arguments],
             workspace=resolution.workspace,
             workspace_access=SandboxWorkspaceAccess.WRITE,
             environment={"LANG": "C.UTF-8", "TERM": "xterm-256color"},
-            network=(SandboxNetwork.SCOPED if network_enabled else SandboxNetwork.NONE),
-            execution_kind=(
-                SandboxExecutionKind.NETWORK_TOOL
-                if network_enabled
-                else SandboxExecutionKind.LOCAL_TOOL
-            ),
-            egress_rules=egress_rules,
-            pinned_hosts=pinned_hosts,
+            network=SandboxNetwork.UNRESTRICTED,
+            execution_kind=SandboxExecutionKind.HUMAN_TERMINAL,
+            container_user=SandboxContainerUser.ROOT,
+            root_filesystem=SandboxRootFilesystem.WRITABLE,
             limits=SandboxLimits(
                 cpu_count=1,
                 memory_mb=512,
@@ -795,34 +739,13 @@ class ContainerTerminalService:
             resolution=resolution,
             runtime=runtime,
             network=network,
+            security=security,
             sandbox_request=sandbox_request,
-            policy_rule=policy_rule,
-            policy_detail=policy_detail,
-            scope_policy_id=policy.id if policy is not None else None,
-            scope_policy_revision=policy.revision if policy is not None else None,
+            policy_rule="human_terminal_unrestricted",
+            policy_detail=(
+                f"{resolution.image.detail}; human terminal has unrestricted outbound bridge networking"
+            ),
         )
-
-    def _resolve(
-        self, engagement_id: str, *, network: bool
-    ) -> OperatorRuntimeResolution:
-        if self.tool_platform is None:
-            raise ContainerTerminalError(
-                "runner_unavailable", "Toolbox container execution is not configured"
-            )
-        try:
-            resolution = self.tool_platform.resolve_operator_runtime(
-                engagement_id, "bash", network=network
-            )
-        except ToolPlatformError as exc:
-            raise ContainerTerminalError(
-                "runtime_unavailable", str(exc), status_code=503
-            ) from exc
-        if resolution.canonical_language != "bash":
-            raise ContainerTerminalError(
-                "runtime_unavailable",
-                "the assigned Toolbox does not declare the bash terminal runtime",
-            )
-        return resolution
 
     def _execution_busy(self, engagement_id: str) -> bool:
         busy = {
@@ -963,16 +886,15 @@ class ContainerTerminalService:
 
 
 def _runtime_snapshot(
-    resolution: OperatorRuntimeResolution,
-) -> ExecutionRuntimeSnapshot:
+    resolution: HumanTerminalRuntimeResolution,
+) -> ContainerTerminalRuntimeSnapshot:
     profile = resolution.profile
-    return ExecutionRuntimeSnapshot(
-        language="bash",
-        interpreter=resolution.runtime.interpreter,
+    return ContainerTerminalRuntimeSnapshot(
+        source_image=resolution.image.source_reference,
+        image=resolution.image.resolved_reference,
+        image_digest=resolution.image.digest,
+        interpreter="/bin/bash",
         arguments=list(TERMINAL_COMMAND),
-        tool_pack_installation_id=resolution.installation.id,
-        manifest_digest=resolution.installation.manifest_digest,
-        image=resolution.image,
         runner_profile_id=profile.id,
         runner_profile_revision=profile.revision,
         runner_runtime=profile.runtime,
@@ -980,9 +902,6 @@ def _runtime_snapshot(
         runner_executable=profile.executable,
         runner_platform=profile.platform,
         runner_context=profile.context,
-        # Connection details remain Core-owned; the webview receives no socket path.
-        runner_socket=None,
-        trusted=resolution.trusted,
     )
 
 
@@ -1001,8 +920,11 @@ def _unb64(value: str) -> bytes:
 __all__ = [
     "ContainerTerminalCapabilities",
     "ContainerTerminalError",
+    "ContainerTerminalNetworkSnapshot",
     "ContainerTerminalPreflightRequest",
     "ContainerTerminalPreflightResponse",
+    "ContainerTerminalRuntimeSnapshot",
+    "ContainerTerminalSecuritySnapshot",
     "ContainerTerminalService",
     "ContainerTerminalStartRequest",
     "ContainerTerminalStartResponse",
