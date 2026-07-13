@@ -288,7 +288,7 @@ jobs:
               printf 'The images were built and pushed, but GitHub creates new container packages as private. '
               printf 'An organization owner must make each component public once before the signed catalog can be published.\n\n'
               for component in nmap nuclei nikto searchsploit semgrep; do
-                printf -- '- [%s package settings](https://github.com/orgs/%s/packages/container/package/nebula-tools%%2F%s/settings)\n' \
+                printf -- '- [%s package settings](https://github.com/orgs/%s/packages/container/nebula-tools%%2F%s/settings)\n' \
                   "$component" "$GITHUB_REPOSITORY_OWNER" "$component"
               done
               printf '\nAfter changing **Danger Zone → Change visibility → Public**, rerun only the failed jobs:\n\n'
