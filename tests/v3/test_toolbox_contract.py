@@ -49,6 +49,39 @@ def source_catalog() -> tuple[dict[str, str], list[dict[str, object]]]:
     return versions, sources
 
 
+def test_nmap_exact_version_switch_overrides_are_value_free():
+    _, sources = source_catalog()
+    nmap = next(item for item in sources if item["name"] == "nmap")
+
+    switches = {
+        "n",
+        "r__upper_r",
+        "sa",
+        "sm",
+        "ss",
+        "st",
+        "sw",
+    }
+    assert set(nmap["option_overrides"]) >= switches
+    assert all(
+        nmap["option_overrides"][identifier] == {"value": None}
+        for identifier in switches
+    )
+
+
+def test_toolbox_install_smoke_tests_allow_cold_desktop_start():
+    manifest = yaml.safe_load(
+        (TOOLBOX / "nebula-tool-pack.yaml").read_text(encoding="utf-8")
+    )
+
+    assert manifest["tools"]
+    assert all(
+        smoke["timeout_seconds"] >= 120
+        for tool in manifest["tools"]
+        for smoke in tool["smoke_tests"]
+    )
+
+
 def _option(identifier: str, flag: str, *, value: str | None = None):
     return {
         "id": identifier,

@@ -38,4 +38,22 @@ examples:
   - /workspace/nmap.xml
 notes:
 - The non-root Toolbox supports TCP connect scans; raw SYN scans are not available.
-option_overrides: {}
+option_overrides:
+  # Nmap compresses distinct switches into slash-delimited help lines. The
+  # generic help parser sees the descriptive words after the colon as a value
+  # metavariable, so pin these exact-version switches to their real no-value
+  # contract.
+  n:
+    value: null
+  r__upper_r:
+    value: null
+  sa:
+    value: null
+  sm:
+    value: null
+  ss:
+    value: null
+  st:
+    value: null
+  sw:
+    value: null

@@ -3,8 +3,10 @@
 The branch-only **Build Nebula Toolbox Staging Bundle** workflow builds and
 smoke-tests native `linux/amd64` and `linux/arm64` images, pushes them to the
 separate `ghcr.io/berylliumsec/nebula-toolbox-staging` package, and uploads one
-unsigned, digest-resolved `.nebula-toolpack` artifact. It never signs or deploys
-the official Toolbox catalog.
+unsigned, digest-resolved `.nebula-toolpack` artifact. Before upload, the
+workflow also installs the assembled bundle through Nebula Core's production
+pull, digest-inspection, hardened smoke-test, parsing, and schema-validation
+path. It never signs or deploys the official Toolbox catalog.
 
 ## Download the bundle on macOS
 
@@ -50,6 +52,12 @@ normal credential store and pulls the exact platform digest from the bundle.
    ```bash
    NEBULA_TOOL_DEVELOPER_MODE=1 \
      /Applications/Nebula.app/Contents/MacOS/nebula-ui
+   ```
+
+   From a source checkout, use:
+
+   ```bash
+   NEBULA_TOOL_DEVELOPER_MODE=1 npm --prefix ui run tauri -- dev
    ```
 
 3. In **Settings → Runners**, configure and verify Docker Desktop or Podman

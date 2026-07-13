@@ -122,7 +122,7 @@ tools:
   - arguments:
       query: nmap
     expected_exit_code: 0
-    timeout_seconds: 30
+    timeout_seconds: 120
 - name: environment.help
   description: Return one exact-version command interface and its captured help evidence.
   image: toolbox
@@ -226,7 +226,7 @@ tools:
       tool: jq
       command_path: []
     expected_exit_code: 0
-    timeout_seconds: 30
+    timeout_seconds: 120
 - name: environment.run_local
   description: Compile and run a catalogued structured invocation with no network.
   image: toolbox
@@ -427,7 +427,7 @@ tools:
       cwd: /workspace
       timeout: 30
     expected_exit_code: 0
-    timeout_seconds: 30
+    timeout_seconds: 120
 - name: environment.run_network
   description: Compile and run a catalogued invocation through target-scoped egress.
   image: toolbox
@@ -663,7 +663,7 @@ tools:
       ports:
       - 1
     expected_exit_code: 0
-    timeout_seconds: 30
+    timeout_seconds: 120
 - name: environment.run_invasive
   description: Compile and run a catalogued invasive invocation after durable approval.
   image: toolbox
@@ -899,7 +899,7 @@ tools:
       ports:
       - 1
     expected_exit_code: 0
-    timeout_seconds: 30
+    timeout_seconds: 120
 - name: environment.shell_local
   description: Run a full Bash command line in the disposable Toolbox with no network.
   image: toolbox
@@ -1011,7 +1011,7 @@ tools:
       cwd: /workspace
       timeout: 30
     expected_exit_code: 0
-    timeout_seconds: 30
+    timeout_seconds: 120
 - name: environment.shell_network
   description: Run a full Bash command line through target-scoped egress; use $NEBULA_TARGET and $NEBULA_PORTS.
   image: toolbox
@@ -1149,4 +1149,4 @@ tools:
       ports:
       - 1
     expected_exit_code: 0
-    timeout_seconds: 30
+    timeout_seconds: 120
