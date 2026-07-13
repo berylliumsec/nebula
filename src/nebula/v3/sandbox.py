@@ -1482,16 +1482,15 @@ class ContainerImagePreparer:
             )
         config = _mapping_get(document, "Config", "config")
         user = _mapping_get(config, "User", "user")
-        if not isinstance(user, str):
-            raise SandboxUnavailable(
-                "Kali image did not declare a valid container config"
-            )
         return PreparedContainerImage(
             source_reference=self.source_reference,
             resolved_reference=f"{self.expected_repository}@{digest}",
             digest=digest,
             platform=self.platform,
-            configured_user=user,
+            # Docker and Podman may omit Config.User when the image uses the
+            # OCI default user. The human terminal always supplies
+            # --user=0:0 explicitly, so this metadata is informational only.
+            configured_user=user if isinstance(user, str) else "",
             refreshed=refreshed,
             detail=(
                 "pulled and verified the latest official Kali image"

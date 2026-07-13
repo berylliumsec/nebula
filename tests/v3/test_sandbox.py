@@ -617,7 +617,7 @@ def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
         return (
             '{"RepoDigests":["kalilinux/kali-rolling@sha256:'
             + "e" * 64
-            + '"],"Os":"linux","Architecture":"amd64","Config":{"User":""}}',
+            + '"],"Os":"linux","Architecture":"amd64"}',
             "",
             0,
         )
@@ -638,6 +638,7 @@ def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
         "docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64
     )
     assert image.refreshed is refreshed
+    assert image.configured_user == ""
     if not refreshed:
         assert "verified cached" in image.detail
 
