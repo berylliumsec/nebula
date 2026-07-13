@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { AssistantMarkdown } from "./AssistantMarkdown";
-import { parseExactFences } from "./assistantMarkdown";
+import { parseExactFences } from "./assistantCode";
 
 describe("exact assistant Markdown", () => {
   it("retains exact closed fence offsets and makes an unclosed fence inert", () => {

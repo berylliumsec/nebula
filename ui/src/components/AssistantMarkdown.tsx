@@ -9,7 +9,7 @@ import {
   sha256,
   utf8Length,
   type ExactFence,
-} from "./assistantMarkdown";
+} from "./assistantCode";
 
 export interface FencedRunCandidate {
   source: string;

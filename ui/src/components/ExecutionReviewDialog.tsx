@@ -10,7 +10,7 @@ import type {
 } from "../api/types";
 import { ModalSurface } from "./DialogSystem";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
-import { visibleSource } from "./assistantMarkdown";
+import { visibleSource } from "./assistantCode";
 
 interface ExecutionReviewDialogProps {
   api: ApiClient;
