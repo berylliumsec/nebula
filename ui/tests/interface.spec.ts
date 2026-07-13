@@ -9,6 +9,14 @@ const workspaces = [
   ["settings", "/settings", "Settings"],
 ] as const;
 
+const responsiveWorkspaces = [
+  ...workspaces,
+  ["missions", "/agents", "Missions"],
+  ["assets", "/assets", "Assets"],
+  ["evidence", "/evidence", "Evidence"],
+  ["knowledge", "/knowledge", "Knowledge"],
+] as const;
+
 async function openPreview(page: Page, route: string, heading: string) {
   await page.goto(route);
   await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
@@ -24,6 +32,40 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
   for (const [name, route, heading] of workspaces) {
     await openPreview(page, route, heading);
     await expect(page).toHaveScreenshot(`${name}-${testInfo.project.name}.png`, { fullPage: true });
+  }
+});
+
+test("all workspaces keep responsive content inside its owning surface", async ({ page }) => {
+  for (const [, route, heading] of responsiveWorkspaces) {
+    await openPreview(page, route, heading);
+    const overflow = await page.locator("body").evaluate(() => {
+      const selector = [
+        ".page",
+        ".metric-grid",
+        ".metric-card",
+        ".session-toolbar",
+        ".agent-layout",
+        ".agent-graph-panel",
+        ".knowledge-sources",
+        ".settings-tabs",
+        ".finding-summary-grid",
+        ".summary-strip",
+        ".data-toolbar",
+        ".callout",
+        ".mission-hero",
+      ].join(", ");
+      return [...document.querySelectorAll<HTMLElement>(selector)]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0
+            && rect.height > 0
+            && style.display !== "none"
+            && element.scrollWidth > element.clientWidth + 2;
+        })
+        .map((element) => `${element.tagName.toLowerCase()}.${element.className}: ${element.clientWidth}/${element.scrollWidth}`);
+    });
+    expect(overflow, `${route} contains horizontally clipped UI`).toEqual([]);
   }
 });
 

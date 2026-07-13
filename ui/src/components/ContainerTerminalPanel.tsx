@@ -22,11 +22,17 @@ interface ContainerTerminalPanelProps {
 const localShellCapability = "environment.shell_local";
 
 async function ensureTerminalAssignment(api: ApiClient, engagementId: string, signal: AbortSignal): Promise<void> {
-  const [packs, assignments] = await Promise.all([
+  const [packs, assignments, tools] = await Promise.all([
     api.listToolPacks(signal),
     api.listEngagementToolAssignments(engagementId, signal),
+    api.listTools(signal),
   ]);
-  const readyShellPacks = packs.filter((pack) => pack.status === "ready" && pack.toolNames.includes(localShellCapability));
+  const availableLocalShellDigests = new Set(tools
+    .filter((tool) => tool.name === localShellCapability && tool.available)
+    .map((tool) => tool.packManifestDigest));
+  const readyShellPacks = packs.filter((pack) => pack.status === "ready" && (
+    pack.toolNames.includes(localShellCapability) || availableLocalShellDigests.has(pack.manifestDigest)
+  ));
   const existing = assignments.find((assignment) => readyShellPacks.some((pack) => pack.manifestDigest === assignment.manifestDigest));
   const selected = existing
     ? readyShellPacks.find((pack) => pack.manifestDigest === existing.manifestDigest)

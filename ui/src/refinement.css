@@ -318,6 +318,8 @@ body {
 
 .agent-graph-panel { min-width: 0; overflow: hidden; }
 .agent-graph { max-width: 100%; }
+.finding-summary-grid article > div:not(.epss-gauge) { min-width: 0; }
+.finding-summary-grid em { flex: 0 1 auto; overflow-wrap: anywhere; text-align: right; }
 
 .overview-grid { gap: 16px; }
 .mission-panel { grid-row: span 2; }
@@ -810,7 +812,17 @@ body {
   .findings-table td:nth-child(6)::before { content: "Updated"; }
   .table-footer { align-items: flex-start; flex-direction: column; gap: 4px; }
 
-  .source-list article { grid-template-columns: 35px minmax(0, 1fr) auto auto; gap: 8px; }
+  .source-list article { grid-template-columns: 35px minmax(0, 1fr) auto; gap: 8px; }
+  .source-list h3 {
+    display: -webkit-box;
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .source-actions { grid-column: 2 / -1; justify-content: flex-start; }
 }
 
 @media (max-width: 600px) {
@@ -826,6 +838,7 @@ body {
 @media (max-width: 360px) {
   .top-bar-title { display: none; }
   .toolbar-page-actions .button.primary { width: 36px; flex: 0 0 36px; gap: 0; padding: 0; font-size: 0; }
+  .session-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (prefers-reduced-transparency: reduce) {

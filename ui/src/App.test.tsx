@@ -320,7 +320,11 @@ describe("Nebula workspace", () => {
       if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{
         ...entity, id: "pack-1", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", manifest_digest: digest,
         source: "catalog", trust_state: "trusted", runtime_profile_id: "runner-1", image_locks: {}, status: "ready",
-        tool_names: ["environment.shell_local", "environment.shell_network"], permissions: ["network", "workspace_write"],
+        tool_names: [], permissions: ["network", "workspace_write"],
+      }]), { status: 200 });
+      if (path.endsWith("/tools")) return new Response(JSON.stringify([{
+        name: "environment.shell_local", pack_id: "pack-1", pack_manifest_digest: digest, description: "Local shell",
+        risk_class: "workspace_write", requires_network: false, requires_approval: false, available: true,
       }]), { status: 200 });
       if (path.endsWith("/tool-assignment")) {
         if (init?.method === "PUT") {
