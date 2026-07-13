@@ -5,6 +5,8 @@
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   font-size: 13px;
+  --mono: "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", monospace;
+  --font-mono: var(--mono);
   --side-width: 248px;
   --side-collapsed-width: 72px;
   --top-height: 64px;
@@ -215,15 +217,17 @@ body {
 
 .top-bar-leading, .top-bar-actions, .toolbar-page-actions { display: flex; align-items: center; gap: 8px; }
 .top-bar-leading { min-width: 190px; }
-.top-bar-title, .top-bar-page-actions { min-width: 0; }
+.top-bar-title, .top-bar-page-actions, .toolbar-page-actions { min-width: 0; }
 .top-bar-title { font-size: 12px; }
 .top-bar-title > span:first-child { display: none; }
 .top-bar-title > span[aria-hidden] { display: none; }
 .top-bar-title strong { font-size: 14px; font-weight: 650; }
-.top-bar-page-actions { min-width: 0; flex: 1; justify-content: flex-end; }
+.top-bar-page-actions { min-width: 0; flex: 1; justify-content: flex-end; overflow: hidden; }
 .top-bar-page-actions:empty { display: none; }
 .top-bar-actions { flex: 0 0 auto; }
-.toolbar-page-actions .button { white-space: nowrap; }
+.toolbar-page-actions .button { flex: 0 0 auto; white-space: nowrap; }
+.toolbar-page-actions .button:disabled,
+.data-toolbar > .button:disabled { display: none; }
 
 .icon-button, .command-trigger, .connection-chip {
   min-height: 32px;
@@ -256,8 +260,8 @@ body {
   font-weight: 700;
 }
 
-.main-content { background: transparent; }
-.page { max-width: 1500px; padding: 32px 36px 64px; }
+.main-content { container-name: workspace; container-type: inline-size; background: transparent; }
+.page { max-width: 1380px; padding: 32px 36px 64px; }
 .page-header { align-items: center; margin-bottom: 24px; }
 .page-header h1 { margin-bottom: 6px; font-size: clamp(26px, 2.2vw, 34px); font-weight: 680; letter-spacing: -.035em; }
 .page-header p { max-width: 720px; font-size: 13px; line-height: 1.5; }
@@ -265,8 +269,8 @@ body {
 
 /* API-backed labels can contain hostnames, model IDs, and filenames without
    natural spaces. Keep those values inside their owning surface. */
-.page :where(h1, h2, h3, p, dd, li),
-.activity-center :where(h2, h3, p, dd, li) { overflow-wrap: anywhere; }
+.page :where(h1, h2, h3, p, li),
+.activity-center :where(h2, h3, p, li) { overflow-wrap: break-word; word-break: normal; }
 .panel-header > div:first-child, .section-heading > div:first-child,
 .callout > div, .mission-hero > div:first-child { min-width: 0; }
 
@@ -324,8 +328,31 @@ body {
 .overview-grid { gap: 16px; }
 .mission-panel { grid-row: span 2; }
 .mission-steps li { min-height: 58px; }
+.mission-steps li > div { min-width: 0; }
 .mission-steps strong { font-size: 13px; }
 .mission-steps small, .step-label { font-size: 11px; }
+.mission-events-empty {
+  display: flex;
+  min-height: 116px;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
+}
+.mission-events-empty > svg {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  padding: 9px;
+  border-radius: 10px;
+  color: var(--blue);
+  background: var(--blue-muted);
+}
+.mission-events-empty > div { display: grid; min-width: 0; gap: 4px; }
+.mission-events-empty strong { font-size: 13px; }
+.mission-events-empty small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .coverage-row strong, .coverage-row span, .policy-facts dt, .policy-facts dd { font-size: 11px; }
 .progress-row > div:first-child strong { font-size: 11px; }
 
@@ -544,7 +571,7 @@ body {
 }
 .resource-inspector > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px; border-bottom: 1px solid var(--border-soft); }
 .resource-inspector > header h2 { margin: 5px 0 0; font-size: 18px; line-height: 1.25; }
-.resource-inspector > header small { color: var(--muted); text-transform: capitalize; }
+.resource-inspector > header small { color: var(--muted); }
 .resource-inspector > .resource-description,
 .resource-inspector > section,
 .resource-inspector > .scope-chip-list { margin: 0; padding: 18px 22px 0; }
@@ -596,11 +623,20 @@ body {
 .settings-section { margin-bottom: 0; scroll-margin-top: 74px; }
 .section-heading h2 { font-size: 19px; }
 .section-heading p { font-size: 12px; }
-.provider-grid { gap: 14px; }
+.provider-grid { grid-template-columns: repeat(2, minmax(280px, 1fr)); gap: 14px; }
 .provider-card { padding: 16px; }
 .provider-heading h3, .tool-pack-card strong { font-size: 13px; }
 .provider-heading p, .provider-message, .provider-card footer, .pack-facts, .tool-pack-card p { font-size: 11px; }
 .health-label, .capability-chip, .pack-status, .signed-badge { font-size: 11px; }
+.provider-card-actions .icon-button:disabled,
+.source-actions .icon-button:disabled,
+.artifact-actions button:disabled { display: none; }
+.developer-pack > div { grid-template-columns: minmax(0, 1fr) minmax(280px, 1.25fr); }
+.developer-pack > div > .button { grid-column: 2; justify-self: end; }
+.knowledge-safety-details { margin-top: 14px; border-top: 1px solid var(--border-soft); }
+.knowledge-safety-details summary { padding: 13px 0 0; color: var(--text); font-size: 11px; font-weight: 600; cursor: pointer; }
+.knowledge-safety-details ul { margin: 12px 0 0; padding-block: 12px 0; border-bottom: 0; }
+.report-empty-state { min-height: 260px; padding: 48px 24px; }
 
 .activity-center {
   border-left-color: var(--border-soft);
@@ -646,7 +682,8 @@ body {
 .palette-results strong { font-size: 12px; }
 .palette-results small, .command-palette footer { font-size: 11px; }
 
-.modal-surface { width: min(480px, calc(100vw - 32px)); overflow: hidden; }
+.modal-surface { overflow: hidden; }
+.modal-surface:not(.approval-review-dialog):not(.execution-review-dialog) { width: min(480px, calc(100vw - 32px)); }
 .confirmation-dialog > header { display: grid; grid-template-columns: 38px 1fr 32px; gap: 12px; align-items: start; padding: 22px; }
 .confirmation-dialog h2 { margin: 1px 0 8px; font-size: 17px; }
 .confirmation-message { color: var(--muted); font-size: 13px; line-height: 1.5; }
@@ -654,7 +691,9 @@ body {
 .confirmation-icon.danger { color: var(--red); background: var(--red-muted); }
 .confirmation-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--border-soft); }
 
-.provider-dialog { font-size: 13px; }
+.provider-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; font-size: 13px; overscroll-behavior: contain; }
+.provider-dialog > header { position: sticky; z-index: 2; top: -20px; margin: -20px -20px 0; padding: 20px; border-bottom: 1px solid var(--border-soft); background: color-mix(in srgb, var(--surface-raised) 96%, transparent); backdrop-filter: blur(18px); }
+.provider-dialog > footer { position: sticky; z-index: 2; bottom: -20px; margin: 0 -20px -20px; padding: 14px 20px 20px; border-top: 1px solid var(--border-soft); background: color-mix(in srgb, var(--surface-raised) 96%, transparent); backdrop-filter: blur(18px); }
 .provider-dialog > header small, .provider-dialog label, .provider-dialog-note, .form-error { font-size: 11px; }
 .provider-dialog input, .provider-dialog select, .provider-dialog textarea { min-height: 38px; border-radius: 9px; font-size: 12px; }
 .empty-state strong { font-size: 13px; }
@@ -664,12 +703,7 @@ body {
 .approval-callout { margin: -6px 0 20px; border-color: color-mix(in srgb, var(--orange) 26%, var(--border)); background: color-mix(in srgb, var(--orange) 7%, var(--surface)); }
 .approval-callout > svg { color: var(--orange); }
 
-/* Never render the dense preview's microcopy at illegible sizes. */
-.app-shell :is(button, input, select, textarea, label, p, small, span, strong, em, a, li, th, td, legend, kbd, dt, dd, code, pre, summary, time) {
-  font-size: max(11px, 1em);
-}
-
-@media (max-width: 1320px) {
+@media (max-width: 1680px) {
   .app-shell.with-activity,
   .app-shell.sidebar-collapsed.with-activity { grid-template-columns: var(--side-width) minmax(0, 1fr); }
   .app-shell.sidebar-collapsed.with-activity { grid-template-columns: var(--side-collapsed-width) minmax(0, 1fr); }
@@ -689,7 +723,7 @@ body {
   .session-inspector { display: none; }
 }
 
-@media (max-width: 1040px) {
+@media (max-width: 1200px) {
   :root { --side-width: 72px; }
   .brand-lockup { justify-content: center; padding: 0; }
   .brand-lockup > span:nth-child(2), .alpha-label, .engagement-copy, .engagement-switcher > svg,
@@ -703,6 +737,13 @@ body {
   .settings-workspace { grid-template-columns: 180px minmax(0, 1fr); gap: 20px; }
   .container-terminal-grid { grid-template-columns: 1fr; }
   .terminal-launch-form { border-right: 0; border-bottom: 1px solid var(--border-soft); }
+}
+
+@media (max-width: 1000px) {
+  .top-bar { gap: 8px; }
+  .top-bar-leading { min-width: 0; }
+  .top-bar-title { display: none; }
+  .toolbar-page-actions .button:not(.primary) { display: none; }
 }
 
 @media (max-width: 900px) {
@@ -830,12 +871,23 @@ body {
     -webkit-line-clamp: 2;
   }
   .source-actions { grid-column: 2 / -1; justify-content: flex-start; }
+  .provider-grid { grid-template-columns: 1fr; }
+  .page-header p, .eyebrow { display: none; }
+  .page-header { margin-bottom: 18px; }
+  .button, .icon-button, .connection-chip, .command-trigger { min-height: 40px; }
+  .icon-button, .connection-chip, .command-trigger { width: 40px; height: 40px; }
+  .settings-section { scroll-margin-top: 190px; }
 }
 
 @media (max-width: 600px) {
-  .metric-grid { grid-template-columns: 1fr; }
-  .metric-card, .metric-card:nth-child(2) { min-height: 76px; border-right: 0; border-bottom: 1px solid var(--border-soft); }
-  .metric-card:last-child { border-bottom: 0; }
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-card, .metric-card:nth-child(2) { min-height: 88px; }
+  .panel-header p, .section-heading p { display: none; }
+  .panel-header.compact { align-items: flex-start; flex-direction: row; }
+  .developer-pack > div { grid-template-columns: 1fr; }
+  .developer-pack > div > .button { grid-column: auto; width: 100%; }
+  .runner-form footer { align-items: stretch; flex-direction: column; }
+  .runner-form footer .button { width: 100%; }
 }
 
 @media (max-width: 480px) {

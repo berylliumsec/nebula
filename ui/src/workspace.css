@@ -207,7 +207,7 @@
 .resource-details > div:nth-child(even) { border-right: 0; }
 .resource-details > div:nth-last-child(-n + 2) { border-bottom: 0; }
 .resource-details dt { color: var(--muted); font-size: 8px; }
-.resource-details dd { margin: 3px 0 0; color: var(--text); font-size: 9px; overflow-wrap: anywhere; text-transform: capitalize; }
+.resource-details dd { margin: 3px 0 0; color: var(--text); font-size: 9px; overflow-wrap: anywhere; }
 .resource-description { margin: 0; color: var(--muted-strong); font-size: 10px; line-height: 1.6; }
 .finding-dialog > section { padding: 10px; border: 1px solid var(--border-soft); border-radius: 7px; }
 .finding-dialog > section h3 { margin: 0 0 5px; font-size: 9px; }

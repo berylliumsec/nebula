@@ -1022,14 +1022,12 @@ class ContainerSandboxRunner(SandboxRunner):
         if workspace is None:
             argv.append("--workdir=/tmp")
         else:
-            mode = (
-                "ro"
-                if request.workspace_access == SandboxWorkspaceAccess.READ
-                else "rw"
-            )
+            mount = f"--mount=type=bind,src={workspace},dst=/workspace"
+            if request.workspace_access == SandboxWorkspaceAccess.READ:
+                mount += ",readonly=true"
             argv.extend(
                 [
-                    f"--mount=type=bind,src={workspace},dst=/workspace,{mode}",
+                    mount,
                     "--workdir=/workspace",
                 ]
             )

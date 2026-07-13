@@ -81,7 +81,7 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
 
 
 def test_container_terminal_argv_adds_tty_without_host_shell_fallback(tmp_path):
-    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
     request = _request(
         tmp_path,
         command=["/bin/bash", "--noprofile", "--norc", "-i"],
@@ -96,11 +96,11 @@ def test_container_terminal_argv_adds_tty_without_host_shell_fallback(tmp_path):
         tty=True,
     )
 
-    assert argv[:3] == ["/usr/bin/podman", "run", "--rm"]
+    assert argv[:3] == ["/usr/bin/docker", "run", "--rm"]
     assert "--interactive" in argv
     assert "--tty" in argv
     assert "--network=none" in argv
-    assert f"--mount=type=bind,src={tmp_path.resolve()},dst=/workspace,rw" in argv
+    assert f"--mount=type=bind,src={tmp_path.resolve()},dst=/workspace" in argv
     assert argv[-5:] == [
         DIGEST_IMAGE,
         "/bin/bash",
@@ -139,30 +139,31 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize(
-    "access,expected_mode",
+    "access,expected_suffix",
     [
         (SandboxWorkspaceAccess.NONE, None),
-        (SandboxWorkspaceAccess.READ, "ro"),
-        (SandboxWorkspaceAccess.WRITE, "rw"),
+        (SandboxWorkspaceAccess.READ, ",readonly=true"),
+        (SandboxWorkspaceAccess.WRITE, ""),
     ],
 )
+@pytest.mark.parametrize("runtime", ["/usr/bin/docker", "/usr/bin/podman"])
 def test_workspace_mount_is_omitted_or_scoped_by_declared_access(
-    tmp_path, access, expected_mode
+    tmp_path, runtime, access, expected_suffix
 ):
-    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    runner = ContainerSandboxRunner(runtime=runtime)
     request = _request(tmp_path, workspace_access=access)
     workspace = runner._validate(request)
     argv = runner._argv(request, workspace)
     mounts = [argument for argument in argv if argument.startswith("--mount=")]
 
-    if expected_mode is None:
+    if expected_suffix is None:
         assert workspace is None
         assert mounts == []
         assert "--workdir=/tmp" in argv
     else:
         assert workspace == tmp_path.resolve()
         assert mounts == [
-            f"--mount=type=bind,src={tmp_path.resolve()},dst=/workspace,{expected_mode}"
+            f"--mount=type=bind,src={tmp_path.resolve()},dst=/workspace{expected_suffix}"
         ]
         assert "--workdir=/workspace" in argv
 

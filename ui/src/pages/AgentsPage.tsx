@@ -61,22 +61,21 @@ export function AgentsPage() {
     return (
       <div className="page agents-page">
         <PageHeader
-          eyebrow="Supervised execution"
           title="Missions"
-          description="Persisted run state and activity from Nebula Core. Specialist task details appear when the tasks resource is connected."
+          description="Supervise specialists, approvals, and mission limits."
           actions={<><StopMissionButton /><NewMissionButton /></>}
         />
-        {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission waiting for operator review</strong><p>{approvals.length} exact request{approvals.length === 1 ? "" : "s"} must be reviewed before bounded work can continue.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
+        {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission paused for review</strong><p>{approvals.length} request{approvals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
         <section className="mission-hero panel">
           <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replace("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{approvals.length} pending approval request{approvals.length === 1 ? "" : "s"}.</p></div>
           <div className="mission-hero-progress"><span><strong>{run?.completedTasks ?? 0}</strong><small>complete</small></span><span><strong>{run?.totalTasks ?? 0}</strong><small>recorded tasks</small></span><span><strong>{events.length}</strong><small>events loaded</small></span></div>
         </section>
         <section className="panel data-panel" aria-label="Mission working memory">
-          <header className="panel-header compact"><div><h2>Working memory</h2><p>Derived model context; canonical task results and checkpoints remain unchanged</p></div><Sparkles size={19} /></header>
+          <header className="panel-header compact"><div><h2>Working memory</h2><p>Derived context for the active mission</p></div><Sparkles size={19} /></header>
           {contextLoading ? <div className="empty-state compact" role="status"><CircleDashed size={23} /><strong>Loading working memory</strong></div> : contextError ? <div className="empty-state compact" role="alert"><CircleDashed size={23} /><strong>Unable to inspect memory</strong><p>{contextError}</p></div> : contextStatus?.snapshot?.memory && contextStatus.status ? <div className="empty-state compact"><Sparkles size={23} /><strong>Memory {contextStatus.status.replace("_", " ")}</strong><p>{contextStatus.snapshot.memory.summary}</p><small>Through event #{contextStatus.compactedThrough} · {contextStatus.snapshot.providerId}/{contextStatus.snapshot.model} · {contextStatus.snapshot.usage.totalTokens} compaction tokens · ${contextStatus.snapshot.costUsd.toFixed(4)}</small><div className="scope-chip-list">{contextStatus.snapshot.sourceReferences.slice(0, 8).map((source) => <Link aria-label={`Open ${source.sourceKind.replace("_", " ")} ${source.sourceId}`} key={`${source.sourceKind}-${source.sourceId}`} to={source.sourceKind.includes("evidence") ? `/evidence?evidence=${encodeURIComponent(source.sourceId)}` : `/missions?task=${encodeURIComponent(source.sourceId)}`}>{source.sourceKind.replace("_", " ")}: {source.sourceId}</Link>)}</div>{contextStatus.snapshot.memory.evidenceIds.length > 0 && <div className="scope-chip-list">{contextStatus.snapshot.memory.evidenceIds.map((id) => <Link key={id} to={`/evidence?evidence=${encodeURIComponent(id)}`}>Evidence: {id}</Link>)}</div>}</div> : contextStatus?.status === "failed" ? <div className="empty-state compact" role="alert"><CircleDashed size={23} /><strong>Compaction failed</strong><p>Retry the mission step with the configured provider. No canonical result or checkpoint was removed.</p></div> : <div className="empty-state compact"><CircleDashed size={23} /><strong>{contextStatus?.status === "stale" ? "Working memory is stale" : "Compaction not needed"}</strong><p>{contextStatus?.status === "stale" ? "New canonical task data is available; the next required model context will refresh memory." : "Current dependency summaries fit within the configured model context."}</p></div>}
         </section>
         <section className="panel data-panel">
-          <header className="panel-header compact"><div><h2>Persisted activity</h2><p>Latest replayed transitions for the selected run</p></div><GitBranch size={19} /></header>
+          <header className="panel-header compact"><div><h2>Activity</h2><p>Latest mission transitions</p></div><GitBranch size={19} /></header>
           {events.length > 0 ? <ol className="event-list">{events.slice(0, 10).map((event) => <li key={event.id}><span className="event-icon"><Bot size={15} /></span><div><p>{event.summary}</p><small>{event.actor ?? "Nebula Core"} · #{event.sequence}</small></div></li>)}</ol> : <div className="empty-state compact"><CircleDashed size={23} /><strong>No run events</strong><p>The selected run has not recorded a transition yet.</p></div>}
         </section>
       </div>
@@ -85,9 +84,8 @@ export function AgentsPage() {
   return (
     <div className="page agents-page">
       <PageHeader
-        eyebrow="Supervised execution"
         title="Missions"
-        description="One supervisor coordinates bounded specialists. Every transition is persisted before it is streamed."
+        description="Supervise specialists, approvals, and mission limits."
         actions={
           <>
             <StopMissionButton />
@@ -96,13 +94,13 @@ export function AgentsPage() {
         }
       />
 
-      {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Approval required</strong><p>Review the exact target, arguments, and expected effects before this mission continues.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
+      {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Approval required</strong><p>{approvals.length} request{approvals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
 
       <section className="mission-hero panel">
         <div>
           <span className="section-kicker"><span className="pulse-dot" /> Mission running</span>
           <h2>External attack surface review</h2>
-          <p>Supervisor is coordinating six specialists across 25 bounded tasks.</p>
+          <p>Six specialists · 25 tasks</p>
         </div>
         <div className="mission-hero-progress">
           <span><strong>12</strong><small>complete</small></span>

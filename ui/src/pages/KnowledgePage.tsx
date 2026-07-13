@@ -206,9 +206,8 @@ export function KnowledgePage() {
   return (
     <div className="page knowledge-page">
       <PageHeader
-        eyebrow="Cited context"
         title="Knowledge"
-        description="Ingested sources are visible, removable, reindexable, and isolated from executable instructions."
+        description="Sources available for cited retrieval."
         actions={<>
           <input ref={inputRef} className="sr-only" type="file" aria-label="Choose knowledge source" accept=".txt,.md,.markdown,.rst,.log,.csv,.json,.jsonl,.ndjson,.html,.htm,.pdf,.docx,text/plain,text/markdown,text/x-markdown,text/csv,application/csv,application/json,application/jsonl,application/x-jsonlines,application/x-ndjson,text/html,application/xhtml+xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => void uploadFile(event)} />
           <button className="button primary" type="button" disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} {uploading ? "Adding source…" : "Add source"}</button>
@@ -246,8 +245,11 @@ export function KnowledgePage() {
           </div>
         </section>
         <aside className="panel knowledge-policy">
-          <span className="policy-illustration"><ShieldAlert size={28} /></span><h2>Retrieval boundary</h2><p>Knowledge content is treated as untrusted data. Instructions found inside sources cannot grant tools, expand scope, or alter system policy.</p>
-          <ul><li>Source identity included with every chunk</li><li>Cloud retrieval stays off until the operator explicitly consents</li><li>Local-only sources are never sent to cloud providers</li><li>Retrieval index can be rebuilt from authoritative data</li></ul>
+          <span className="policy-illustration"><ShieldAlert size={28} /></span><h2>Retrieval safety</h2><p>Sources are treated as untrusted data.</p>
+          <details className="knowledge-safety-details">
+            <summary>How retrieval stays bounded</summary>
+            <ul><li>Every chunk keeps its source identity</li><li>Cloud retrieval requires operator consent</li><li>Local-only sources stay local</li></ul>
+          </details>
         </aside>
       </div>
       {selected && <aside className="resource-inspector" role="complementary" aria-labelledby="knowledge-detail-title"><header><div><small>{sourceType(selected)}</small><h2 id="knowledge-detail-title">{selected.name}</h2></div><button className="icon-button subtle" type="button" aria-label="Close knowledge details" onClick={() => setSelected(undefined)}><X size={17} /></button></header><dl className="resource-details"><div><dt>Status</dt><dd>{selected.status}</dd></div><div><dt>Chunks</dt><dd>{selected.documentCount || "Not indexed"}</dd></div><div><dt>Citation</dt><dd>{selected.citation || selected.name}</dd></div><div><dt>Updated</dt><dd>{displayTime(selected.updatedAt)}</dd></div><div><dt>Source type</dt><dd>{sourceType(selected)}</dd></div></dl><section><h3>Retrieval boundary</h3><p>Content is untrusted data and cannot grant tools, expand scope, or modify system policy.</p></section><div className="inspector-actions"><button className="button secondary full" type="button" disabled={!canMutate || busyIds.has(selected.id)} onClick={() => void reindex(selected)}><RefreshCw size={14} /> Reindex source</button></div></aside>}
