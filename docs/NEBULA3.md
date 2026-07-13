@@ -172,9 +172,23 @@ single chat session or mission run; it is not shared across an engagement.
 
 ## Reviewed code execution and workspace limits
 
-Nebula does not provide a host terminal. A supported completed assistant fence
-(`bash`/`shell`, `sh`, or `python`/`python3`/`py`) can be copied or sent through
-an exact review. Every run starts a new non-root container with fixed v1 limits:
+Nebula does not provide a host terminal. The Sessions workspace does provide a
+human-operated **Container terminal** after an exact Core review. It launches a
+fresh interactive bash process in the assigned signed Toolbox image, mounts only
+the engagement workspace at `/workspace`, and removes the named container when
+the WebSocket disconnects, the operator stops it, or Core shuts down. The PTY is
+attached only to the fixed `docker/podman run --interactive --tty` process; no
+host shell, runtime socket, image, interpreter, command, or mount is selected by
+the webview. Offline is the default. Scoped mode permits exactly one
+policy-approved, DNS-pinned target and selected ports through the same certified
+per-invocation egress helper used by reviewed execution. Every terminal has 1
+CPU, 512 MiB RAM, 128 PIDs, a 30-minute hard limit, a 15-minute I/O idle limit,
+and the same application-enforced workspace limits described below. Interactive
+input/output is not sent to an AI provider or automatically promoted to evidence.
+
+A supported completed assistant fence (`bash`/`shell`, `sh`, or
+`python`/`python3`/`py`) can also be copied or sent through an exact one-shot
+review. Every run starts a new non-root container with fixed v1 limits:
 1 CPU, 512 MiB RAM, 128 PIDs, 300 seconds, and independent 2,000,000-byte stdout
 and stderr capture limits. The program has no interactive stdin. Only the
 engagement workspace is mounted at `/workspace`; containers are never resumed.
@@ -184,7 +198,7 @@ policy-approved target and selected ports, resolves and pins its addresses at
 confirmation, and uses the per-invocation egress helper. Run is exposed as one
 release-gated feature only when both offline and scoped paths are ready. There
 is no bridge/host network mode, host shell fallback, or runtime socket exposed
-to the webview.
+to the webview in either workflow.
 
 The persistent scratch workspace is limited to 5 GiB total allocated data,
 50,000 entries, and 1 GiB per file. Core rejects an already-over-limit
@@ -227,13 +241,14 @@ Podman Machine command/profile boundaries, the frozen-Core package audit, the
 UI accessibility/visual suite, and the full v3 backend suite.
 
 Before a release, manually smoke-test the signed digest-pinned Toolbox on
-Docker Desktop or a rootless Podman Machine. Confirm an offline run, a scoped
-single-target run and blocked out-of-scope connection, cancellation cleanup,
-Core-restart interruption, workspace promotion/reset, raw-output warning,
+Docker Desktop or a rootless Podman Machine. Confirm an offline terminal, a
+scoped single-target terminal and blocked out-of-scope connection, terminal
+disconnect/Core-restart cleanup, an offline run, a scoped single-target run,
+cancellation cleanup, Core-restart interruption, workspace promotion/reset, raw-output warning,
 Draft note/Discuss in chat, cached PDF export, and sensitive bundle v2 export.
-The release is blocked if Run appears without both execution modes, a runtime
-socket or host terminal reaches the webview, or any runner failure falls back
-to host execution.
+The release is blocked if Run appears without both execution modes, the
+container terminal can bypass review/scope, a runtime socket or host terminal
+reaches the webview, or any runner failure falls back to host execution.
 
 ## Current release boundary
 

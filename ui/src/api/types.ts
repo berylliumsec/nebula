@@ -704,6 +704,7 @@ export interface HealthResponse {
   version: string;
   mode: "local" | "team";
   runner: "ready" | "unavailable" | "degraded";
+  containerTerminal: "configured" | "unavailable";
 }
 
 export type ExecutionLanguage = "bash" | "sh" | "python";
@@ -807,6 +808,52 @@ export interface ExecutionCapabilities {
   runtimes: ExecutionCapability[];
   limits: ExecutionLimits;
   workspace: "/workspace";
+}
+
+export interface ContainerTerminalRequest {
+  engagementId: Identifier;
+  network: ExecutionNetworkRequest;
+  columns: number;
+  rows: number;
+}
+
+export interface ContainerTerminalCapabilities {
+  engagementId: Identifier;
+  ready: boolean;
+  offline: boolean;
+  scopedNetwork: boolean;
+  detail?: string;
+  workspace: "/workspace";
+  limits: ExecutionLimits;
+  idleTimeoutSeconds: number;
+  freshContainer: true;
+  hostAccess: false;
+}
+
+export interface ContainerTerminalPreflight {
+  allowed: boolean;
+  errorCode?: string;
+  detail: string;
+  runtime?: ExecutionRuntimeSnapshot;
+  network?: ExecutionNetworkSnapshot;
+  limits: ExecutionLimits;
+  workspace: "/workspace";
+  policyRule?: string;
+  scopePolicyId?: Identifier;
+  scopePolicyRevision?: number;
+  previewFingerprint?: string;
+  previewToken?: string;
+  expiresAt?: string;
+  idleTimeoutSeconds: number;
+  freshContainer: true;
+  hostAccess: false;
+}
+
+export interface ContainerTerminalSession {
+  sessionId: Identifier;
+  websocketTicket: string;
+  ticketExpiresAt: string;
+  websocketPath: string;
 }
 
 export interface WorkspaceChange {

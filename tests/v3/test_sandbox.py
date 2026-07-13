@@ -80,6 +80,64 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
     assert all(value not in {"sh", "-c", "/bin/sh"} for value in argv[:-4])
 
 
+def test_container_terminal_argv_adds_tty_without_host_shell_fallback(tmp_path):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    request = _request(
+        tmp_path,
+        command=["/bin/bash", "--noprofile", "--norc", "-i"],
+        workspace_access=SandboxWorkspaceAccess.WRITE,
+    )
+    workspace = runner._validate(request)
+    argv = runner._argv(
+        request,
+        workspace,
+        container_name="nebula-terminal-abc123",
+        interactive=True,
+        tty=True,
+    )
+
+    assert argv[:3] == ["/usr/bin/podman", "run", "--rm"]
+    assert "--interactive" in argv
+    assert "--tty" in argv
+    assert "--network=none" in argv
+    assert f"--mount=type=bind,src={tmp_path.resolve()},dst=/workspace,rw" in argv
+    assert argv[-5:] == [
+        DIGEST_IMAGE,
+        "/bin/bash",
+        "--noprofile",
+        "--norc",
+        "-i",
+    ]
+    assert all(value not in {"-c", "/bin/sh"} for value in argv[:-5])
+    with pytest.raises(SandboxError, match="requires interactive"):
+        runner._argv(request, workspace, tty=True)
+
+
+def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeypatch):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    removed: list[str] = []
+
+    async def capture(*arguments):
+        assert arguments == ("ps", "--all", "--format", "{{.Names}}")
+        return (
+            "nebula-terminal-good123\n"
+            "nebula-exec-preserve\n"
+            "nebula-terminal-bad/name\n"
+            "customer-container\n",
+            "",
+            0,
+        )
+
+    async def remove(name):
+        removed.append(name)
+
+    monkeypatch.setattr(runner, "_capture", capture)
+    monkeypatch.setattr(runner, "_force_remove", remove)
+    asyncio.run(runner.cleanup_terminal_containers())
+
+    assert removed == ["nebula-terminal-good123"]
+
+
 @pytest.mark.parametrize(
     "access,expected_mode",
     [

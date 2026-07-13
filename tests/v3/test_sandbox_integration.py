@@ -98,3 +98,50 @@ print('x' * 70000)
         assert second.stdout == "persisted=kept\n"
 
     asyncio.run(scenario())
+
+
+def test_real_rootless_runtime_opens_and_removes_container_terminal(tmp_path):
+    workspace = tmp_path / "terminal-workspace"
+    workspace.mkdir(mode=0o777)
+    workspace.chmod(0o777)
+    runner = ContainerSandboxRunner(
+        runtime=RUNTIME,
+        allow_unpinned_images=True,
+        workspace_roots=[tmp_path],
+    )
+
+    async def scenario() -> None:
+        available, detail = await runner.available()
+        assert available, detail
+        request = SandboxRequest(
+            image=IMAGE,
+            command=["/bin/bash", "--noprofile", "--norc", "-i"],
+            workspace=workspace,
+            workspace_access=SandboxWorkspaceAccess.WRITE,
+            network=SandboxNetwork.NONE,
+            environment={"LANG": "C.UTF-8", "TERM": "xterm-256color"},
+            limits=SandboxLimits(timeout_seconds=30),
+        )
+        process = await runner.open_terminal(
+            request,
+            container_name="nebula-terminal-integration",
+            columns=100,
+            rows=30,
+        )
+        try:
+            await process.write(
+                b"printf 'terminal-container-only\\n'\nprintf kept > terminal.txt\nexit\n"
+            )
+            output = bytearray()
+            while True:
+                chunk = await asyncio.wait_for(process.read(), timeout=10)
+                if not chunk:
+                    break
+                output.extend(chunk)
+            assert await asyncio.wait_for(process.wait(), timeout=10) == 0
+            assert b"terminal-container-only" in output
+            assert (workspace / "terminal.txt").read_text() == "kept"
+        finally:
+            await process.close()
+
+    asyncio.run(scenario())

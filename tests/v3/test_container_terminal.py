@@ -1,0 +1,386 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+from functools import wraps
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+
+from nebula.v3.api import create_app
+from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.container_terminal import (
+    ContainerTerminalError,
+    ContainerTerminalPreflightRequest,
+    ContainerTerminalService,
+    ContainerTerminalStartRequest,
+)
+from nebula.v3.domain import (
+    Engagement,
+    RunnerIsolation,
+    RunnerProfile,
+    RunnerRuntime,
+    ScopePolicy,
+    ToolPackInstallation,
+    ToolPackInstallationStatus,
+    ToolPackTrust,
+    utc_now,
+)
+from nebula.v3.sandbox import SandboxNetwork, SandboxWorkspaceAccess
+from nebula.v3.storage import NebulaStore
+from nebula.v3.tool_platform import OperatorRuntimeResolution
+from nebula.v3.toolpacks import ToolPackOperatorRuntime
+from nebula.v3.workspace import WorkspaceService
+
+
+def async_test(function):
+    @wraps(function)
+    def run(*args, **kwargs):
+        return asyncio.run(function(*args, **kwargs))
+
+    return run
+
+
+class RecordingTerminalProcess:
+    container_name = "nebula-terminal-recording"
+
+    def __init__(self) -> None:
+        self.closed = 0
+        self.writes: list[bytes] = []
+        self.resizes: list[tuple[int, int]] = []
+        self._chunks = [b"container-only\r\n", b""]
+
+    async def read(self, maximum_bytes: int = 32_768) -> bytes:
+        assert maximum_bytes <= 32_768
+        await asyncio.sleep(0)
+        return self._chunks.pop(0)
+
+    async def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    def resize(self, columns: int, rows: int) -> None:
+        self.resizes.append((columns, rows))
+
+    async def wait(self) -> int:
+        await asyncio.sleep(0.02)
+        return 7
+
+    async def close(self) -> None:
+        self.closed += 1
+
+
+class RecordingTerminalRunner:
+    def __init__(self, *, certified: bool = True) -> None:
+        self.egress_controller = SimpleNamespace(certified=certified)
+        self.requests: list[tuple[object, str, int, int]] = []
+        self.processes: list[RecordingTerminalProcess] = []
+
+    async def open_terminal(
+        self, request, *, container_name: str, columns: int, rows: int
+    ) -> RecordingTerminalProcess:
+        self.requests.append((request, container_name, columns, rows))
+        process = RecordingTerminalProcess()
+        process.container_name = container_name
+        self.processes.append(process)
+        return process
+
+
+class StubTerminalPlatform:
+    execution_enabled = True
+
+    def __init__(self, workspace, runner: RecordingTerminalRunner) -> None:
+        self.workspace = workspace
+        self.workspace.mkdir(parents=True)
+        self.runner = runner
+        self.cleanup_calls = 0
+        self.profile = RunnerProfile(
+            id="runner-1",
+            name="Rootless Podman",
+            runtime=RunnerRuntime.PODMAN,
+            executable="/usr/bin/podman",
+            platform="linux/amd64",
+            isolation=RunnerIsolation.ROOTLESS,
+            enabled=True,
+            healthy=True,
+        )
+        self.installation = ToolPackInstallation(
+            id="pack-1",
+            publisher="berylliumsec",
+            name="toolbox",
+            version="1",
+            manifest_digest="a" * 64,
+            source="test",
+            trust=ToolPackTrust.CURATED,
+            runtime_profile_id=self.profile.id,
+            image_locks={"linux/amd64": "example.invalid/toolbox@sha256:" + "b" * 64},
+            status=ToolPackInstallationStatus.READY,
+            manifest_path="/tmp/manifest.json",
+            installed_at=utc_now(),
+            verified_at=utc_now(),
+        )
+
+    async def cleanup_operator_terminals(self) -> None:
+        self.cleanup_calls += 1
+
+    def workspace_for(self, engagement_id: str):
+        del engagement_id
+        return self.workspace
+
+    def resolve_operator_runtime(
+        self, engagement_id: str, language: str, *, network: bool
+    ) -> OperatorRuntimeResolution:
+        del engagement_id, network
+        assert language == "bash"
+        runtime = ToolPackOperatorRuntime(
+            language="bash",
+            aliases=["bash", "shell"],
+            image="toolbox",
+            adapter="/opt/nebula/bin/nebula-toolbox",
+            interpreter="/bin/bash",
+            arguments=["--noprofile", "--norc", "-eu", "-o", "pipefail"],
+        )
+        return OperatorRuntimeResolution(
+            canonical_language="bash",
+            runtime=runtime,
+            installation=self.installation,
+            manifest=SimpleNamespace(),  # type: ignore[arg-type]
+            profile=self.profile,
+            image=self.installation.image_locks["linux/amd64"],
+            runner=self.runner,  # type: ignore[arg-type]
+            workspace=self.workspace,
+            trusted=True,
+        )
+
+
+def fixture(tmp_path, *, certified: bool = True):
+    store = NebulaStore(tmp_path / "nebula.db")
+    engagement = store.create(Engagement(name="Container Terminal Lab"))
+    policy = store.create(
+        ScopePolicy(
+            engagement_id=engagement.id,
+            allowed_cidrs=["10.0.0.0/8"],
+            allowed_ports=[443, 8443],
+        )
+    )
+    engagement = store.update(
+        Engagement,
+        engagement.id,
+        {"scope_policy_id": policy.id},
+        expected_revision=engagement.revision,
+    )
+    runner = RecordingTerminalRunner(certified=certified)
+    platform = StubTerminalPlatform(tmp_path / "workspace", runner)
+    service = ContainerTerminalService(
+        store=store,
+        tool_platform=platform,  # type: ignore[arg-type]
+        operator_id=lambda: "operator-1",
+    )
+    return store, engagement, policy, runner, platform, service
+
+
+@async_test
+async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
+    store, engagement, _policy, runner, platform, service = fixture(tmp_path)
+    store.append_operation_event(
+        "orphaned-terminal",
+        "container_terminal",
+        engagement.id,
+        "container_terminal.running",
+        {"status": "running"},
+        actor_id="operator-1",
+    )
+    await service.startup()
+    assert platform.cleanup_calls == 1
+    recovered = store.replay_operation_events("orphaned-terminal")
+    assert recovered[-1].event_type == "container_terminal.terminal"
+    assert recovered[-1].payload["status"] == "interrupted"
+    capabilities = service.capabilities(engagement.id)
+    assert capabilities.ready is True
+    assert capabilities.offline is True
+    assert capabilities.scoped_network is True
+    assert capabilities.host_access is False
+
+    request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+    preview = await service.preflight(request)
+    assert preview.allowed is True
+    assert preview.runtime is not None
+    assert preview.runtime.interpreter == "/bin/bash"
+    assert preview.runtime.arguments == ["--noprofile", "--norc", "-i"]
+    assert preview.network is not None
+    assert preview.network.mode.value == "none"
+    assert preview.host_access is False
+    assert preview.fresh_container is True
+    assert preview.preview_token is not None
+    assert preview.preview_fingerprint is not None
+
+    start = ContainerTerminalStartRequest(
+        **request.model_dump(),
+        preview_token=preview.preview_token,
+        preview_fingerprint=preview.preview_fingerprint,
+        client_idempotency_key="terminal-attempt-1",
+    )
+    created = await service.start(start)
+    retry = await service.start(start)
+    assert retry.session_id == created.session_id
+    assert service.workspace_lock(engagement.id).locked() is True
+    with pytest.raises(ContainerTerminalError, match="invalid"):
+        await service.claim(created.session_id, "wrong-ticket")
+    await service.claim(created.session_id, created.websocket_ticket)
+    with pytest.raises(ContainerTerminalError, match="already been used"):
+        await service.claim(created.session_id, created.websocket_ticket)
+
+    process = await service.launch(created.session_id)
+    assert process is runner.processes[0]
+    sandbox_request, name, columns, rows = runner.requests[0]
+    assert name.startswith("nebula-terminal-")
+    assert (columns, rows) == (100, 30)
+    assert sandbox_request.command == [
+        "/bin/bash",
+        "--noprofile",
+        "--norc",
+        "-i",
+    ]
+    assert sandbox_request.workspace == platform.workspace
+    assert sandbox_request.workspace_access == SandboxWorkspaceAccess.WRITE
+    assert sandbox_request.network == SandboxNetwork.NONE
+    assert sandbox_request.environment == {
+        "LANG": "C.UTF-8",
+        "TERM": "xterm-256color",
+    }
+    assert sandbox_request.limits.cpu_count == 1
+    assert sandbox_request.limits.memory_mb == 512
+    assert sandbox_request.limits.pids == 128
+
+    await service.finish(created.session_id, outcome="completed", exit_code=0)
+    assert service.workspace_lock(engagement.id).locked() is False
+    assert runner.processes[0].closed == 1
+    events = store.replay_operation_events(created.session_id)
+    assert [event.event_type for event in events] == [
+        "container_terminal.pending",
+        "container_terminal.claimed",
+        "container_terminal.running",
+        "container_terminal.terminal",
+    ]
+    assert all(event.operation_kind == "container_terminal" for event in events)
+    await service.shutdown()
+
+
+@async_test
+async def test_scoped_terminal_pins_one_policy_approved_target(tmp_path):
+    _store, engagement, _policy, runner, _platform, service = fixture(tmp_path)
+    request = ContainerTerminalPreflightRequest(
+        engagement_id=engagement.id,
+        network={"mode": "scoped", "target": "10.20.30.40", "ports": [8443, 443]},
+    )
+    preview = await service.preflight(request)
+    assert preview.allowed is True
+    assert preview.network is not None
+    assert preview.network.resolved_addresses == ["10.20.30.40"]
+    assert preview.network.ports == [443, 8443]
+    start = ContainerTerminalStartRequest(
+        **request.model_dump(),
+        preview_token=preview.preview_token,
+        preview_fingerprint=preview.preview_fingerprint,
+        client_idempotency_key="scoped-terminal",
+    )
+    created = await service.start(start)
+    await service.claim(created.session_id, created.websocket_ticket)
+    await service.launch(created.session_id)
+    sandbox_request = runner.requests[0][0]
+    assert sandbox_request.network == SandboxNetwork.SCOPED
+    assert sandbox_request.egress_rules[0].address == "10.20.30.40"
+    assert sandbox_request.egress_rules[0].ports == [443, 8443]
+    assert sandbox_request.pinned_hosts == {"10.20.30.40": "10.20.30.40"}
+    await service.finish(created.session_id, outcome="closed")
+
+
+@async_test
+async def test_scoped_terminal_fails_closed_without_certified_egress(tmp_path):
+    _store, engagement, _policy, _runner, _platform, service = fixture(
+        tmp_path, certified=False
+    )
+    preview = await service.preflight(
+        ContainerTerminalPreflightRequest(
+            engagement_id=engagement.id,
+            network={"mode": "scoped", "target": "10.20.30.40", "ports": [443]},
+        )
+    )
+    assert preview.allowed is False
+    assert preview.error_code == "runner_unavailable"
+    assert "certified" in preview.detail
+
+
+def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp_path):
+    store, engagement, _policy, runner, platform, service = fixture(tmp_path)
+    workspace = WorkspaceService(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        tool_platform=platform,  # type: ignore[arg-type]
+        operator_id=lambda: "operator-1",
+    )
+    app = create_app(
+        store,
+        auth_token="test-token",
+        container_terminal_service=service,
+        workspace_service=workspace,
+    )
+    headers = {"Authorization": "Bearer test-token"}
+    with TestClient(app) as client:
+        health = client.get("/api/v1/health", headers=headers)
+        assert health.json()["human_pty"] == "unavailable"
+        assert health.json()["container_terminal"] == "configured"
+        preview = client.post(
+            "/api/v1/container-terminal/preflight",
+            headers=headers,
+            json={
+                "engagement_id": engagement.id,
+                "network": {"mode": "none", "ports": []},
+                "columns": 90,
+                "rows": 24,
+            },
+        )
+        assert preview.status_code == 200
+        reviewed = preview.json()
+        started = client.post(
+            "/api/v1/container-terminal/sessions",
+            headers=headers,
+            json={
+                "engagement_id": engagement.id,
+                "network": {"mode": "none", "ports": []},
+                "columns": 90,
+                "rows": 24,
+                "preview_token": reviewed["preview_token"],
+                "preview_fingerprint": reviewed["preview_fingerprint"],
+                "client_idempotency_key": "api-terminal",
+            },
+        )
+        assert started.status_code == 201
+        session = started.json()
+        blocked_reset = client.post(
+            f"/api/v1/engagements/{engagement.id}/workspace/reset",
+            headers=headers,
+            json={"engagement_name": engagement.name},
+        )
+        assert blocked_reset.status_code == 409
+        assert blocked_reset.json()["code"] == "workspace_busy"
+        encoded_token = base64.urlsafe_b64encode(b"test-token").decode().rstrip("=")
+        protocols = [
+            "nebula.container-terminal.v1",
+            f"nebula.auth.{encoded_token}",
+            f"nebula.ticket.{session['websocket_ticket']}",
+        ]
+        with client.websocket_connect(
+            session["websocket_path"], subprotocols=protocols
+        ) as socket:
+            assert socket.receive_json()["type"] == "ready"
+            output = socket.receive_json()
+            assert output["type"] == "output"
+            assert base64.b64decode(output["data"]) == b"container-only\r\n"
+            terminal = socket.receive_json()
+            assert terminal == {
+                "type": "exit",
+                "exit_code": 7,
+                "outcome": "completed",
+            }
+    assert runner.processes[0].closed == 1

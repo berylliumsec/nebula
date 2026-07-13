@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import fcntl
 import ipaddress
 import json
 import os
 import platform as host_platform
+import pty
 import re
+import signal
+import struct
+import termios
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -537,6 +543,128 @@ class AnalysisOnlyRunner(SandboxRunner):
         )
 
 
+@dataclass
+class SandboxTerminalProcess:
+    """A PTY attached only to one named OCI container-runtime process.
+
+    The PTY is an I/O transport for ``docker/podman run --interactive --tty``.
+    It never resolves or launches a host shell.  Closing the transport always
+    removes the named container and releases any scoped-egress helper.
+    """
+
+    process: asyncio.subprocess.Process
+    master_fd: int
+    container_name: str
+    runner: "ContainerSandboxRunner"
+    egress_lease: EgressLease | None = None
+    _closed: bool = False
+    _close_lock: asyncio.Lock | None = None
+
+    def __post_init__(self) -> None:
+        os.set_blocking(self.master_fd, False)
+        self._close_lock = asyncio.Lock()
+
+    async def read(self, maximum_bytes: int = 32_768) -> bytes:
+        if maximum_bytes < 1 or maximum_bytes > 32_768:
+            raise ValueError("terminal reads must be between 1 and 32768 bytes")
+        while not self._closed:
+            try:
+                return os.read(self.master_fd, maximum_bytes)
+            except BlockingIOError:
+                await _wait_for_fd(self.master_fd, writable=False)
+            except OSError as exc:
+                if exc.errno in {errno.EBADF, errno.EIO}:
+                    return b""
+                raise
+        return b""
+
+    async def write(self, data: bytes) -> None:
+        if not data:
+            return
+        if len(data) > 1024 * 1024:
+            raise ValueError("terminal input exceeds 1048576 bytes")
+        view = memoryview(data)
+        while view and not self._closed:
+            try:
+                written = os.write(self.master_fd, view)
+                view = view[written:]
+            except BlockingIOError:
+                await _wait_for_fd(self.master_fd, writable=True)
+            except OSError as exc:
+                if exc.errno in {errno.EBADF, errno.EIO}:
+                    return
+                raise
+
+    def resize(self, columns: int, rows: int) -> None:
+        if not 1 <= columns <= 1_000 or not 1 <= rows <= 1_000:
+            raise ValueError("terminal dimensions must be between 1 and 1000")
+        if self._closed:
+            return
+        fcntl.ioctl(
+            self.master_fd,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", rows, columns, 0, 0),
+        )
+
+    async def wait(self) -> int:
+        return int(await self.process.wait())
+
+    async def close(self) -> None:
+        assert self._close_lock is not None
+        async with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                if self.process.returncode is None:
+                    try:
+                        os.killpg(self.process.pid, signal.SIGTERM)
+                    except OSError:
+                        try:
+                            self.process.terminate()
+                        except ProcessLookupError:
+                            pass
+                    try:
+                        await asyncio.wait_for(self.process.wait(), timeout=2)
+                    except asyncio.TimeoutError:
+                        try:
+                            os.killpg(self.process.pid, signal.SIGKILL)
+                        except OSError:
+                            try:
+                                self.process.kill()
+                            except ProcessLookupError:
+                                pass
+                        await self.process.wait()
+            finally:
+                await self.runner._force_remove(self.container_name)
+                try:
+                    if self.egress_lease is not None:
+                        await self.egress_lease.close()
+                        self.egress_lease = None
+                finally:
+                    try:
+                        os.close(self.master_fd)
+                    except OSError:
+                        pass
+
+
+async def _wait_for_fd(file_descriptor: int, *, writable: bool) -> None:
+    loop = asyncio.get_running_loop()
+    ready: asyncio.Future[None] = loop.create_future()
+
+    def mark_ready() -> None:
+        if not ready.done():
+            ready.set_result(None)
+
+    register = loop.add_writer if writable else loop.add_reader
+    remove = loop.remove_writer if writable else loop.remove_reader
+    register(file_descriptor, mark_ready)
+    try:
+        await ready
+    finally:
+        remove(file_descriptor)
+
+
 class ContainerSandboxRunner(SandboxRunner):
     """Execute argv directly in a rootless, resource-limited OCI container.
 
@@ -861,6 +989,7 @@ class ContainerSandboxRunner(SandboxRunner):
         container_name: str = "nebula-tool",
         network_mode: str | None = None,
         interactive: bool = False,
+        tty: bool = False,
     ) -> list[str]:
         if not self.runtime or self.profile is None:
             raise SandboxUnavailable("no container runtime is configured")
@@ -882,6 +1011,12 @@ class ContainerSandboxRunner(SandboxRunner):
         ]
         if interactive:
             argv.append("--interactive")
+        if tty:
+            if not interactive:
+                raise SandboxError(
+                    "a terminal TTY requires interactive container input"
+                )
+            argv.append("--tty")
         if self.profile.seccomp_profile is not None:
             argv.append(f"--security-opt=seccomp={self.profile.seccomp_profile}")
         if workspace is None:
@@ -916,6 +1051,121 @@ class ContainerSandboxRunner(SandboxRunner):
 
     async def run(self, request: SandboxRequest) -> SandboxResult:
         return await self.run_stream(request)
+
+    async def open_terminal(
+        self,
+        request: SandboxRequest,
+        *,
+        container_name: str,
+        columns: int,
+        rows: int,
+    ) -> SandboxTerminalProcess:
+        """Launch one fixed-command container with an interactive PTY."""
+
+        healthy, detail = await self.available()
+        if not healthy:
+            raise SandboxUnavailable(detail)
+        if (
+            request.workspace_access != SandboxWorkspaceAccess.NONE
+            and self.workspace_roots is None
+        ):
+            raise SandboxUnavailable(
+                "workspace terminal execution requires explicitly configured workspace roots"
+            )
+        workspace = self._validate(request)
+        if not re.fullmatch(
+            r"nebula-terminal-[a-z0-9][a-z0-9_.-]{0,53}", container_name
+        ):
+            raise SandboxError(
+                "terminal container name is outside the Nebula namespace"
+            )
+        if not 1 <= columns <= 1_000 or not 1 <= rows <= 1_000:
+            raise SandboxError("terminal dimensions must be between 1 and 1000")
+
+        lease: EgressLease | None = None
+        if request.network == SandboxNetwork.SCOPED:
+            if not request.egress_rules:
+                raise SandboxUnavailable(
+                    "network terminal execution requires explicit broker-approved egress rules"
+                )
+            if not self.egress_controller.certified:
+                raise SandboxUnavailable(
+                    "network terminal execution requires a certified per-invocation egress helper"
+                )
+            lease = await self.egress_controller.acquire(
+                runtime_argv=self._runtime_argv(),
+                runtime_environment=_runtime_environment(),
+                request=request,
+                container_name=container_name,
+                seccomp_profile=self.profile.seccomp_profile if self.profile else None,
+            )
+        master_fd: int | None = None
+        slave_fd: int | None = None
+        try:
+            argv = self._argv(
+                request,
+                workspace,
+                container_name=container_name,
+                network_mode=lease.network_mode if lease else None,
+                interactive=True,
+                tty=True,
+            )
+            master_fd, slave_fd = pty.openpty()
+            fcntl.ioctl(
+                slave_fd,
+                termios.TIOCSWINSZ,
+                struct.pack("HHHH", rows, columns, 0, 0),
+            )
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                env=_runtime_environment(),
+                start_new_session=True,
+            )
+        except (OSError, SandboxError) as exc:
+            if master_fd is not None:
+                os.close(master_fd)
+            if lease is not None:
+                await lease.close()
+            if isinstance(exc, SandboxError):
+                raise
+            raise SandboxUnavailable(
+                f"could not start container terminal runtime: {exc}"
+            ) from exc
+        finally:
+            if slave_fd is not None:
+                os.close(slave_fd)
+        assert master_fd is not None
+        return SandboxTerminalProcess(
+            process=process,
+            master_fd=master_fd,
+            container_name=container_name,
+            runner=self,
+            egress_lease=lease,
+        )
+
+    async def cleanup_terminal_containers(self) -> None:
+        """Best-effort removal of terminals orphaned by a prior Core process."""
+
+        if not self.runtime or self.profile is None:
+            return
+        try:
+            stdout, _stderr, return_code = await self._capture(
+                "ps", "--all", "--format", "{{.Names}}"
+            )
+        except (OSError, asyncio.TimeoutError, SandboxError):
+            return
+        if return_code != 0:
+            return
+        names = {
+            line.strip()
+            for line in stdout.splitlines()
+            if re.fullmatch(r"nebula-terminal-[a-z0-9][a-z0-9_.-]{0,53}", line.strip())
+        }
+        for name in sorted(names):
+            await self._force_remove(name)
 
     async def run_stream(
         self,
@@ -1392,6 +1642,7 @@ __all__ = [
     "SandboxRequest",
     "SandboxResult",
     "SandboxRunner",
+    "SandboxTerminalProcess",
     "SandboxUnavailable",
     "SandboxWorkspaceAccess",
 ]

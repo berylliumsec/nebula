@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
   Braces,
   FileClock,
@@ -9,6 +9,7 @@ import {
   Send,
   ShieldCheck,
   Square,
+  SquareTerminal,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type {
@@ -29,8 +30,10 @@ import { useConfirmation } from "../components/DialogSystem";
 import { WorkspacePanel } from "../components/WorkspacePanel";
 import { useWorkspace } from "../state/WorkspaceContext";
 
-type SessionView = "chat" | "executions" | "workspace";
+type SessionView = "chat" | "terminal" | "executions" | "workspace";
 type MessageState = "complete" | "streaming" | "error" | "cancelled";
+
+const ContainerTerminalPanel = lazy(() => import("../components/ContainerTerminalPanel").then((module) => ({ default: module.ContainerTerminalPanel })));
 
 interface ConversationMessage extends ChatMessage {
   id: string;
@@ -422,13 +425,14 @@ export function SessionsPage() {
       <PageHeader
         eyebrow="Operator workspace"
         title="Sessions"
-        description="Cited analyst chat, reviewed disposable code execution, durable history, and the engagement workspace share one controlled surface."
+        description="Cited analyst chat, a human-operated container terminal, reviewed code execution, durable history, and the engagement workspace share one controlled surface."
         actions={view === "chat" ? <button className="button primary" type="button" disabled={previewMode || !engagement} title={!engagement ? "Create or select an engagement before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : undefined}
       />
 
       <div className="session-toolbar">
         <div className="session-tabs" role="tablist" aria-label="Session views">
           <button type="button" role="tab" aria-selected={view === "chat"} onClick={() => setView("chat")}><MessageSquare size={16} /> Analyst chat</button>
+          <button type="button" role="tab" aria-selected={view === "terminal"} onClick={() => setView("terminal")}><SquareTerminal size={16} /> Human terminal</button>
           <button type="button" role="tab" aria-selected={view === "executions"} onClick={() => setView("executions")}><FileClock size={16} /> Executions</button>
           <button type="button" role="tab" aria-selected={view === "workspace"} onClick={() => setView("workspace")}><FolderOpen size={16} /> Workspace</button>
         </div>
@@ -446,12 +450,14 @@ export function SessionsPage() {
           </nav>
         </aside>}
         <section className="session-workspace">
-          {view === "executions" && api && engagement ? (
+          {view === "terminal" && api && engagement ? (
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading container terminal…</strong></div>}><ContainerTerminalPanel api={api} engagementId={engagement.id} engagementName={engagement.name} /></Suspense>
+          ) : view === "executions" && api && engagement ? (
             <ExecutionHistory api={api} engagementId={engagement.id} refreshKey={executionRefresh} onRerun={setRunCandidate} providers={providers} onChatAttached={openAttachedChat} />
           ) : view === "workspace" && api && engagement ? (
             <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} />
           ) : view !== "chat" ? (
-            <div className="empty-state"><FolderOpen size={24} /><strong>Select an engagement</strong><p>Execution history and workspace files are engagement-scoped.</p></div>
+            <div className="empty-state"><FolderOpen size={24} /><strong>Select an engagement</strong><p>The container terminal, execution history, and workspace files are engagement-scoped.</p></div>
           ) : (
             <div className="chat-panel">
               {!previewMode && <div className="chat-context-bar">

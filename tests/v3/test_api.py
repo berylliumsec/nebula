@@ -50,6 +50,7 @@ def test_health_and_data_routes_require_auth(api):
     assert response.status_code == 200
     assert response.json()["journal_mode"] == "wal"
     assert response.json()["human_pty"] == "unavailable"
+    assert response.json()["container_terminal"] == "unavailable"
     assert response.json()["version"] == __version__
     assert {
         "commit",

@@ -52,6 +52,19 @@ from .chat import (
     ChatPrivacyError,
     ChatService,
 )
+from .container_terminal import (
+    ContainerTerminalCapabilities,
+    ContainerTerminalError,
+    ContainerTerminalPreflightRequest,
+    ContainerTerminalPreflightResponse,
+    ContainerTerminalService,
+    ContainerTerminalStartRequest,
+    ContainerTerminalStartResponse,
+    MAX_TERMINAL_INPUT_BYTES,
+    TERMINAL_IDLE_TIMEOUT_SECONDS,
+    TERMINAL_MAX_DURATION_SECONDS,
+    TERMINAL_OUTPUT_CHUNK_BYTES,
+)
 from .database import Database
 from .context import (
     DEFAULT_CONTEXT_WINDOW,
@@ -189,6 +202,24 @@ CUSTOM_RESOURCES = {
 API_PREFIX = "/api/v1"
 TOOL_PACK_EVENT_POLL_SECONDS = 0.25
 TOOL_PACK_EVENT_HEARTBEAT_TICKS = 20
+
+
+def _websocket_protocol_secret(
+    protocols: list[str], prefix: str, *, decode_base64: bool
+) -> str | None:
+    matches = [
+        value.removeprefix(prefix) for value in protocols if value.startswith(prefix)
+    ]
+    if len(matches) != 1 or not matches[0]:
+        return None
+    if not decode_base64:
+        return matches[0]
+    try:
+        return base64.urlsafe_b64decode(
+            matches[0] + "=" * (-len(matches[0]) % 4)
+        ).decode("utf-8")
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        return None
 
 
 class SpaStaticFiles(StaticFiles):
@@ -361,6 +392,7 @@ def create_app(
     enable_executable_missions: bool | None = None,
     execution_service: ExecutionService | None = None,
     execution_data_root: str | Path | None = None,
+    container_terminal_service: ContainerTerminalService | None = None,
     workspace_service: WorkspaceService | None = None,
     report_render_service: ReportRenderService | None = None,
     execution_ai_service: ExecutionAIService | None = None,
@@ -416,6 +448,22 @@ def create_app(
         )
     if executions is not None and executions.store is not store:
         raise ValueError("execution_service must use the API store")
+    container_terminals = container_terminal_service
+    if container_terminals is None and tool_platform is not None:
+        container_terminals = ContainerTerminalService(
+            store=store,
+            tool_platform=tool_platform,
+            execution_service=executions,
+            operator_id=active_operator_id,
+        )
+    if container_terminals is not None and container_terminals.store is not store:
+        raise ValueError("container_terminal_service must use the API store")
+    if (
+        container_terminals is not None
+        and executions is not None
+        and container_terminals.execution_service is None
+    ):
+        container_terminals.bind_execution_service(executions)
     workspaces = workspace_service
     if workspaces is None and artifact_store is not None and tool_platform is not None:
         workspaces = WorkspaceService(
@@ -447,6 +495,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        if container_terminals is not None:
+            await container_terminals.startup()
         if executions is not None:
             await executions.startup()
         if report_renders is not None:
@@ -457,13 +507,15 @@ def create_app(
         try:
             yield
         finally:
+            if executions is not None:
+                await executions.shutdown()
+            if container_terminals is not None:
+                await container_terminals.shutdown()
             await missions.shutdown()
             if report_renders is not None:
                 await report_renders.shutdown()
             if execution_ai is not None:
                 await execution_ai.shutdown()
-            if executions is not None:
-                await executions.shutdown()
 
     app = FastAPI(
         title="Nebula 3 Core API",
@@ -479,6 +531,7 @@ def create_app(
     app.state.operator_profile_service = operators
     app.state.tool_platform = tool_platform
     app.state.execution_service = executions
+    app.state.container_terminal_service = container_terminals
     app.state.workspace_service = workspaces
     app.state.report_render_service = report_renders
     app.state.execution_ai_service = execution_ai
@@ -583,6 +636,15 @@ def create_app(
             content={"detail": exc.detail, "code": exc.code},
         )
 
+    @app.exception_handler(ContainerTerminalError)
+    async def container_terminal_error_handler(
+        _: Request, exc: ContainerTerminalError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail, "code": exc.code},
+        )
+
     @app.exception_handler(ReportRenderError)
     async def report_render_error_handler(
         _: Request, exc: ReportRenderError
@@ -645,6 +707,10 @@ def create_app(
             "runner": "unavailable",
             # Compatibility field; the host-backed terminal implementation is gone.
             "human_pty": "unavailable",
+            # This is a reviewed OCI-container terminal, never the legacy host PTY.
+            "container_terminal": (
+                "configured" if container_terminals is not None else "unavailable"
+            ),
             "api_version": "v1",
             **store.database.health(),
         }
@@ -657,6 +723,15 @@ def create_app(
                 status_code=503,
             )
         return executions
+
+    def require_container_terminal_service() -> ContainerTerminalService:
+        if container_terminals is None:
+            raise ContainerTerminalError(
+                "runner_unavailable",
+                "container terminal is not configured",
+                status_code=503,
+            )
+        return container_terminals
 
     def require_workspace_service() -> WorkspaceService:
         if workspaces is None:
@@ -684,6 +759,330 @@ def create_app(
                 status_code=503,
             )
         return execution_ai
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminal/capabilities",
+        response_model=ContainerTerminalCapabilities,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def container_terminal_capabilities(
+        engagement_id: str,
+    ) -> ContainerTerminalCapabilities:
+        return require_container_terminal_service().capabilities(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/container-terminal/preflight",
+        response_model=ContainerTerminalPreflightResponse,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def preflight_container_terminal(
+        request: ContainerTerminalPreflightRequest,
+    ) -> ContainerTerminalPreflightResponse:
+        return await require_container_terminal_service().preflight(request)
+
+    @app.post(
+        f"{API_PREFIX}/container-terminal/sessions",
+        response_model=ContainerTerminalStartResponse,
+        status_code=201,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_container_terminal(
+        request: ContainerTerminalStartRequest,
+    ) -> ContainerTerminalStartResponse:
+        return await require_container_terminal_service().start(request)
+
+    @app.websocket(f"{API_PREFIX}/container-terminals/{{session_id}}/ws")
+    async def container_terminal_socket(websocket: WebSocket, session_id: str) -> None:
+        service = container_terminals
+        if service is None:
+            await websocket.close(code=4503, reason="container terminal unavailable")
+            return
+        offered_protocols = [
+            value.strip()
+            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if value.strip()
+        ]
+        terminal_protocol = "nebula.container-terminal.v1"
+        if terminal_protocol not in offered_protocols:
+            await websocket.close(code=4406, reason="terminal protocol required")
+            return
+
+        supplied: str | None = None
+        authorization = websocket.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:]
+        subprotocol_token = _websocket_protocol_secret(
+            offered_protocols, "nebula.auth.", decode_base64=True
+        )
+        if (
+            supplied
+            and subprotocol_token
+            and not hmac.compare_digest(supplied, subprotocol_token)
+        ):
+            await websocket.close(code=4401, reason="conflicting authentication tokens")
+            return
+        supplied = subprotocol_token or supplied
+        if not allow_unauthenticated and (
+            not supplied or not hmac.compare_digest(supplied, token)
+        ):
+            await websocket.close(code=4401, reason="valid bearer token required")
+            return
+        ticket = _websocket_protocol_secret(
+            offered_protocols, "nebula.ticket.", decode_base64=False
+        )
+        if not ticket:
+            await websocket.close(code=4401, reason="terminal ticket required")
+            return
+        try:
+            await service.claim(session_id, ticket)
+        except ContainerTerminalError as exc:
+            close_code = 4404 if exc.status_code == 404 else 4401
+            await websocket.close(code=close_code, reason=exc.detail[:120])
+            return
+
+        await websocket.accept(subprotocol=terminal_protocol)
+        process = None
+        outcome = "disconnected"
+        exit_code: int | None = None
+        detail: str | None = None
+        error_code: str | None = None
+        tasks: list[asyncio.Task[Any]] = []
+        try:
+            try:
+                process = await service.launch(session_id)
+            except ContainerTerminalError as exc:
+                await websocket.send_json(
+                    {"type": "error", "code": exc.code, "detail": exc.detail}
+                )
+                await websocket.close(code=4503, reason=exc.detail[:120])
+                return
+            await websocket.send_json(
+                {
+                    "type": "ready",
+                    "session_id": session_id,
+                    "max_duration_seconds": TERMINAL_MAX_DURATION_SECONDS,
+                    "idle_timeout_seconds": TERMINAL_IDLE_TIMEOUT_SECONDS,
+                }
+            )
+
+            async def send_output() -> None:
+                assert process is not None
+                while True:
+                    data = await process.read(TERMINAL_OUTPUT_CHUNK_BYTES)
+                    if not data:
+                        return
+                    await service.touch(session_id)
+                    await websocket.send_json(
+                        {
+                            "type": "output",
+                            "encoding": "base64",
+                            "data": base64.b64encode(data).decode("ascii"),
+                        }
+                    )
+
+            async def receive_input() -> str:
+                assert process is not None
+                while True:
+                    encoded_message = await websocket.receive_text()
+                    if (
+                        len(encoded_message.encode("utf-8", errors="replace"))
+                        > MAX_TERMINAL_INPUT_BYTES + 16_384
+                    ):
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "code": "input_limit",
+                                "detail": "terminal frame exceeds the 1 MiB input boundary",
+                            }
+                        )
+                        continue
+                    try:
+                        message = json.loads(encoded_message)
+                    except json.JSONDecodeError:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "code": "invalid_frame",
+                                "detail": "terminal frame must be valid JSON",
+                            }
+                        )
+                        continue
+                    if not isinstance(message, dict):
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "code": "invalid_frame",
+                                "detail": "terminal frame must be an object",
+                            }
+                        )
+                        continue
+                    frame_type = message.get("type")
+                    if frame_type == "input":
+                        value = message.get("data")
+                        if not isinstance(value, str):
+                            await websocket.send_json(
+                                {
+                                    "type": "error",
+                                    "code": "invalid_frame",
+                                    "detail": "terminal input must be text",
+                                }
+                            )
+                            continue
+                        try:
+                            data = value.encode("utf-8", errors="strict")
+                        except UnicodeEncodeError:
+                            await websocket.send_json(
+                                {
+                                    "type": "error",
+                                    "code": "invalid_frame",
+                                    "detail": "terminal input must be valid UTF-8",
+                                }
+                            )
+                            continue
+                        if len(data) > MAX_TERMINAL_INPUT_BYTES:
+                            await websocket.send_json(
+                                {
+                                    "type": "error",
+                                    "code": "input_limit",
+                                    "detail": "terminal input frame exceeds 1 MiB",
+                                }
+                            )
+                            continue
+                        await process.write(data)
+                        await service.touch(session_id)
+                    elif frame_type == "resize":
+                        columns = message.get("columns")
+                        rows = message.get("rows")
+                        if (
+                            isinstance(columns, bool)
+                            or isinstance(rows, bool)
+                            or not isinstance(columns, int)
+                            or not isinstance(rows, int)
+                        ):
+                            await websocket.send_json(
+                                {
+                                    "type": "error",
+                                    "code": "invalid_frame",
+                                    "detail": "terminal dimensions must be integers",
+                                }
+                            )
+                            continue
+                        try:
+                            process.resize(columns, rows)
+                        except ValueError as exc:
+                            await websocket.send_json(
+                                {
+                                    "type": "error",
+                                    "code": "invalid_frame",
+                                    "detail": str(exc),
+                                }
+                            )
+                            continue
+                        await service.touch(session_id)
+                    elif frame_type == "close":
+                        return "closed"
+                    else:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "code": "invalid_frame",
+                                "detail": "unsupported terminal frame type",
+                            }
+                        )
+
+            async def watchdog() -> tuple[str, str, str]:
+                started = asyncio.get_running_loop().time()
+                while True:
+                    await asyncio.sleep(1)
+                    try:
+                        await service.enforce_workspace_limits(session_id)
+                    except ContainerTerminalError as exc:
+                        return "workspace_limit", exc.code, exc.detail
+                    if (
+                        asyncio.get_running_loop().time() - started
+                        >= TERMINAL_MAX_DURATION_SECONDS
+                    ):
+                        return (
+                            "timed_out",
+                            "timeout",
+                            "terminal reached its 30-minute maximum duration",
+                        )
+                    if (
+                        await service.idle_seconds(session_id)
+                        >= TERMINAL_IDLE_TIMEOUT_SECONDS
+                    ):
+                        return (
+                            "idle_timeout",
+                            "idle_timeout",
+                            "terminal closed after 15 minutes without input or output",
+                        )
+
+            output_task = asyncio.create_task(
+                send_output(), name=f"container-terminal-output-{session_id}"
+            )
+            input_task = asyncio.create_task(
+                receive_input(), name=f"container-terminal-input-{session_id}"
+            )
+            wait_task = asyncio.create_task(
+                process.wait(), name=f"container-terminal-wait-{session_id}"
+            )
+            watchdog_task = asyncio.create_task(
+                watchdog(), name=f"container-terminal-watchdog-{session_id}"
+            )
+            tasks = [output_task, input_task, wait_task, watchdog_task]
+            done, _pending = await asyncio.wait(
+                {input_task, wait_task, watchdog_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if wait_task in done:
+                exit_code = wait_task.result()
+                outcome = "completed"
+                try:
+                    await asyncio.wait_for(asyncio.shield(output_task), timeout=1)
+                except (asyncio.TimeoutError, WebSocketDisconnect):
+                    pass
+                await websocket.send_json(
+                    {"type": "exit", "exit_code": exit_code, "outcome": outcome}
+                )
+            elif watchdog_task in done:
+                outcome, error_code, detail = watchdog_task.result()
+                await websocket.send_json(
+                    {"type": "error", "code": error_code, "detail": detail}
+                )
+                await websocket.send_json(
+                    {"type": "exit", "exit_code": None, "outcome": outcome}
+                )
+            elif input_task in done:
+                try:
+                    outcome = input_task.result()
+                except WebSocketDisconnect:
+                    outcome = "disconnected"
+                if outcome == "closed":
+                    await websocket.send_json(
+                        {"type": "exit", "exit_code": None, "outcome": outcome}
+                    )
+        except WebSocketDisconnect:
+            outcome = "disconnected"
+        except RuntimeError as exc:
+            # Starlette raises RuntimeError when a peer disappears between
+            # receive/send calls; treat it as a disconnect, not a Core failure.
+            outcome = "disconnected"
+            detail = str(exc)[:1_000]
+        finally:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            await service.finish(
+                session_id,
+                outcome=outcome,
+                exit_code=exit_code,
+                detail=detail,
+                error_code=error_code,
+            )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/execution-capabilities",
@@ -1065,7 +1464,11 @@ def create_app(
     async def reset_workspace(
         engagement_id: str, request: WorkspaceResetRequest
     ) -> WorkspaceResetResult:
-        return require_workspace_service().reset(engagement_id, request)
+        workspace = require_workspace_service()
+        if container_terminals is None:
+            return workspace.reset(engagement_id, request)
+        async with container_terminals.guard_workspace_operation(engagement_id):
+            return workspace.reset(engagement_id, request)
 
     @app.post(
         f"{API_PREFIX}/reports/{{report_id}}/renders",

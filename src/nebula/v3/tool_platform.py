@@ -898,6 +898,27 @@ class ToolPlatform:
         workspace.chmod(0o777)
         return workspace
 
+    async def cleanup_operator_terminals(self) -> None:
+        """Best-effort cleanup for terminal containers orphaned by Core exit."""
+
+        profiles = self.store.list_entities(StoredRunnerProfile, limit=1_000)
+        seen: set[tuple[str, str | None]] = set()
+        runners: list[ContainerSandboxRunner] = []
+        for profile in profiles:
+            identity = (profile.executable, profile.context)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            try:
+                runners.append(self._runner(profile))
+            except (ValueError, ToolPlatformError):
+                continue
+        if runners:
+            await asyncio.gather(
+                *(runner.cleanup_terminal_containers() for runner in runners),
+                return_exceptions=True,
+            )
+
     def resolve_operator_runtime(
         self, engagement_id: str, language: str, *, network: bool
     ) -> OperatorRuntimeResolution:

@@ -9,6 +9,10 @@ import type {
   ChatCompletionResponse,
   ChatSessionSummary,
   ChatStreamEvent,
+  ContainerTerminalCapabilities,
+  ContainerTerminalPreflight,
+  ContainerTerminalRequest,
+  ContainerTerminalSession,
   ContextMemory,
   ContextSnapshot,
   ContextSourceReference,
@@ -486,6 +490,45 @@ interface WireExecutionCapabilities extends JsonObject {
   }>;
   limits: WireExecutionLimits;
   workspace: "/workspace";
+}
+
+interface WireContainerTerminalCapabilities extends JsonObject {
+  engagement_id: string;
+  ready: boolean;
+  offline: boolean;
+  scoped_network: boolean;
+  detail?: string | null;
+  workspace: "/workspace";
+  limits: WireExecutionLimits;
+  idle_timeout_seconds: number;
+  fresh_container: true;
+  host_access: false;
+}
+
+interface WireContainerTerminalPreflight extends JsonObject {
+  allowed: boolean;
+  error_code?: string | null;
+  detail: string;
+  runtime?: WireExecutionRuntime | null;
+  network?: WireExecutionNetwork | null;
+  limits: WireExecutionLimits;
+  workspace: "/workspace";
+  policy_rule?: string | null;
+  scope_policy_id?: string | null;
+  scope_policy_revision?: number | null;
+  preview_fingerprint?: string | null;
+  preview_token?: string | null;
+  expires_at?: string | null;
+  idle_timeout_seconds: number;
+  fresh_container: true;
+  host_access: false;
+}
+
+interface WireContainerTerminalSession extends JsonObject {
+  session_id: string;
+  websocket_ticket: string;
+  ticket_expires_at: string;
+  websocket_path: string;
 }
 
 interface WireWorkspaceListing extends JsonObject {
@@ -1290,6 +1333,42 @@ function mapExecutionPreflight(value: WireExecutionPreflight): ExecutionPrefligh
   };
 }
 
+function terminalBody(value: ContainerTerminalRequest): JsonObject {
+  return {
+    engagement_id: value.engagementId,
+    network: {
+      mode: value.network.mode,
+      target: value.network.target,
+      ports: value.network.ports,
+    },
+    columns: value.columns,
+    rows: value.rows,
+  };
+}
+
+function mapContainerTerminalPreflight(
+  value: WireContainerTerminalPreflight,
+): ContainerTerminalPreflight {
+  return {
+    allowed: value.allowed,
+    errorCode: value.error_code ?? undefined,
+    detail: value.detail,
+    runtime: value.runtime ? mapExecutionRuntime(value.runtime) : undefined,
+    network: value.network ? mapExecutionNetwork(value.network) : undefined,
+    limits: mapExecutionLimits(value.limits),
+    workspace: value.workspace,
+    policyRule: value.policy_rule ?? undefined,
+    scopePolicyId: value.scope_policy_id ?? undefined,
+    scopePolicyRevision: value.scope_policy_revision ?? undefined,
+    previewFingerprint: value.preview_fingerprint ?? undefined,
+    previewToken: value.preview_token ?? undefined,
+    expiresAt: value.expires_at ?? undefined,
+    idleTimeoutSeconds: value.idle_timeout_seconds,
+    freshContainer: value.fresh_container,
+    hostAccess: value.host_access,
+  };
+}
+
 function executionBody(value: ExecutionRequest): JsonObject {
   return {
     engagement_id: value.engagementId,
@@ -1609,12 +1688,14 @@ export class ApiClient {
       Partial<HealthResponse> & {
         api_version?: string;
         dialect?: string;
+        container_terminal?: "configured" | "unavailable";
       }
     >("health", { signal }).then((health) => ({
       status: health.status === "degraded" ? "degraded" : "ok",
       version: health.version ?? health.api_version ?? "unknown",
       mode: health.mode ?? (health.dialect?.startsWith("postgres") ? "team" : "local"),
       runner: health.runner ?? "unavailable",
+      containerTerminal: health.container_terminal ?? "unavailable",
     }));
   }
 
@@ -2152,6 +2233,67 @@ export class ApiClient {
     );
     if (!response.ok) throw await responseError(response);
     return response.blob();
+  }
+
+  containerTerminalCapabilities(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ContainerTerminalCapabilities> {
+    return this.request<WireContainerTerminalCapabilities>(
+      `engagements/${encodeURIComponent(engagementId)}/container-terminal/capabilities`,
+      { signal },
+    ).then((value) => ({
+      engagementId: value.engagement_id,
+      ready: value.ready,
+      offline: value.offline,
+      scopedNetwork: value.scoped_network,
+      detail: value.detail ?? undefined,
+      workspace: value.workspace,
+      limits: mapExecutionLimits(value.limits),
+      idleTimeoutSeconds: value.idle_timeout_seconds,
+      freshContainer: value.fresh_container,
+      hostAccess: value.host_access,
+    }));
+  }
+
+  preflightContainerTerminal(
+    body: ContainerTerminalRequest,
+    signal?: AbortSignal,
+  ): Promise<ContainerTerminalPreflight> {
+    return this.request<WireContainerTerminalPreflight>(
+      "container-terminal/preflight",
+      {
+        method: "POST",
+        signal,
+        body: JSON.stringify(terminalBody(body)),
+      },
+    ).then(mapContainerTerminalPreflight);
+  }
+
+  startContainerTerminal(
+    body: ContainerTerminalRequest,
+    preview: Pick<ContainerTerminalPreflight, "previewToken" | "previewFingerprint">,
+    clientIdempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<ContainerTerminalSession> {
+    return this.request<WireContainerTerminalSession>(
+      "container-terminal/sessions",
+      {
+        method: "POST",
+        signal,
+        body: JSON.stringify({
+          ...terminalBody(body),
+          preview_token: preview.previewToken,
+          preview_fingerprint: preview.previewFingerprint,
+          client_idempotency_key: clientIdempotencyKey,
+        }),
+      },
+    ).then((value) => ({
+      sessionId: value.session_id,
+      websocketTicket: value.websocket_ticket,
+      ticketExpiresAt: value.ticket_expires_at,
+      websocketPath: value.websocket_path,
+    }));
   }
 
   executionCapabilities(engagementId: string, signal?: AbortSignal): Promise<ExecutionCapabilities> {

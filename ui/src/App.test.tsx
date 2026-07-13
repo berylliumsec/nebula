@@ -304,6 +304,50 @@ describe("Nebula workspace", () => {
     expect(screen.getByText("Use port 8443").closest("article")).toHaveFocus();
   });
 
+  it("restores the human terminal as an exact reviewed container boundary", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable", container_terminal: "configured" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Terminal review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/container-terminal/capabilities")) return new Response(JSON.stringify({
+        engagement_id: "engagement-1", ready: true, offline: true, scoped_network: true, workspace: "/workspace",
+        limits: { cpu_count: 1, memory_mb: 512, pids: 128, timeout_seconds: 1800, output_bytes_per_stream: 2_000_000 },
+        idle_timeout_seconds: 900, fresh_container: true, host_access: false,
+      }), { status: 200 });
+      if (path.endsWith("/container-terminal/preflight") && init?.method === "POST") return new Response(JSON.stringify({
+        allowed: true,
+        detail: "request is confined to the workspace",
+        runtime: {
+          language: "bash", interpreter: "/bin/bash", arguments: ["--noprofile", "--norc", "-i"],
+          tool_pack_installation_id: "pack-1", manifest_digest: "a".repeat(64), image: `example.invalid/toolbox@sha256:${"b".repeat(64)}`,
+          runner_profile_id: "runner-1", runner_profile_revision: 2, runner_runtime: "podman", runner_isolation: "rootless",
+          runner_executable: "/usr/bin/podman", runner_platform: "linux/amd64", trusted: true,
+        },
+        network: { mode: "none", ports: [], resolved_addresses: [] },
+        limits: { cpu_count: 1, memory_mb: 512, pids: 128, timeout_seconds: 1800, output_bytes_per_stream: 2_000_000 },
+        workspace: "/workspace", policy_rule: "low_risk", scope_policy_id: "scope-1", scope_policy_revision: 3,
+        preview_fingerprint: "c".repeat(64), preview_token: "signed.preview", expires_at: "2026-07-13T18:00:00Z",
+        idle_timeout_seconds: 900, fresh_container: true, host_access: false,
+      }), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions");
+
+    await user.click(await screen.findByRole("tab", { name: /Human terminal/ }));
+    expect(await screen.findByRole("heading", { name: "Container terminal" })).toBeVisible();
+    expect(screen.getByText("No host shell")).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Review container terminal" }));
+
+    expect(await screen.findByRole("heading", { name: "Confirm exact terminal boundary" })).toBeVisible();
+    expect(screen.getByText("/bin/bash --noprofile --norc -i")).toBeVisible();
+    expect(screen.getByText(/None; no host shell or runtime socket/)).toBeVisible();
+    const call = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/preflight") && request?.method === "POST");
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ engagement_id: "engagement-1", network: { mode: "none", ports: [] }, columns: 100, rows: 30 });
+  });
+
   it("creates and activates a new engagement from the switcher", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     let engagements = [{ ...entity, id: "engagement-old", name: "Old engagement", description: "", client_name: "Old client", status: "active", tags: [], metadata: {} }];

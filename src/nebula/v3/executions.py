@@ -206,6 +206,11 @@ class ExecutionService:
         self._start_lock = asyncio.Lock()
         self._shutting_down = False
 
+    def engagement_lock(self, engagement_id: str) -> asyncio.Lock:
+        """Shared workspace-operation lock for one engagement."""
+
+        return self._engagement_locks.setdefault(engagement_id, asyncio.Lock())
+
     async def startup(self) -> None:
         """Fail closed after a prior Core died mid-execution."""
 
@@ -806,11 +811,9 @@ class ExecutionService:
 
     async def _execute(self, execution_id: str) -> None:
         execution = self.store.get(OperatorExecution, execution_id)
-        lock = self._engagement_locks.setdefault(
-            execution.engagement_id, asyncio.Lock()
-        )
+        lock = self.engagement_lock(execution.engagement_id)
         try:
-            async with self._global_slots, lock:
+            async with lock, self._global_slots:
                 current = self.store.get(OperatorExecution, execution_id)
                 if current.status == OperatorExecutionStatus.CANCELLING:
                     await self._terminal_without_output(
