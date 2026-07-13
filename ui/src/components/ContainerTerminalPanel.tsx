@@ -30,8 +30,8 @@ async function ensureTerminalAssignment(api: ApiClient, engagementId: string, si
   const availableLocalShellDigests = new Set(tools
     .filter((tool) => tool.name === localShellCapability && tool.available)
     .map((tool) => tool.packManifestDigest));
-  const readyShellPacks = packs.filter((pack) => pack.status === "ready" && (
-    pack.toolNames.includes(localShellCapability) || availableLocalShellDigests.has(pack.manifestDigest)
+  const readyShellPacks = packs.filter((pack) => (
+    pack.status === "ready" && availableLocalShellDigests.has(pack.manifestDigest)
   ));
   const existing = assignments.find((assignment) => readyShellPacks.some((pack) => pack.manifestDigest === assignment.manifestDigest));
   const selected = existing

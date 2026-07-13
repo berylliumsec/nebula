@@ -307,6 +307,7 @@ describe("Nebula workspace", () => {
   it("starts Terminal automatically inside the reviewed container boundary", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const digest = "a".repeat(64);
+    const incompleteDigest = "d".repeat(64);
     let environmentAssigned = false;
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
@@ -317,15 +318,28 @@ describe("Nebula workspace", () => {
         limits: { cpu_count: 1, memory_mb: 512, pids: 128, timeout_seconds: 1800, output_bytes_per_stream: 2_000_000 },
         idle_timeout_seconds: 900, fresh_container: true, host_access: false, detail: environmentAssigned ? null : "engagement is not assigned environment.shell_local",
       }), { status: 200 });
-      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{
-        ...entity, id: "pack-1", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", manifest_digest: digest,
-        source: "catalog", trust_state: "trusted", runtime_profile_id: "runner-1", image_locks: {}, status: "ready",
-        tool_names: [], permissions: ["network", "workspace_write"],
-      }]), { status: 200 });
-      if (path.endsWith("/tools")) return new Response(JSON.stringify([{
-        name: "environment.shell_local", pack_id: "pack-1", pack_manifest_digest: digest, description: "Local shell",
-        risk_class: "workspace_write", requires_network: false, requires_approval: false, available: true,
-      }]), { status: 200 });
+      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([
+        {
+          ...entity, id: "pack-incomplete", publisher: "berylliumsec", name: "nebula-toolbox-staging", version: "0.1.0.dev6", manifest_digest: incompleteDigest,
+          source: "local", trust_state: "developer", runtime_profile_id: "runner-1", image_locks: {}, status: "ready",
+          tool_names: ["environment.shell_local"], permissions: ["workspace_write"],
+        },
+        {
+          ...entity, id: "pack-1", publisher: "berylliumsec", name: "nebula-toolbox-staging", version: "0.1.0.dev6", manifest_digest: digest,
+          source: "local", trust_state: "developer", runtime_profile_id: "runner-1", image_locks: {}, status: "ready",
+          tool_names: [], permissions: ["network", "workspace_write"],
+        },
+      ]), { status: 200 });
+      if (path.endsWith("/tools")) return new Response(JSON.stringify([
+        {
+          name: "environment.shell_local", pack_id: "pack-incomplete", pack_manifest_digest: incompleteDigest, description: "Unavailable local shell",
+          risk_class: "workspace_write", requires_network: false, requires_approval: false, available: false,
+        },
+        {
+          name: "environment.shell_local", pack_id: "pack-1", pack_manifest_digest: digest, description: "Local shell",
+          risk_class: "workspace_write", requires_network: false, requires_approval: false, available: true,
+        },
+      ]), { status: 200 });
       if (path.endsWith("/tool-assignment")) {
         if (init?.method === "PUT") {
           environmentAssigned = true;

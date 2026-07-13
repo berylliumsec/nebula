@@ -93,6 +93,18 @@ def test_staging_bundle_resolves_both_images_and_embeds_catalog(tmp_path):
     assert result["identity"] == "berylliumsec/nebula-toolbox-staging@0.1.0.dev7"
     assert archive.manifest.metadata.name == "nebula-toolbox-staging"
     assert archive.manifest.metadata.version == "0.1.0.dev7"
+    assert {runtime.language for runtime in archive.manifest.operator_runtimes} == {
+        "bash",
+        "sh",
+        "python",
+    }
+    bash = next(
+        runtime
+        for runtime in archive.manifest.operator_runtimes
+        if runtime.language == "bash"
+    )
+    assert bash.aliases == ["bash", "shell"]
+    assert bash.interpreter == "/bin/bash"
     assert {image.platform: image.image for image in archive.manifest.images} == {
         "linux/amd64": (
             "ghcr.io/berylliumsec/nebula-toolbox-staging@sha256:" + "a" * 64
