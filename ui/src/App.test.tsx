@@ -710,6 +710,48 @@ describe("Nebula workspace", () => {
     expect(screen.getByText("Environment assignments are unavailable")).toBeVisible();
   });
 
+  it("includes shell access by default without capability checkboxes", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const digest = "1".repeat(64);
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Default shell review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{ ...entity, id: "pack-1", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", manifest_digest: digest, source: "catalog", trust_state: "trusted", runtime_profile_id: "runner-1", image_locks: {}, status: "ready", tool_names: ["environment.shell_local", "environment.shell_network"], permissions: ["network", "workspace_write"], verified_at: entity.updated_at }]), { status: 200 });
+      if (path.endsWith("/tools")) return new Response(JSON.stringify([
+        { name: "environment.shell_local", pack_id: "pack-1", pack_manifest_digest: digest, description: "Local shell", risk_class: "workspace_write", requires_network: false, requires_approval: false, available: true },
+        { name: "environment.shell_network", pack_id: "pack-1", pack_manifest_digest: digest, description: "Scoped network shell", risk_class: "active_scan", requires_network: true, requires_approval: false, available: true },
+      ]), { status: 200 });
+      if (path.endsWith("/tool-assignment")) {
+        if (init?.method === "PUT") {
+          const body = JSON.parse(String(init.body));
+          return new Response(JSON.stringify({ ...entity, id: "assignment-1", engagement_id: "engagement-1", manifest_digest: digest, allowed_tool_names: body.tool_names, enabled: body.enabled }), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (path.endsWith("/scope")) return new Response(JSON.stringify({ ...entity, id: "scope-1", engagement_id: "engagement-1", allowed_cidrs: [], allowed_domains: [], allowed_urls: [], allowed_ports: [], prohibited_actions: [], local_only: true, max_concurrency: 1, grants: [] }), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    await user.click(await screen.findByRole("link", { name: "Engagement Policy" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Assigned execution environment" })).toHaveValue(digest));
+    expect(await screen.findByText(/shell access are included automatically/i)).toBeVisible();
+    expect(screen.queryByRole("checkbox", { name: /environment\.shell_local/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /environment\.shell_network/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save assignment" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-assignment") && request?.method === "PUT")).toBe(true));
+    const call = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-assignment") && request?.method === "PUT");
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      manifest_digest: digest,
+      tool_names: [],
+      enabled: true,
+    });
+  });
+
   it("selects assigned Toolbox capabilities by default with bounded budgets", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {

@@ -757,6 +757,51 @@ def test_tool_platform_uses_fixed_pack_root_with_test_override(tmp_path, monkeyp
     )
 
 
+def test_tool_platform_includes_declared_shell_capabilities_implicitly(tmp_path):
+    manifest = compile_manifest_yaml(manifest_source(second_platform=False))
+    manifest = manifest.model_copy(
+        update={
+            "tools": [
+                manifest.tools[0],
+                manifest.tools[0].model_copy(
+                    update={"name": "environment.shell_local"}
+                ),
+                manifest.tools[0].model_copy(
+                    update={"name": "environment.shell_network"}
+                ),
+            ]
+        }
+    )
+    digest = manifest_digest(manifest)
+    platform = ToolPlatform(
+        store=NebulaStore(Database(tmp_path / "implicit-shell.db")),
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "core-data",
+        tool_pack_root=tmp_path / "packs",
+    )
+    platform.manifests.put(manifest)
+
+    assert platform.normalize_assignment(digest, ["sample.query"]) == [
+        "environment.shell_local",
+        "environment.shell_network",
+        "sample.query",
+    ]
+
+    legacy_assignment = EngagementToolAssignment(
+        engagement_id="engagement-1",
+        manifest_digest=digest,
+        allowed_tool_names=["sample.query"],
+        enabled=True,
+        assigned_by="operator-1",
+    )
+    assert platform._assignment_allows_operator_shell(
+        legacy_assignment, "environment.shell_local"
+    )
+    assert platform._assignment_allows_operator_shell(
+        legacy_assignment, "environment.shell_network"
+    )
+
+
 def test_default_tool_platform_enables_brokered_execution(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "nebula.v3.tool_platform.default_tool_pack_root",

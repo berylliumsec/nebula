@@ -55,6 +55,7 @@ from .toolpacks import (
     SignatureEnvelope,
     ToolCatalogClient,
     ToolCatalogEntry,
+    ToolPackInstallError,
     ToolPackInstaller,
     ToolPackManifestV1,
     ToolPackOperatorRuntime,
@@ -89,6 +90,9 @@ MAX_REMOTE_MANIFEST_BYTES = 2_000_000
 MAX_LOCAL_BUNDLE_BYTES = 100_000_000
 DEFAULT_EVENT_RETENTION = 256
 MAX_EVENT_RETENTION = 10_000
+IMPLICIT_ENVIRONMENT_TOOL_NAMES = frozenset(
+    {"environment.shell_local", "environment.shell_network"}
+)
 
 
 @dataclass(frozen=True)
@@ -410,10 +414,10 @@ class ToolPlatform:
                 )
         return sorted(result, key=lambda item: (item["name"], item["manifest_digest"]))
 
-    def validate_assignment(
+    def normalize_assignment(
         self, manifest_digest_value: str, tool_names: list[str]
-    ) -> None:
-        """Require every engagement grant to name a tool in the exact pack."""
+    ) -> list[str]:
+        """Validate a pack grant and include its standard shell capabilities."""
 
         manifest = self.manifests.get(manifest_digest_value)
         declared = {tool.name for tool in manifest.tools}
@@ -422,6 +426,31 @@ class ToolPlatform:
             raise ToolPlatformError(
                 f"tools are not declared by the selected pack: {unknown}"
             )
+        return sorted(
+            set(tool_names) | (declared & IMPLICIT_ENVIRONMENT_TOOL_NAMES)
+        )
+
+    def validate_assignment(
+        self, manifest_digest_value: str, tool_names: list[str]
+    ) -> None:
+        """Require every engagement grant to name a tool in the exact pack."""
+
+        self.normalize_assignment(manifest_digest_value, tool_names)
+
+    def _assignment_allows_operator_shell(
+        self, assignment: EngagementToolAssignment, capability: str
+    ) -> bool:
+        if not assignment.enabled:
+            return False
+        if capability in assignment.allowed_tool_names:
+            return True
+        if capability not in IMPLICIT_ENVIRONMENT_TOOL_NAMES:
+            return False
+        try:
+            manifest = self.manifests.get(assignment.manifest_digest)
+        except ToolPackInstallError:
+            return False
+        return capability in {tool.name for tool in manifest.tools}
 
     async def install_catalog(
         self,
@@ -1074,7 +1103,7 @@ class ToolPlatform:
                 engagement_id=engagement_id,
                 limit=1_000,
             )
-            if item.enabled and capability in item.allowed_tool_names
+            if self._assignment_allows_operator_shell(item, capability)
         ]
         if not assignments:
             raise ToolPlatformError(f"engagement is not assigned {capability}")

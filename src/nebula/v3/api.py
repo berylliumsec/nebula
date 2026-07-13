@@ -1938,8 +1938,9 @@ def create_app(
             raise ConflictError(
                 "tool assignment requires a verified ready pack installation"
             )
+        assigned_tool_names = request.tool_names
         if tool_platform is not None:
-            tool_platform.validate_assignment(
+            assigned_tool_names = tool_platform.normalize_assignment(
                 request.manifest_digest, request.tool_names
             )
         active_operator = operators.active_profile_or_none()
@@ -1956,7 +1957,7 @@ def create_app(
             None,
         )
         changes = {
-            "allowed_tool_names": request.tool_names,
+            "allowed_tool_names": assigned_tool_names,
             "enabled": request.enabled,
             "assigned_by": operator_id,
         }
@@ -1978,7 +1979,7 @@ def create_app(
                 id=assignment_id,
                 engagement_id=engagement_id,
                 manifest_digest=request.manifest_digest,
-                allowed_tool_names=request.tool_names,
+                allowed_tool_names=assigned_tool_names,
                 enabled=request.enabled,
                 assigned_by=operator_id,
             )
