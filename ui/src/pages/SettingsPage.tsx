@@ -25,12 +25,12 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 
 const settingsSections = [
   ["general-settings", "General"],
-  ["provider-settings", "AI Providers"],
-  ["tool-pack-settings", "Toolbox"],
+  ["provider-settings", "Models"],
+  ["tool-pack-settings", "Tools"],
   ["runtime-settings", "Runners"],
-  ["engagement-policy-settings", "Engagement Policy"],
-  ["operator-settings", "Operators"],
-  ["security-settings", "Privacy & Security"],
+  ["engagement-policy-settings", "Policy"],
+  ["operator-settings", "People"],
+  ["security-settings", "Privacy"],
 ] as const;
 
 type SettingsSection = typeof settingsSections[number][0];
@@ -378,7 +378,7 @@ export function SettingsPage() {
   const dialogAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
   return (
     <div className="page settings-page">
-      <PageHeader title="Settings" description="Providers, execution, policy, identity, and privacy." />
+      <PageHeader title="Settings" description="Workspace preferences." />
       <div className="settings-workspace">
       <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label]) => <a className={settingsSection === id ? "active" : undefined} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); window.history.replaceState(null, "", `#${id}`); setSettingsSection(id); }}>{label}</a>)}</nav>
       <div className="settings-detail" data-section={settingsSection}>

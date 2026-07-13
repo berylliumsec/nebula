@@ -145,7 +145,7 @@ export function AgentsPage() {
             <article className="agent-card" key={name}>
               <header><span className={`agent-icon ${state}`}><Icon size={19} /></span><span className={`agent-state ${state}`}>{state === "running" ? <span className="pulse-dot" /> : state === "queued" ? <CircleDashed size={12} /> : null}{state}</span></header>
               <h3>{name}</h3><p>{detail}</p>
-              <footer><span>{tools}</span><span>Trail in activity center</span></footer>
+              <footer><span>{tools}</span></footer>
             </article>
           ))}
         </div>

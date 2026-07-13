@@ -149,6 +149,10 @@ describe("Nebula workspace", () => {
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "Live engagement" })).toBeVisible();
+    const emptyActivity = screen.getByText("No mission activity", { exact: true }).closest(".mission-events-empty");
+    expect(emptyActivity).not.toBeNull();
+    expect(within(emptyActivity!).getByText("Events appear after Core records a transition.", { exact: true })).toBeVisible();
+    expect(emptyActivity!.closest("li")).toBeNull();
     expect(screen.getByRole("button", { name: /Show activity inspector/ })).toBeVisible();
     expect(OnlineWebSocket.lastUrl).toContain("/api/v1/runs/run-newest/events/ws?after=0");
     const approvalLoads = fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith("/approvals")).length;
@@ -175,6 +179,9 @@ describe("Nebula workspace", () => {
     const encoder = new TextEncoder();
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const url = new URL(String(input));
+      if (url.pathname.endsWith("/providers/provider-1/health")) {
+        return new Response(JSON.stringify({ provider_id: "provider-1", healthy: true, models: ["model-1", "model-2"], detail: null }), { status: 200 });
+      }
       if (url.pathname.endsWith("/health")) {
         return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
       }
@@ -191,10 +198,10 @@ describe("Nebula workspace", () => {
           enabled: true,
           is_local: false,
           secret_ref: "env:OPENAI_API_KEY",
-          model_allowlist: ["model-1"],
+          model_allowlist: [],
           capabilities: { streaming: true },
           privacy: { local_only: false, residency: [], permits_sensitive_data: true },
-          metadata: { default_model: "model-1" },
+          metadata: {},
         }]), { status: 200 });
       }
       if (url.pathname.endsWith("/knowledge")) {
@@ -230,7 +237,9 @@ describe("Nebula workspace", () => {
     renderApp("/sessions");
     await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }));
     expect(await screen.findByRole("combobox", { name: "Chat provider" })).toHaveValue("provider-1");
-    expect(screen.getByRole("combobox", { name: "Chat model" })).toHaveValue("model-1");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Chat model" })).toHaveValue("model-1"));
+    expect(screen.getByRole("option", { name: "model-2" })).toBeVisible();
+    expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-1/health") && init?.method === "POST")).toBe(true);
     await user.type(screen.getByRole("textbox", { name: "Message the analyst assistant" }), "Review the scope");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     await user.click(await screen.findByRole("button", { name: "Allow this request" }));

@@ -334,9 +334,11 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         const result = await api.refreshProviderHealth(id);
         setProviders((current) => current.map((provider) => provider.id === id
           ? (() => {
-              const selectableModels = provider.modelAllowlist.length
-                ? result.models.filter((model) => provider.modelAllowlist.includes(model))
-                : result.models;
+              const selectableModels = result.healthy
+                ? provider.modelAllowlist.length
+                  ? result.models.filter((model) => provider.modelAllowlist.includes(model))
+                  : result.models
+                : provider.models;
               return {
                 ...provider,
                 state: result.healthy ? "healthy" : "offline",

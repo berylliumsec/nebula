@@ -103,6 +103,7 @@ export function SessionsPage() {
     knowledgeSources,
     previewMode,
     providers,
+    refreshProvider,
     resolveApproval,
   } = useWorkspace();
   const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
@@ -124,10 +125,12 @@ export function SessionsPage() {
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [chatError, setChatError] = useState<string>();
+  const [discoveringProviderId, setDiscoveringProviderId] = useState<string>();
   const [contextStatus, setContextStatus] = useState<ContextStatus>();
   const [contextLoading, setContextLoading] = useState(false);
   const [contextError, setContextError] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
+  const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const selectedProvider = enabledProviders.find((provider) => provider.id === providerId);
@@ -191,9 +194,32 @@ export function SessionsPage() {
   }, [enabledProviders, providerId]);
 
   useEffect(() => {
-    if (model || !selectedProvider) return;
-    setModel(selectedProvider.defaultModel ?? selectedProvider.models[0] ?? "");
-  }, [model, selectedProvider]);
+    if (!selectedProvider || sessionId) return;
+    const models = selectedProvider.models;
+    if (!models.length) {
+      if (!discoveringProviderId && model) setModel("");
+      return;
+    }
+    if (model && models.includes(model)) return;
+    const preferredModel = selectedProvider.defaultModel && models.includes(selectedProvider.defaultModel)
+      ? selectedProvider.defaultModel
+      : models[0];
+    setModel(preferredModel ?? "");
+  }, [discoveringProviderId, model, selectedProvider, sessionId]);
+
+  useEffect(() => {
+    if (!providerId) {
+      lastModelDiscoveryProviderIdRef.current = undefined;
+      return;
+    }
+    if (coreState !== "online" || previewMode || sessionId) return;
+    if (lastModelDiscoveryProviderIdRef.current === providerId) return;
+    lastModelDiscoveryProviderIdRef.current = providerId;
+    setDiscoveringProviderId(providerId);
+    void refreshProvider(providerId).finally(() => {
+      setDiscoveringProviderId((current) => current === providerId ? undefined : current);
+    });
+  }, [coreState, previewMode, providerId, refreshProvider, sessionId]);
 
   useEffect(() => {
     if (coreState !== "online" || !selectedProvider) return;
@@ -303,6 +329,16 @@ export function SessionsPage() {
     setModel(provider?.defaultModel ?? provider?.models[0] ?? "");
     setIncludeKnowledge(Boolean(knowledgeSources.length && (provider?.kind === "local" || provider?.privacy === "local_only" || provider?.permitsSensitiveData)));
   };
+
+  const modelDiscoveryInProgress = discoveringProviderId === providerId;
+  const selectedModelIsUnavailable = Boolean(model && selectedProvider && !selectedProvider.models.includes(model));
+  const modelPlaceholder = modelDiscoveryInProgress
+    ? "Discovering models…"
+    : selectedProvider?.models.length
+      ? "Select model"
+      : selectedProvider
+        ? "No models discovered"
+        : "Select provider first";
 
   const selectSession = async (id: string) => {
     if (!id) {
@@ -707,10 +743,10 @@ export function SessionsPage() {
 
       <div className="session-toolbar">
         <div className="session-tabs" role="tablist" aria-label="Session views">
-          <button type="button" role="tab" aria-selected={view === "chat"} onClick={() => setView("chat")}><MessageSquare size={16} /> Analyst chat</button>
+          <button type="button" role="tab" aria-label="Analyst chat" aria-selected={view === "chat"} onClick={() => setView("chat")}><MessageSquare size={16} /> Chat</button>
           <button type="button" role="tab" aria-selected={view === "terminal"} onClick={() => setView("terminal")}><SquareTerminal size={16} /> Terminal</button>
-          <button type="button" role="tab" aria-selected={view === "executions"} onClick={() => setView("executions")}><FileClock size={16} /> Executions</button>
-          <button type="button" role="tab" aria-selected={view === "workspace"} onClick={() => setView("workspace")}><FolderOpen size={16} /> Workspace</button>
+          <button type="button" role="tab" aria-label="Execution history" aria-selected={view === "executions"} onClick={() => setView("executions")}><FileClock size={16} /> Runs</button>
+          <button type="button" role="tab" aria-label="Workspace files" aria-selected={view === "workspace"} onClick={() => setView("workspace")}><FolderOpen size={16} /> Files</button>
         </div>
         {view === "chat" && <button className="session-mobile-list" type="button" aria-pressed={mobileListOpen} onClick={() => setMobileListOpen((value) => !value)}><MessageSquare size={15} /> {mobileListOpen ? "Current chat" : "Conversations"}</button>}
         <div className="session-scope"><ShieldCheck size={15} /> Human controlled · {engagement?.name ?? (previewMode ? "ACME-EXT preview" : "no engagement")}</div>
@@ -720,7 +756,7 @@ export function SessionsPage() {
         {view === "chat" && <aside className="session-list" aria-label="Conversations">
           <header><div><span>Conversations</span><strong>{previewMode ? "Preview" : `${sessions.length} saved`}</strong></div><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={previewMode || !engagement} onClick={newConversation}><Plus size={16} /></button></header>
           <nav>
-            <button className={!sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{selectedProvider?.name ?? "Choose a provider"}</small></span></button>
+            <button className={!sessionId && !previewMode ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{selectedProvider?.name ?? "Choose a provider"}</small></span></button>
             {sessions.map((session) => <div className={`session-list-item${session.id === sessionId ? " active" : ""}`} key={session.id}><button className="session-select" type="button" onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><button className="icon-button subtle" type="button" aria-label={`Delete conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Delete ${session.title}`} onClick={() => void deleteConversation(session)}>{deletingSessionId === session.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></div>)}
             {previewMode && <button className="active" type="button" onClick={() => setMobileListOpen(false)}><MessageSquare size={16} /><span><strong>Gateway applicability review</strong><small>Local preview</small></span></button>}
           </nav>
@@ -738,7 +774,7 @@ export function SessionsPage() {
             <div className="chat-panel">
               {!previewMode && <div className="chat-context-bar">
                 <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label>
-                <label><span>Model</span><input aria-label="Chat model" value={model} disabled={sending || Boolean(sessionId)} list="chat-models" placeholder="Exact model ID" onChange={(event) => setModel(event.target.value)} /><datalist id="chat-models">{selectedProvider?.models.map((item) => <option value={item} key={item} />)}</datalist></label>
+                <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={sending || Boolean(sessionId) || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{selectedProvider?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
                 <label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? cloudKnowledgeAllowed ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label>
                 <label className="chat-knowledge-toggle" title={toolboxUnavailableReason}><input type="checkbox" checked={toolsEnabled && canUseTools} disabled={!canUseTools || sending || Boolean(pendingResponse)} onChange={(event) => setToolsEnabled(event.target.checked)} /><span>Toolbox enabled<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"}` : toolboxUnavailableReason}</small></span></label>
               </div>}

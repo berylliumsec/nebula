@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Command, Contrast, Moon, PanelLeft, PanelRight, Search, Sun } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { navigationItems } from "../navigation";
@@ -20,12 +20,21 @@ interface PaletteAction {
   run: () => void;
 }
 
+const FOCUSABLE = [
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "[href]",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
 export function CommandPalette({ open, onClose, onToggleActivity, onToggleSidebar }: CommandPaletteProps) {
   const navigate = useNavigate();
   const { setPreference } = useTheme();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const actions = useMemo<PaletteAction[]>(
     () => [
@@ -90,10 +99,14 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
 
   useEffect(() => {
     if (open) {
+      returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setQuery("");
       setSelected(0);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
+    return () => {
+      if (open) returnFocusRef.current?.focus();
+    };
   }, [open]);
 
   useEffect(() => setSelected(0), [query]);
@@ -106,13 +119,35 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
     onClose();
   };
 
+  const trapFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const items = [...(paletteRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])];
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
       <div
+        ref={paletteRef}
         className="command-palette"
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
+        onKeyDown={trapFocus}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <label className="palette-search">
@@ -125,7 +160,6 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pages and actions…"
             onKeyDown={(event) => {
-              if (event.key === "Escape") onClose();
               if (event.key === "ArrowDown") {
                 event.preventDefault();
                 setSelected((value) => Math.min(value + 1, results.length - 1));

@@ -55,7 +55,7 @@ export function TopBar({
           <strong>{page.label}</strong>
         </div>
       </div>
-      <div className="top-bar-page-actions" ref={setToolbarHost} aria-label={`${page.label} actions`} />
+      <div className="top-bar-page-actions" ref={setToolbarHost} role="group" aria-label={`${page.label} actions`} />
       <div className="top-bar-actions">
         {previewMode && <span className="preview-pill">Interface preview</span>}
         <button
