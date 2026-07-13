@@ -76,7 +76,7 @@ jobs:
           printf '%s\n' "$DIGEST" > "release-input/toolbox-$ARCHITECTURE.digest"
           install -m 0644 "$output/model-catalog.json" \
             "release-input/toolbox-$ARCHITECTURE.model-catalog.json"
-      - uses: actions/upload-artifact@ea165f8d65e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: toolbox-staging-image-${{ matrix.architecture }}
           path: release-input
@@ -134,7 +134,7 @@ jobs:
               "nebula-toolbox-staging-$GITHUB_RUN_ID"
             printf 'This run did not sign or publish the official Toolbox catalog.\n'
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: nebula-toolbox-staging-${{ github.run_id }}
           path: staging-artifact
