@@ -70,8 +70,8 @@ export function NewMissionButton({ className = "button primary", children }: New
     return () => { active = false; };
   }, [api, coreState, engagement?.id, toolPackRevision]);
 
-  const providerSupportsTools = provider?.capabilities.includes("tool calling") === true
-    && provider.capabilities.includes("strict structured output");
+  const verification = provider?.capabilityVerifications?.[model];
+  const providerSupportsTools = verification?.status === "verified";
 
   useEffect(() => {
     if (providerSupportsTools) return;

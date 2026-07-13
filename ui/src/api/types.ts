@@ -206,6 +206,7 @@ export interface ApprovalSummary {
   id: Identifier;
   runId: Identifier;
   engagementId: Identifier;
+  origin?: "mission" | "chat";
   status: "pending" | "approved" | "rejected" | "expired" | "cancelled";
   risk: "passive" | "active" | "credentialed" | "exploit" | "destructive";
   toolName: string;
@@ -486,7 +487,16 @@ export interface ProviderHealth {
   privacy: "local_only" | "regional" | "cloud";
   lastCheckedAt?: string;
   capabilities: string[];
+  capabilityVerifications?: Record<string, ProviderCapabilityVerification>;
   message?: string;
+}
+
+export interface ProviderCapabilityVerification {
+  model: string;
+  status: "verified" | "failed";
+  checkedAt: string;
+  contractVersion: string;
+  failureDetail?: string;
 }
 
 export interface ProviderRuntimeHealth {
@@ -569,9 +579,12 @@ export interface ChatCompletionRequest {
   temperature?: number;
   includeKnowledge?: boolean;
   allowCloudKnowledge?: boolean;
+  toolsEnabled?: boolean;
+  allowCloudToolResults?: boolean;
 }
 
 export interface ChatCompletionResponse {
+  turnId?: Identifier;
   sessionId?: Identifier;
   providerId: Identifier;
   model: string;
@@ -640,10 +653,21 @@ export interface ContextStatus {
 }
 
 export type ChatStreamEvent =
-  | { type: "started"; providerId: Identifier; model: string; sessionId?: Identifier }
-  | { type: "delta"; providerId: Identifier; model: string; delta: string }
+  | { type: "started"; providerId: Identifier; model: string; sessionId?: Identifier; turnId?: Identifier }
+  | { type: "delta"; providerId: Identifier; model: string; delta: string; turnId?: Identifier }
+  | { type: "tool_started"; turnId: Identifier; toolCallId: Identifier; capability: string; arguments: Record<string, unknown>; step: number }
+  | { type: "tool_completed"; turnId: Identifier; toolCallId: Identifier; capability: string; status: string; summary: string; evidenceIds: Identifier[]; step: number }
+  | { type: "approval_required"; turnId: Identifier; toolCallId: Identifier; approval: Record<string, unknown> }
   | ({ type: "done" } & ChatCompletionResponse)
   | { type: "error"; detail: string };
+
+export interface ChatTurn {
+  id: Identifier;
+  sessionId: Identifier;
+  status: "routing" | "waiting_approval" | "finalizing" | "complete" | "failed" | "cancelled";
+  approvalId?: Identifier;
+  toolCallIds: Identifier[];
+}
 
 export interface ChatSessionSummary {
   id: Identifier;
@@ -651,6 +675,7 @@ export interface ChatSessionSummary {
   title: string;
   providerId: Identifier;
   model?: string;
+  toolsEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 }

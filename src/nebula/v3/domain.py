@@ -100,6 +100,11 @@ class ToolCallStatus(StringEnum):
     COMPLETE = "complete"
 
 
+class ToolCallOrigin(StringEnum):
+    MISSION = "mission"
+    CHAT = "chat"
+
+
 class ApprovalStatus(StringEnum):
     PENDING = "pending"
     APPROVED = "approved"
@@ -107,6 +112,11 @@ class ApprovalStatus(StringEnum):
     REJECTED = "rejected"
     EXPIRED = "expired"
     CANCELLED = "cancelled"
+
+
+class ProviderVerificationStatus(StringEnum):
+    VERIFIED = "verified"
+    FAILED = "failed"
 
 
 class ToolPackInstallationStatus(StringEnum):
@@ -763,6 +773,9 @@ class ToolCall(Entity):
     entity_kind: ClassVar[str] = "tool_calls"
     engagement_id: str
     run_id: str
+    origin: ToolCallOrigin = ToolCallOrigin.MISSION
+    chat_session_id: str | None = None
+    chat_turn_id: str | None = None
     task_id: str | None = None
     tool_name: str
     status: ToolCallStatus = ToolCallStatus.PROPOSED
@@ -780,6 +793,9 @@ class Approval(Entity):
     entity_kind: ClassVar[str] = "approvals"
     engagement_id: str
     run_id: str
+    origin: ToolCallOrigin = ToolCallOrigin.MISSION
+    chat_session_id: str | None = None
+    chat_turn_id: str | None = None
     task_id: str | None = None
     tool_call_id: str | None = None
     status: ApprovalStatus = ApprovalStatus.PENDING
@@ -808,6 +824,34 @@ class ModelCapabilities(NebulaModel):
     audio: bool = False
     embeddings: bool = False
     reasoning_controls: bool = False
+
+
+class ProviderCapabilityVerification(NebulaModel):
+    """A strict tool-call contract result for one exact provider model."""
+
+    model: str = Field(min_length=1, max_length=500)
+    status: ProviderVerificationStatus
+    checked_at: datetime = Field(default_factory=utc_now)
+    contract_version: str = Field(default="required-tool-v1", min_length=1)
+    failure_detail: str | None = Field(default=None, max_length=1_000)
+
+    @field_validator("checked_at")
+    @classmethod
+    def checked_time_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("verification timestamp must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def result_is_coherent(self) -> "ProviderCapabilityVerification":
+        if (
+            self.status == ProviderVerificationStatus.VERIFIED
+            and self.failure_detail is not None
+        ):
+            raise ValueError("verified capability records cannot contain a failure")
+        if self.status == ProviderVerificationStatus.FAILED and not self.failure_detail:
+            raise ValueError("failed verification requires a failure detail")
+        return self
 
 
 class ProviderPrivacy(NebulaModel):
@@ -872,6 +916,9 @@ class ProviderProfile(Entity):
     secret_ref: str | None = None
     model_allowlist: list[str] = Field(default_factory=list)
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+    capability_verifications: dict[str, ProviderCapabilityVerification] = Field(
+        default_factory=dict
+    )
     privacy: ProviderPrivacy = Field(default_factory=ProviderPrivacy)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -910,7 +957,27 @@ class ProviderProfile(Entity):
                     raise ValueError(
                         f"provider option {key} must be a positive integer"
                     )
+        if any(
+            key != verification.model
+            for key, verification in self.capability_verifications.items()
+        ):
+            raise ValueError("capability verification keys must match exact model IDs")
+        has_verified_model = any(
+            verification.status == ProviderVerificationStatus.VERIFIED
+            and verification.contract_version == "required-tool-v1"
+            for verification in self.capability_verifications.values()
+        )
+        self.capabilities.tool_calling = has_verified_model
+        self.capabilities.parallel_tool_calls = False
         return self
+
+    def tools_verified_for(self, model: str) -> bool:
+        verification = self.capability_verifications.get(model)
+        return bool(
+            verification
+            and verification.status == ProviderVerificationStatus.VERIFIED
+            and verification.contract_version == "required-tool-v1"
+        )
 
 
 class SourceSnapshot(Entity):
@@ -1037,6 +1104,40 @@ class ChatSession(Entity):
     provider_profile_id: str
     model: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatTurnStatus(StringEnum):
+    ROUTING = "routing"
+    WAITING_APPROVAL = "waiting_approval"
+    FINALIZING = "finalizing"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ChatTurn(Entity):
+    """A durable, idempotently resumable chat tool loop."""
+
+    entity_kind: ClassVar[str] = "chat_turns"
+    engagement_id: str
+    session_id: str
+    provider_profile_id: str
+    model: str
+    status: ChatTurnStatus = ChatTurnStatus.ROUTING
+    tools_enabled: bool = False
+    max_tool_calls: int = Field(default=5, ge=0, le=5)
+    next_step: int = Field(default=0, ge=0, le=5)
+    tool_call_ids: list[str] = Field(default_factory=list)
+    tool_history: list[dict[str, Any]] = Field(default_factory=list)
+    approval_id: str | None = None
+    scope_policy_id: str | None = None
+    scope_revision: int | None = Field(default=None, ge=1)
+    tool_pack_digests: list[str] = Field(default_factory=list)
+    tool_interface_catalog_digests: list[str] = Field(default_factory=list)
+    request_snapshot: dict[str, Any] = Field(default_factory=dict)
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    final_message_id: str | None = None
+    error: str | None = Field(default=None, max_length=1_000)
 
 
 class ChatMessage(Entity):
@@ -1359,6 +1460,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     SourceSnapshot,
     KnowledgeSource,
     ChatSession,
+    ChatTurn,
     ChatMessage,
     ContextSnapshot,
     OperatorExecution,

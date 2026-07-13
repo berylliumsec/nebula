@@ -78,6 +78,13 @@ class ProviderFlavor(str, Enum):
     CUSTOM = "custom"
 
 
+class ToolChoice(str, Enum):
+    """Provider-neutral tool routing policy."""
+
+    AUTO = "auto"
+    REQUIRED = "required"
+
+
 class ModelCapabilities(BaseModel):
     streaming: bool = True
     tools: bool = False
@@ -204,6 +211,7 @@ class ToolDefinition(BaseModel):
 class ModelToolResult(BaseModel):
     call_id: str
     name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
     output: dict[str, Any] | str
     is_error: bool = False
 
@@ -214,11 +222,18 @@ class ModelRequest(BaseModel):
     instructions: str | None = None
     tools: list[ToolDefinition] = Field(default_factory=list)
     tool_results: list[ModelToolResult] = Field(default_factory=list)
+    tool_choice: ToolChoice = ToolChoice.AUTO
     max_output_tokens: int | None = Field(default=None, gt=0)
     temperature: float | None = None
     parallel_tool_calls: bool = False
     response_schema: dict[str, Any] | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def required_choice_has_tools(self) -> "ModelRequest":
+        if self.tool_choice == ToolChoice.REQUIRED and not self.tools:
+            raise ValueError("tool_choice=required requires at least one tool")
+        return self
 
 
 class ToolCall(BaseModel):
@@ -428,18 +443,26 @@ class OpenAIResponsesProvider(ModelProvider):
             "model": model,
             "input": [message.model_dump() for message in request.messages],
         }
-        payload["input"].extend(
-            {
-                "type": "function_call_output",
-                "call_id": result.call_id,
-                "output": (
-                    json.dumps(result.output, sort_keys=True)
-                    if isinstance(result.output, dict)
-                    else result.output
-                ),
-            }
-            for result in request.tool_results
-        )
+        for result in request.tool_results:
+            payload["input"].extend(
+                [
+                    {
+                        "type": "function_call",
+                        "call_id": result.call_id,
+                        "name": result.name,
+                        "arguments": json.dumps(result.arguments, sort_keys=True),
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": result.call_id,
+                        "output": (
+                            json.dumps(result.output, sort_keys=True)
+                            if isinstance(result.output, dict)
+                            else result.output
+                        ),
+                    },
+                ]
+            )
         if request.instructions:
             payload["instructions"] = request.instructions
         if request.max_output_tokens:
@@ -458,6 +481,8 @@ class OpenAIResponsesProvider(ModelProvider):
                 }
                 for tool in request.tools
             ]
+            if request.tool_choice == ToolChoice.REQUIRED:
+                payload["tool_choice"] = "required"
         if request.response_schema:
             payload["text"] = {
                 "format": {
@@ -541,18 +566,36 @@ class OpenAICompatibleProvider(ModelProvider):
             "model": model,
             "messages": [message.model_dump() for message in request.messages],
         }
-        payload["messages"].extend(
-            {
-                "role": "tool",
-                "tool_call_id": result.call_id,
-                "content": (
-                    json.dumps(result.output, sort_keys=True)
-                    if isinstance(result.output, dict)
-                    else result.output
-                ),
-            }
-            for result in request.tool_results
-        )
+        for result in request.tool_results:
+            payload["messages"].extend(
+                [
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": result.call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": result.name,
+                                    "arguments": json.dumps(
+                                        result.arguments, sort_keys=True
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": result.call_id,
+                        "content": (
+                            json.dumps(result.output, sort_keys=True)
+                            if isinstance(result.output, dict)
+                            else result.output
+                        ),
+                    },
+                ]
+            )
         if request.instructions:
             payload["messages"].insert(
                 0, {"role": "system", "content": request.instructions}
@@ -575,6 +618,8 @@ class OpenAICompatibleProvider(ModelProvider):
                 }
                 for tool in request.tools
             ]
+            if request.tool_choice == ToolChoice.REQUIRED:
+                payload["tool_choice"] = "required"
         if request.response_schema:
             payload["response_format"] = {
                 "type": "json_schema",
@@ -754,24 +799,37 @@ class AnthropicProvider(ModelProvider):
                 if message.role != "system"
             ],
         }
-        payload["messages"].extend(
-            {
-                "role": "user",
-                "content": [
+        for result in request.tool_results:
+            payload["messages"].extend(
+                [
                     {
-                        "type": "tool_result",
-                        "tool_use_id": result.call_id,
-                        "content": (
-                            json.dumps(result.output, sort_keys=True)
-                            if isinstance(result.output, dict)
-                            else result.output
-                        ),
-                        "is_error": result.is_error,
-                    }
-                ],
-            }
-            for result in request.tool_results
-        )
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": result.call_id,
+                                "name": result.name,
+                                "input": result.arguments,
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": result.call_id,
+                                "content": (
+                                    json.dumps(result.output, sort_keys=True)
+                                    if isinstance(result.output, dict)
+                                    else result.output
+                                ),
+                                "is_error": result.is_error,
+                            }
+                        ],
+                    },
+                ]
+            )
         systems = [m.content for m in request.messages if m.role == "system"]
         if request.instructions or systems:
             payload["system"] = "\n".join(
@@ -788,6 +846,11 @@ class AnthropicProvider(ModelProvider):
                 }
                 for tool in request.tools
             ]
+            if request.tool_choice == ToolChoice.REQUIRED:
+                payload["tool_choice"] = {
+                    "type": "any",
+                    "disable_parallel_tool_use": not request.parallel_tool_calls,
+                }
         async with self._client(self._headers()) as client:
             response = await client.post(self._path("/v1/messages"), json=payload)
         if response.is_error:
@@ -884,24 +947,39 @@ class GeminiProvider(ModelProvider):
                 else message.content
             )
             contents.append({"role": role, "parts": parts})
-        contents.extend(
-            {
-                "role": "user",
-                "parts": [
+        for result in request.tool_results:
+            contents.extend(
+                [
                     {
-                        "functionResponse": {
-                            "name": result.name,
-                            "response": (
-                                result.output
-                                if isinstance(result.output, dict)
-                                else {"output": result.output}
-                            ),
-                        }
-                    }
-                ],
-            }
-            for result in request.tool_results
-        )
+                        "role": "model",
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "id": result.call_id,
+                                    "name": result.name,
+                                    "args": result.arguments,
+                                }
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "functionResponse": {
+                                    "id": result.call_id,
+                                    "name": result.name,
+                                    "response": (
+                                        result.output
+                                        if isinstance(result.output, dict)
+                                        else {"output": result.output}
+                                    ),
+                                }
+                            }
+                        ],
+                    },
+                ]
+            )
         payload: dict[str, Any] = {"contents": contents}
         system_parts = [str(m.content) for m in request.messages if m.role == "system"]
         if request.instructions:
@@ -923,6 +1001,8 @@ class GeminiProvider(ModelProvider):
                     ]
                 }
             ]
+            if request.tool_choice == ToolChoice.REQUIRED:
+                payload["toolConfig"] = {"functionCallingConfig": {"mode": "ANY"}}
         generation: dict[str, Any] = {}
         if request.max_output_tokens:
             generation["maxOutputTokens"] = request.max_output_tokens
@@ -1018,27 +1098,41 @@ class BedrockProvider(ModelProvider):
                 if msg.role != "system"
             ],
         }
-        kwargs["messages"].extend(
-            {
-                "role": "user",
-                "content": [
+        for result in request.tool_results:
+            kwargs["messages"].extend(
+                [
                     {
-                        "toolResult": {
-                            "toolUseId": result.call_id,
-                            "content": [
-                                (
-                                    {"json": result.output}
-                                    if isinstance(result.output, dict)
-                                    else {"text": result.output}
-                                )
-                            ],
-                            "status": "error" if result.is_error else "success",
-                        }
-                    }
-                ],
-            }
-            for result in request.tool_results
-        )
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": result.call_id,
+                                    "name": result.name,
+                                    "input": result.arguments,
+                                }
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "toolResult": {
+                                    "toolUseId": result.call_id,
+                                    "content": [
+                                        (
+                                            {"json": result.output}
+                                            if isinstance(result.output, dict)
+                                            else {"text": result.output}
+                                        )
+                                    ],
+                                    "status": "error" if result.is_error else "success",
+                                }
+                            }
+                        ],
+                    },
+                ]
+            )
         systems = [str(m.content) for m in request.messages if m.role == "system"]
         if request.instructions:
             systems.append(request.instructions)
@@ -1057,6 +1151,8 @@ class BedrockProvider(ModelProvider):
                     for tool in request.tools
                 ]
             }
+            if request.tool_choice == ToolChoice.REQUIRED:
+                kwargs["toolConfig"]["toolChoice"] = {"any": {}}
         inference: dict[str, Any] = {}
         if request.max_output_tokens:
             inference["maxTokens"] = request.max_output_tokens

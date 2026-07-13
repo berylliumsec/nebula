@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Activity, Cloud, Cpu, KeyRound, Laptop, Pencil, Power, RefreshCw, Trash2 } from "lucide-react";
+import { Activity, Cloud, Cpu, KeyRound, Laptop, Pencil, Power, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import type { ProviderHealth } from "../api/types";
 
 interface ProviderHealthCardProps {
@@ -7,14 +7,17 @@ interface ProviderHealthCardProps {
   preview?: boolean;
   busy?: boolean;
   onRefresh?: (id: string) => Promise<void>;
+  onReverify?: (id: string) => Promise<void>;
   onEdit?: (provider: ProviderHealth) => void;
   onToggle?: (provider: ProviderHealth) => Promise<void>;
   onDelete?: (provider: ProviderHealth) => Promise<void>;
 }
 
-export function ProviderHealthCard({ provider, preview = false, busy = false, onRefresh, onEdit, onToggle, onDelete }: ProviderHealthCardProps) {
+export function ProviderHealthCard({ provider, preview = false, busy = false, onRefresh, onReverify, onEdit, onToggle, onDelete }: ProviderHealthCardProps) {
   const [refreshing, setRefreshing] = useState(false);
   const KindIcon = provider.kind === "local" ? Laptop : provider.kind === "gateway" ? Cpu : Cloud;
+  const verificationModel = provider.defaultModel ?? provider.modelAllowlist[0];
+  const verification = verificationModel ? provider.capabilityVerifications?.[verificationModel] : undefined;
   const refresh = async () => {
     if (!onRefresh || refreshing) return;
     setRefreshing(true);
@@ -55,6 +58,15 @@ export function ProviderHealthCard({ provider, preview = false, busy = false, on
       <div className="capability-list" aria-label={`${provider.name} capabilities`}>
         {provider.capabilities.map((capability) => <span key={capability}>{capability}</span>)}
       </div>
+      <p className="provider-message">
+        {verification?.status === "verified"
+          ? `Tool calling verified for ${verification.model} · ${new Date(verification.checkedAt).toLocaleString()}`
+          : verification?.failureDetail
+            ? `Tool verification failed for ${verification.model}: ${verification.failureDetail}`
+            : verificationModel
+              ? `Tool calling is unverified for ${verificationModel}.`
+              : "Configure a model to verify tool calling."}
+      </p>
       {provider.message && <p className="provider-message">{provider.message}</p>}
       <footer>
         <span>
@@ -66,6 +78,7 @@ export function ProviderHealthCard({ provider, preview = false, busy = false, on
               : "Profile registered"}
         </span>
         <div className="provider-card-actions">
+          <button className="icon-button subtle" type="button" aria-label={`Reverify ${provider.name} tool calling`} disabled={!onReverify || preview || busy || !provider.enabled || !verificationModel} onClick={() => void onReverify?.(provider.id)}><ShieldCheck size={14} aria-hidden="true" /></button>
           <button className="icon-button subtle" type="button" aria-label={`Edit ${provider.name}`} disabled={!onEdit || preview || busy} onClick={() => onEdit?.(provider)}><Pencil size={14} aria-hidden="true" /></button>
           <button className="icon-button subtle" type="button" aria-label={`${provider.enabled ? "Disable" : "Enable"} ${provider.name}`} disabled={!onToggle || preview || busy} onClick={() => void onToggle?.(provider)}><Power size={14} aria-hidden="true" /></button>
           <button className="icon-button subtle" type="button" aria-label={`Delete ${provider.name}`} disabled={!onDelete || preview || busy} onClick={() => void onDelete?.(provider)}><Trash2 size={14} aria-hidden="true" /></button>

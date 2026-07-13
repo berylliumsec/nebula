@@ -9,6 +9,7 @@ import type {
   ChatCompletionResponse,
   ChatSessionSummary,
   ChatStreamEvent,
+  ChatTurn,
   ContainerTerminalCapabilities,
   ContainerTerminalPreflight,
   ContainerTerminalRequest,
@@ -95,6 +96,7 @@ interface WireAgentRun extends WireEntity {
 interface WireApproval extends WireEntity {
   engagement_id: string;
   run_id: string;
+  origin?: "mission" | "chat";
   status: string;
   risk_class: string;
   exact_request: JsonObject;
@@ -231,6 +233,13 @@ interface WireProvider extends WireEntity {
   secret_ref?: string | null;
   model_allowlist?: string[];
   capabilities?: Record<string, boolean>;
+  capability_verifications?: Record<string, {
+    model: string;
+    status: "verified" | "failed";
+    checked_at: string;
+    contract_version: string;
+    failure_detail?: string | null;
+  }>;
   privacy?: {
     local_only?: boolean;
     retention?: string | null;
@@ -245,6 +254,18 @@ interface WireProviderRuntimeHealth extends JsonObject {
   healthy: boolean;
   models?: string[];
   detail?: string | null;
+}
+
+interface WireProviderVerificationResponse extends JsonObject {
+  provider_id: string;
+  provider_revision: number;
+  verification: {
+    model: string;
+    status: "verified" | "failed";
+    checked_at: string;
+    contract_version: string;
+    failure_detail?: string | null;
+  };
 }
 
 interface WireProviderCatalogEntry extends JsonObject {
@@ -280,6 +301,7 @@ interface WireChatCitation extends JsonObject {
 }
 
 interface WireChatCompletion extends JsonObject {
+  turn_id?: string | null;
   session_id?: string | null;
   provider_id: string;
   model: string;
@@ -354,7 +376,16 @@ interface WireContextStatus extends JsonObject {
 }
 
 interface WireChatStreamEvent extends Partial<WireChatCompletion> {
-  type: "started" | "delta" | "done" | "error";
+  type: "started" | "delta" | "tool_started" | "tool_completed" | "approval_required" | "done" | "error";
+  turn_id?: string;
+  tool_call_id?: string;
+  capability?: string;
+  arguments?: JsonObject;
+  status?: string;
+  summary?: string;
+  evidence_ids?: string[];
+  step?: number;
+  approval?: JsonObject;
   provider_id?: string;
   model?: string;
   delta?: string;
@@ -367,6 +398,13 @@ interface WireChatSession extends WireEntity {
   provider_profile_id: string;
   model?: string | null;
   metadata?: JsonObject;
+}
+
+interface WireChatTurn extends WireEntity {
+  session_id: string;
+  status: ChatTurn["status"];
+  approval_id?: string | null;
+  tool_call_ids?: string[];
 }
 
 interface WirePersistedChatMessage extends WireEntity {
@@ -782,6 +820,7 @@ function mapApproval(value: WireApproval): ApprovalSummary {
     id: value.id,
     runId: value.run_id,
     engagementId: value.engagement_id,
+    origin: value.origin ?? "mission",
     status: mapApprovalStatus(value.status),
     risk: mapRiskClass(value.risk_class),
     toolName: stringField(request.tool_name) ?? "Tool request",
@@ -1050,6 +1089,15 @@ function mapProvider(value: WireProvider): ProviderHealth {
         ? "regional"
         : "cloud",
     capabilities,
+    capabilityVerifications: Object.fromEntries(
+      Object.entries(value.capability_verifications ?? {}).map(([model, result]) => [model, {
+        model: result.model,
+        status: result.status,
+        checkedAt: result.checked_at,
+        contractVersion: result.contract_version,
+        failureDetail: result.failure_detail ?? undefined,
+      }]),
+    ),
     message: value.enabled === false
       ? "Provider profile is disabled."
       : requiresDefaultModel && !defaultModel
@@ -1123,6 +1171,7 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
   const contextInputTokens = numberField(value.context_usage?.input_tokens);
   const contextOutputTokens = numberField(value.context_usage?.output_tokens);
   return {
+    turnId: value.turn_id ?? undefined,
     sessionId: value.session_id ?? undefined,
     providerId: value.provider_id,
     model: value.model,
@@ -1430,6 +1479,8 @@ function chatRequestBody(body: ChatCompletionRequest, stream: boolean): JsonObje
     temperature: body.temperature,
     include_knowledge: body.includeKnowledge ?? true,
     allow_cloud_knowledge: body.allowCloudKnowledge ?? false,
+    tools_enabled: body.toolsEnabled ?? false,
+    allow_cloud_tool_results: body.allowCloudToolResults ?? false,
     stream,
   };
 }
@@ -1441,8 +1492,19 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     title: value.title,
     providerId: value.provider_profile_id,
     model: value.model ?? undefined,
+    toolsEnabled: value.metadata?.tools_enabled === true,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
+  };
+}
+
+function mapChatTurn(value: WireChatTurn): ChatTurn {
+  return {
+    id: value.id,
+    sessionId: value.session_id,
+    status: value.status,
+    approvalId: value.approval_id ?? undefined,
+    toolCallIds: value.tool_call_ids ?? [],
   };
 }
 
@@ -2191,6 +2253,23 @@ export class ApiClient {
     ).then(mapProviderRuntimeHealth);
   }
 
+  async verifyProviderCapabilities(
+    id: string,
+    model: string,
+    expectedRevision: number,
+    signal?: AbortSignal,
+  ): Promise<ProviderHealth> {
+    await this.request<WireProviderVerificationResponse>(
+      `providers/${encodeURIComponent(id)}/capabilities/verify`,
+      {
+        method: "POST",
+        signal,
+        body: JSON.stringify({ model, expected_revision: expectedRevision }),
+      },
+    );
+    return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`).then(mapProvider);
+  }
+
   listKnowledgeSources(engagementId: string, signal?: AbortSignal): Promise<Page<KnowledgeSource>> {
     return this.listAll<WireKnowledgeSource>("knowledge", signal, engagementId)
       .then((items) => page(items.map(mapKnowledgeSource)));
@@ -2559,19 +2638,23 @@ export class ApiClient {
     body: ChatCompletionRequest,
     onEvent: (event: ChatStreamEvent) => void,
     signal?: AbortSignal,
-  ): Promise<ChatCompletionResponse> {
+    resumeTurnId?: string,
+  ): Promise<ChatCompletionResponse | undefined> {
     const headers = new Headers({
       Accept: "text/event-stream",
       "Content-Type": "application/json",
     });
     const token = this.getToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+    const response = await this.fetchImpl(
+      resumeTurnId
+        ? `${this.baseUrl}/chat/turns/${encodeURIComponent(resumeTurnId)}/resume`
+        : `${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers,
       signal,
       credentials: "same-origin",
-      body: JSON.stringify(chatRequestBody(body, true)),
+      body: resumeTurnId ? undefined : JSON.stringify(chatRequestBody(body, true)),
     });
     if (!response.ok) throw await responseError(response);
     if (!response.body) {
@@ -2582,6 +2665,7 @@ export class ApiClient {
     const decoder = new TextDecoder();
     let buffer = "";
     let completed: ChatCompletionResponse | undefined;
+    let pausedForApproval = false;
 
     const processBlock = (block: string) => {
       const lines = block.replace(/\r/g, "").split("\n");
@@ -2607,6 +2691,7 @@ export class ApiClient {
           providerId: wire.provider_id ?? body.providerId,
           model: wire.model ?? body.model ?? "unknown",
           sessionId: wire.session_id ?? undefined,
+          turnId: wire.turn_id ?? undefined,
         });
         return;
       }
@@ -2616,6 +2701,44 @@ export class ApiClient {
           providerId: wire.provider_id ?? body.providerId,
           model: wire.model ?? body.model ?? "unknown",
           delta: wire.delta ?? "",
+          turnId: wire.turn_id ?? undefined,
+        });
+        return;
+      }
+      if (wire.type === "tool_started") {
+        if (!wire.turn_id || !wire.tool_call_id || !wire.capability) return;
+        onEvent({
+          type: "tool_started",
+          turnId: wire.turn_id,
+          toolCallId: wire.tool_call_id,
+          capability: wire.capability,
+          arguments: wire.arguments ?? {},
+          step: wire.step ?? 0,
+        });
+        return;
+      }
+      if (wire.type === "tool_completed") {
+        if (!wire.turn_id || !wire.tool_call_id || !wire.capability) return;
+        onEvent({
+          type: "tool_completed",
+          turnId: wire.turn_id,
+          toolCallId: wire.tool_call_id,
+          capability: wire.capability,
+          status: wire.status ?? "complete",
+          summary: wire.summary ?? "Capability completed",
+          evidenceIds: wire.evidence_ids ?? [],
+          step: wire.step ?? 0,
+        });
+        return;
+      }
+      if (wire.type === "approval_required") {
+        if (!wire.turn_id || !wire.tool_call_id) return;
+        pausedForApproval = true;
+        onEvent({
+          type: "approval_required",
+          turnId: wire.turn_id,
+          toolCallId: wire.tool_call_id,
+          approval: wire.approval ?? {},
         });
         return;
       }
@@ -2642,9 +2765,31 @@ export class ApiClient {
       if (done) break;
     }
     if (buffer.trim()) processBlock(buffer);
-    if (!completed) {
+    if (!completed && !pausedForApproval) {
       throw new ApiError("The chat response ended before a completion was received.", 502);
     }
     return completed;
+  }
+
+  resumeChatTurn(
+    turnId: string,
+    fallback: ChatCompletionRequest,
+    onEvent: (event: ChatStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatCompletionResponse | undefined> {
+    return this.streamChat(fallback, onEvent, signal, turnId);
+  }
+
+  getPendingChatTurn(sessionId: string, signal?: AbortSignal): Promise<ChatTurn | undefined> {
+    return this.request<WireChatTurn | null>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/pending-turn`,
+      { signal },
+    ).then((value) => value ? mapChatTurn(value) : undefined);
+  }
+
+  cancelChatTurn(turnId: string): Promise<ChatTurn> {
+    return this.request<WireChatTurn>(`chat/turns/${encodeURIComponent(turnId)}/cancel`, {
+      method: "POST",
+    }).then(mapChatTurn);
   }
 }

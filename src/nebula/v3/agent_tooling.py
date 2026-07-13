@@ -17,7 +17,13 @@ from .orchestration import (
     SpecialistResult,
     SpecialistRole,
 )
-from .providers import ModelMessage, ModelProvider, ModelRequest, ToolDefinition
+from .providers import (
+    ModelMessage,
+    ModelProvider,
+    ModelRequest,
+    ToolChoice,
+    ToolDefinition,
+)
 from .tool_interfaces import ToolInterfaceCatalog, ToolInterfaceError
 from .tools import PolicyDenied, ToolBroker, ToolInvocation, ToolSpec
 
@@ -223,8 +229,9 @@ class BrokeredToolSpecialist:
                     model=self.model,
                     instructions=(
                         "You are a Nebula security specialist working inside a disposable "
-                        "Toolbox container. Request at most one supplied capability for "
-                        "this stage. Search the environment before selecting unfamiliar "
+                        "Toolbox container. Request exactly one supplied capability for "
+                        "this stage and return no prose. Search the environment before "
+                        "selecting unfamiliar "
                         "commands. Use only explicit in-scope targets present in the task. "
                         "Full Bash is allowed only through environment.shell_local or "
                         "environment.shell_network; it still runs inside the disposable "
@@ -246,6 +253,7 @@ class BrokeredToolSpecialist:
                     tools=[
                         self._definition(self.specs[name]) for name in sorted(allowed)
                     ],
+                    tool_choice=ToolChoice.REQUIRED,
                     parallel_tool_calls=False,
                     max_output_tokens=self.max_output_tokens,
                     metadata=self._metadata(context),
@@ -255,18 +263,9 @@ class BrokeredToolSpecialist:
                 first_usage[0] + response.usage.input_tokens,
                 first_usage[1] + response.usage.output_tokens,
             )
-            if not response.tool_calls:
-                summary = response.text.strip()
-                if not summary:
-                    raise MissionError(
-                        "specialist returned neither analysis nor a tool call"
-                    )
-                return SpecialistResult(
-                    summary=summary,
-                    rationale="specialist declined executable action; no tool was called",
-                    input_tokens=first_usage[0],
-                    output_tokens=first_usage[1],
-                    cost_usd=self._cost(*first_usage),
+            if response.text.strip():
+                raise MissionError(
+                    "specialist returned prose during required tool routing"
                 )
             if len(response.tool_calls) != 1:
                 raise MissionError(
@@ -430,6 +429,7 @@ class BrokeredToolSpecialist:
                     )
                 ],
                 tools=[selection_tool],
+                tool_choice=ToolChoice.REQUIRED,
                 parallel_tool_calls=False,
                 max_output_tokens=min(self.max_output_tokens, 1024),
                 metadata=self._metadata(context),
@@ -438,6 +438,10 @@ class BrokeredToolSpecialist:
         if len(response.tool_calls) != 1:
             raise MissionError(
                 "specialist did not make exactly one interface selection"
+            )
+        if response.text.strip():
+            raise MissionError(
+                "specialist returned prose during required interface selection"
             )
         call = response.tool_calls[0]
         if call.name != selection_tool.name:

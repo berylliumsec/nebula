@@ -26,6 +26,7 @@ from .domain import (
     ApprovalStatus,
     Evidence,
     RiskClass,
+    ToolCallOrigin,
     ScopePolicy,
     ToolCall as PersistedToolCall,
     ToolCallStatus,
@@ -324,6 +325,9 @@ class ToolInvocation(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     engagement_id: str
     run_id: str
+    origin: ToolCallOrigin = ToolCallOrigin.MISSION
+    chat_session_id: str | None = None
+    chat_turn_id: str | None = None
     task_id: str | None = None
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -606,6 +610,9 @@ class StoreToolLedger:
             id=call_id,
             engagement_id=invocation.engagement_id,
             run_id=invocation.run_id,
+            origin=invocation.origin,
+            chat_session_id=invocation.chat_session_id,
+            chat_turn_id=invocation.chat_turn_id,
             task_id=invocation.task_id,
             tool_name=invocation.tool_name,
             risk_class=spec.risk_class,
@@ -714,6 +721,9 @@ class StoreToolLedger:
                 id=approval_id,
                 engagement_id=invocation.engagement_id,
                 run_id=invocation.run_id,
+                origin=invocation.origin,
+                chat_session_id=invocation.chat_session_id,
+                chat_turn_id=invocation.chat_turn_id,
                 task_id=invocation.task_id,
                 tool_call_id=call.id,
                 risk_class=spec.risk_class,

@@ -118,6 +118,33 @@ def _source(
     )
 
 
+def test_tool_enabled_chat_requires_exact_model_verification(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "chat-tools-unverified.db")
+    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
+    payload = _profile(local=True).model_dump(mode="python")
+    payload["capabilities"] = {
+        "streaming": True,
+        "tool_calling": True,
+        "strict_structured_output": True,
+    }
+    profile = store.create(ProviderProfile.model_validate(payload))
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _profile: provider)
+
+    with pytest.raises(ChatConfigurationError, match="exact selected model"):
+        asyncio.run(
+            ChatService(store).prepare_async(
+                ChatCompletionRequest(
+                    provider_id=profile.id,
+                    engagement_id=engagement.id,
+                    model="model-a",
+                    messages=[{"role": "user", "content": "Use the toolbox"}],
+                    tools_enabled=True,
+                )
+            )
+        )
+
+
 def test_local_chat_retrieves_only_its_engagement_and_persists(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "chat.db")
     engagement = store.create(Engagement(id="eng-a", name="Engagement A"))

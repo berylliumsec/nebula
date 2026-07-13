@@ -59,6 +59,7 @@ export function SettingsPage() {
     providers,
     providerCatalog,
     refreshProvider,
+    reverifyProvider,
     addProvider,
     updateProvider,
     setProviderEnabled,
@@ -385,7 +386,7 @@ export function SettingsPage() {
         <div className="section-heading"><div><h2>Model providers</h2><p>Configured provider profiles and their declared capabilities.</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <div className="knowledge-status error" role="alert">{providerActionError}</div>}
         {providers.length > 0 ? (
-          <div className="provider-grid">{providers.map((provider) => <ProviderHealthCard provider={provider} preview={previewMode} busy={providerBusy === provider.id} onRefresh={refreshProvider} onEdit={openProviderEdit} onToggle={toggleProvider} onDelete={removeProvider} key={provider.id} />)}</div>
+          <div className="provider-grid">{providers.map((provider) => <ProviderHealthCard provider={provider} preview={previewMode} busy={providerBusy === provider.id} onRefresh={refreshProvider} onReverify={reverifyProvider} onEdit={openProviderEdit} onToggle={toggleProvider} onDelete={removeProvider} key={provider.id} />)}</div>
         ) : (
           <div className="empty-state compact"><Server size={23} /><strong>No provider profiles</strong><p>Add a provider profile in Core before assigning a model to a mission.</p></div>
         )}
@@ -464,6 +465,7 @@ export function SettingsPage() {
             {!dialogLocal && <label className="provider-consent"><input type="checkbox" checked={permitsSensitiveData} onChange={(event) => setPermitsSensitiveData(event.target.checked)} /><span><strong>Allow engagement and document data</strong><small>Permit this profile to receive redacted knowledge excerpts only after a separate confirmation for each chat request.</small></span></label>}
             <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : "This profile will use the provider's ambient credential chain, if supported."}</p>
             {selected?.notes && <p className="provider-dialog-note">{selected.notes}</p>}
+            <p className="provider-dialog-note">Saving runs one small, harmless required-tool inference probe for the exact default model. Health refresh remains a no-cost liveness check.</p>
             {formError && <p className="form-error" role="alert">{formError}</p>}
             <footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim() || (requiresDefaultModel && !model.trim()) || (dialogProviderType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim()))}>{saving ? "Saving…" : editingProvider ? "Save provider" : "Add provider"}</button></footer>
           </form>

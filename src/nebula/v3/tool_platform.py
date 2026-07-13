@@ -77,6 +77,7 @@ from .tools import (
     StoreToolLedger,
     ToolBroker,
     ToolRegistry,
+    ToolSpec,
 )
 
 
@@ -88,6 +89,16 @@ MAX_REMOTE_MANIFEST_BYTES = 2_000_000
 MAX_LOCAL_BUNDLE_BYTES = 100_000_000
 DEFAULT_EVENT_RETENTION = 256
 MAX_EVENT_RETENTION = 10_000
+
+
+@dataclass(frozen=True)
+class ChatToolComponents:
+    broker: ToolBroker
+    scope: ScopePolicy
+    workspace: Path
+    specs: Mapping[str, ToolSpec]
+    tool_pack_digests: tuple[str, ...]
+    interface_catalog_digests: tuple[str, ...]
 
 
 ToolPackOperation = Literal[
@@ -888,6 +899,132 @@ class ToolPlatform:
             },
         )
 
+    def chat_components(
+        self,
+        *,
+        engagement_id: str,
+        turn_id: str,
+        provider: ModelProvider,
+        model: str,
+    ) -> ChatToolComponents:
+        """Resolve the complete engagement assignment through the mission broker lock."""
+
+        del turn_id, provider, model
+        if not self.execution_enabled:
+            raise ToolPlatformError("Toolbox execution is disabled in this Core")
+        engagement = self.store.get(Engagement, engagement_id)
+        if not engagement.scope_policy_id:
+            raise ToolPlatformError("engagement has no scope policy")
+        scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+
+        assignments = [
+            item
+            for item in self.store.list_entities(
+                EngagementToolAssignment,
+                engagement_id=engagement_id,
+                limit=1_000,
+            )
+            if item.enabled
+        ]
+        selected = list(
+            dict.fromkeys(
+                name for item in assignments for name in item.allowed_tool_names
+            )
+        )
+        if not selected:
+            raise ToolPlatformError("engagement has no enabled Toolbox assignment")
+        digests = sorted({item.manifest_digest for item in assignments})
+        installations = [
+            item
+            for item in self.store.list_entities(ToolPackInstallation, limit=1_000)
+            if item.manifest_digest in digests
+            and item.status == ToolPackInstallationStatus.READY
+        ]
+        if {item.manifest_digest for item in installations} != set(digests):
+            raise ToolPlatformError("an assigned Toolbox pack is unavailable")
+        interface_digests = sorted(
+            {
+                item.interface_catalog_digest
+                for item in installations
+                if item.interface_catalog_digest
+            }
+        )
+        for installation in installations:
+            if bool(installation.interface_catalog_path) != bool(
+                installation.interface_catalog_digest
+            ):
+                raise ToolPlatformError("assigned interface catalog lock is incomplete")
+            if installation.interface_catalog_path:
+                assert installation.interface_catalog_digest is not None
+                load_interface_catalog_file(
+                    Path(installation.interface_catalog_path),
+                    installation.interface_catalog_digest,
+                )
+        runtime_ids = {item.runtime_profile_id for item in installations}
+        if len(runtime_ids) != 1:
+            raise ToolPlatformError(
+                "chat Toolbox assignments must use one local runner"
+            )
+        runner_profile = self.store.get(StoredRunnerProfile, runtime_ids.pop())
+        if not runner_profile.enabled or not runner_profile.healthy:
+            raise ToolPlatformError("selected Toolbox runner is unavailable")
+        runner_platform = cast(
+            Literal["linux/amd64", "linux/arm64"], runner_profile.platform
+        )
+        parser_executor = SandboxParserExecutor(
+            runner=self._runner(runner_profile), parser_root=self.parser_root
+        )
+        registry_all = build_tool_registry(
+            installations,
+            platform=runner_platform,
+            manifests=self.manifests,
+            parser_executor=parser_executor,
+        )
+        registry = ToolRegistry()
+        for name in selected:
+            registry.register(registry_all.get(name))
+        specs = {spec.name: spec for spec in registry.specs()}
+        network_tools = sorted(
+            spec.name for spec in specs.values() if spec.network_access
+        )
+        embedded_helper = next(
+            (
+                spec.image
+                for spec in specs.values()
+                if spec.network_access
+                and spec.name.startswith("environment.")
+                and spec.image is not None
+            ),
+            None,
+        )
+        egress_helper_image = runner_profile.egress_helper_image or embedded_helper
+        if network_tools and not egress_helper_image:
+            raise ToolPlatformError(
+                "assigned network tools require a certified digest-pinned egress helper"
+            )
+        broker = ToolBroker(
+            registry=registry,
+            policy_engine=PolicyEngine(),
+            runner=self._runner(
+                runner_profile, egress_helper_image=egress_helper_image
+            ),
+            ledger=StoreToolLedger(self.store),
+            workspace_resolver=lambda owner_engagement_id: self.workspace_for(
+                owner_engagement_id
+            ),
+            evidence_recorder=StoreToolEvidenceRecorder(
+                self.store, self.artifact_store
+            ),
+        )
+        return ChatToolComponents(
+            broker=broker,
+            scope=scope,
+            workspace=self.workspace_for(engagement_id),
+            specs=specs,
+            tool_pack_digests=tuple(digests),
+            interface_catalog_digests=tuple(interface_digests),
+        )
+
     def workspace_for(self, engagement_id: str) -> Path:
         component = hashlib.sha256(engagement_id.encode("utf-8")).hexdigest()
         workspace = self.workspace_root / component
@@ -1115,9 +1252,9 @@ class ToolPlatform:
                 "domains": scope.allowed_domains,
                 "urls": scope.allowed_urls,
                 "ports": scope.allowed_ports,
-                "not_before": scope.not_before.isoformat()
-                if scope.not_before
-                else None,
+                "not_before": (
+                    scope.not_before.isoformat() if scope.not_before else None
+                ),
                 "not_after": scope.not_after.isoformat() if scope.not_after else None,
                 "prohibited_actions": scope.prohibited_actions,
             },

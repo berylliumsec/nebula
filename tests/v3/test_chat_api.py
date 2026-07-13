@@ -165,7 +165,8 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert streamed.headers["content-type"].startswith("text/event-stream")
     assert "event: started" in streamed.text
     assert 'event: delta\ndata: {"type":"delta"' in streamed.text
-    assert 'event: done\ndata: {"session_id":null' in streamed.text
+    assert "event: done" in streamed.text
+    assert '"session_id":null' in streamed.text
 
 
 def test_chat_api_rejects_system_injection_and_disallowed_model(tmp_path, monkeypatch):

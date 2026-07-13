@@ -82,6 +82,8 @@ from .domain import (
     ApprovalStatus,
     Artifact,
     ChatMessage,
+    ChatTurn,
+    ChatTurnStatus,
     ChatTokenUsage,
     ContextOwnerType,
     ContextSnapshotStatus,
@@ -97,7 +99,9 @@ from .domain import (
     OperatorProfile,
     OperatorExecution,
     OperatorExecutionStatus,
+    ProviderCapabilityVerification,
     ProviderProfile,
+    ProviderVerificationStatus,
     Task,
     ReportRender,
     RunnerIsolation,
@@ -109,6 +113,7 @@ from .domain import (
     ScopePolicy,
     ToolPackInstallation,
     ToolPackInstallationStatus,
+    ToolCallOrigin,
     utc_now,
 )
 from .evidence import (
@@ -158,9 +163,13 @@ from .missions import (
 )
 from .operators import OperatorProfileService
 from .providers import (
+    ModelMessage,
+    ModelRequest,
     PROVIDER_CATALOG,
     ProviderError,
     ProviderHealth,
+    ToolChoice,
+    ToolDefinition,
     provider_from_profile,
 )
 from .reporting import ReportRenderError, ReportRenderService
@@ -182,6 +191,8 @@ READ_ONLY_RESOURCES = {
     "artifacts",
     "chat_messages",
     "chat_sessions",
+    "chat_turns",
+    "chat_turns",
     "evidence",
     "knowledge",
     "generated_drafts",
@@ -194,12 +205,14 @@ READ_ONLY_RESOURCES = {
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
+    "chat_turns",
     "context_snapshots",
     "operator_profiles",
     "runner_profiles",
 }
 
 API_PREFIX = "/api/v1"
+PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS = 30
 TOOL_PACK_EVENT_POLL_SECONDS = 0.25
 TOOL_PACK_EVENT_HEARTBEAT_TICKS = 20
 
@@ -261,6 +274,26 @@ class OperationEventList(NebulaModel):
 class PatchRequest(NebulaModel):
     changes: dict[str, Any]
     expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ProviderCapabilityVerifyRequest(NebulaModel):
+    model: str = Field(min_length=1, max_length=500)
+    expected_revision: int = Field(ge=1)
+
+
+class ProviderCapabilityVerifyResponse(NebulaModel):
+    provider_id: str
+    provider_revision: int
+    verification: ProviderCapabilityVerification
+
+
+class ChatTurnSummary(NebulaModel):
+    id: str
+    session_id: str
+    status: ChatTurnStatus
+    approval_id: str | None = None
+    tool_call_ids: list[str] = Field(default_factory=list)
+    revision: int = Field(ge=1)
 
 
 class ApprovalDecisionRequest(NebulaModel):
@@ -699,9 +732,9 @@ def create_app(
         return {
             "status": "ok",
             **identity,
-            "mode": "local"
-            if store.database.engine.dialect.name == "sqlite"
-            else "team",
+            "mode": (
+                "local" if store.database.engine.dialect.name == "sqlite" else "team"
+            ),
             # Runner health belongs to the separately configured worker. The
             # API never assumes that presence of a container CLI makes it safe.
             "runner": "unavailable",
@@ -1572,7 +1605,11 @@ def create_app(
         approval = store.get(Approval, approval_id)
         if approval.status != ApprovalStatus.PENDING:
             raise ConflictError("approval has already been resolved")
-        approval_run = store.get(AgentRun, approval.run_id)
+        approval_run = (
+            store.get(AgentRun, approval.run_id)
+            if approval.origin == ToolCallOrigin.MISSION
+            else None
+        )
         if approval.expires_at is not None and approval.expires_at <= utc_now():
             expired, _ = store.update_with_event(
                 Approval,
@@ -1634,7 +1671,16 @@ def create_app(
             actor_id=operator_id,
             idempotency_key=f"approval:{approval.id}:resolved",
         )
-        if approval_run.status == RunStatus.WAITING_APPROVAL:
+        if approval.origin == ToolCallOrigin.CHAT:
+            if request.decision == "stop":
+                ChatService(store, tool_platform=tool_platform).cancel_turn(
+                    approval.run_id
+                )
+            return updated
+        if (
+            approval_run is not None
+            and approval_run.status == RunStatus.WAITING_APPROVAL
+        ):
             if request.decision == "stop":
                 await missions.stop_mission(
                     approval_run.id,
@@ -2389,6 +2435,24 @@ def create_app(
         return await _provider_health(profile)
 
     @app.post(
+        f"{API_PREFIX}/providers/{{provider_id}}/capabilities/verify",
+        response_model=ProviderCapabilityVerifyResponse,
+        tags=["providers"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def verify_provider_capabilities(
+        provider_id: str,
+        request: ProviderCapabilityVerifyRequest,
+    ) -> ProviderCapabilityVerifyResponse:
+        profile = store.get(ProviderProfile, provider_id)
+        if profile.revision != request.expected_revision:
+            raise ConflictError(
+                f"revision conflict: expected {request.expected_revision}, "
+                f"found {profile.revision}"
+            )
+        return await _verify_provider_capability(store, profile, request.model)
+
+    @app.post(
         f"{API_PREFIX}/provider-health/refresh",
         response_model=list[ProviderHealth],
         tags=["providers"],
@@ -2422,7 +2486,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def create_chat_completion(request: ChatCompletionRequest) -> Any:
-        service = ChatService(store)
+        service = ChatService(store, tool_platform=tool_platform)
         prepared = await service.prepare_async(request)
         if not request.stream:
             return await service.complete(prepared)
@@ -2450,6 +2514,51 @@ def create_app(
             },
         )
 
+    @app.post(
+        f"{API_PREFIX}/chat/turns/{{turn_id}}/resume",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def resume_chat_turn(turn_id: str) -> StreamingResponse:
+        service = ChatService(store, tool_platform=tool_platform)
+        prepared = service.prepare_resume(turn_id)
+
+        async def event_stream() -> Any:
+            try:
+                async for event, payload in service.stream(prepared):
+                    yield _server_sent_event(event, payload)
+            except asyncio.CancelledError:
+                raise
+            except (ChatError, ProviderError, ConflictError) as exc:
+                yield _server_sent_event("error", {"type": "error", "detail": str(exc)})
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/pending-turn",
+        response_model=ChatTurnSummary | None,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_pending_chat_turn(session_id: str) -> ChatTurnSummary | None:
+        turn = ChatService(store, tool_platform=tool_platform).pending_turn(session_id)
+        return _chat_turn_summary(turn) if turn is not None else None
+
+    @app.post(
+        f"{API_PREFIX}/chat/turns/{{turn_id}}/cancel",
+        response_model=ChatTurnSummary,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def cancel_chat_turn(turn_id: str) -> ChatTurnSummary:
+        return _chat_turn_summary(
+            ChatService(store, tool_platform=tool_platform).cancel_turn(turn_id)
+        )
+
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",
         response_model=list[ChatMessage],
@@ -2457,7 +2566,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_chat_session_messages(session_id: str) -> list[ChatMessage]:
-        return ChatService(store).session_messages(session_id)
+        return ChatService(store, tool_platform=tool_platform).session_messages(
+            session_id
+        )
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/context",
@@ -2466,7 +2577,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_chat_session_context(session_id: str) -> ContextStatus:
-        return ChatService(store).context_status(session_id)
+        return ChatService(store, tool_platform=tool_platform).context_status(
+            session_id
+        )
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/context",
@@ -2774,6 +2887,17 @@ def _server_sent_event(event: str, payload: dict[str, Any]) -> bytes:
     return f"event: {event}\ndata: {encoded}\n\n".encode()
 
 
+def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
+    return ChatTurnSummary(
+        id=turn.id,
+        session_id=turn.session_id,
+        status=turn.status,
+        approval_id=turn.approval_id,
+        tool_call_ids=turn.tool_call_ids,
+        revision=turn.revision,
+    )
+
+
 async def _provider_health(profile: ProviderProfile) -> ProviderHealth:
     """Return bounded, allowlisted health without reviving disabled profiles."""
 
@@ -2802,6 +2926,176 @@ async def _provider_health(profile: ProviderProfile) -> ProviderHealth:
         allowed = set(profile.model_allowlist)
         models = [model for model in models if model in allowed]
     return health.model_copy(update={"models": list(dict.fromkeys(models))})
+
+
+def _safe_verification_failure(exc: Exception) -> str:
+    if isinstance(exc, ProviderError):
+        detail = str(exc)
+        detail = re.sub(
+            r"(?i)(authorization|api[_-]?key|token|secret)\s*[:=]?\s*\S+",
+            r"\1 [redacted]",
+            detail,
+        )
+        return detail[:1_000]
+    return f"capability probe failed ({type(exc).__name__})"
+
+
+async def _verify_provider_capability(
+    store: NebulaStore,
+    profile: ProviderProfile,
+    model: str,
+) -> ProviderCapabilityVerifyResponse:
+    """Perform and durably record a harmless exact-model required-call probe."""
+
+    if profile.model_allowlist and model not in profile.model_allowlist:
+        raise ValueError("verification model must be present in model_allowlist")
+    nonce = secrets.token_urlsafe(18)
+    probe_name = "nebula_capability_probe"
+    probe_profile = profile.model_copy(
+        update={
+            "capabilities": profile.capabilities.model_copy(
+                update={
+                    "tool_calling": True,
+                    "strict_structured_output": True,
+                    "parallel_tool_calls": False,
+                }
+            )
+        }
+    )
+    try:
+        response = await asyncio.wait_for(
+            provider_from_profile(probe_profile).complete(
+                ModelRequest(
+                    model=model,
+                    instructions=(
+                        "Capability verification. Call the supplied function exactly once "
+                        "with the required nonce. Return no prose."
+                    ),
+                    messages=[
+                        ModelMessage(
+                            role="user",
+                            content="Make the required capability-verification call now.",
+                        )
+                    ],
+                    tools=[
+                        ToolDefinition(
+                            name=probe_name,
+                            description="Echo a harmless one-time verification nonce.",
+                            input_schema={
+                                "type": "object",
+                                "properties": {
+                                    "nonce": {"type": "string", "enum": [nonce]}
+                                },
+                                "required": ["nonce"],
+                                "additionalProperties": False,
+                            },
+                        )
+                    ],
+                    tool_choice=ToolChoice.REQUIRED,
+                    parallel_tool_calls=False,
+                    max_output_tokens=128,
+                    temperature=0,
+                )
+            ),
+            timeout=PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS,
+        )
+        if response.text.strip():
+            raise ProviderError("probe returned prose instead of only a tool call")
+        if len(response.tool_calls) != 1:
+            raise ProviderError("probe did not return exactly one structured tool call")
+        call = response.tool_calls[0]
+        if not call.id:
+            raise ProviderError("probe tool call omitted its call ID")
+        if call.name != probe_name:
+            raise ProviderError("probe returned the wrong function name")
+        if call.arguments != {"nonce": nonce}:
+            raise ProviderError(
+                "probe returned arguments that failed strict validation"
+            )
+        finish_reason = (response.finish_reason or "").lower()
+        if finish_reason not in {"tool_calls", "tool_use", "completed", "stop"}:
+            raise ProviderError("probe returned an invalid finish reason")
+        verification = ProviderCapabilityVerification(
+            model=model,
+            status=ProviderVerificationStatus.VERIFIED,
+        )
+    except Exception as exc:
+        verification = ProviderCapabilityVerification(
+            model=model,
+            status=ProviderVerificationStatus.FAILED,
+            failure_detail=_safe_verification_failure(exc),
+        )
+
+    verifications = dict(profile.capability_verifications)
+    verifications[model] = verification
+    has_verified_model = any(
+        item.status == ProviderVerificationStatus.VERIFIED
+        and item.contract_version == "required-tool-v1"
+        for item in verifications.values()
+    )
+    updated = store.update(
+        ProviderProfile,
+        profile.id,
+        {
+            "capability_verifications": verifications,
+            "capabilities": profile.capabilities.model_copy(
+                update={
+                    "tool_calling": has_verified_model,
+                    "strict_structured_output": has_verified_model,
+                    "parallel_tool_calls": False,
+                }
+            ),
+        },
+        expected_revision=profile.revision,
+    )
+    return ProviderCapabilityVerifyResponse(
+        provider_id=profile.id,
+        provider_revision=updated.revision,
+        verification=verification,
+    )
+
+
+def _provider_contract_fingerprint(profile: ProviderProfile) -> tuple[Any, ...]:
+    metadata = profile.metadata
+    options = metadata.get("options")
+    return (
+        profile.provider_type,
+        profile.endpoint,
+        profile.secret_ref,
+        profile.is_local,
+        tuple(profile.model_allowlist),
+        metadata.get("default_model"),
+        json.dumps(options, sort_keys=True, default=str),
+    )
+
+
+def _invalidate_provider_verification(
+    current: ProviderProfile,
+    candidate: ProviderProfile,
+) -> ProviderProfile:
+    """Fail closed when any compatibility-sensitive provider field changes."""
+
+    changed = _provider_contract_fingerprint(current) != _provider_contract_fingerprint(
+        candidate
+    )
+    verifications = {} if changed else current.capability_verifications
+    has_verified_model = any(
+        item.status == ProviderVerificationStatus.VERIFIED
+        and item.contract_version == "required-tool-v1"
+        for item in verifications.values()
+    )
+    return candidate.model_copy(
+        update={
+            "capability_verifications": verifications,
+            "capabilities": candidate.capabilities.model_copy(
+                update={
+                    "tool_calling": has_verified_model,
+                    "strict_structured_output": has_verified_model,
+                    "parallel_tool_calls": False,
+                }
+            ),
+        }
+    )
 
 
 def _assert_unique_api_operations(app: FastAPI) -> None:
@@ -2845,8 +3139,31 @@ def _register_crud_routes(
                 raise ValueError(
                     f"cannot set server-managed fields: {sorted(protected)}"
                 )
+            if isinstance(entity, ProviderProfile):
+                entity = entity.model_copy(
+                    update={
+                        "capability_verifications": {},
+                        "capabilities": entity.capabilities.model_copy(
+                            update={
+                                "tool_calling": False,
+                                "strict_structured_output": False,
+                                "parallel_tool_calls": False,
+                            }
+                        ),
+                    }
+                )
             entity_validator.validate_create(entity)
-            return store.create(entity)
+            created = store.create(entity)
+            if isinstance(created, ProviderProfile):
+                default_model = created.metadata.get("default_model") or next(
+                    iter(created.model_allowlist), None
+                )
+                if isinstance(default_model, str) and default_model:
+                    verified = await _verify_provider_capability(
+                        store, created, default_model
+                    )
+                    return store.get(ProviderProfile, verified.provider_id)
+            return created
 
         create_entity.__name__ = f"create_{resource.replace('-', '_')}"
         create_entity.__annotations__ = {"entity": model, "return": model}
@@ -2903,12 +3220,33 @@ def _register_crud_routes(
                     f"revision conflict: expected {if_match}, found {current.revision}"
                 )
             entity_validator.validate_update(current, entity)
-            return store.replace(
+            if isinstance(current, ProviderProfile) and isinstance(
+                entity, ProviderProfile
+            ):
+                entity = _invalidate_provider_verification(current, entity)
+            replaced = store.replace(
                 model,
                 entity_id,
                 entity,
                 expected_revision=current.revision if if_match is None else if_match,
             )
+            if (
+                isinstance(current, ProviderProfile)
+                and isinstance(replaced, ProviderProfile)
+                and (
+                    _provider_contract_fingerprint(current)
+                    != _provider_contract_fingerprint(replaced)
+                )
+            ):
+                default_model = replaced.metadata.get("default_model") or next(
+                    iter(replaced.model_allowlist), None
+                )
+                if isinstance(default_model, str) and default_model:
+                    result = await _verify_provider_capability(
+                        store, replaced, default_model
+                    )
+                    return store.get(ProviderProfile, result.provider_id)
+            return replaced
 
         replace_entity.__name__ = f"replace_{resource.replace('-', '_')}"
         replace_entity.__annotations__["entity"] = model
@@ -2934,17 +3272,45 @@ def _register_crud_routes(
             payload = current.model_dump(mode="python")
             payload.update(patch.changes)
             candidate = model.model_validate(payload)
+            changes = dict(patch.changes)
+            if isinstance(current, ProviderProfile) and isinstance(
+                candidate, ProviderProfile
+            ):
+                candidate = _invalidate_provider_verification(current, candidate)
+                changes = {
+                    key: value
+                    for key, value in candidate.model_dump(mode="python").items()
+                    if key not in {"id", "created_at", "updated_at", "revision"}
+                    and value != getattr(current, key)
+                }
             entity_validator.validate_update(current, candidate)
-            return store.update(
+            updated = store.update(
                 model,
                 entity_id,
-                patch.changes,
+                changes,
                 expected_revision=(
                     current.revision
                     if patch.expected_revision is None
                     else patch.expected_revision
                 ),
             )
+            if (
+                isinstance(current, ProviderProfile)
+                and isinstance(updated, ProviderProfile)
+                and (
+                    _provider_contract_fingerprint(current)
+                    != _provider_contract_fingerprint(updated)
+                )
+            ):
+                default_model = updated.metadata.get("default_model") or next(
+                    iter(updated.model_allowlist), None
+                )
+                if isinstance(default_model, str) and default_model:
+                    result = await _verify_provider_capability(
+                        store, updated, default_model
+                    )
+                    return store.get(ProviderProfile, result.provider_id)
+            return updated
 
         patch_entity.__name__ = f"patch_{resource.replace('-', '_')}"
         patch_entity.__annotations__["return"] = model

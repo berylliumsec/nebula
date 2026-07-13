@@ -12,7 +12,9 @@ from nebula.v3.domain import (
     Engagement,
     EngagementToolAssignment,
     ModelCapabilities as ProfileCapabilities,
+    ProviderCapabilityVerification,
     ProviderProfile,
+    ProviderVerificationStatus,
     RiskClass,
     RunStatus,
     ScopePolicy,
@@ -244,6 +246,16 @@ def _provider(store: NebulaStore, *, executable: bool = False) -> ProviderProfil
             capabilities=ProfileCapabilities(
                 tool_calling=executable,
                 strict_structured_output=executable,
+            ),
+            capability_verifications=(
+                {
+                    "security-model": ProviderCapabilityVerification(
+                        model="security-model",
+                        status=ProviderVerificationStatus.VERIFIED,
+                    )
+                }
+                if executable
+                else {}
             ),
         )
     )
@@ -522,7 +534,13 @@ def test_executable_mission_preflight_is_strict_and_pins_ready_packs(tmp_path):
                 "capabilities": ProfileCapabilities(
                     tool_calling=True,
                     strict_structured_output=True,
-                )
+                ),
+                "capability_verifications": {
+                    "security-model": ProviderCapabilityVerification(
+                        model="security-model",
+                        status=ProviderVerificationStatus.VERIFIED,
+                    )
+                },
             },
             expected_revision=provider.revision,
         )

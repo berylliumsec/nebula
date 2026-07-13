@@ -230,9 +230,11 @@ class MissionService:
         pack_digests: list[str] = []
         interface_catalog_digests: list[str] = []
         if selected_tools:
-            if not (provider.capabilities.tools and provider.capabilities.strict_tools):
+            if not profile.tools_verified_for(clean_model):
                 raise MissionConfigurationError(
-                    "executable missions require reliable strict structured tool calling"
+                    "executable missions require reliable strict structured tool calling "
+                    "and successful verification for "
+                    f"the exact selected model {clean_model!r}"
                 )
             if not engagement.scope_policy_id:
                 raise MissionConfigurationError(

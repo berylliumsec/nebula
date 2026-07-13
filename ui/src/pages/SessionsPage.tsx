@@ -14,8 +14,10 @@ import {
 import { Link } from "react-router-dom";
 import type {
   ChatCitation,
+  ChatCompletionRequest,
   ChatMessage,
   ChatSessionSummary,
+  ChatStreamEvent,
   ChatUsage,
   ContextStatus,
   ExecutionCapabilities,
@@ -31,7 +33,24 @@ import { WorkspacePanel } from "../components/WorkspacePanel";
 import { useWorkspace } from "../state/WorkspaceContext";
 
 type SessionView = "chat" | "terminal" | "executions" | "workspace";
-type MessageState = "complete" | "streaming" | "error" | "cancelled";
+type MessageState = "complete" | "streaming" | "waiting_approval" | "error" | "cancelled";
+
+interface ToolLifecycleCard {
+  assistantId: string;
+  toolCallId: string;
+  capability: string;
+  status: string;
+  summary?: string;
+  evidenceIds: string[];
+}
+
+interface PendingChatResponse {
+  turnId: string;
+  assistantId: string;
+  userId: string;
+  request: ChatCompletionRequest;
+  approval: Record<string, unknown>;
+}
 
 const ContainerTerminalPanel = lazy(() => import("../components/ContainerTerminalPanel").then((module) => ({ default: module.ContainerTerminalPanel })));
 
@@ -77,11 +96,13 @@ export function SessionsPage() {
   const {
     api,
     activeOperator,
+    approvals,
     coreState,
     engagement,
     knowledgeSources,
     previewMode,
     providers,
+    resolveApproval,
   } = useWorkspace();
   const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
   const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
@@ -91,6 +112,11 @@ export function SessionsPage() {
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
   const [includeKnowledge, setIncludeKnowledge] = useState(true);
+  const [toolsEnabled, setToolsEnabled] = useState(true);
+  const [assignedToolCount, setAssignedToolCount] = useState(0);
+  const [toolRuntimeReason, setToolRuntimeReason] = useState<string>();
+  const [toolCards, setToolCards] = useState<ToolLifecycleCard[]>([]);
+  const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -106,7 +132,50 @@ export function SessionsPage() {
   const providerIsLocal = selectedProvider?.kind === "local" || selectedProvider?.privacy === "local_only";
   const cloudKnowledgeAllowed = providerIsLocal || selectedProvider?.permitsSensitiveData === true;
   const canUseKnowledge = knowledgeSources.length > 0 && cloudKnowledgeAllowed;
+  const modelVerified = selectedProvider?.capabilityVerifications?.[model]?.status === "verified";
+  const toolboxAvailable = Boolean(modelVerified && assignedToolCount > 0 && !toolRuntimeReason);
+  const toolboxReason = !modelVerified
+    ? model ? `Tool calling is unverified for ${model}.` : "Select a model to verify tool calling."
+    : toolRuntimeReason ?? (assignedToolCount === 0 ? "No Toolbox capabilities are assigned to this engagement." : undefined);
+  const canUseTools = toolboxAvailable;
+  const toolboxUnavailableReason = toolboxReason;
 
+  useEffect(() => {
+    if (!api || coreState !== "online" || !engagement) {
+      setAssignedToolCount(0);
+      setToolRuntimeReason("Toolbox configuration is unavailable.");
+      return;
+    }
+    let active = true;
+    void Promise.all([
+      api.listEngagementToolAssignments(engagement.id),
+      api.listTools(),
+      api.listToolPacks(),
+    ]).then(([assignments, tools, packs]) => {
+      if (!active) return;
+      const enabledAssignments = assignments.filter((item) => item.enabled);
+      const readyDigests = new Set(packs.filter((pack) => pack.status === "ready").map((pack) => pack.manifestDigest));
+      if (!enabledAssignments.length) {
+        setAssignedToolCount(0);
+        setToolRuntimeReason(undefined);
+        return;
+      }
+      if (enabledAssignments.some((item) => !item.manifestDigest || !readyDigests.has(item.manifestDigest))) {
+        setAssignedToolCount(0);
+        setToolRuntimeReason("An assigned Toolbox pack is unavailable.");
+        return;
+      }
+      const assigned = tools.filter((tool) => enabledAssignments.some((assignment) => assignment.manifestDigest === tool.packManifestDigest && assignment.toolNames.includes(tool.name)));
+      const available = assigned.filter((tool) => tool.available);
+      setAssignedToolCount(available.length);
+      setToolRuntimeReason(available.length ? undefined : assigned[0]?.unavailableReason ?? "The assigned Toolbox runner is unavailable.");
+    }).catch(() => {
+      if (!active) return;
+      setAssignedToolCount(0);
+      setToolRuntimeReason("Toolbox configuration is unavailable.");
+    });
+    return () => { active = false; };
+  }, [api, coreState, engagement]);
   useEffect(() => {
     if (!enabledProviders.length) {
       setProviderId("");
@@ -141,6 +210,9 @@ export function SessionsPage() {
     setContextLoading(false);
     setContextError(undefined);
     setRunCandidate(undefined);
+    setToolsEnabled(true);
+    setToolCards([]);
+    setPendingResponse(undefined);
   }, [engagement?.id]);
 
   useEffect(() => {
@@ -196,6 +268,9 @@ export function SessionsPage() {
     setContextError(undefined);
     setView("chat");
     setMobileListOpen(false);
+    setToolsEnabled(true);
+    setToolCards([]);
+    setPendingResponse(undefined);
   };
 
   const selectProvider = (id: string) => {
@@ -217,9 +292,10 @@ export function SessionsPage() {
     setContextError(undefined);
     try {
       const summary = sessions.find((session) => session.id === id);
-      const [history, contextResult] = await Promise.all([
+      const [history, contextResult, pendingTurn] = await Promise.all([
         api.listChatMessages(id),
         api.getChatContext(id).then((context) => ({ context })).catch(() => ({ context: undefined })),
+        api.getPendingChatTurn(id).catch(() => undefined),
       ]);
       setSessionId(id);
       setMessages(history.map(persistedMessage));
@@ -228,6 +304,61 @@ export function SessionsPage() {
       if (summary) {
         setProviderId(summary.providerId);
         setModel(summary.model ?? "");
+        setToolsEnabled(summary.toolsEnabled ?? false);
+      }
+      if (pendingTurn && summary) {
+        const assistantId = makeId("assistant-pending");
+        const approval = approvals.find((item) => item.id === pendingTurn.approvalId);
+        const resumeRequest: ChatCompletionRequest = {
+          providerId: summary.providerId,
+          engagementId: engagement?.id,
+          sessionId: id,
+          model: summary.model,
+          messages: [],
+          toolsEnabled: true,
+        };
+        setMessages((current) => [...current, {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          createdAt: new Date().toISOString(),
+          citations: [],
+          state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "streaming",
+          durable: false,
+        }]);
+        setToolCards(pendingTurn.toolCallIds.map((toolCallId) => ({
+          assistantId,
+          toolCallId,
+          capability: "Toolbox capability",
+          status: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "running",
+          evidenceIds: [],
+        })));
+        if (pendingTurn.status === "waiting_approval") {
+          setPendingResponse({
+            turnId: pendingTurn.id,
+            assistantId,
+            userId: "",
+            request: resumeRequest,
+            approval: approval
+              ? { ...approval, exact_request: { tool_name: approval.toolName, arguments: approval.arguments } }
+              : { id: pendingTurn.approvalId },
+          });
+        } else {
+          setPendingResponse(undefined);
+          setSending(true);
+          void api.resumeChatTurn(
+            pendingTurn.id,
+            resumeRequest,
+            (streamEvent) => applyChatEvent(streamEvent, assistantId, "", resumeRequest),
+          ).then(async (response) => {
+            if (response?.sessionId) await refreshSessions(response.sessionId);
+          }).catch((error) => {
+            setChatError(error instanceof Error ? error.message : "Could not restore the pending response.");
+          }).finally(() => setSending(false));
+        }
+      } else {
+        setPendingResponse(undefined);
+        setToolCards([]);
       }
       setView("chat");
       setMobileListOpen(false);
@@ -261,6 +392,7 @@ export function SessionsPage() {
       if (summary) {
         setProviderId(summary.providerId);
         setModel(summary.model ?? "");
+        setToolsEnabled(summary.toolsEnabled ?? false);
       }
       setView("chat");
       setMobileListOpen(false);
@@ -270,6 +402,69 @@ export function SessionsPage() {
       setLoadingHistory(false);
       setContextLoading(false);
     }
+  };
+
+  const applyChatEvent = (
+    streamEvent: ChatStreamEvent,
+    assistantId: string,
+    userId: string,
+    request: ChatCompletionRequest,
+  ) => {
+    if (streamEvent.type === "started" && streamEvent.sessionId) {
+      setSessionId(streamEvent.sessionId);
+    }
+    if (streamEvent.type === "delta" && streamEvent.delta) {
+      setMessages((current) => current.map((message) => message.id === assistantId
+        ? { ...message, content: message.content + streamEvent.delta }
+        : message));
+    }
+    if (streamEvent.type === "tool_started") {
+      setToolCards((current) => [...current.filter((item) => item.toolCallId !== streamEvent.toolCallId), {
+        assistantId,
+        toolCallId: streamEvent.toolCallId,
+        capability: streamEvent.capability,
+        status: "running",
+        evidenceIds: [],
+      }]);
+    }
+    if (streamEvent.type === "tool_completed") {
+      setToolCards((current) => current.map((item) => item.toolCallId === streamEvent.toolCallId
+        ? { ...item, status: streamEvent.status, summary: streamEvent.summary, evidenceIds: streamEvent.evidenceIds }
+        : item));
+    }
+    if (streamEvent.type === "approval_required") {
+      setToolCards((current) => current.map((item) => item.toolCallId === streamEvent.toolCallId
+        ? { ...item, status: "waiting_approval" }
+        : item));
+      setPendingResponse({
+        turnId: streamEvent.turnId,
+        assistantId,
+        userId,
+        request,
+        approval: streamEvent.approval,
+      });
+      setMessages((current) => current.map((message) => {
+        if (message.id === userId) return { ...message, durable: true };
+        return message.id === assistantId ? { ...message, state: "waiting_approval" } : message;
+      }));
+    }
+    if (streamEvent.type === "done") {
+      setPendingResponse(undefined);
+      setMessages((current) => current.map((message) => {
+        if (message.id === userId) return { ...message, durable: true };
+        if (message.id !== assistantId) return message;
+        return {
+          ...message,
+          id: streamEvent.message.id ?? message.id,
+          content: streamEvent.message.content,
+          citations: streamEvent.citations,
+          usage: streamEvent.usage,
+          state: "complete",
+          durable: Boolean(streamEvent.message.id),
+        };
+      }));
+    }
+    if (streamEvent.type === "error") setChatError(streamEvent.detail);
   };
 
   const submit = async (event: FormEvent) => {
@@ -293,6 +488,21 @@ export function SessionsPage() {
         setChatError("Message not sent because cloud knowledge transfer was not approved.");
         return;
       }
+    }
+
+    const wantsTools = toolsEnabled && canUseTools;
+    let allowCloudToolResults = false;
+    if (wantsTools && !providerIsLocal) {
+      if (!selectedProvider.permitsSensitiveData) {
+        setChatError("This provider profile does not permit Toolbox results to leave the device.");
+        return;
+      }
+      allowCloudToolResults = await confirm({
+        title: "Share redacted tool results?",
+        message: `Allow this turn to send redacted, truncated Toolbox results to ${selectedProvider.name}? Canonical output remains local.`,
+        confirmLabel: "Allow this turn",
+      });
+      if (!allowCloudToolResults) return;
     }
 
     const now = new Date().toISOString();
@@ -325,51 +535,31 @@ export function SessionsPage() {
     abortRef.current = controller;
     const initialSessionId = sessionId || undefined;
     let returnedSessionId = initialSessionId;
+    const chatRequest: ChatCompletionRequest = {
+      providerId: selectedProvider.id,
+      engagementId: engagement.id,
+      sessionId: returnedSessionId,
+      model: model.trim(),
+      messages: returnedSessionId
+        ? [{ role: "user", content }]
+        : [
+            ...durableHistory.map(({ role, content: historyContent }) => ({ role, content: historyContent })),
+            { role: "user", content },
+          ],
+      includeKnowledge: wantsKnowledge,
+      allowCloudKnowledge,
+      toolsEnabled: wantsTools,
+      allowCloudToolResults,
+    };
 
     try {
-      const response = await api.streamChat({
-        providerId: selectedProvider.id,
-        engagementId: engagement.id,
-        sessionId: returnedSessionId,
-        model: model.trim(),
-        messages: returnedSessionId
-          ? [{ role: "user", content }]
-          : [
-              ...durableHistory.map(({ role, content: historyContent }) => ({ role, content: historyContent })),
-              { role: "user", content },
-            ],
-        includeKnowledge: wantsKnowledge,
-        allowCloudKnowledge,
-      }, (streamEvent) => {
-        if (streamEvent.type === "started") {
-          returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
-          if (streamEvent.sessionId) setSessionId(streamEvent.sessionId);
-        }
-        if (streamEvent.type === "delta" && streamEvent.delta) {
-          setMessages((current) => current.map((message) => message.id === assistantId
-            ? { ...message, content: message.content + streamEvent.delta }
-            : message));
-        }
-        if (streamEvent.type === "done") {
-          returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
-          setMessages((current) => current.map((message) => {
-            if (message.id === userId) return { ...message, durable: true };
-            if (message.id !== assistantId) return message;
-            return {
-              ...message,
-              id: streamEvent.message.id ?? message.id,
-              content: streamEvent.message.content,
-              citations: streamEvent.citations,
-              usage: streamEvent.usage,
-              state: "complete",
-              durable: Boolean(streamEvent.message.id),
-            };
-          }));
-        }
-        if (streamEvent.type === "error") setChatError(streamEvent.detail);
+      const response = await api.streamChat(chatRequest, (streamEvent) => {
+        if (streamEvent.type === "started") returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
+        if (streamEvent.type === "done") returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
+        applyChatEvent(streamEvent, assistantId, userId, chatRequest);
       }, controller.signal);
-      returnedSessionId = response.sessionId ?? returnedSessionId;
-      if (returnedSessionId) {
+      returnedSessionId = response?.sessionId ?? returnedSessionId;
+      if (response && returnedSessionId) {
         await refreshSessions(returnedSessionId);
         setContextLoading(true);
         try {
@@ -402,6 +592,69 @@ export function SessionsPage() {
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = undefined;
+      setSending(false);
+    }
+  };
+
+  const decideInlineApproval = async (decision: "approve" | "edit" | "reject" | "stop") => {
+    if (!pendingResponse || !api) return;
+    const approvalId = typeof pendingResponse.approval.id === "string"
+      ? pendingResponse.approval.id
+      : undefined;
+    if (!approvalId) {
+      setChatError("The pending approval is missing its durable ID.");
+      return;
+    }
+    try {
+      let editedArguments: Record<string, unknown> | undefined;
+      if (decision === "edit") {
+        const exact = pendingResponse.approval.exact_request;
+        const current = exact && typeof exact === "object" && "arguments" in exact
+          ? (exact as Record<string, unknown>).arguments
+          : {};
+        const edited = globalThis.prompt(
+          "Edit the exact JSON arguments before approval",
+          JSON.stringify(current ?? {}, null, 2),
+        );
+        if (edited === null) return;
+        const parsed: unknown = JSON.parse(edited);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("Edited arguments must be one JSON object.");
+        }
+        editedArguments = parsed as Record<string, unknown>;
+      }
+      await resolveApproval(approvalId, {
+        decision: decision === "edit" ? "approve" : decision,
+        editedArguments,
+      });
+      if (decision === "stop") {
+        setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
+        ? { ...message, state: "cancelled", detail: "Response stopped by the operator." }
+          : message));
+        setPendingResponse(undefined);
+        return;
+      }
+      setSending(true);
+      setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
+        ? { ...message, state: "streaming" }
+        : message));
+      const response = await api.resumeChatTurn(
+        pendingResponse.turnId,
+        pendingResponse.request,
+        (streamEvent) => applyChatEvent(
+          streamEvent,
+          pendingResponse.assistantId,
+          pendingResponse.userId,
+          pendingResponse.request,
+        ),
+      );
+      if (response?.sessionId) {
+        await refreshSessions(response.sessionId);
+        setContextStatus(await api.getChatContext(response.sessionId));
+      }
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "Could not resume the response.");
+    } finally {
       setSending(false);
     }
   };
@@ -464,6 +717,7 @@ export function SessionsPage() {
                 <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label>
                 <label><span>Model</span><input aria-label="Chat model" value={model} disabled={sending || Boolean(sessionId)} list="chat-models" placeholder="Exact model ID" onChange={(event) => setModel(event.target.value)} /><datalist id="chat-models">{selectedProvider?.models.map((item) => <option value={item} key={item} />)}</datalist></label>
                 <label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? cloudKnowledgeAllowed ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label>
+                <label className="chat-knowledge-toggle" title={toolboxUnavailableReason}><input type="checkbox" checked={toolsEnabled && canUseTools} disabled={!canUseTools || sending || Boolean(pendingResponse)} onChange={(event) => setToolsEnabled(event.target.checked)} /><span>Toolbox enabled<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"}` : toolboxUnavailableReason}</small></span></label>
               </div>}
               <div className="chat-scroll" ref={scrollRef} aria-live="polite">
                 {previewMode ? <>
@@ -472,15 +726,16 @@ export function SessionsPage() {
                 </> : loadingHistory ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? messages.map((message) => (
                   <article className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`} data-sequence={message.sequence} key={message.id} tabIndex={-1}>
                     <span className="chat-avatar">{message.role === "user" ? "You" : "N"}</span>
-                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.detail && <p className="chat-message-error" role="alert">{message.detail}</p>}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
+                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}</div>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}{message.detail && <p className="chat-message-error" role="alert">{message.detail}</p>}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
                   </article>
-                )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Chat is analysis-only. Commands remain inert fenced text until you choose Run and complete exact review.</p></div>}
+                )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use engagement-assigned Toolbox capabilities when the exact model is verified.</p></div>}
               </div>
+              {pendingResponse && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <p className="chat-error" role="alert">{chatError}</p>}
               <form className="chat-composer" onSubmit={(event) => void submit(event)}>
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <textarea id="analyst-message" value={draft} disabled={previewMode || !engagement || !selectedProvider || loadingHistory} placeholder={previewMode ? "Connect Nebula Core to chat…" : !engagement ? "Create or select an engagement to chat…" : selectedProvider ? "Ask about this engagement…" : "Add and select a provider in Settings…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
-                <footer><span>{includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat · executable tools disabled"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => abortRef.current?.abort()}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><span>{toolsEnabled && canUseTools ? `Toolbox enabled · ${assignedToolCount} assigned` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse) void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
             </div>
           )}
@@ -491,7 +746,7 @@ export function SessionsPage() {
           <dl><div><dt>Active operator</dt><dd>{previewMode ? "Jordan Diaz" : activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat"}</dd></div><div><dt>Provider</dt><dd>{selectedProvider?.name ?? "Not selected"}</dd></div><div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl>
           <section><h3>Working memory</h3>{contextLoading ? <p role="status">Loading working memory…</p> : contextError ? <p role="alert">{contextError}</p> : contextStatus?.status ? <><div className="scope-chip-list"><span>Memory: {contextStatus.status.replace("_", " ")}</span><span>{contextStatus.estimatedInputTokens} / {contextStatus.targetInputTokens} estimated tokens</span></div>{contextStatus.snapshot?.memory ? <div className="empty-state mini"><Braces size={19} /><p>{contextStatus.snapshot.memory.summary}</p><small>Derived through sequence {contextStatus.compactedThrough} · {contextStatus.snapshot.providerId}/{contextStatus.snapshot.model} · {contextStatus.snapshot.usage.totalTokens} compaction tokens · ${contextStatus.snapshot.costUsd.toFixed(4)}</small><div className="scope-chip-list">{contextStatus.snapshot.sourceReferences.filter((source) => source.sequence).slice(0, 8).map((source) => <button aria-label={`Go to transcript message ${source.sequence}`} type="button" key={`${source.sourceId}-${source.sequence}`} onClick={() => { const target = document.querySelector<HTMLElement>(`[data-sequence="${source.sequence}"]`); target?.scrollIntoView?.({ behavior: "smooth", block: "center" }); target?.focus(); }}>Message #{source.sequence}</button>)}</div></div> : contextStatus.status === "failed" ? <p role="alert">Context compaction failed. Retry with the configured provider before continuing this conversation.</p> : <p>{contextStatus.status === "stale" ? "Working memory is stale and will refresh before the next answer that requires compaction." : "Compaction has not been needed for this conversation."}</p>}</> : <p>Select a saved conversation to inspect its working memory.</p>}</section>
           <section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"}</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section>
-          <section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>Chat has no tools. A completed, persisted supported fence can be copied or separately reviewed for a disposable container.</p></div></section>
+          <section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>{toolsEnabled && canUseTools ? `${assignedToolCount} assigned capabilities run sequentially through the scoped broker; approvals pause this response.` : toolboxUnavailableReason ?? "Toolbox is disabled for this session."}</p></div></section>
           <section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Derived memory is not evidence. Citations still identify canonical ingested chunks and transcript messages.</p></div></section>
         </aside>}
       </div>

@@ -10,12 +10,23 @@ from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     Engagement,
     ProviderProfile,
     RiskClass,
+    ToolCallOrigin,
     utc_now,
 )
-from nebula.v3.providers import OpenAICompatibleProvider, ProviderFlavor, ProviderHealth
+from nebula.v3.providers import (
+    ModelResponse,
+    OpenAICompatibleProvider,
+    ProviderFlavor,
+    ProviderHealth,
+    ToolCall,
+    ToolChoice,
+)
 from nebula.v3.storage import NebulaStore
 from nebula.v3.version import __version__
 
@@ -98,6 +109,121 @@ def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
         "models": ["security-model"],
         "detail": None,
     }
+
+
+def test_exact_model_capability_probe_persists_and_runtime_edit_reverifies(
+    api, monkeypatch
+):
+    client, store, _ = api
+    profile = store.create(
+        ProviderProfile(
+            name="Lab vLLM",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["coder-model"],
+            metadata={"default_model": "coder-model"},
+        )
+    )
+
+    async def valid_probe(_runtime, request):
+        assert request.model == "coder-model"
+        assert request.tool_choice == ToolChoice.REQUIRED
+        assert len(request.tools) == 1
+        nonce = request.tools[0].input_schema["properties"]["nonce"]["enum"][0]
+        return ModelResponse(
+            provider_id=profile.id,
+            model="coder-model",
+            tool_calls=[
+                ToolCall(
+                    id="probe-call",
+                    name="nebula_capability_probe",
+                    arguments={"nonce": nonce},
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "complete", valid_probe)
+    verified = client.post(
+        f"/api/v1/providers/{profile.id}/capabilities/verify",
+        headers=_auth(),
+        json={"model": "coder-model", "expected_revision": profile.revision},
+    )
+
+    assert verified.status_code == 200
+    assert verified.json()["verification"]["status"] == "verified", verified.json()[
+        "verification"
+    ]["failure_detail"]
+    stored = store.get(ProviderProfile, profile.id)
+    assert stored.tools_verified_for("coder-model") is True
+    assert stored.capabilities.tool_calling is True
+
+    changed = client.patch(
+        f"/api/v1/providers/{profile.id}",
+        headers=_auth(),
+        json={
+            "changes": {
+                "metadata": {
+                    "default_model": "coder-model",
+                    "options": {"timeout_seconds": 30},
+                }
+            },
+            "expected_revision": stored.revision,
+        },
+    )
+
+    assert changed.status_code == 200
+    assert (
+        changed.json()["capability_verifications"]["coder-model"]["status"]
+        == "verified"
+    )
+    assert changed.json()["capabilities"]["tool_calling"] is True
+
+
+def test_chat_origin_approval_decision_does_not_require_an_agent_run(api):
+    client, store, _ = api
+    engagement = Engagement(id="eng-chat-approval", name="Chat approval")
+    session = ChatSession(
+        id="session-chat-approval",
+        engagement_id=engagement.id,
+        title="Approval chat",
+        provider_profile_id="provider-chat",
+        model="model-a",
+    )
+    turn = ChatTurn(
+        id="turn-chat-approval",
+        engagement_id=engagement.id,
+        session_id=session.id,
+        provider_profile_id="provider-chat",
+        model="model-a",
+        status=ChatTurnStatus.WAITING_APPROVAL,
+        tools_enabled=True,
+        approval_id="approval-chat",
+    )
+    approval = Approval(
+        id="approval-chat",
+        engagement_id=engagement.id,
+        run_id=turn.id,
+        origin=ToolCallOrigin.CHAT,
+        chat_session_id=session.id,
+        chat_turn_id=turn.id,
+        risk_class=RiskClass.ACTIVE_SCAN,
+        exact_request={"tool_name": "safe.scan", "arguments": {"target": "host"}},
+        policy_rationale="operator confirmation required",
+        requested_by="chat-assistant",
+    )
+    store.create_many([engagement, session, turn, approval])
+
+    response = client.post(
+        f"/api/v1/approvals/{approval.id}/decision",
+        headers=_auth(),
+        json={"decision": "approve"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["origin"] == "chat"
+    assert response.json()["status"] == "approved"
+    assert store.get(ChatTurn, turn.id).status == ChatTurnStatus.WAITING_APPROVAL
 
 
 def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeypatch):

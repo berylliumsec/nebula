@@ -20,10 +20,12 @@ from .database import (
     RunEventRow,
 )
 from .domain import (
+    ChatTurn,
     ENTITY_MODEL_BY_KIND,
     Entity,
     OperationEvent,
     ToolCall,
+    ToolCallOrigin,
     RunEvent,
     entity_engagement_id,
     utc_now,
@@ -267,10 +269,16 @@ class NebulaStore:
                 )
                 return _row_to_entity(row, ToolCall)
 
+            owner_kind = (
+                ChatTurn.entity_kind if call.origin == ToolCallOrigin.CHAT else "runs"
+            )
             run = (
                 connection.execute(
                     select(EntityRow)
-                    .where(EntityRow.id == call.run_id, EntityRow.kind == "runs")
+                    .where(
+                        EntityRow.id == call.run_id,
+                        EntityRow.kind == owner_kind,
+                    )
                     .with_for_update()
                 )
                 .mappings()
@@ -278,7 +286,7 @@ class NebulaStore:
             )
             if run is None:
                 raise NotFoundError(
-                    f"agent run is required before tool execution: {call.run_id}"
+                    f"tool-call owner is required before execution: {call.run_id}"
                 )
             # PostgreSQL readers do not block on the run row until the
             # ``FOR UPDATE`` statement above. A concurrent reservation may
@@ -301,7 +309,11 @@ class NebulaStore:
                     updated_at=existing["updated_at"],
                 )
                 return _row_to_entity(row, ToolCall)
-            maximum = int(run["payload"].get("budget", {}).get("max_tool_calls", 0))
+            maximum = (
+                int(run["payload"].get("max_tool_calls", 0))
+                if call.origin == ToolCallOrigin.CHAT
+                else int(run["payload"].get("budget", {}).get("max_tool_calls", 0))
+            )
             counter = (
                 connection.execute(
                     select(RunBudgetCounterRow)

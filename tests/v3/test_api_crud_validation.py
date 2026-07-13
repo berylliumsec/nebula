@@ -335,16 +335,22 @@ def test_provider_patch_validates_candidate_after_revision_check(api):
     invalid = client.patch(
         f"/api/v1/providers/{profile['id']}",
         headers=_auth(),
-        json={"changes": {"provider_type": "unknown"}, "expected_revision": 1},
+        json={
+            "changes": {"provider_type": "unknown"},
+            "expected_revision": profile["revision"],
+        },
     )
     assert invalid.status_code == 422
     valid = client.patch(
         f"/api/v1/providers/{profile['id']}",
         headers=_auth(),
-        json={"changes": {"name": "Renamed"}, "expected_revision": 1},
+        json={
+            "changes": {"name": "Renamed"},
+            "expected_revision": profile["revision"],
+        },
     )
     assert valid.status_code == 200
-    assert valid.json()["revision"] == 2
+    assert valid.json()["revision"] == profile["revision"] + 1
     stale_invalid = client.patch(
         f"/api/v1/providers/{profile['id']}",
         headers=_auth(),
@@ -355,7 +361,7 @@ def test_provider_patch_validates_candidate_after_revision_check(api):
     replacement["provider_type"] = "unknown"
     invalid_replace = client.put(
         f"/api/v1/providers/{profile['id']}",
-        headers={**_auth(), "If-Match": "2"},
+        headers={**_auth(), "If-Match": str(valid.json()["revision"])},
         json=replacement,
     )
     assert invalid_replace.status_code == 422
