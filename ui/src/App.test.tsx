@@ -131,6 +131,12 @@ describe("Nebula workspace", () => {
           { ...entity, id: "run-newest", engagement_id: "engagement-first", objective: "Live mission", status: "running", updated_at: "2026-07-12T12:00:00Z", metadata: {} },
         ]), { status: 200 });
       }
+      if (url.pathname.endsWith("/runs/run-newest/context")) {
+        return new Response(JSON.stringify({
+          owner_type: "agent_run", owner_id: "run-newest", status: "ready", context_window: 8192, max_output_tokens: 2048, target_input_tokens: 4608, estimated_input_tokens: 5000, compacted_through: 4,
+          snapshot: { ...entity, id: "snapshot-run", owner_type: "agent_run", owner_id: "run-newest", version: 1, status: "ready", compacted_through: 4, memory: { summary: "Dependency results retained for synthesis.", confirmed_facts: [], decisions: [], constraints: [], corrections: [], open_questions: [], evidence_ids: ["evidence-1"], artifact_ids: [] }, source_references: [{ source_kind: "task_result", source_id: "task-1" }], provider_profile_id: "provider-1", model: "model-1", prompt_version: "nebula-context-v1", usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 }, cost_usd: 0.001 },
+        }), { status: 200 });
+      }
       if (url.pathname.endsWith("/approvals")) {
         return new Response(JSON.stringify([{ ...entity, id: "approval-first", engagement_id: "engagement-first", run_id: "run-first", status: "pending", risk_class: "active_scan", exact_request: { tool_name: "scan.tcp", arguments: { ports: [443] } }, policy_rationale: "Active scan approval", requested_by: "network-specialist", requested_at: entity.created_at, expected_effects: ["Probe the target"] }]), { status: 200 });
       }
@@ -138,6 +144,7 @@ describe("Nebula workspace", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("WebSocket", OnlineWebSocket);
+    const user = userEvent.setup();
 
     renderApp();
 
@@ -154,6 +161,9 @@ describe("Nebula workspace", () => {
       expect.stringContaining("/api/v1/findings?engagement_id=engagement-first"),
       expect.stringMatching(/\/api\/v1\/providers\?limit=1000&offset=0$/),
     ]));
+    await user.click(screen.getByRole("link", { name: "Missions" }));
+    expect(await screen.findByText("Dependency results retained for synthesis.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open task result task-1" })).toHaveAttribute("href", "/missions?task=task-1");
   });
 
   it("streams analyst chat with explicit provider/model selection and cloud knowledge consent", async () => {
@@ -235,6 +245,63 @@ describe("Nebula workspace", () => {
       allow_cloud_knowledge: true,
       messages: [{ role: "user", content: "Review the scope" }],
     });
+  });
+
+  it("inspects chat working memory and navigates provenance by keyboard", async () => {
+    const entity = {
+      created_at: "2026-07-12T10:00:00Z",
+      updated_at: "2026-07-12T11:00:00Z",
+      revision: 1,
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Memory review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/providers")) return new Response(JSON.stringify([{ ...entity, id: "provider-1", name: "Local analyst", provider_type: "vllm", endpoint: null, enabled: true, is_local: true, secret_ref: null, model_allowlist: ["model-1"], capabilities: { streaming: true }, privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "model-1" } }]), { status: 200 });
+      if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify([{ ...entity, id: "session-1", engagement_id: "engagement-1", title: "Saved context", provider_profile_id: "provider-1", model: "model-1", metadata: { message_count: 2 } }]), { status: 200 });
+      if (path.endsWith("/chat/sessions/session-1/messages")) return new Response(JSON.stringify([
+        { ...entity, id: "message-1", engagement_id: "engagement-1", session_id: "session-1", sequence: 1, role: "user", content: "Use port 8443", citations: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
+        { ...entity, id: "message-2", engagement_id: "engagement-1", session_id: "session-1", sequence: 2, role: "assistant", content: "Port retained", citations: [], usage: { input_tokens: 2, output_tokens: 2, total_tokens: 4 } },
+      ]), { status: 200 });
+      if (path.endsWith("/chat/sessions/session-1/context")) return new Response(JSON.stringify({
+        owner_type: "chat_session",
+        owner_id: "session-1",
+        status: "ready",
+        context_window: 8192,
+        max_output_tokens: 2048,
+        target_input_tokens: 4608,
+        estimated_input_tokens: 4700,
+        compacted_through: 1,
+        snapshot: {
+          ...entity,
+          id: "snapshot-1",
+          owner_type: "chat_session",
+          owner_id: "session-1",
+          version: 1,
+          status: "ready",
+          compacted_through: 1,
+          memory: { summary: "The selected service uses port 8443.", confirmed_facts: [], decisions: [], constraints: [], corrections: [], open_questions: [], evidence_ids: [], artifact_ids: [] },
+          source_references: [{ source_kind: "chat_message", source_id: "message-1", sequence: 1 }],
+          provider_profile_id: "provider-1",
+          model: "model-1",
+          prompt_version: "nebula-context-v1",
+          usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16 },
+          cost_usd: 0,
+        },
+      }), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions");
+
+    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }));
+    await user.click(await screen.findByRole("button", { name: /Saved context/ }));
+    expect(await screen.findByText("The selected service uses port 8443.")).toBeVisible();
+    const source = screen.getByRole("button", { name: "Go to transcript message 1" });
+    source.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("Use port 8443").closest("article")).toHaveFocus();
   });
 
   it("creates and activates a new engagement from the switcher", async () => {
@@ -380,13 +447,15 @@ describe("Nebula workspace", () => {
     await user.selectOptions(within(dialog).getByLabelText("Provider type"), "vertex");
     await user.type(within(dialog).getByLabelText("Endpoint"), "https://us-central1-aiplatform.googleapis.com");
     await user.type(within(dialog).getByLabelText("Default model"), "gemini-2.5-pro");
+    await user.type(within(dialog).getByLabelText("Context window (tokens)"), "16000");
+    await user.type(within(dialog).getByLabelText("Maximum output tokens"), "1000");
     await user.type(within(dialog).getByLabelText("Google Cloud project"), "security-project");
     await user.type(within(dialog).getByLabelText("Vertex location"), "us-central1");
     await user.click(within(dialog).getByRole("button", { name: "Add provider" }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/providers") && init?.method === "POST")).toBe(true));
     const createCall = fetchMock.mock.calls.find(([input, init]) => new URL(String(input)).pathname.endsWith("/providers") && init?.method === "POST");
-    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ provider_type: "vertex", metadata: { options: { project: "security-project", location: "us-central1" } } });
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ provider_type: "vertex", metadata: { options: { project: "security-project", location: "us-central1", context_window: 16000, max_output_tokens: 1000 } } });
   });
 
   it("records a manual finding as an asset-linked, unverified candidate", async () => {

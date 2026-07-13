@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -6,6 +7,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from nebula.v3.domain import (
     AgentRun,
     Approval,
+    ContextOwnerType,
+    ContextSnapshot,
+    Engagement,
+    ProviderProfile,
     RiskClass,
     RunBudget,
     RunStatus,
@@ -17,9 +22,20 @@ from nebula.v3.orchestration import (
     MissionError,
     MissionPlan,
     MissionRuntime,
+    ModelSpecialist,
     PlannedTask,
     SpecialistResult,
     SpecialistRole,
+)
+from nebula.v3.providers import (
+    ModelCapabilities,
+    ModelProvider,
+    ModelRequest,
+    ModelResponse,
+    ModelUsage,
+    ProviderConfig,
+    ProviderHealth,
+    ProviderKind,
 )
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import ApprovalRequired
@@ -79,6 +95,43 @@ class ApprovalSpecialist:
                 )
             )
         return SpecialistResult(summary="approved scan analyzed")
+
+
+class CompactingMissionProvider(ModelProvider):
+    def __init__(self) -> None:
+        super().__init__(
+            ProviderConfig(
+                id="provider-a",
+                kind=ProviderKind.OPENAI_COMPATIBLE,
+                base_url="http://127.0.0.1:8000/v1",
+                default_model="model-a",
+                model_allowlist=["model-a"],
+                local=True,
+                capabilities=ModelCapabilities(),
+            )
+        )
+        self.requests: list[ModelRequest] = []
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        if request.metadata.get("operation") == "context_compaction":
+            text = json.dumps(
+                {"summary": "Scope result compacted with canonical provenance."}
+            )
+        elif request.metadata.get("task_id") == "planning":
+            text = "scope-result " * 180
+        else:
+            text = "report drafted from compacted dependency context"
+        return ModelResponse(
+            provider_id=self.config.id,
+            model="model-a",
+            text=text,
+            usage=ModelUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+            finish_reason="stop",
+        )
+
+    async def health(self) -> ProviderHealth:
+        return ProviderHealth(provider_id=self.config.id, healthy=True)
 
 
 def _runtime(tmp_path, supervisor, specialists):
@@ -166,6 +219,186 @@ def test_in_memory_mission_respects_dependencies_and_verifies_evidence(tmp_path)
         "task.verified",
         "run.completed",
     ]
+
+
+def test_mission_compacts_only_model_facing_dependency_context_and_charges_usage(
+    tmp_path,
+):
+    store = NebulaStore(tmp_path / "mission-context.db")
+    engagement = store.create(Engagement(id="engagement-1", name="Compaction"))
+    store.create(
+        ProviderProfile(
+            id="provider-a",
+            name="Local model",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            metadata={
+                "default_model": "model-a",
+                "options": {"context_window": 600, "max_output_tokens": 100},
+            },
+        )
+    )
+    planning = PlannedTask(
+        id="planning",
+        role=SpecialistRole.SCOPE_PLANNING,
+        title="Review scope",
+        instructions="Produce a detailed bounded scope result",
+    )
+    reporting = PlannedTask(
+        id="reporting",
+        role=SpecialistRole.REPORTING_REMEDIATION,
+        title="Report",
+        instructions="Use the prior scope result",
+        depends_on=[planning.id],
+    )
+    provider = CompactingMissionProvider()
+    runtime = MissionRuntime(
+        store=store,
+        checkpointer=InMemorySaver(),
+        supervisor=PlannedSupervisor(
+            MissionPlan(
+                summary="Compaction mission",
+                rationale="Exercise bounded dependency context",
+                tasks=[planning, reporting],
+            )
+        ),
+        specialists={
+            SpecialistRole.SCOPE_PLANNING: ModelSpecialist(
+                provider,
+                role=SpecialistRole.SCOPE_PLANNING,
+                model="model-a",
+                max_output_tokens=100,
+            ),
+            SpecialistRole.REPORTING_REMEDIATION: ModelSpecialist(
+                provider,
+                role=SpecialistRole.REPORTING_REMEDIATION,
+                model="model-a",
+                max_output_tokens=100,
+            ),
+        },
+    )
+
+    state = asyncio.run(
+        runtime.start(
+            engagement_id=engagement.id,
+            objective="Produce a bounded report",
+            budget=RunBudget(max_tokens=2_000, max_tool_calls=0),
+            provider_id=provider.config.id,
+            model="model-a",
+        )
+    )
+
+    compaction_requests = [
+        request
+        for request in provider.requests
+        if request.metadata.get("operation") == "context_compaction"
+    ]
+    report_request = next(
+        request
+        for request in provider.requests
+        if request.metadata.get("task_id") == reporting.id
+    )
+    assert compaction_requests
+    assert "DERIVED WORKING MEMORY" in str(report_request.messages[0].content)
+    assert state["input_tokens"] + state["output_tokens"] == 30 + 15 * len(
+        compaction_requests
+    )
+    assert state["results"][planning.id]["summary"].startswith("scope-result")
+    assert store.get(AgentRun, state["run_id"]).status == RunStatus.COMPLETE
+    snapshot = store.list_entities(
+        ContextSnapshot, engagement_id=engagement.id, limit=100
+    )[0]
+    assert snapshot.owner_type == ContextOwnerType.AGENT_RUN
+    assert snapshot.source_references[0].source_id == planning.id
+    event_types = [event.event_type for event in store.replay_events(state["run_id"])]
+    assert "context.compaction_started" in event_types
+    assert "context.compacted" in event_types
+
+
+def test_mission_rejects_compaction_before_call_when_budget_is_insufficient(
+    tmp_path,
+):
+    store = NebulaStore(tmp_path / "mission-context-budget.db")
+    engagement = store.create(Engagement(id="engagement-1", name="Compaction"))
+    store.create(
+        ProviderProfile(
+            id="provider-a",
+            name="Local model",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            metadata={
+                "default_model": "model-a",
+                "options": {"context_window": 600, "max_output_tokens": 100},
+            },
+        )
+    )
+    planning = PlannedTask(
+        id="planning",
+        role=SpecialistRole.SCOPE_PLANNING,
+        title="Review scope",
+        instructions="Produce a detailed bounded scope result",
+    )
+    reporting = PlannedTask(
+        id="reporting",
+        role=SpecialistRole.REPORTING_REMEDIATION,
+        title="Report",
+        instructions="Use the prior scope result",
+        depends_on=[planning.id],
+    )
+    provider = CompactingMissionProvider()
+    runtime = MissionRuntime(
+        store=store,
+        checkpointer=InMemorySaver(),
+        supervisor=PlannedSupervisor(
+            MissionPlan(
+                summary="Compaction budget mission",
+                rationale="Reject before spending beyond the cap",
+                tasks=[planning, reporting],
+            )
+        ),
+        specialists={
+            SpecialistRole.SCOPE_PLANNING: ModelSpecialist(
+                provider,
+                role=SpecialistRole.SCOPE_PLANNING,
+                model="model-a",
+                max_output_tokens=100,
+            ),
+            SpecialistRole.REPORTING_REMEDIATION: ModelSpecialist(
+                provider,
+                role=SpecialistRole.REPORTING_REMEDIATION,
+                model="model-a",
+                max_output_tokens=100,
+            ),
+        },
+    )
+
+    state = asyncio.run(
+        runtime.start(
+            engagement_id=engagement.id,
+            objective="Produce a bounded report",
+            budget=RunBudget(
+                max_tokens=120,
+                max_tool_calls=0,
+                max_retries=0,
+            ),
+            provider_id=provider.config.id,
+            model="model-a",
+        )
+    )
+
+    assert not [
+        request
+        for request in provider.requests
+        if request.metadata.get("operation") == "context_compaction"
+    ]
+    assert state["task_status"][reporting.id] == TaskStatus.FAILED.value
+    assert "insufficient mission token budget" in state["errors"][reporting.id]
+    assert state["input_tokens"] + state["output_tokens"] == 15
+    event_types = [event.event_type for event in store.replay_events(state["run_id"])]
+    assert "context.compaction_started" in event_types
+    assert "context.compaction_failed" in event_types
 
 
 def test_approval_checkpoint_resumes_same_attempt_with_zero_retries(tmp_path):
