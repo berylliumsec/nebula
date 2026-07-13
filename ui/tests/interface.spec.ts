@@ -255,7 +255,7 @@ for (const theme of ["light", "dark", "high-contrast"] as const) {
   test(`critical workspaces meet automated accessibility checks in ${theme} mode`, async ({ page }) => {
     await openPreview(page, "/", "Good afternoon, Jordan");
     await page.evaluate((value) => localStorage.setItem("nebula.theme", value), theme);
-    for (const [, route, heading] of workspaces) {
+    for (const [, route, heading] of responsiveWorkspaces) {
       await openPreview(page, route, heading);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();

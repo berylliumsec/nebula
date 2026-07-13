@@ -47,6 +47,7 @@ export function OverviewPage() {
   const missionTitle = previewMode ? "External attack surface review" : run?.title;
   const missionStatus = previewMode ? "running" : run?.status.replace("_", " ");
   const priorityFinding = findings.find((finding) => finding.severity === "critical") ?? findings[0];
+  const hasCoverage = previewMode || assets.length > 0 || findings.length > 0 || events.length > 0 || approvals.length > 0;
   return (
     <div className="page overview-page">
       <PageHeader
@@ -90,7 +91,7 @@ export function OverviewPage() {
         </article>
         <article className="metric-card accent-violet">
           <span className="metric-icon"><Bot size={19} /></span>
-          <div><small>Mission</small><strong>{missionStatus ?? "—"}</strong><span>{missionTitle ?? "No active run"}</span></div>
+          <div><small>Mission</small><strong>{missionStatus ?? "—"}</strong><span title={missionTitle ?? "No active run"}>{missionTitle ?? "No active run"}</span></div>
         </article>
         <article className="metric-card accent-red">
           <span className="metric-icon"><FileCheck2 size={19} /></span>
@@ -103,12 +104,12 @@ export function OverviewPage() {
       </section>
 
       <div className="overview-grid">
-        <section className="panel mission-panel">
+        <section className={`panel mission-panel${!previewMode && events.length === 0 ? " is-empty" : ""}`}>
           <header className="panel-header">
             <div>
               {missionStatus && <span className="section-kicker"><span className="pulse-dot" /> {missionStatus}</span>}
               <h2>{missionTitle ?? "No active mission"}</h2>
-              <p>{run?.startedAt ? `Started ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(run.startedAt))}` : previewMode ? "Supervised preview" : "Start a supervised analysis when you’re ready."}</p>
+              <p>{run?.startedAt ? `Started ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(run.startedAt))}` : previewMode ? "Supervised preview" : run ? "Mission status from Core" : "Start a supervised analysis when you’re ready."}</p>
             </div>
             <div className="panel-header-actions">
               {run && <StopMissionButton className="button quiet" />}
@@ -170,7 +171,7 @@ export function OverviewPage() {
               <p>{priorityFinding.evidenceCount} evidence record{priorityFinding.evidenceCount === 1 ? "" : "s"} · {priorityFinding.status.replace("_", " ")}</p>
               <Link to="/findings">Review finding <ArrowUpRight size={14} /></Link>
             </div>
-          ) : <div className="priority-finding"><strong>No findings recorded</strong><p>Candidate and verified findings will appear here.</p></div>}
+          ) : <div className="priority-finding empty"><strong>No findings recorded</strong><p>Candidate and verified findings will appear here.</p></div>}
         </section>
 
         <section className="panel coverage-panel">
@@ -178,7 +179,7 @@ export function OverviewPage() {
             <div><h2>Assessment coverage</h2><p>Deterministic progress by surface</p></div>
             <ScanSearch size={19} aria-hidden="true" />
           </header>
-          <div className="coverage-list">
+          {hasCoverage ? <div className="coverage-list">
             {(previewMode ? [
               ["External discovery", 92, "31 / 34 assets"],
               ["Service analysis", 67, "24 / 36 services"],
@@ -196,7 +197,7 @@ export function OverviewPage() {
                 <strong>{value}%</strong>
               </div>
             ))}
-          </div>
+          </div> : <div className="coverage-empty"><strong>Waiting for mission records</strong><span>Coverage appears as Core records activity.</span></div>}
         </section>
 
         <section className="panel policy-panel">

@@ -149,7 +149,7 @@ describe("Nebula workspace", () => {
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "Live engagement" })).toBeVisible();
-    const emptyActivity = screen.getByText("No mission activity", { exact: true }).closest(".mission-events-empty");
+    const emptyActivity = screen.getByText("No mission activity", { exact: true }).closest(".mission-events-empty") as HTMLElement | null;
     expect(emptyActivity).not.toBeNull();
     expect(within(emptyActivity!).getByText("Events appear after Core records a transition.", { exact: true })).toBeVisible();
     expect(emptyActivity!.closest("li")).toBeNull();

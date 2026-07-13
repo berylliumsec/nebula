@@ -24,13 +24,13 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 ];
 
 const settingsSections = [
-  ["general-settings", "General"],
-  ["provider-settings", "Models"],
-  ["tool-pack-settings", "Tools"],
-  ["runtime-settings", "Runners"],
-  ["engagement-policy-settings", "Policy"],
-  ["operator-settings", "People"],
-  ["security-settings", "Privacy"],
+  ["general-settings", "General", "General"],
+  ["provider-settings", "Models", "AI Providers"],
+  ["tool-pack-settings", "Tools", "Toolbox"],
+  ["runtime-settings", "Runners", "Runners"],
+  ["engagement-policy-settings", "Policy", "Engagement Policy"],
+  ["operator-settings", "People", "Operators"],
+  ["security-settings", "Privacy", "Privacy & Security"],
 ] as const;
 
 type SettingsSection = typeof settingsSections[number][0];
@@ -380,7 +380,7 @@ export function SettingsPage() {
     <div className="page settings-page">
       <PageHeader title="Settings" description="Workspace preferences." />
       <div className="settings-workspace">
-      <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label]) => <a className={settingsSection === id ? "active" : undefined} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); window.history.replaceState(null, "", `#${id}`); setSettingsSection(id); }}>{label}</a>)}</nav>
+      <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); window.history.replaceState(null, "", `#${id}`); setSettingsSection(id); }}>{label}</a>)}</nav>
       <div className="settings-detail" data-section={settingsSection}>
       <section className="settings-section" id="provider-settings">
         <div className="section-heading"><div><h2>Model providers</h2><p>Configured provider profiles and their declared capabilities.</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
