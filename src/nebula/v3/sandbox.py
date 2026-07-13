@@ -14,6 +14,7 @@ import re
 import signal
 import struct
 import termios
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -998,8 +999,15 @@ class ContainerSandboxRunner(SandboxRunner):
                 raise SandboxError(
                     "workspace is outside the configured workspace roots"
                 )
-        if not self.allow_unpinned_images and not re.fullmatch(
-            r"[^\s@]+@sha256:[0-9a-f]{64}", request.image
+        repository_digest = re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", request.image)
+        local_image_id = re.fullmatch(r"sha256:[0-9a-f]{64}", request.image)
+        if (
+            not self.allow_unpinned_images
+            and repository_digest is None
+            and not (
+                request.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL
+                and local_image_id is not None
+            )
         ):
             raise SandboxError("sandbox images must be pinned by sha256 digest")
         if request.network_name is not None:
@@ -1360,16 +1368,26 @@ class ContainerSandboxRunner(SandboxRunner):
 @dataclass(frozen=True)
 class PreparedContainerImage:
     source_reference: str
+    base_resolved_reference: str
+    base_digest: str
     resolved_reference: str
     digest: str
     platform: Literal["linux/amd64", "linux/arm64"]
     configured_user: str
+    installed_packages: tuple[str, ...]
     refreshed: bool
     detail: str
 
 
 class ContainerImagePreparer:
-    """Pull one allowlisted mutable source and resolve it to a local digest."""
+    """Verify official Kali and prepare a pinned local headless-tool image."""
+
+    _derived_repository = "localhost/nebula-kali-headless"
+    _recipe_version = "v1"
+    _installed_packages = ("kali-linux-headless", "iputils-ping")
+    _base_label = "org.nebula.human-terminal.base"
+    _profile_label = "org.nebula.human-terminal.profile"
+    _recipe_label = "org.nebula.human-terminal.recipe"
 
     def __init__(
         self,
@@ -1379,6 +1397,7 @@ class ContainerImagePreparer:
         source_reference: str,
         expected_repository: str,
         pull_timeout_seconds: int = 900,
+        build_timeout_seconds: int = 3600,
     ) -> None:
         if platform not in {"linux/amd64", "linux/arm64"}:
             raise ValueError(
@@ -1386,6 +1405,8 @@ class ContainerImagePreparer:
             )
         if pull_timeout_seconds < 1 or pull_timeout_seconds > 3600:
             raise ValueError("pull timeout must be between 1 and 3600 seconds")
+        if build_timeout_seconds < 1 or build_timeout_seconds > 7200:
+            raise ValueError("build timeout must be between 1 and 7200 seconds")
         if runner.profile is None:
             raise ValueError("container image preparation requires an explicit runner")
         if not re.fullmatch(
@@ -1404,6 +1425,7 @@ class ContainerImagePreparer:
         self.source_reference = source_reference
         self.expected_repository = expected_repository
         self.pull_timeout_seconds = pull_timeout_seconds
+        self.build_timeout_seconds = build_timeout_seconds
 
     async def prepare(self) -> PreparedContainerImage:
         available, detail = await self.runner.available()
@@ -1480,24 +1502,151 @@ class ContainerImagePreparer:
             raise SandboxUnavailable(
                 f"Kali image platform mismatch: expected {self.platform}, observed {observed_platform}"
             )
-        config = _mapping_get(document, "Config", "config")
+        base_resolved_reference = f"{self.expected_repository}@{digest}"
+        derived_tag = (
+            f"{self._derived_repository}:"
+            f"{self._recipe_version}-{digest.removeprefix('sha256:')}"
+        )
+        build_detail: str | None = None
+        built = False
+        try:
+            stdout, stderr, return_code = await self._build_derived_image(
+                base_resolved_reference,
+                derived_tag,
+            )
+            if return_code == 0:
+                built = True
+            else:
+                build_detail = (stderr.strip() or stdout.strip() or str(return_code))[
+                    -1000:
+                ]
+        except (OSError, SandboxError) as exc:
+            build_detail = str(exc)[-1000:]
+
+        (
+            derived_stdout,
+            derived_stderr,
+            derived_return_code,
+        ) = await self._runtime_command(
+            "image",
+            "inspect",
+            derived_tag,
+            "--format",
+            "{{json .}}",
+            timeout_seconds=30,
+        )
+        if derived_return_code != 0:
+            inspect_detail = (
+                derived_stderr.strip()
+                or derived_stdout.strip()
+                or str(derived_return_code)
+            )[-1000:]
+            if build_detail:
+                raise SandboxUnavailable(
+                    "Kali headless tool image build failed "
+                    f"({build_detail}); no verified cached tool image is available "
+                    f"({inspect_detail})"
+                )
+            raise SandboxUnavailable(
+                f"prepared Kali headless tool image could not be inspected: {inspect_detail}"
+            )
+        try:
+            derived_document = _first_document(json.loads(derived_stdout))
+        except json.JSONDecodeError as exc:
+            raise SandboxUnavailable(
+                "Kali headless tool image inspection returned invalid JSON"
+            ) from exc
+
+        image_id = str(_mapping_get(derived_document, "Id", "ID", "id")).lower()
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            raise SandboxUnavailable(
+                "runtime returned an invalid Kali headless tool image ID"
+            )
+        derived_os = str(_mapping_get(derived_document, "Os", "OS", "os")).lower()
+        derived_architecture = str(
+            _mapping_get(derived_document, "Architecture", "architecture", "Arch")
+        ).lower()
+        derived_platform = f"{derived_os}/{derived_architecture}"
+        if derived_platform != self.platform:
+            raise SandboxUnavailable(
+                "Kali headless tool image platform mismatch: "
+                f"expected {self.platform}, observed {derived_platform}"
+            )
+        config = _mapping_get(derived_document, "Config", "config")
+        labels = _mapping_get(config, "Labels", "labels")
+        if not isinstance(labels, dict):
+            labels = _mapping_get(derived_document, "Labels", "labels")
+        if not isinstance(labels, dict) or (
+            labels.get(self._base_label) != base_resolved_reference
+            or labels.get(self._profile_label) != "kali-linux-headless"
+            or labels.get(self._recipe_label) != self._recipe_version
+        ):
+            raise SandboxUnavailable(
+                "runtime did not prove the Kali headless tool image build recipe"
+            )
         user = _mapping_get(config, "User", "user")
         return PreparedContainerImage(
             source_reference=self.source_reference,
-            resolved_reference=f"{self.expected_repository}@{digest}",
-            digest=digest,
+            base_resolved_reference=base_resolved_reference,
+            base_digest=digest,
+            resolved_reference=image_id,
+            digest=image_id,
             platform=self.platform,
             # Docker and Podman may omit Config.User when the image uses the
             # OCI default user. The human terminal always supplies
             # --user=0:0 explicitly, so this metadata is informational only.
             configured_user=user if isinstance(user, str) else "",
+            installed_packages=self._installed_packages,
             refreshed=refreshed,
             detail=(
-                "pulled and verified the latest official Kali image"
+                "pulled and verified the latest official Kali image; "
+                + (
+                    "prepared the cached kali-linux-headless tool image"
+                    if built
+                    else "using the verified cached kali-linux-headless tool image "
+                    f"after rebuild failed: {build_detail}"
+                )
                 if refreshed
-                else f"using a verified cached Kali image after refresh failed: {pull_detail}"
+                else "using a verified cached official Kali image after refresh failed: "
+                f"{pull_detail}; "
+                + (
+                    "prepared the cached kali-linux-headless tool image"
+                    if built
+                    else "using the verified cached kali-linux-headless tool image "
+                    f"after rebuild failed: {build_detail}"
+                )
             ),
         )
+
+    async def _build_derived_image(
+        self,
+        base_resolved_reference: str,
+        derived_tag: str,
+    ) -> tuple[str, str, int]:
+        dockerfile = f"""FROM {base_resolved_reference}
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \\
+ && apt-get install -y {" ".join(self._installed_packages)} \\
+ && printf '%s\\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-nebula-terminal \\
+ && apt-get clean \\
+ && rm -rf /var/lib/apt/lists/*
+LABEL {self._base_label}={base_resolved_reference}
+LABEL {self._profile_label}=kali-linux-headless
+LABEL {self._recipe_label}={self._recipe_version}
+CMD ["/bin/bash"]
+"""
+        with tempfile.TemporaryDirectory(prefix="nebula-kali-") as directory:
+            context = Path(directory)
+            (context / "Dockerfile").write_text(dockerfile, encoding="utf-8")
+            return await self._runtime_command(
+                "build",
+                f"--platform={self.platform}",
+                "--pull=false",
+                "--quiet",
+                f"--tag={derived_tag}",
+                str(context),
+                timeout_seconds=self.build_timeout_seconds,
+            )
 
     async def _runtime_command(
         self, *arguments: str, timeout_seconds: int

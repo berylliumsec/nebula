@@ -843,8 +843,11 @@ export interface ContainerTerminalRequest {
 
 export interface ContainerTerminalRuntimeSnapshot {
   sourceImage: string;
+  baseImage: string;
+  baseImageDigest: string;
   image: string;
   imageDigest: string;
+  installedPackages: string[];
   interpreter: string;
   arguments: string[];
   runnerProfileId: Identifier;
@@ -877,6 +880,7 @@ export interface ContainerTerminalCapabilities {
   ready: boolean;
   detail?: string;
   sourceImage: string;
+  installedPackages: string[];
   network: ContainerTerminalNetworkSnapshot;
   security: ContainerTerminalSecuritySnapshot;
   workspace: "/workspace";

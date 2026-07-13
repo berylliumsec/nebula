@@ -112,10 +112,15 @@ class StubTerminalPlatform:
         )
         self.image = PreparedContainerImage(
             source_reference="docker.io/kalilinux/kali-rolling:latest",
-            resolved_reference=("docker.io/kalilinux/kali-rolling@sha256:" + "b" * 64),
-            digest="sha256:" + "b" * 64,
+            base_resolved_reference=(
+                "docker.io/kalilinux/kali-rolling@sha256:" + "b" * 64
+            ),
+            base_digest="sha256:" + "b" * 64,
+            resolved_reference="sha256:" + "c" * 64,
+            digest="sha256:" + "c" * 64,
             platform="linux/amd64",
             configured_user="",
+            installed_packages=("kali-linux-headless", "iputils-ping"),
             refreshed=True,
             detail="pulled and verified the latest official Kali image",
         )
@@ -179,6 +184,10 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     capabilities = service.capabilities(engagement.id)
     assert capabilities.ready is True
     assert capabilities.source_image == "docker.io/kalilinux/kali-rolling:latest"
+    assert capabilities.installed_packages == [
+        "kali-linux-headless",
+        "iputils-ping",
+    ]
     assert capabilities.network.mode == "unrestricted"
     assert capabilities.network.runtime_network == "bridge"
     assert capabilities.security.container_user == "root"
@@ -191,8 +200,11 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     assert preview.allowed is True
     assert preview.runtime is not None
     assert preview.runtime.source_image == capabilities.source_image
+    assert preview.runtime.base_image == platform.image.base_resolved_reference
+    assert preview.runtime.base_image_digest == platform.image.base_digest
     assert preview.runtime.image == platform.image.resolved_reference
     assert preview.runtime.image_digest == platform.image.digest
+    assert preview.runtime.installed_packages == list(platform.image.installed_packages)
     assert preview.runtime.interpreter == "/bin/bash"
     assert preview.runtime.arguments == ["--noprofile", "--norc", "-i"]
     assert preview.network.mode == "unrestricted"
@@ -259,6 +271,11 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     assert all(event.operation_kind == "container_terminal" for event in events)
     pending = events[0].payload
     assert pending["runtime"]["image"] == platform.image.resolved_reference
+    assert pending["runtime"]["base_image"] == platform.image.base_resolved_reference
+    assert pending["runtime"]["installed_packages"] == [
+        "kali-linux-headless",
+        "iputils-ping",
+    ]
     assert pending["network"] == {
         "mode": "unrestricted",
         "published_ports": [],

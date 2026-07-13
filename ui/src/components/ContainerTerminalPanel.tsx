@@ -131,15 +131,16 @@ function LiveContainerTerminal({
 
   return <div className="container-terminal-live">
     <header>
-      <div><span className={`status-dot ${state === "ready" ? "healthy" : state === "error" ? "unavailable" : "warning"}`} /><span><strong>{statusLabel}</strong><small>Unrestricted outbound · root · writable · Kali <code title={runtime.image}>{runtime.imageDigest.slice(0, 19)}…</code></small></span></div>
+      <div><span className={`status-dot ${state === "ready" ? "healthy" : state === "error" ? "unavailable" : "warning"}`} /><span><strong>{statusLabel}</strong><small>Unrestricted outbound · root · writable · Kali headless <code title={`${runtime.image}\nOfficial base: ${runtime.baseImage}`}>{runtime.imageDigest.slice(0, 19)}…</code></small></span></div>
       {exit ? <button className="button secondary" type="button" onClick={onAnother}><RotateCcw size={15} /> New terminal</button> : <button className="button danger" type="button" disabled={state === "closing" || state === "closed"} onClick={() => socketRef.current?.requestClose()}><CircleStop size={15} /> Stop terminal</button>}
     </header>
     <div className="terminal-live-notices">
       {error && <p className="terminal-error" role="alert">{error}</p>}
+      <p>Installed baseline: <code>kali-linux-headless</code> and <code>iputils-ping</code>. The official base is <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code>.</p>
       <p className="terminal-network-warning"><AlertTriangle size={14} /> Bridge networking can reach the public Internet and any host-addressable service. No ports, raw-packet capabilities, host shell, or runtime socket are granted.</p>
     </div>
     <div className="xterm-shell" ref={hostRef} aria-label="Terminal output" />
-    <footer><ShieldCheck size={14} /> System changes and packages disappear when this digest-pinned container closes; only <code>/workspace</code> persists.{exit?.exitCode !== undefined ? ` Exit code ${exit.exitCode}.` : ""}</footer>
+    <footer><ShieldCheck size={14} /> Additional system changes and packages disappear when this content-pinned container closes; the Kali headless baseline and <code>/workspace</code> remain available in new sessions.{exit?.exitCode !== undefined ? ` Exit code ${exit.exitCode}.` : ""}</footer>
   </div>;
 }
 
@@ -204,17 +205,17 @@ export function ContainerTerminalPanel({ api, engagementId, engagementName }: Co
   const status = phase === "checking"
     ? "Checking the verified container runner…"
     : phase === "preparing"
-      ? "Preparing the latest official Kali image…"
-      : "Starting the digest-pinned Kali terminal…";
+      ? "Preparing the Kali headless tool image…"
+      : "Starting the content-pinned Kali terminal…";
 
   return <div className="container-terminal-panel">
     <section className="container-terminal-intro">
       <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
-      <div><small>Kali shell</small><h2>Terminal</h2><p>A fresh official minimal Kali Rolling container starts for <strong>{engagementName}</strong> as root with a writable disposable filesystem and unrestricted outbound networking. It includes no security tools by default; packages installed with <code>apt</code> disappear when the session closes, while <code>/workspace</code> persists.</p></div>
+      <div><small>Kali shell</small><h2>Terminal</h2><p>A fresh Kali Rolling container starts for <strong>{engagementName}</strong> as root with a writable disposable filesystem and unrestricted outbound networking. Nebula derives it from the verified official image with the <code>kali-linux-headless</code> toolset and <code>iputils-ping</code> preinstalled. Additional packages installed with <code>apt</code> disappear when the session closes, while <code>/workspace</code> persists.</p></div>
       <span className="terminal-boundary"><AlertTriangle size={15} /> Root + network</span>
     </section>
     <section className="terminal-auto-start" aria-live="polite">
-      {error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><p className="terminal-error" role="alert">{error}</p><button className="button primary" type="button" onClick={() => setLaunchAttempt((value) => value + 1)}><RotateCcw size={15} /> Retry</button></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><p>Terminal pulls <code>docker.io/kalilinux/kali-rolling:latest</code> once per Core start, verifies it, and launches the resolved digest with no host shell or runtime socket.</p></>}
+      {error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><p className="terminal-error" role="alert">{error}</p><button className="button primary" type="button" onClick={() => setLaunchAttempt((value) => value + 1)}><RotateCcw size={15} /> Retry</button></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><p>Terminal verifies <code>docker.io/kalilinux/kali-rolling:latest</code>, prepares a cached <code>kali-linux-headless</code> tool image, and launches its immutable image ID with no host shell or runtime socket. The first build can take several minutes.</p></>}
     </section>
   </div>;
 }

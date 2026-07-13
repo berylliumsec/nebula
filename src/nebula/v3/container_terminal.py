@@ -85,8 +85,11 @@ class ContainerTerminalStartRequest(ContainerTerminalPreflightRequest):
 
 class ContainerTerminalRuntimeSnapshot(NebulaModel):
     source_image: str = Field(min_length=1, max_length=1_000)
+    base_image: str = Field(min_length=1, max_length=1_000)
+    base_image_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     image: str = Field(min_length=1, max_length=1_000)
     image_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    installed_packages: list[str] = Field(min_length=1, max_length=16)
     interpreter: str = Field(min_length=1, max_length=500)
     arguments: list[str] = Field(default_factory=list, max_length=32)
     runner_profile_id: str = Field(min_length=1, max_length=200)
@@ -119,6 +122,11 @@ class ContainerTerminalCapabilities(NebulaModel):
     ready: bool
     detail: str | None = None
     source_image: str = DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE
+    installed_packages: list[str] = Field(
+        default_factory=lambda: ["kali-linux-headless", "iputils-ping"],
+        min_length=1,
+        max_length=16,
+    )
     network: ContainerTerminalNetworkSnapshot = Field(
         default_factory=ContainerTerminalNetworkSnapshot
     )
@@ -891,8 +899,11 @@ def _runtime_snapshot(
     profile = resolution.profile
     return ContainerTerminalRuntimeSnapshot(
         source_image=resolution.image.source_reference,
+        base_image=resolution.image.base_resolved_reference,
+        base_image_digest=resolution.image.base_digest,
         image=resolution.image.resolved_reference,
         image_digest=resolution.image.digest,
+        installed_packages=list(resolution.image.installed_packages),
         interpreter="/bin/bash",
         arguments=list(TERMINAL_COMMAND),
         runner_profile_id=profile.id,

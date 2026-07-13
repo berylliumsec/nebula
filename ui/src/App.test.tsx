@@ -329,7 +329,7 @@ describe("Nebula workspace", () => {
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable", container_terminal: "configured" }), { status: 200 });
       if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Terminal review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
       if (path.endsWith("/container-terminal/capabilities")) return new Response(JSON.stringify({
-        engagement_id: "engagement-1", ready: true, source_image: "docker.io/kalilinux/kali-rolling:latest", workspace: "/workspace",
+        engagement_id: "engagement-1", ready: true, source_image: "docker.io/kalilinux/kali-rolling:latest", installed_packages: ["kali-linux-headless", "iputils-ping"], workspace: "/workspace",
         network: { mode: "unrestricted", runtime_network: "bridge", published_ports: [] },
         security: { container_user: "root", root_filesystem: "writable", linux_capabilities: [], no_new_privileges: true, host_network: false, runtime_socket: false, host_shell: false },
         limits: { cpu_count: 1, memory_mb: 512, pids: 128, timeout_seconds: 1800, output_bytes_per_stream: 2_000_000 },
@@ -368,7 +368,8 @@ describe("Nebula workspace", () => {
         detail: "request is confined to the workspace",
         runtime: {
           source_image: "docker.io/kalilinux/kali-rolling:latest", interpreter: "/bin/bash", arguments: ["--noprofile", "--norc", "-i"],
-          image: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`, image_digest: `sha256:${"b".repeat(64)}`,
+          base_image: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`, base_image_digest: `sha256:${"b".repeat(64)}`,
+          image: `sha256:${"c".repeat(64)}`, image_digest: `sha256:${"c".repeat(64)}`, installed_packages: ["kali-linux-headless", "iputils-ping"],
           runner_profile_id: "runner-1", runner_profile_revision: 2, runner_runtime: "podman", runner_isolation: "rootless",
           runner_executable: "/usr/bin/podman", runner_platform: "linux/amd64",
         },
@@ -393,7 +394,7 @@ describe("Nebula workspace", () => {
     await user.click(await screen.findByRole("tab", { name: "Terminal" }));
     expect(await screen.findByRole("heading", { name: "Terminal" })).toBeVisible();
     expect(screen.getByText("Root + network")).toBeVisible();
-    expect(screen.getByText(/includes no security tools by default/i)).toBeVisible();
+    expect(screen.getAllByText("kali-linux-headless").length).toBeGreaterThan(0);
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/sessions") && request?.method === "POST")).toBe(true));
 
     expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-assignment") && request?.method === "PUT")).toBe(false);

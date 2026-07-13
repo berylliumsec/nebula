@@ -176,8 +176,11 @@ Nebula does not provide a host terminal. The Sessions workspace provides a
 human-operated **Terminal** in the official minimal
 `docker.io/kalilinux/kali-rolling:latest` image. On first use after each Core
 start, Core asks the selected verified runner to pull that tag, verifies the
-repository and platform, and resolves an immutable repository digest. Every
-session launches that digest with `--pull=never`.
+repository and platform, and resolves an immutable repository digest. Core then
+builds or reuses a locally cached image from that verified base with
+`kali-linux-headless` and `iputils-ping` installed. The build recipe, official
+base digest, and derived content-addressed image ID are verified and recorded;
+every session launches the derived image ID with `--pull=never`.
 
 The Kali container runs as root with a writable disposable container layer and
 ordinary unrestricted outbound bridge networking. This deliberate human-only
@@ -186,8 +189,11 @@ not receive host networking, published ports, added Linux capabilities, a host
 shell, or a container-runtime socket. The runner itself must remain rootless or
 inside an approved desktop VM. Only the engagement workspace is mounted at
 `/workspace`; packages and system changes disappear when the session closes.
-The official minimal image contains no security tools by default, so operators
-may install packages for that session with `apt`.
+The cached baseline supplies Kali's command-line default toolset and `ping`.
+Operators may install additional packages for that session with `apt`; the
+derived image config keeps APT usable despite the empty runtime capability set.
+Tools that require raw-packet or network-administration capabilities remain
+limited by design.
 
 The named container is removed when the WebSocket disconnects, the operator
 stops it, or Core shuts down. Every terminal retains the existing 1 CPU, 512 MiB

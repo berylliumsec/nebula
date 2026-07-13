@@ -841,12 +841,15 @@ def test_human_terminal_image_is_prepared_once_per_runner_revision(
             await asyncio.sleep(0)
             return PreparedContainerImage(
                 source_reference="docker.io/kalilinux/kali-rolling:latest",
-                resolved_reference=(
+                base_resolved_reference=(
                     "docker.io/kalilinux/kali-rolling@sha256:" + DIGEST_A
                 ),
-                digest="sha256:" + DIGEST_A,
+                base_digest="sha256:" + DIGEST_A,
+                resolved_reference="sha256:" + DIGEST_B,
+                digest="sha256:" + DIGEST_B,
                 platform="linux/amd64",
                 configured_user="",
+                installed_packages=("kali-linux-headless", "iputils-ping"),
                 refreshed=True,
                 detail="pulled",
             )
@@ -862,7 +865,8 @@ def test_human_terminal_image_is_prepared_once_per_runner_revision(
     first, second = asyncio.run(resolve_twice())
     assert calls == 1
     assert first.image == second.image
-    assert first.image.resolved_reference.endswith(DIGEST_A)
+    assert first.image.base_resolved_reference.endswith(DIGEST_A)
+    assert first.image.resolved_reference.endswith(DIGEST_B)
 
 
 def test_tool_platform_includes_declared_shell_capabilities_implicitly(tmp_path):

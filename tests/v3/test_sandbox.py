@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -120,6 +121,7 @@ def test_human_terminal_alone_can_be_root_writable_and_unrestricted(tmp_path):
     runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
     request = _request(
         tmp_path,
+        image="sha256:" + "a" * 64,
         command=["/bin/bash", "--noprofile", "--norc", "-i"],
         workspace_access=SandboxWorkspaceAccess.WRITE,
         network=SandboxNetwork.UNRESTRICTED,
@@ -137,6 +139,9 @@ def test_human_terminal_alone_can_be_root_writable_and_unrestricted(tmp_path):
     assert not any(
         value.startswith("--publish") or value == "--privileged" for value in argv
     )
+
+    with pytest.raises(SandboxError, match="pinned by sha256 digest"):
+        runner._validate(_request(tmp_path, image="sha256:" + "a" * 64))
 
     for changes in (
         {"network": SandboxNetwork.UNRESTRICTED},
@@ -606,6 +611,7 @@ def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
         expected_repository="docker.io/kalilinux/kali-rolling",
     )
     calls = []
+    dockerfiles = []
 
     async def available():
         return True, "healthy"
@@ -614,10 +620,27 @@ def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
         calls.append((arguments, timeout_seconds))
         if arguments[0] == "pull":
             return "", "registry unavailable", pull_return_code
+        if arguments[0] == "build":
+            dockerfiles.append(
+                (Path(arguments[-1]) / "Dockerfile").read_text(encoding="utf-8")
+            )
+            return "built", "", 0
+        if arguments[2] == "docker.io/kalilinux/kali-rolling:latest":
+            return (
+                '{"RepoDigests":["kalilinux/kali-rolling@sha256:'
+                + "e" * 64
+                + '"],"Os":"linux","Architecture":"amd64"}',
+                "",
+                0,
+            )
         return (
-            '{"RepoDigests":["kalilinux/kali-rolling@sha256:'
+            '{"Id":"sha256:'
+            + "d" * 64
+            + '","Os":"linux","Architecture":"amd64","Config":{"Labels":{'
+            + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
-            + '"],"Os":"linux","Architecture":"amd64"}',
+            + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
+            + '"org.nebula.human-terminal.recipe":"v1"}}}',
             "",
             0,
         )
@@ -634,11 +657,23 @@ def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
         ),
         900,
     )
-    assert image.resolved_reference == (
+    assert image.base_resolved_reference == (
         "docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64
     )
+    assert image.base_digest == "sha256:" + "e" * 64
+    assert image.resolved_reference == "sha256:" + "d" * 64
+    assert image.digest == "sha256:" + "d" * 64
+    assert image.installed_packages == ("kali-linux-headless", "iputils-ping")
     assert image.refreshed is refreshed
     assert image.configured_user == ""
+    build = next(call for call in calls if call[0][0] == "build")
+    assert build[0][1] == "--platform=linux/amd64"
+    assert build[0][2] == "--pull=false"
+    assert build[0][3] == "--quiet"
+    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v1-")
+    assert "FROM docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64 in dockerfiles[0]
+    assert "apt-get install -y kali-linux-headless iputils-ping" in dockerfiles[0]
+    assert 'APT::Sandbox::User "root";' in dockerfiles[0]
     if not refreshed:
         assert "verified cached" in image.detail
 

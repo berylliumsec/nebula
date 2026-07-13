@@ -535,6 +535,7 @@ interface WireContainerTerminalCapabilities extends JsonObject {
   ready: boolean;
   detail?: string | null;
   source_image: string;
+  installed_packages: string[];
   network: WireContainerTerminalNetwork;
   security: WireContainerTerminalSecurity;
   workspace: "/workspace";
@@ -545,8 +546,11 @@ interface WireContainerTerminalCapabilities extends JsonObject {
 
 interface WireContainerTerminalRuntime extends JsonObject {
   source_image: string;
+  base_image: string;
+  base_image_digest: string;
   image: string;
   image_digest: string;
+  installed_packages: string[];
   interpreter: string;
   arguments: string[];
   runner_profile_id: string;
@@ -1422,8 +1426,11 @@ function terminalBody(value: ContainerTerminalRequest): JsonObject {
 function mapContainerTerminalRuntime(value: WireContainerTerminalRuntime) {
   return {
     sourceImage: value.source_image,
+    baseImage: value.base_image,
+    baseImageDigest: value.base_image_digest,
     image: value.image,
     imageDigest: value.image_digest,
+    installedPackages: value.installed_packages,
     interpreter: value.interpreter,
     arguments: value.arguments,
     runnerProfileId: value.runner_profile_id,
@@ -2386,6 +2393,7 @@ export class ApiClient {
       ready: value.ready,
       detail: value.detail ?? undefined,
       sourceImage: value.source_image,
+      installedPackages: value.installed_packages,
       network: mapContainerTerminalNetwork(value.network),
       security: mapContainerTerminalSecurity(value.security),
       workspace: value.workspace,

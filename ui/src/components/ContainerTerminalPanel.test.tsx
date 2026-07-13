@@ -63,8 +63,11 @@ describe("ContainerTerminalPanel", () => {
         previewFingerprint: "preview-fingerprint",
         runtime: {
           sourceImage: "docker.io/kalilinux/kali-rolling:latest",
-          image: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
-          imageDigest: `sha256:${"b".repeat(64)}`,
+          baseImage: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
+          baseImageDigest: `sha256:${"b".repeat(64)}`,
+          image: `sha256:${"c".repeat(64)}`,
+          imageDigest: `sha256:${"c".repeat(64)}`,
+          installedPackages: ["kali-linux-headless", "iputils-ping"],
           interpreter: "/bin/bash",
           arguments: ["--noprofile", "--norc", "-i"],
           runnerProfileId: "local",
@@ -91,6 +94,7 @@ describe("ContainerTerminalPanel", () => {
     expect(socketSpies.dispose).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/Unrestricted outbound · root · writable/)).toBeVisible();
     expect(screen.getByText(/Bridge networking can reach the public Internet/)).toBeVisible();
+    expect(screen.getByText(/Installed baseline:/)).toBeVisible();
     expect(screen.getByTitle(`docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`)).toBeVisible();
   });
 });
