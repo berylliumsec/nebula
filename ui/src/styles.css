@@ -304,7 +304,11 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .approval-card details { margin: 10px 0 13px; padding: 8px; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--surface-muted); }
 .approval-card summary { color: var(--blue); font-size: 9px; cursor: pointer; }
 .approval-card pre { overflow-x: auto; color: var(--muted-strong); font-size: 8px; }
-.approval-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.approval-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.approval-editor { display: grid; gap: 6px; margin: 10px 0; }
+.approval-editor label { color: var(--muted-strong); font-size: 9px; font-weight: 650; }
+.approval-editor textarea { width: 100%; resize: vertical; font-family: var(--font-mono); font-size: 9px; }
+.approval-editor-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .empty-state { display: flex; align-items: center; justify-content: center; flex-direction: column; color: var(--muted); text-align: center; }
 .empty-state.compact { min-height: 150px; padding: 20px; }
 .empty-state.mini { min-height: 80px; padding: 12px; border: 1px dashed var(--border); border-radius: 7px; }

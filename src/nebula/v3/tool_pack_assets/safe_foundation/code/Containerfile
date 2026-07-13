@@ -1,0 +1,5 @@
+FROM semgrep/semgrep@{{sha256:semgrep-base}}
+COPY curated-rules /opt/nebula/rules
+RUN addgroup -S nebula && adduser -S -G nebula -u 10001 nebula && chown -R nebula:nebula /opt/nebula
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/semgrep"]

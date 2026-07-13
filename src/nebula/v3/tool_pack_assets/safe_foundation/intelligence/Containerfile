@@ -1,0 +1,4 @@
+FROM alpine@{{sha256:alpine-base}}
+RUN apk add --no-cache exploitdb && addgroup -S nebula && adduser -S -G nebula -u 10001 nebula
+USER 10001:10001
+ENTRYPOINT ["/usr/bin/searchsploit"]

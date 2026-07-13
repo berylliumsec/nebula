@@ -99,8 +99,15 @@ describe("ApiClient", () => {
       run_id: "run-1",
       status: "pending",
       risk_class: "active_scan",
-      exact_request: { tool_name: "scan.tcp", arguments: { ports: [80] } },
+      exact_request: {
+        tool_name: "scan.tcp",
+        arguments: { ports: [80] },
+        argv: ["/usr/bin/nmap", "-sT", "-p", "80", "192.0.2.8"],
+        image: `example.invalid/nmap@sha256:${"a".repeat(64)}`,
+        manifest_digest: "b".repeat(64),
+      },
       target: "192.0.2.8",
+      credential_class: "lab-read-only",
       expected_effects: ["Probe one in-scope target"],
       policy_rationale: "An active scan needs operator approval",
       requested_by: "network-specialist",
@@ -133,6 +140,9 @@ describe("ApiClient", () => {
       risk: "active",
       toolName: "scan.tcp",
       expectedEffects: "Probe one in-scope target",
+      command: ["/usr/bin/nmap", "-sT", "-p", "80", "192.0.2.8"],
+      manifestDigest: "b".repeat(64),
+      credentialClass: "lab-read-only",
     })]);
     expect(decided).toMatchObject({ status: "approved", arguments: { ports: [443] } });
     expect(fetchMock.mock.calls[0][0]).toBe(
@@ -706,5 +716,49 @@ describe("ApiClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/assets"))?.[1]?.body)).name).toBe("api.example.test");
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/reports"))?.[1]?.body)).title).toBe("Assessment");
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/missions"))?.[1]?.body))).toMatchObject({ provider_id: "provider-1", model: "model-1", max_duration_seconds: 600 });
+  });
+
+  it("maps tool-pack, runner, scope, and exact assignment contracts", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/tool-catalog")) return new Response(JSON.stringify({ items: [{ id: "safe-network", publisher: "berylliumsec", name: "network", version: "1.0.0", description: "Safe network tools", manifest_digest: "sha256:catalog", licenses: ["Apache-2.0"], platforms: ["linux/amd64", "linux/arm64"], tool_names: ["nmap.connect_scan"], permissions: ["network"], signed: true }] }), { status: 200 });
+      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{ id: "pack-1", catalog_id: "safe-network", publisher: "berylliumsec", name: "network", version: "1.0.0", manifest_digest: "sha256:catalog", source: "catalog", trust_state: "trusted", runtime_profile_id: "local", image_locks: { nmap: "sha256:image" }, status: "ready", tool_names: ["nmap.connect_scan"], permissions: ["network"], verified_at: "2026-07-12T12:00:00Z" }]), { status: 200 });
+      if (path.endsWith("/tools")) return new Response(JSON.stringify([{ name: "nmap.connect_scan", pack_id: "pack-1", pack_manifest_digest: "sha256:catalog", description: "TCP connect scan", risk_class: "active_scan", requires_network: true, requires_approval: true, available: true }]), { status: 200 });
+      if (path.endsWith("/runner-profiles")) return new Response(JSON.stringify([{ id: "local", name: "Podman Machine", runtime: "podman", executable: "/opt/homebrew/bin/podman", platform: "linux/arm64", isolation: "podman_machine", enabled: true, healthy: false, last_health_at: "2026-07-12T12:00:00Z", last_health_detail: "Podman machine is stopped", revision: 2 }]), { status: 200 });
+      if (path.endsWith("/engagements/engagement-1/scope")) return new Response(JSON.stringify({ id: "scope-1", engagement_id: "engagement-1", allowed_cidrs: ["192.0.2.0/24"], allowed_domains: ["app.example.test"], allowed_urls: [], allowed_ports: [443], not_before: null, not_after: "2026-07-13T12:00:00Z", prohibited_actions: ["exploitation"], local_only: true, max_concurrency: 1, grants: [], revision: 3 }), { status: 200 });
+      if (path.endsWith("/engagements/engagement-1/tool-assignment")) {
+        if (init?.method === "PUT") return new Response(JSON.stringify({ id: "assignment-1", engagement_id: "engagement-1", manifest_digest: "sha256:catalog", tool_names: ["nmap.connect_scan"], enabled: true, revision: 1 }), { status: 200 });
+        return new Response(JSON.stringify({ items: [{ id: "assignment-1", engagement_id: "engagement-1", manifest_digest: "sha256:catalog", tool_names: ["nmap.connect_scan"], enabled: true, revision: 1 }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "not mocked" }), { status: 500 });
+    });
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const [catalog, packs, tools, runners, scope, assignments] = await Promise.all([
+      client.listToolCatalog(), client.listToolPacks(), client.listTools(), client.listRunnerProfiles(), client.getEngagementScope("engagement-1"), client.listEngagementToolAssignments("engagement-1"),
+    ]);
+    const saved = await client.updateEngagementToolAssignment("engagement-1", { manifestDigest: "sha256:catalog", toolNames: ["nmap.connect_scan"], enabled: true });
+
+    expect(catalog[0]).toMatchObject({ id: "safe-network", manifestDigest: "sha256:catalog", signed: true });
+    expect(packs[0]).toMatchObject({ status: "ready", trustState: "trusted", imageLocks: { nmap: "sha256:image" } });
+    expect(tools[0]).toMatchObject({ riskClass: "active_scan", requiresApproval: true, available: true });
+    expect(runners[0]).toMatchObject({ runtimeType: "podman", isolationMode: "podman_machine", executable: "/opt/homebrew/bin/podman", state: "degraded", detail: "Podman machine is stopped" });
+    expect(scope).toMatchObject({ allowedCidrs: ["192.0.2.0/24"], allowedPorts: [443], prohibitedActions: ["exploitation"], revision: 3 });
+    expect(assignments).toHaveLength(1);
+    expect(saved).toMatchObject({ manifestDigest: "sha256:catalog", toolNames: ["nmap.connect_scan"], enabled: true });
+    const assignmentBody = JSON.parse(String(fetchMock.mock.calls.find(([input, init]) => String(input).endsWith("/tool-assignment") && init?.method === "PUT")?.[1]?.body));
+    expect(assignmentBody).toEqual({ manifest_digest: "sha256:catalog", tool_names: ["nmap.connect_scan"], enabled: true });
+  });
+
+  it("sends analysis-only mission defaults and bounded tool mission budgets", async () => {
+    const response = { id: "run-1", engagement_id: "engagement-1", objective: "Review", status: "queued", created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T10:00:00Z", revision: 1, metadata: {} };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(response), { status: 202 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await client.createMission({ engagementId: "engagement-1", objective: "Review", providerId: "provider-1", model: "model-1" });
+    await client.createMission({ engagementId: "engagement-1", objective: "Scan", providerId: "provider-1", model: "model-1", toolNames: ["nmap.connect_scan"], maxToolCalls: 20, maxConcurrency: 2 });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ tool_names: [], max_tool_calls: 0, max_concurrency: 1 });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({ tool_names: ["nmap.connect_scan"], max_tool_calls: 20, max_concurrency: 2 });
   });
 });

@@ -10,8 +10,10 @@ import json
 import re
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import (
     Depends,
@@ -55,14 +57,23 @@ from .domain import (
     Artifact,
     ChatMessage,
     Engagement,
+    EngagementToolAssignment,
     Entity,
     Evidence,
     KnowledgeSource,
+    MissionGrant,
     NebulaModel,
     OperatorProfile,
     ProviderProfile,
+    RunnerIsolation,
+    RunnerProfile,
+    RunnerRuntime,
     RunBudget,
     RunEvent,
+    RunStatus,
+    ScopePolicy,
+    ToolPackInstallation,
+    ToolPackInstallationStatus,
     utc_now,
 )
 from .evidence import (
@@ -101,6 +112,7 @@ from .providers import (
 )
 from .pty import HumanPtyService
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .tool_platform import ToolPlatform, ToolPlatformError
 from .version import __version__, build_metadata
 
 READ_ONLY_RESOURCES = {
@@ -117,9 +129,11 @@ READ_ONLY_RESOURCES = {
     "tool_calls",
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
-CUSTOM_RESOURCES = {"operator_profiles"}
+CUSTOM_RESOURCES = {"operator_profiles", "runner_profiles"}
 
 API_PREFIX = "/api/v1"
+TOOL_PACK_EVENT_POLL_SECONDS = 0.25
+TOOL_PACK_EVENT_HEARTBEAT_TICKS = 20
 
 
 class SpaStaticFiles(StaticFiles):
@@ -185,6 +199,56 @@ class MissionStartRequest(NebulaModel):
     max_tokens: int = Field(default=32_000, ge=1, le=MAX_API_MISSION_TOKENS)
     max_cost_usd: float | None = Field(default=None, ge=0, le=MAX_API_MISSION_COST_USD)
     max_retries: int = Field(default=1, ge=0, le=MAX_API_MISSION_RETRIES)
+    tool_names: list[str] = Field(default_factory=list, max_length=64)
+    max_tool_calls: int = Field(default=0, ge=0, le=100)
+    max_concurrency: int = Field(default=1, ge=1, le=2)
+
+
+class ScopePolicyUpdateRequest(NebulaModel):
+    allowed_cidrs: list[str] = Field(default_factory=list)
+    allowed_domains: list[str] = Field(default_factory=list)
+    allowed_urls: list[str] = Field(default_factory=list)
+    allowed_ports: list[int] = Field(default_factory=list)
+    not_before: datetime | None = None
+    not_after: datetime | None = None
+    prohibited_actions: list[str] = Field(default_factory=list)
+    local_only: bool = False
+    max_concurrency: int = Field(default=1, ge=1, le=256)
+    grants: list[MissionGrant] = Field(default_factory=list)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class EngagementToolAssignmentRequest(NebulaModel):
+    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool_names: list[str] = Field(default_factory=list, max_length=64)
+    enabled: bool = True
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class RunnerProfileRequest(NebulaModel):
+    name: str = Field(min_length=1, max_length=200)
+    runtime: RunnerRuntime
+    executable: str
+    context: str | None = Field(default=None, max_length=500)
+    socket: str | None = Field(default=None, max_length=2048)
+    platform: str = Field(pattern=r"^linux/(amd64|arm64)$")
+    isolation: RunnerIsolation
+    enabled: bool = True
+    egress_helper_image: str | None = None
+    seccomp_profile: str | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ToolPackInstallRequest(NebulaModel):
+    catalog_id: str = Field(min_length=1, max_length=500)
+    version: str | None = Field(default=None, max_length=100)
+    runtime_profile_id: str = Field(min_length=1, max_length=200)
+
+
+class LocalToolPackInstallRequest(NebulaModel):
+    bundle_base64: str = Field(min_length=1, max_length=24_000_000)
+    runtime_profile_id: str = Field(min_length=1, max_length=200)
+    developer_mode_confirmed: bool = False
 
 
 class MissionStopRequest(NebulaModel):
@@ -224,6 +288,8 @@ def create_app(
     human_pty_root: str | Path | None = None,
     mission_service: MissionService | None = None,
     mission_checkpoint_path: str | Path | None = None,
+    tool_platform: ToolPlatform | None = None,
+    enable_executable_missions: bool | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -243,9 +309,18 @@ def create_app(
         raise ValueError(
             "pass either mission_service or mission_checkpoint_path, not both"
         )
+    executable_missions_enabled = (
+        tool_platform.execution_enabled
+        if enable_executable_missions is None and tool_platform is not None
+        else bool(enable_executable_missions)
+    )
 
     missions = mission_service or MissionService(
-        store, checkpoint_path=mission_checkpoint_path
+        store,
+        checkpoint_path=mission_checkpoint_path,
+        tool_components_factory=(
+            tool_platform.mission_components if tool_platform is not None else None
+        ),
     )
     if missions.store is not store:
         raise ValueError("mission_service must use the API store")
@@ -272,6 +347,8 @@ def create_app(
     app.state.allow_unauthenticated = allow_unauthenticated
     app.state.mission_service = missions
     app.state.operator_profile_service = operators
+    app.state.tool_platform = tool_platform
+    app.state.executable_missions_enabled = executable_missions_enabled
     pty_service = (
         HumanPtyService(human_pty_root)
         if enable_human_pty and human_pty_root is not None
@@ -359,6 +436,12 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
+    @app.exception_handler(ToolPlatformError)
+    async def tool_platform_error_handler(
+        _: Request, exc: ToolPlatformError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
     @app.exception_handler(ChatHistoryConflict)
     @app.exception_handler(ChatPrivacyError)
     async def chat_conflict_handler(_: Request, exc: ChatError) -> JSONResponse:
@@ -408,7 +491,7 @@ def create_app(
         approval = store.get(Approval, approval_id)
         if approval.status != ApprovalStatus.PENDING:
             raise ConflictError("approval has already been resolved")
-        store.get(AgentRun, approval.run_id)
+        approval_run = store.get(AgentRun, approval.run_id)
         if approval.expires_at is not None and approval.expires_at <= utc_now():
             expired, _ = store.update_with_event(
                 Approval,
@@ -450,6 +533,10 @@ def create_app(
         if request.edited_arguments is not None:
             exact = dict(approval.exact_request)
             exact["arguments"] = request.edited_arguments
+            # The signed declarative binding is rendered again by the broker
+            # after schema and scope validation. Never retain an argv preview
+            # that describes the pre-edit arguments.
+            exact.pop("argv", None)
             changes["exact_request"] = exact
         updated, _ = store.update_with_event(
             Approval,
@@ -466,6 +553,15 @@ def create_app(
             actor_id=operator_id,
             idempotency_key=f"approval:{approval.id}:resolved",
         )
+        if approval_run.status == RunStatus.WAITING_APPROVAL:
+            if request.decision == "stop":
+                await missions.stop_mission(
+                    approval_run.id,
+                    reason=request.reason or "Stopped from an approval decision",
+                    actor_id=operator_id,
+                )
+            else:
+                await missions.resume_after_approval(updated, actor_id=operator_id)
         return updated
 
     @app.get(
@@ -610,6 +706,415 @@ def create_app(
         except EvidenceReferenceError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/scope",
+        response_model=ScopePolicy,
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def engagement_scope(engagement_id: str) -> ScopePolicy:
+        engagement = store.get(Engagement, engagement_id)
+        if not engagement.scope_policy_id:
+            return ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
+        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        if scope.engagement_id != engagement.id:
+            raise ConflictError("engagement scope policy ownership is inconsistent")
+        return scope
+
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/scope",
+        response_model=ScopePolicy,
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def replace_engagement_scope(
+        engagement_id: str, request: ScopePolicyUpdateRequest
+    ) -> ScopePolicy:
+        engagement = store.get(Engagement, engagement_id)
+        active_operator = operators.active_profile_or_none()
+        operator_id = active_operator.id if active_operator is not None else "operator"
+        payload = request.model_dump(exclude={"expected_revision"})
+        payload["grants"] = [
+            grant.model_copy(update={"granted_by": operator_id})
+            for grant in request.grants
+        ]
+        if engagement.scope_policy_id:
+            current = store.get(ScopePolicy, engagement.scope_policy_id)
+            if current.engagement_id != engagement.id:
+                raise ConflictError("engagement scope policy ownership is inconsistent")
+            return store.update(
+                ScopePolicy,
+                current.id,
+                payload,
+                expected_revision=request.expected_revision or current.revision,
+            )
+
+        scope_id = f"scope:{engagement.id}"
+        candidate = ScopePolicy(
+            id=scope_id,
+            engagement_id=engagement.id,
+            **payload,
+        )
+        try:
+            scope = store.create(candidate)
+        except ConflictError:
+            scope = store.get(ScopePolicy, scope_id)
+            if scope.engagement_id != engagement.id:
+                raise
+            scope = store.update(
+                ScopePolicy,
+                scope.id,
+                payload,
+                expected_revision=request.expected_revision or scope.revision,
+            )
+        store.update(
+            Engagement,
+            engagement.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=engagement.revision,
+        )
+        return scope
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/tool-assignment",
+        response_model=list[EngagementToolAssignment],
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def engagement_tool_assignments(
+        engagement_id: str,
+    ) -> list[EngagementToolAssignment]:
+        store.get(Engagement, engagement_id)
+        return [
+            assignment
+            for assignment in store.list_entities(EngagementToolAssignment, limit=1_000)
+            if assignment.engagement_id == engagement_id
+        ]
+
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/tool-assignment",
+        response_model=EngagementToolAssignment,
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def put_engagement_tool_assignment(
+        engagement_id: str, request: EngagementToolAssignmentRequest
+    ) -> EngagementToolAssignment:
+        store.get(Engagement, engagement_id)
+        installations = [
+            item
+            for item in store.list_entities(ToolPackInstallation, limit=1_000)
+            if item.manifest_digest == request.manifest_digest
+            and item.status == ToolPackInstallationStatus.READY
+        ]
+        if not installations:
+            raise ConflictError(
+                "tool assignment requires a verified ready pack installation"
+            )
+        if tool_platform is not None:
+            tool_platform.validate_assignment(
+                request.manifest_digest, request.tool_names
+            )
+        active_operator = operators.active_profile_or_none()
+        operator_id = active_operator.id if active_operator is not None else "operator"
+        existing = next(
+            (
+                assignment
+                for assignment in store.list_entities(
+                    EngagementToolAssignment, limit=1_000
+                )
+                if assignment.engagement_id == engagement_id
+                and assignment.manifest_digest == request.manifest_digest
+            ),
+            None,
+        )
+        changes = {
+            "allowed_tool_names": request.tool_names,
+            "enabled": request.enabled,
+            "assigned_by": operator_id,
+        }
+        if existing is not None:
+            return store.update(
+                EngagementToolAssignment,
+                existing.id,
+                changes,
+                expected_revision=request.expected_revision or existing.revision,
+            )
+        assignment_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"nebula:tool-assignment:{engagement_id}:{request.manifest_digest}",
+            )
+        )
+        return store.create(
+            EngagementToolAssignment(
+                id=assignment_id,
+                engagement_id=engagement_id,
+                manifest_digest=request.manifest_digest,
+                allowed_tool_names=request.tool_names,
+                enabled=request.enabled,
+                assigned_by=operator_id,
+            )
+        )
+
+    @app.get(
+        f"{API_PREFIX}/tool-catalog",
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def tool_catalog() -> list[dict[str, Any]]:
+        if tool_platform is None:
+            raise HTTPException(
+                status_code=501, detail="tool-pack platform is not configured"
+            )
+        return await tool_platform.catalog()
+
+    @app.get(
+        f"{API_PREFIX}/tool-packs",
+        response_model=list[ToolPackInstallation],
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def tool_pack_installations() -> list[ToolPackInstallation]:
+        return store.list_entities(ToolPackInstallation, limit=1_000)
+
+    @app.get(
+        f"{API_PREFIX}/tools",
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def installed_tools() -> list[dict[str, Any]]:
+        if tool_platform is None:
+            return []
+        return tool_platform.list_tools()
+
+    @app.post(
+        f"{API_PREFIX}/tool-packs/install",
+        response_model=ToolPackInstallation,
+        status_code=201,
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def install_catalog_tool_pack(
+        request: ToolPackInstallRequest,
+    ) -> ToolPackInstallation:
+        if tool_platform is None:
+            raise HTTPException(
+                status_code=501, detail="tool-pack platform is not configured"
+            )
+        return await tool_platform.install_catalog(
+            request.catalog_id,
+            runtime_profile_id=request.runtime_profile_id,
+            version=request.version,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/tool-packs/install-local",
+        response_model=ToolPackInstallation,
+        status_code=201,
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def install_local_tool_pack(
+        request: LocalToolPackInstallRequest,
+    ) -> ToolPackInstallation:
+        if tool_platform is None:
+            raise HTTPException(
+                status_code=501, detail="tool-pack platform is not configured"
+            )
+        try:
+            bundle = base64.b64decode(request.bundle_base64, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise HTTPException(
+                status_code=422, detail="tool-pack bundle is not valid base64"
+            ) from exc
+        return await tool_platform.install_local(
+            bundle,
+            runtime_profile_id=request.runtime_profile_id,
+            confirm_permissions=request.developer_mode_confirmed,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/tool-packs/{{installation_id}}/verify",
+        response_model=ToolPackInstallation,
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def verify_tool_pack(installation_id: str) -> ToolPackInstallation:
+        if tool_platform is None:
+            raise HTTPException(
+                status_code=501, detail="tool-pack platform is not configured"
+            )
+        return await tool_platform.verify(installation_id)
+
+    @app.post(
+        f"{API_PREFIX}/tool-packs/{{installation_id}}/update",
+        response_model=ToolPackInstallation,
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_tool_pack(installation_id: str) -> ToolPackInstallation:
+        if tool_platform is None:
+            raise HTTPException(
+                status_code=501, detail="tool-pack platform is not configured"
+            )
+        return await tool_platform.update(installation_id)
+
+    @app.delete(
+        f"{API_PREFIX}/tool-packs/{{installation_id}}",
+        status_code=204,
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def disable_tool_pack(installation_id: str) -> Response:
+        if tool_platform is None:
+            raise HTTPException(
+                status_code=501, detail="tool-pack platform is not configured"
+            )
+        tool_platform.disable(installation_id)
+        return Response(status_code=204)
+
+    @app.websocket(f"{API_PREFIX}/tool-packs/events/ws")
+    async def tool_pack_event_socket(
+        websocket: WebSocket,
+        after_sequence: int = Query(default=0, ge=0),
+    ) -> None:
+        supplied: str | None = None
+        authorization = websocket.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:]
+        offered_protocols = [
+            value.strip()
+            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if value.strip()
+        ]
+        subprotocol_token: str | None = None
+        for protocol in offered_protocols:
+            if not protocol.startswith("nebula.auth."):
+                continue
+            encoded = protocol.removeprefix("nebula.auth.")
+            try:
+                padding = "=" * (-len(encoded) % 4)
+                subprotocol_token = base64.urlsafe_b64decode(encoded + padding).decode(
+                    "utf-8"
+                )
+            except (ValueError, UnicodeDecodeError):
+                subprotocol_token = None
+            break
+        if (
+            supplied
+            and subprotocol_token
+            and not hmac.compare_digest(supplied, subprotocol_token)
+        ):
+            await websocket.close(code=4401, reason="conflicting authentication tokens")
+            return
+        supplied = subprotocol_token or supplied
+        if not allow_unauthenticated and (
+            not supplied or not hmac.compare_digest(supplied, token)
+        ):
+            await websocket.close(code=4401, reason="valid bearer token required")
+            return
+        if tool_platform is None:
+            await websocket.close(
+                code=4501, reason="tool-pack platform is not configured"
+            )
+            return
+        event_protocol = (
+            "nebula.tool-packs.v1"
+            if "nebula.tool-packs.v1" in offered_protocols
+            else None
+        )
+        await websocket.accept(subprotocol=event_protocol)
+        cursor = after_sequence
+        try:
+            replay = tool_platform.events.replay(cursor)
+            for event in replay.events:
+                await websocket.send_json(
+                    {"kind": "event", "event": event.model_dump(mode="json")}
+                )
+                cursor = event.sequence
+            await websocket.send_json(
+                {
+                    "kind": "replay_complete",
+                    "after_sequence": cursor,
+                    "oldest_sequence": replay.oldest_sequence,
+                    "latest_sequence": replay.latest_sequence,
+                    "truncated": replay.truncated,
+                }
+            )
+
+            idle_ticks = 0
+            while True:
+                await asyncio.sleep(TOOL_PACK_EVENT_POLL_SECONDS)
+                replay = tool_platform.events.replay(cursor)
+                if replay.events:
+                    idle_ticks = 0
+                    if replay.truncated:
+                        await websocket.send_json(
+                            {
+                                "kind": "replay_gap",
+                                "after_sequence": cursor,
+                                "oldest_sequence": replay.oldest_sequence,
+                                "latest_sequence": replay.latest_sequence,
+                            }
+                        )
+                    for event in replay.events:
+                        await websocket.send_json(
+                            {
+                                "kind": "event",
+                                "event": event.model_dump(mode="json"),
+                            }
+                        )
+                        cursor = event.sequence
+                else:
+                    idle_ticks += 1
+                    if idle_ticks >= TOOL_PACK_EVENT_HEARTBEAT_TICKS:
+                        await websocket.send_json(
+                            {
+                                "kind": "heartbeat",
+                                "after_sequence": cursor,
+                                "oldest_sequence": replay.oldest_sequence,
+                                "latest_sequence": replay.latest_sequence,
+                            }
+                        )
+                        idle_ticks = 0
+        except WebSocketDisconnect:
+            return
+
+    @app.get(
+        f"{API_PREFIX}/runner-profiles",
+        response_model=list[RunnerProfile],
+        tags=["runners"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def runner_profiles() -> list[RunnerProfile]:
+        return store.list_entities(RunnerProfile, limit=1_000)
+
+    @app.put(
+        f"{API_PREFIX}/runner-profiles/{{profile_id}}",
+        response_model=RunnerProfile,
+        tags=["runners"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def put_runner_profile(
+        profile_id: str, request: RunnerProfileRequest
+    ) -> RunnerProfile:
+        payload = request.model_dump(exclude={"expected_revision"})
+        try:
+            existing = store.get(RunnerProfile, profile_id)
+        except NotFoundError:
+            profile = store.create(RunnerProfile(id=profile_id, **payload))
+        else:
+            profile = store.update(
+                RunnerProfile,
+                existing.id,
+                payload,
+                expected_revision=request.expected_revision or existing.revision,
+            )
+        if tool_platform is not None:
+            return await tool_platform.verify_runner(profile.id)
+        return profile
+
     @app.post(
         f"{API_PREFIX}/missions",
         response_model=AgentRun,
@@ -618,15 +1123,23 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def start_mission(request: MissionStartRequest) -> AgentRun:
+        if request.tool_names and not executable_missions_enabled:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "executable missions remain release-gated until the complete "
+                    "runner-isolation acceptance flow passes"
+                ),
+            )
         active_operator = operators.active_profile_or_none()
         operator_id = active_operator.id if active_operator is not None else "operator"
         budget = RunBudget(
-            max_concurrency=1,
-            max_delegation_depth=0,
+            max_concurrency=request.max_concurrency,
+            max_delegation_depth=1 if request.tool_names else 0,
             max_duration_seconds=request.max_duration_seconds,
             max_tokens=request.max_tokens,
             max_cost_usd=request.max_cost_usd,
-            max_tool_calls=0,
+            max_tool_calls=request.max_tool_calls,
             max_retries=request.max_retries,
             per_target_active_operations=1,
         )
@@ -636,6 +1149,7 @@ def create_app(
             provider_id=request.provider_id,
             model=request.model,
             budget=budget,
+            tool_names=request.tool_names,
             actor_id=operator_id,
         )
 

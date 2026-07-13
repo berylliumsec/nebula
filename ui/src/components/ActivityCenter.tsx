@@ -9,7 +9,7 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import type { ApprovalDecision, RunEventKind } from "../api/types";
+import type { ApprovalDecisionRequest, RunEventKind } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 
 type CenterTab = "activity" | "approvals";
@@ -35,18 +35,39 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
   const [tab, setTab] = useState<CenterTab>("activity");
   const [busyId, setBusyId] = useState<string>();
   const [decisionError, setDecisionError] = useState<string>();
+  const [editingId, setEditingId] = useState<string>();
+  const [editedArguments, setEditedArguments] = useState("");
   const { events, approvals, previewMode, resolveApproval, streamState } = useWorkspace();
 
-  const decide = async (id: string, decision: ApprovalDecision) => {
+  const decide = async (id: string, request: ApprovalDecisionRequest) => {
     setBusyId(id);
     setDecisionError(undefined);
     try {
-      await resolveApproval(id, decision);
+      await resolveApproval(id, request);
+      setEditingId(undefined);
     } catch (error) {
       setDecisionError(error instanceof Error ? error.message : "Could not record the approval decision.");
     } finally {
       setBusyId(undefined);
     }
+  };
+
+  const approveEdited = async (id: string) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(editedArguments);
+    } catch {
+      setDecisionError("Edited arguments must be valid JSON.");
+      return;
+    }
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      setDecisionError("Edited arguments must be one JSON object.");
+      return;
+    }
+    await decide(id, {
+      decision: "approve",
+      editedArguments: parsed as Record<string, unknown>,
+    });
   };
 
   return (
@@ -129,29 +150,70 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
                     <dt>Target</dt>
                     <dd>{approval.target}</dd>
                   </div>
+                  {approval.credentialClass && <div>
+                    <dt>Credential</dt>
+                    <dd>{approval.credentialClass}</dd>
+                  </div>}
                 </dl>
                 <p>{approval.rationale}</p>
                 <details>
                   <summary>Exact arguments and effects</summary>
                   <pre>{JSON.stringify(approval.arguments, null, 2)}</pre>
+                  {approval.command && <><strong>Command argv</strong><pre>{JSON.stringify(approval.command, null, 2)}</pre></>}
+                  {approval.image && <p><strong>Image:</strong> <code>{approval.image}</code></p>}
+                  {approval.manifestDigest && <p><strong>Manifest:</strong> <code>{approval.manifestDigest}</code></p>}
                   <p>{approval.expectedEffects}</p>
                 </details>
+                {editingId === approval.id && <div className="approval-editor">
+                  <label htmlFor={`approval-arguments-${approval.id}`}>Edited arguments</label>
+                  <textarea
+                    id={`approval-arguments-${approval.id}`}
+                    rows={7}
+                    spellCheck={false}
+                    value={editedArguments}
+                    onChange={(event) => setEditedArguments(event.target.value)}
+                  />
+                  <div className="approval-editor-actions">
+                    <button className="button quiet" type="button" onClick={() => setEditingId(undefined)}>Cancel edit</button>
+                    <button className="button primary" type="button" disabled={busyId === approval.id} onClick={() => void approveEdited(approval.id)}>Approve edited</button>
+                  </div>
+                </div>}
                 <div className="approval-actions">
                   <button
                     className="button danger-quiet"
                     type="button"
                     disabled={previewMode || busyId === approval.id}
-                    onClick={() => void decide(approval.id, "reject")}
+                    onClick={() => void decide(approval.id, { decision: "reject" })}
                   >
                     <X size={15} aria-hidden="true" /> Reject
+                  </button>
+                  <button
+                    className="button quiet"
+                    type="button"
+                    disabled={previewMode || busyId === approval.id}
+                    onClick={() => {
+                      setDecisionError(undefined);
+                      setEditingId(approval.id);
+                      setEditedArguments(JSON.stringify(approval.arguments, null, 2));
+                    }}
+                  >
+                    Edit
                   </button>
                   <button
                     className="button primary"
                     type="button"
                     disabled={previewMode || busyId === approval.id}
-                    onClick={() => void decide(approval.id, "approve")}
+                    onClick={() => void decide(approval.id, { decision: "approve" })}
                   >
                     <Check size={15} aria-hidden="true" /> Approve once
+                  </button>
+                  <button
+                    className="button danger-quiet"
+                    type="button"
+                    disabled={previewMode || busyId === approval.id}
+                    onClick={() => void decide(approval.id, { decision: "stop" })}
+                  >
+                    Stop mission
                   </button>
                 </div>
               </article>

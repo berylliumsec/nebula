@@ -11,6 +11,7 @@ import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, ClassVar
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -106,6 +107,32 @@ class ApprovalStatus(StringEnum):
     REJECTED = "rejected"
     EXPIRED = "expired"
     CANCELLED = "cancelled"
+
+
+class ToolPackInstallationStatus(StringEnum):
+    PENDING = "pending"
+    PULLING = "pulling"
+    VERIFYING = "verifying"
+    READY = "ready"
+    FAILED = "failed"
+    DISABLED = "disabled"
+
+
+class ToolPackTrust(StringEnum):
+    CURATED = "curated"
+    TRUSTED_PUBLISHER = "trusted_publisher"
+    LOCAL_UNSIGNED = "local_unsigned"
+
+
+class RunnerRuntime(StringEnum):
+    PODMAN = "podman"
+    DOCKER = "docker"
+
+
+class RunnerIsolation(StringEnum):
+    ROOTLESS = "rootless"
+    PODMAN_MACHINE = "podman_machine"
+    DOCKER_DESKTOP_VM = "docker_desktop_vm"
 
 
 class ReportStatus(StringEnum):
@@ -227,6 +254,46 @@ class ScopePolicy(Entity):
                 raise ValueError("ports must be between 1 and 65535")
         return sorted(set(values))
 
+    @field_validator("allowed_urls")
+    @classmethod
+    def normalize_urls(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            try:
+                parsed = urlsplit(value)
+                port = parsed.port
+            except ValueError as exc:
+                raise ValueError(f"invalid scoped URL: {value}") from exc
+            if parsed.scheme.lower() not in {"http", "https"}:
+                raise ValueError("scoped URLs must use http or https")
+            if not parsed.hostname:
+                raise ValueError("scoped URLs require a hostname")
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError("scoped URLs cannot contain credentials")
+            if parsed.fragment:
+                raise ValueError("scoped URLs cannot contain fragments")
+            if any(ord(character) < 32 for character in value):
+                raise ValueError("scoped URLs cannot contain control characters")
+            try:
+                host = parsed.hostname.encode("idna").decode("ascii").lower()
+            except UnicodeError as exc:
+                raise ValueError(f"invalid scoped URL hostname: {value}") from exc
+            if ":" in host:
+                host = f"[{host}]"
+            netloc = f"{host}:{port}" if port is not None else host
+            normalized.append(
+                urlunsplit(
+                    (
+                        parsed.scheme.lower(),
+                        netloc,
+                        parsed.path or "/",
+                        parsed.query,
+                        "",
+                    )
+                )
+            )
+        return sorted(set(normalized))
+
     @field_validator("not_before", "not_after")
     @classmethod
     def optional_times_must_be_aware(cls, value: datetime | None) -> datetime | None:
@@ -251,6 +318,129 @@ class Engagement(Entity):
     owner_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolPackInstallation(Entity):
+    """One immutable pack version installed for the current OS user."""
+
+    entity_kind: ClassVar[str] = "tool_pack_installations"
+    publisher: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$")
+    version: str = Field(min_length=1, max_length=100)
+    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source: str = Field(min_length=1, max_length=2048)
+    trust: ToolPackTrust
+    publisher_key_id: str | None = Field(default=None, max_length=200)
+    runtime_profile_id: str
+    image_locks: dict[str, str] = Field(default_factory=dict)
+    status: ToolPackInstallationStatus = ToolPackInstallationStatus.PENDING
+    manifest_path: str
+    installed_at: datetime | None = None
+    verified_at: datetime | None = None
+    failure_detail: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("installed_at", "verified_at")
+    @classmethod
+    def pack_times_must_be_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("tool-pack timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class RunnerProfile(Entity):
+    """Explicitly configured local OCI runtime; executables are never PATH-resolved."""
+
+    entity_kind: ClassVar[str] = "runner_profiles"
+    name: str = Field(min_length=1, max_length=200)
+    runtime: RunnerRuntime
+    executable: str
+    context: str | None = Field(default=None, max_length=500)
+    socket: str | None = Field(default=None, max_length=2048)
+    platform: str = Field(pattern=r"^linux/(amd64|arm64)$")
+    isolation: RunnerIsolation
+    egress_helper_image: str | None = None
+    seccomp_profile: str | None = None
+    enabled: bool = True
+    healthy: bool = False
+    last_health_at: datetime | None = None
+    last_health_detail: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("executable")
+    @classmethod
+    def runner_executable_is_absolute(cls, value: str) -> str:
+        if not value.startswith("/") or "\x00" in value:
+            raise ValueError("runner executable must be an absolute path")
+        return value
+
+    @field_validator("egress_helper_image")
+    @classmethod
+    def helper_image_is_digest_pinned(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        pattern = (
+            r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?"
+            r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+"
+            r"@sha256:[0-9a-f]{64}"
+        )
+        if not re.fullmatch(pattern, value):
+            raise ValueError("egress helper image must be digest-pinned")
+        repository = value.rsplit("@", 1)[0].rsplit("/", 1)[-1]
+        if ":" in repository:
+            raise ValueError("egress helper image cannot include a mutable tag")
+        return value
+
+    @field_validator("seccomp_profile")
+    @classmethod
+    def seccomp_path_is_absolute(cls, value: str | None) -> str | None:
+        if value is not None and (not value.startswith("/") or "\x00" in value):
+            raise ValueError("seccomp profile must be an absolute path")
+        return value
+
+    @field_validator("socket")
+    @classmethod
+    def runner_socket_is_local(cls, value: str | None) -> str | None:
+        if value is not None and not (
+            value.startswith("unix://") or value.startswith("/")
+        ):
+            raise ValueError("runner socket must be a local Unix socket")
+        return value
+
+    @field_validator("last_health_at")
+    @classmethod
+    def runner_health_time_must_be_aware(
+        cls, value: datetime | None
+    ) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("runner health timestamp must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def runtime_matches_executable(self) -> "RunnerProfile":
+        executable_name = self.executable.rsplit("/", 1)[-1]
+        if executable_name not in {"docker", "podman"}:
+            raise ValueError("runner executable must be docker or podman")
+        if executable_name != self.runtime.value:
+            raise ValueError("runner runtime must match its executable")
+        return self
+
+
+class EngagementToolAssignment(Entity):
+    """Exact installed pack and tool allowlist granted to one engagement."""
+
+    entity_kind: ClassVar[str] = "engagement_tool_assignments"
+    engagement_id: str
+    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    allowed_tool_names: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    assigned_by: str = Field(min_length=1, max_length=200)
+
+    @field_validator("allowed_tool_names")
+    @classmethod
+    def normalize_assigned_tools(cls, values: list[str]) -> list[str]:
+        pattern = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
+        if any(not pattern.fullmatch(value) for value in values):
+            raise ValueError("assigned tool names must be canonical tool identifiers")
+        return sorted(set(values))
 
 
 class Asset(Entity):
@@ -477,7 +667,15 @@ class AgentRun(Entity):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     last_event_sequence: int = Field(default=0, ge=0)
+    tool_pack_digests: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("tool_pack_digests")
+    @classmethod
+    def valid_pack_digests(cls, values: list[str]) -> list[str]:
+        if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in values):
+            raise ValueError("tool-pack digests must be lowercase SHA-256 values")
+        return list(dict.fromkeys(values))
 
 
 class Task(Entity):
@@ -777,6 +975,9 @@ class RunEvent(NebulaModel):
 ENTITY_MODELS: tuple[type[Entity], ...] = (
     Engagement,
     ScopePolicy,
+    ToolPackInstallation,
+    RunnerProfile,
+    EngagementToolAssignment,
     Asset,
     Service,
     Identity,

@@ -56,6 +56,137 @@ export interface MissionCreateRequest {
   maxTokens?: number;
   maxCostUsd?: number;
   maxRetries?: number;
+  toolNames?: string[];
+  maxToolCalls?: number;
+  maxConcurrency?: number;
+}
+
+export type ToolPackStatus = "pending" | "pulling" | "verifying" | "ready" | "failed" | "disabled";
+
+export interface ToolPackCatalogEntry {
+  id: Identifier;
+  publisher: string;
+  name: string;
+  version: string;
+  description: string;
+  manifestDigest: string;
+  minimumNebulaVersion?: string;
+  licenses: string[];
+  platforms: string[];
+  toolNames: string[];
+  permissions: string[];
+  signed: boolean;
+}
+
+export interface ToolPackInstallation {
+  id: Identifier;
+  catalogId?: Identifier;
+  publisher: string;
+  name: string;
+  version: string;
+  manifestDigest: string;
+  source: string;
+  trustState: "trusted" | "developer" | "untrusted" | "invalid";
+  runtimeProfileId?: Identifier;
+  imageLocks: Record<string, string>;
+  status: ToolPackStatus;
+  toolNames: string[];
+  permissions: string[];
+  installedAt?: string;
+  verifiedAt?: string;
+  failureDetail?: string;
+}
+
+export interface ToolSummary {
+  name: string;
+  packId: Identifier;
+  packManifestDigest: string;
+  description: string;
+  riskClass: "local_read" | "passive" | "active_scan" | "workspace_write" | "credential_use" | "exploitation" | "persistence" | "destructive" | "scope_change";
+  requiresNetwork: boolean;
+  requiresApproval: boolean;
+  available: boolean;
+  unavailableReason?: string;
+}
+
+export type RunnerRuntime = "podman" | "docker";
+export type RunnerIsolation = "rootless" | "podman_machine" | "docker_desktop_vm" | "unverified";
+
+export interface RunnerProfile {
+  id: Identifier;
+  name: string;
+  runtimeType: RunnerRuntime;
+  executable: string;
+  context?: string;
+  socket?: string;
+  platform: string;
+  isolationMode: RunnerIsolation;
+  state: "ready" | "degraded" | "unavailable" | "unchecked";
+  lastCheckedAt?: string;
+  detail?: string;
+  egressHelperImage?: string;
+  seccompProfile?: string;
+  revision: number;
+}
+
+export interface RunnerProfileUpdateRequest {
+  name: string;
+  runtimeType: RunnerRuntime;
+  executable: string;
+  context?: string;
+  socket?: string;
+  platform: string;
+  isolationMode: Exclude<RunnerIsolation, "unverified">;
+  egressHelperImage?: string;
+  seccompProfile?: string;
+  expectedRevision?: number;
+}
+
+export interface EngagementScopePolicy {
+  id?: Identifier;
+  engagementId: Identifier;
+  allowedCidrs: string[];
+  allowedDomains: string[];
+  allowedUrls: string[];
+  allowedPorts: number[];
+  notBefore?: string;
+  notAfter?: string;
+  prohibitedActions: string[];
+  localOnly: boolean;
+  maxConcurrency: number;
+  grants: MissionGrant[];
+  revision: number;
+}
+
+export interface MissionGrant {
+  riskClasses: string[];
+  toolNames: string[];
+  targets: string[];
+  grantedAt: string;
+  expiresAt: string;
+  grantedBy: string;
+}
+
+export interface EngagementScopeUpdateRequest extends Omit<EngagementScopePolicy, "engagementId" | "revision"> {
+  expectedRevision: number;
+}
+
+export interface EngagementToolAssignment {
+  id?: Identifier;
+  engagementId: Identifier;
+  manifestDigest?: string;
+  toolNames: string[];
+  enabled: boolean;
+  revision: number;
+  updatedBy?: string;
+  updatedAt?: string;
+}
+
+export interface EngagementToolAssignmentUpdateRequest {
+  manifestDigest: string;
+  toolNames: string[];
+  enabled: boolean;
+  expectedRevision?: number;
 }
 
 export interface RunStopRequest {
@@ -76,6 +207,10 @@ export interface ApprovalSummary {
   rationale: string;
   expectedEffects: string;
   arguments: Record<string, unknown>;
+  command?: string[];
+  image?: string;
+  manifestDigest?: string;
+  credentialClass?: string;
   expiresAt?: string;
   createdAt: string;
 }

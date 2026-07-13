@@ -132,6 +132,10 @@ An external Chroma directory is skipped unless the operator supplies
 
 ## Tool safety model
 
+Operator setup, installation locations, CLI/API examples, extension authoring,
+and the truthful Safe Foundation release status are documented in the
+[tool-pack guide](TOOL_PACKS.md).
+
 Executable tools are disabled unless all of these are present:
 
 1. A typed `ToolSpec` with closed JSON schemas and trusted target/path mappings.
@@ -144,6 +148,11 @@ Executable tools are disabled unless all of these are present:
 
 Missing isolation results in analysis-only mode. There is no host execution
 fallback.
+
+The Safe Foundation manifests currently bundled with this repository are
+unresolved release source, not installable signed packs. They contain digest
+placeholders and have no published SBOM/provenance payloads or trust key. Do not
+substitute example digests to enable them.
 
 ## Current release boundary
 

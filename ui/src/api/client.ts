@@ -13,6 +13,8 @@ import type {
   EngagementCreateRequest,
   EvidenceSummary,
   EvidenceUploadRequest,
+  EngagementScopePolicy,
+  EngagementScopeUpdateRequest,
   FindingCreateRequest,
   FindingSummary,
   HealthResponse,
@@ -33,6 +35,13 @@ import type {
   ReportSummary,
   ReportUpdateRequest,
   RunStopRequest,
+  RunnerProfile,
+  RunnerProfileUpdateRequest,
+  EngagementToolAssignment,
+  EngagementToolAssignmentUpdateRequest,
+  ToolPackCatalogEntry,
+  ToolPackInstallation,
+  ToolSummary,
 } from "./types";
 
 type JsonObject = Record<string, unknown>;
@@ -69,6 +78,7 @@ interface WireApproval extends WireEntity {
   risk_class: string;
   exact_request: JsonObject;
   target?: string | null;
+  credential_class?: string | null;
   expected_effects?: string[];
   policy_rationale: string;
   requested_by: string;
@@ -248,6 +258,115 @@ interface WirePersistedChatMessage extends WireEntity {
   metadata?: JsonObject;
 }
 
+interface WireToolPackCatalogEntry extends JsonObject {
+  id?: string;
+  catalog_id?: string;
+  publisher: string;
+  name: string;
+  version: string;
+  description?: string;
+  manifest_digest: string;
+  minimum_nebula_version?: string | null;
+  licenses?: string[];
+  platforms?: string[];
+  tool_names?: string[];
+  permissions?: string[];
+  signed?: boolean;
+}
+
+interface WireToolPackInstallation extends JsonObject {
+  id: string;
+  catalog_id?: string | null;
+  publisher: string;
+  name: string;
+  version: string;
+  manifest_digest: string;
+  source?: string;
+  trust?: "curated" | "trusted_publisher" | "local_unsigned";
+  trust_state?: ToolPackInstallation["trustState"];
+  runtime_profile_id?: string | null;
+  image_locks?: Record<string, string>;
+  status: ToolPackInstallation["status"];
+  tool_names?: string[];
+  permissions?: string[];
+  installed_at?: string | null;
+  verified_at?: string | null;
+  failure_detail?: string | null;
+}
+
+interface WireToolSummary extends JsonObject {
+  name: string;
+  pack_id: string;
+  pack_manifest_digest?: string;
+  manifest_digest?: string;
+  description?: string;
+  risk_class?: ToolSummary["riskClass"];
+  requires_network?: boolean;
+  network_access?: boolean;
+  requires_approval?: boolean;
+  available?: boolean;
+  unavailable_reason?: string | null;
+}
+
+interface WireRunnerProfile extends JsonObject {
+  id: string;
+  name: string;
+  runtime_type?: RunnerProfile["runtimeType"];
+  runtime?: RunnerProfile["runtimeType"];
+  executable: string;
+  context?: string | null;
+  socket?: string | null;
+  platform?: string;
+  isolation_mode?: RunnerProfile["isolationMode"];
+  isolation?: RunnerProfile["isolationMode"];
+  state?: RunnerProfile["state"];
+  enabled?: boolean;
+  healthy?: boolean;
+  last_checked_at?: string | null;
+  last_health_at?: string | null;
+  detail?: string | null;
+  last_health_detail?: string | null;
+  egress_helper_image?: string | null;
+  seccomp_profile?: string | null;
+  revision?: number;
+}
+
+interface WireEngagementScope extends JsonObject {
+  id?: string;
+  engagement_id: string;
+  allowed_cidrs?: string[];
+  allowed_domains?: string[];
+  allowed_urls?: string[];
+  allowed_ports?: number[];
+  not_before?: string | null;
+  not_after?: string | null;
+  prohibited_actions?: string[];
+  local_only?: boolean;
+  max_concurrency?: number;
+  grants?: Array<{
+    risk_classes?: string[];
+    tool_names?: string[];
+    targets?: string[];
+    granted_at?: string;
+    expires_at?: string;
+    granted_by?: string;
+  }>;
+  revision?: number;
+}
+
+interface WireEngagementToolAssignment extends JsonObject {
+  id?: string;
+  engagement_id: string;
+  manifest_digest?: string | null;
+  tool_names?: string[];
+  allowed_tool_names?: string[];
+  enabled?: boolean;
+  revision?: number;
+  updated_by?: string | null;
+  assigned_by?: string | null;
+  updated_at?: string | null;
+}
+
 export interface ApiClientOptions {
   baseUrl?: string;
   token?: string | (() => string | undefined);
@@ -351,6 +470,10 @@ function mapApprovalStatus(value: string): ApprovalSummary["status"] {
 
 function mapApproval(value: WireApproval): ApprovalSummary {
   const request = value.exact_request ?? {};
+  const command = Array.isArray(request.argv)
+    && request.argv.every((item) => typeof item === "string")
+    ? request.argv as string[]
+    : undefined;
   return {
     id: value.id,
     runId: value.run_id,
@@ -365,6 +488,10 @@ function mapApproval(value: WireApproval): ApprovalSummary {
     arguments: request.arguments && typeof request.arguments === "object"
       ? (request.arguments as JsonObject)
       : {},
+    command,
+    image: stringField(request.image),
+    manifestDigest: stringField(request.manifest_digest),
+    credentialClass: value.credential_class ?? undefined,
     expiresAt: value.expires_at ?? undefined,
     createdAt: value.requested_at ?? value.created_at,
   };
@@ -688,6 +815,127 @@ function mapPersistedChatMessage(value: WirePersistedChatMessage): PersistedChat
   };
 }
 
+function wireItems<T>(value: T[] | { items?: T[]; entries?: T[] }): T[] {
+  return Array.isArray(value) ? value : value.items ?? value.entries ?? [];
+}
+
+function mapToolCatalogEntry(value: WireToolPackCatalogEntry): ToolPackCatalogEntry {
+  return {
+    id: value.id ?? value.catalog_id ?? `${value.publisher}/${value.name}@${value.version}`,
+    publisher: value.publisher,
+    name: value.name,
+    version: value.version,
+    description: value.description ?? "",
+    manifestDigest: value.manifest_digest,
+    minimumNebulaVersion: value.minimum_nebula_version ?? undefined,
+    licenses: value.licenses ?? [],
+    platforms: value.platforms ?? [],
+    toolNames: value.tool_names ?? [],
+    permissions: value.permissions ?? [],
+    signed: value.signed !== false,
+  };
+}
+
+function mapToolPackInstallation(value: WireToolPackInstallation): ToolPackInstallation {
+  const trustState = value.trust_state
+    ?? (value.trust === "local_unsigned" ? "developer" : value.trust ? "trusted" : "untrusted");
+  return {
+    id: value.id,
+    catalogId: value.catalog_id ?? undefined,
+    publisher: value.publisher,
+    name: value.name,
+    version: value.version,
+    manifestDigest: value.manifest_digest,
+    source: value.source ?? "local",
+    trustState,
+    runtimeProfileId: value.runtime_profile_id ?? undefined,
+    imageLocks: value.image_locks ?? {},
+    status: value.status,
+    toolNames: value.tool_names ?? [],
+    permissions: value.permissions ?? [],
+    installedAt: value.installed_at ?? undefined,
+    verifiedAt: value.verified_at ?? undefined,
+    failureDetail: value.failure_detail ?? undefined,
+  };
+}
+
+function mapToolSummary(value: WireToolSummary): ToolSummary {
+  return {
+    name: value.name,
+    packId: value.pack_id,
+    packManifestDigest: value.pack_manifest_digest ?? value.manifest_digest ?? "",
+    description: value.description ?? "",
+    riskClass: value.risk_class ?? "passive",
+    requiresNetwork: value.requires_network === true || value.network_access === true,
+    requiresApproval: value.requires_approval === true,
+    available: value.available === true,
+    unavailableReason: value.unavailable_reason ?? undefined,
+  };
+}
+
+function mapRunnerProfile(value: WireRunnerProfile): RunnerProfile {
+  return {
+    id: value.id,
+    name: value.name,
+    runtimeType: value.runtime_type ?? value.runtime ?? "podman",
+    executable: value.executable,
+    context: value.context ?? undefined,
+    socket: value.socket ?? undefined,
+    platform: value.platform ?? "unknown",
+    isolationMode: value.isolation_mode ?? value.isolation ?? "unverified",
+    state: value.state ?? (value.healthy
+      ? "ready"
+      : value.enabled === false
+        ? "unavailable"
+        : value.last_health_at || value.last_checked_at
+          ? "degraded"
+          : "unchecked"),
+    lastCheckedAt: value.last_checked_at ?? value.last_health_at ?? undefined,
+    detail: value.detail ?? value.last_health_detail ?? undefined,
+    egressHelperImage: value.egress_helper_image ?? undefined,
+    seccompProfile: value.seccomp_profile ?? undefined,
+    revision: numberField(value.revision),
+  };
+}
+
+function mapEngagementScope(value: WireEngagementScope): EngagementScopePolicy {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    allowedCidrs: value.allowed_cidrs ?? [],
+    allowedDomains: value.allowed_domains ?? [],
+    allowedUrls: value.allowed_urls ?? [],
+    allowedPorts: value.allowed_ports ?? [],
+    notBefore: value.not_before ?? undefined,
+    notAfter: value.not_after ?? undefined,
+    prohibitedActions: value.prohibited_actions ?? [],
+    localOnly: value.local_only !== false,
+    maxConcurrency: numberField(value.max_concurrency) || 1,
+    grants: (value.grants ?? []).map((grant) => ({
+      riskClasses: grant.risk_classes ?? [],
+      toolNames: grant.tool_names ?? [],
+      targets: grant.targets ?? [],
+      grantedAt: grant.granted_at ?? "",
+      expiresAt: grant.expires_at ?? "",
+      grantedBy: grant.granted_by ?? "",
+    })),
+    revision: numberField(value.revision),
+  };
+}
+
+function mapToolAssignment(value: WireEngagementToolAssignment): EngagementToolAssignment {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    manifestDigest: value.manifest_digest ?? undefined,
+    toolNames: value.tool_names ?? value.allowed_tool_names ?? [],
+    enabled: value.enabled === true,
+    revision: numberField(value.revision),
+    updatedBy: value.updated_by ?? value.assigned_by ?? undefined,
+    updatedAt: value.updated_at ?? undefined,
+  };
+}
+
 async function responseError(response: Response): Promise<ApiError> {
   const text = await response.text();
   let details: unknown = text;
@@ -865,8 +1113,129 @@ export class ApiClient {
         max_tokens: body.maxTokens,
         max_cost_usd: body.maxCostUsd,
         max_retries: body.maxRetries,
+        tool_names: body.toolNames ?? [],
+        max_tool_calls: body.maxToolCalls ?? 0,
+        max_concurrency: body.maxConcurrency ?? 1,
       }),
     }).then(mapRun);
+  }
+
+  listToolCatalog(signal?: AbortSignal): Promise<ToolPackCatalogEntry[]> {
+    return this.request<WireToolPackCatalogEntry[] | { items?: WireToolPackCatalogEntry[]; entries?: WireToolPackCatalogEntry[] }>("tool-catalog", { signal })
+      .then((value) => wireItems(value).map(mapToolCatalogEntry));
+  }
+
+  listToolPacks(signal?: AbortSignal): Promise<ToolPackInstallation[]> {
+    return this.request<WireToolPackInstallation[] | { items?: WireToolPackInstallation[] }>("tool-packs", { signal })
+      .then((value) => wireItems(value).map(mapToolPackInstallation));
+  }
+
+  listTools(signal?: AbortSignal): Promise<ToolSummary[]> {
+    return this.request<WireToolSummary[] | { items?: WireToolSummary[] }>("tools", { signal })
+      .then((value) => wireItems(value).map(mapToolSummary));
+  }
+
+  installToolPack(catalogId: string, runtimeProfileId: string, version?: string): Promise<ToolPackInstallation> {
+    return this.request<WireToolPackInstallation>("tool-packs/install", {
+      method: "POST",
+      body: JSON.stringify({ catalog_id: catalogId, version, runtime_profile_id: runtimeProfileId }),
+    }).then(mapToolPackInstallation);
+  }
+
+  installLocalToolPack(bundleBase64: string, runtimeProfileId: string, developerModeConfirmed: boolean): Promise<ToolPackInstallation> {
+    return this.request<WireToolPackInstallation>("tool-packs/install-local", {
+      method: "POST",
+      body: JSON.stringify({
+        bundle_base64: bundleBase64,
+        runtime_profile_id: runtimeProfileId,
+        developer_mode_confirmed: developerModeConfirmed,
+      }),
+    }).then(mapToolPackInstallation);
+  }
+
+  verifyToolPack(id: string): Promise<ToolPackInstallation> {
+    return this.request<WireToolPackInstallation>(`tool-packs/${encodeURIComponent(id)}/verify`, { method: "POST" })
+      .then(mapToolPackInstallation);
+  }
+
+  updateToolPack(id: string): Promise<ToolPackInstallation> {
+    return this.request<WireToolPackInstallation>(`tool-packs/${encodeURIComponent(id)}/update`, { method: "POST" })
+      .then(mapToolPackInstallation);
+  }
+
+  async removeToolPack(id: string): Promise<void> {
+    await this.request<void>(`tool-packs/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  listRunnerProfiles(signal?: AbortSignal): Promise<RunnerProfile[]> {
+    return this.request<WireRunnerProfile[] | { items?: WireRunnerProfile[] }>("runner-profiles", { signal })
+      .then((value) => wireItems(value).map(mapRunnerProfile));
+  }
+
+  updateRunnerProfile(id: string, body: RunnerProfileUpdateRequest): Promise<RunnerProfile> {
+    return this.request<WireRunnerProfile>(`runner-profiles/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: body.name,
+        runtime: body.runtimeType,
+        executable: body.executable,
+        context: body.context || null,
+        socket: body.socket || null,
+        platform: body.platform,
+        isolation: body.isolationMode,
+        ...(body.egressHelperImage ? { egress_helper_image: body.egressHelperImage } : {}),
+        ...(body.seccompProfile ? { seccomp_profile: body.seccompProfile } : {}),
+        expected_revision: body.expectedRevision,
+      }),
+    }).then(mapRunnerProfile);
+  }
+
+  getEngagementScope(engagementId: string, signal?: AbortSignal): Promise<EngagementScopePolicy> {
+    return this.request<WireEngagementScope>(`engagements/${encodeURIComponent(engagementId)}/scope`, { signal })
+      .then(mapEngagementScope);
+  }
+
+  updateEngagementScope(engagementId: string, body: EngagementScopeUpdateRequest): Promise<EngagementScopePolicy> {
+    return this.request<WireEngagementScope>(`engagements/${encodeURIComponent(engagementId)}/scope`, {
+      method: "PUT",
+      body: JSON.stringify({
+        allowed_cidrs: body.allowedCidrs,
+        allowed_domains: body.allowedDomains,
+        allowed_urls: body.allowedUrls,
+        allowed_ports: body.allowedPorts,
+        not_before: body.notBefore || null,
+        not_after: body.notAfter || null,
+        prohibited_actions: body.prohibitedActions,
+        local_only: body.localOnly,
+        max_concurrency: body.maxConcurrency,
+        grants: body.grants.map((grant) => ({
+          risk_classes: grant.riskClasses,
+          tool_names: grant.toolNames,
+          targets: grant.targets,
+          granted_at: grant.grantedAt,
+          expires_at: grant.expiresAt,
+          granted_by: grant.grantedBy,
+        })),
+        expected_revision: body.expectedRevision || undefined,
+      }),
+    }).then(mapEngagementScope);
+  }
+
+  listEngagementToolAssignments(engagementId: string, signal?: AbortSignal): Promise<EngagementToolAssignment[]> {
+    return this.request<WireEngagementToolAssignment[] | { items?: WireEngagementToolAssignment[] }>(`engagements/${encodeURIComponent(engagementId)}/tool-assignment`, { signal })
+      .then((value) => wireItems(value).map(mapToolAssignment));
+  }
+
+  updateEngagementToolAssignment(engagementId: string, body: EngagementToolAssignmentUpdateRequest): Promise<EngagementToolAssignment> {
+    return this.request<WireEngagementToolAssignment>(`engagements/${encodeURIComponent(engagementId)}/tool-assignment`, {
+      method: "PUT",
+      body: JSON.stringify({
+        manifest_digest: body.manifestDigest,
+        tool_names: body.toolNames,
+        enabled: body.enabled,
+        expected_revision: body.expectedRevision || undefined,
+      }),
+    }).then(mapToolAssignment);
   }
 
   stopRun(id: string, body: RunStopRequest = {}): Promise<AgentRunSummary> {

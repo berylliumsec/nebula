@@ -520,4 +520,104 @@ describe("Nebula workspace", () => {
     expect(row).not.toBeNull();
     expect(within(row!).getAllByRole("cell")[4]).toHaveTextContent("1");
   });
+
+  it("keeps Core online and explains analysis-only degradation when tooling endpoints are unavailable", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const featurePaths = ["/runner-profiles", "/scope", "/tool-assignment"];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Bounded review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/tool-catalog")) return new Response(JSON.stringify({ detail: "Tool platform is not configured" }), { status: 501 });
+      if (featurePaths.some((suffix) => path.endsWith(suffix))) return new Response(JSON.stringify({ detail: "Feature not installed" }), { status: 404 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp("/settings");
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
+    expect(await screen.findByText("Tool packs are not available in this Core build")).toBeVisible();
+    expect(screen.getByText("Runner profiles are not available in this Core build")).toBeVisible();
+    expect(screen.getByText("Scope editing is unavailable")).toBeVisible();
+    expect(screen.getByText("Tool assignments are unavailable")).toBeVisible();
+  });
+
+  it("starts with zero tools, then submits only selected assigned tools and bounded budgets", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Tool review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/providers")) return new Response(JSON.stringify([{ ...entity, id: "provider-1", name: "Structured provider", provider_type: "vllm", enabled: true, is_local: true, model_allowlist: ["model-1"], capabilities: { streaming: true, tool_calling: true, strict_structured_output: true }, privacy: { local_only: true, residency: [] }, metadata: { default_model: "model-1" } }]), { status: 200 });
+      if (path.endsWith("/tool-assignment")) return new Response(JSON.stringify([{ id: "assignment-1", engagement_id: "engagement-1", manifest_digest: "sha256:network", tool_names: ["nmap.connect_scan"], enabled: true, revision: 1 }]), { status: 200 });
+      if (path.endsWith("/tools")) return new Response(JSON.stringify([{ name: "nmap.connect_scan", pack_id: "pack-network", pack_manifest_digest: "sha256:network", description: "TCP connect scan", risk_class: "active_scan", requires_network: true, requires_approval: true, available: true }]), { status: 200 });
+      if (path.endsWith("/missions") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ ...entity, id: "run-1", engagement_id: "engagement-1", objective: body.objective, status: "queued", metadata: {} }), { status: 202 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp();
+
+    await screen.findByRole("heading", { name: "Tool review" });
+    await user.click(screen.getByRole("button", { name: "New mission" }));
+    let dialog = screen.getByRole("dialog", { name: "New mission" });
+    expect(within(dialog).getByText(/empty tool list and a zero tool-call budget/i)).toBeVisible();
+    await user.type(within(dialog).getByRole("textbox", { name: "Objective" }), "Scan the assigned target");
+    await user.click(await within(dialog).findByRole("checkbox", { name: /nmap\.connect_scan/i }));
+    expect(within(dialog).getByRole("spinbutton", { name: "Maximum tool calls" })).toHaveValue(20);
+    expect(within(dialog).getByRole("spinbutton", { name: "Maximum concurrency" })).toHaveValue(2);
+    await user.click(within(dialog).getByRole("button", { name: "Close mission dialog" }));
+    await user.click(screen.getByRole("button", { name: "New mission" }));
+    dialog = screen.getByRole("dialog", { name: "New mission" });
+    expect(within(dialog).getByRole("checkbox", { name: /nmap\.connect_scan/i })).not.toBeChecked();
+    expect(within(dialog).queryByRole("spinbutton", { name: "Maximum tool calls" })).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("checkbox", { name: /nmap\.connect_scan/i }));
+    await user.click(within(dialog).getByRole("button", { name: "Start mission" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/missions") && request?.method === "POST")).toBe(true));
+    const call = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/missions") && request?.method === "POST");
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ tool_names: ["nmap.connect_scan"], max_tool_calls: 20, max_concurrency: 2 });
+  });
+
+  it("shows replayed tool-pack progress in Settings", async () => {
+    class ToolPackWebSocket extends EventTarget {
+      static instance?: ToolPackWebSocket;
+      readonly url: string;
+      readonly protocols: string[];
+      constructor(url: string | URL, protocols: string | string[]) {
+        super();
+        this.url = String(url);
+        this.protocols = typeof protocols === "string" ? [protocols] : protocols;
+        ToolPackWebSocket.instance = this;
+      }
+      close() { this.dispatchEvent(new CloseEvent("close", { code: 1000 })); }
+    }
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Progress review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/scope")) return new Response(JSON.stringify({ ...entity, id: "scope:engagement-1", engagement_id: "engagement-1", allowed_cidrs: [], allowed_domains: [], allowed_urls: [], allowed_ports: [], prohibited_actions: [], local_only: true, max_concurrency: 1, grants: [] }), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", ToolPackWebSocket);
+    renderApp("/settings");
+
+    const progressRegion = await screen.findByRole("region", { name: "Tool-pack installation progress" });
+    await waitFor(() => expect(ToolPackWebSocket.instance).toBeDefined());
+    expect(ToolPackWebSocket.instance?.url).toContain("/api/v1/tool-packs/events/ws?after_sequence=0");
+    expect(ToolPackWebSocket.instance?.protocols[0]).toBe("nebula.tool-packs.v1");
+    act(() => ToolPackWebSocket.instance?.dispatchEvent(new Event("open")));
+    act(() => ToolPackWebSocket.instance?.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ kind: "event", event: { sequence: 1, occurred_at: "2026-07-12T19:00:00Z", operation_id: "operation-1", operation: "install_catalog", phase: "verifying", pack_identity: "berylliumsec/network@1.0.0", manifest_digest: "a".repeat(64) } }) })));
+    expect(await within(progressRegion).findByText("berylliumsec/network@1.0.0")).toBeVisible();
+    expect(within(progressRegion).getByText("verifying")).toBeVisible();
+    act(() => ToolPackWebSocket.instance?.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ kind: "event", event: { sequence: 2, occurred_at: "2026-07-12T19:00:01Z", operation_id: "operation-1", operation: "install_catalog", phase: "ready", pack_identity: "berylliumsec/network@1.0.0", manifest_digest: "a".repeat(64), result_status: "ready" } }) })));
+    expect(await within(progressRegion).findByText("ready")).toBeVisible();
+    expect(within(progressRegion).queryByText("verifying")).not.toBeInTheDocument();
+  });
 });

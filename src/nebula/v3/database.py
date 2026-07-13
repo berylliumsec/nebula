@@ -19,6 +19,7 @@ from sqlalchemy import (
     create_engine,
     event,
     func,
+    insert,
     select,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -194,7 +195,7 @@ class Database:
             current = connection.scalar(select(func.max(SchemaVersionRow.version)))
             if current is None:
                 connection.execute(
-                    SchemaVersionRow.__table__.insert().values(
+                    insert(SchemaVersionRow).values(
                         version=CURRENT_SCHEMA_VERSION, applied_at=utc_now()
                     )
                 )
@@ -227,9 +228,7 @@ class Database:
             # ``Base.metadata.create_all`` has already installed the additive
             # budget counter table. Record the migration only after that DDL.
             connection.execute(
-                SchemaVersionRow.__table__.insert().values(
-                    version=2, applied_at=utc_now()
-                )
+                insert(SchemaVersionRow).values(version=2, applied_at=utc_now())
             )
             return
         raise SchemaVersionError(f"no migration path from schema {current} to {target}")

@@ -11,10 +11,13 @@ from nebula.v3.domain import (
     AgentRun,
     Engagement,
     ProviderProfile,
+    RiskClass,
     RunStatus,
     ScopePolicy,
     Task,
     TaskStatus,
+    ToolCall,
+    ToolCallStatus,
 )
 from nebula.v3.missions import MissionService
 from nebula.v3.providers import (
@@ -406,6 +409,15 @@ def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
         assert started.status_code == 202
         run_id = started.json()["id"]
         assert provider.started.wait(timeout=5)
+        waiting_call = store.create(
+            ToolCall(
+                engagement_id=engagement.id,
+                run_id=run_id,
+                tool_name="nmap.connect_scan",
+                status=ToolCallStatus.WAITING_APPROVAL,
+                risk_class=RiskClass.ACTIVE_SCAN,
+            )
+        )
 
         stopped = client.post(
             f"/api/v1/runs/{run_id}/stop",
@@ -427,10 +439,14 @@ def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
         assert attempts and {attempt.status for attempt in attempts} == {
             TaskStatus.CANCELLED
         }
+        cancelled_call = store.get(ToolCall, waiting_call.id)
+        assert cancelled_call.status == ToolCallStatus.CANCELLED
+        assert cancelled_call.error == "Operator ended the review"
         events = store.replay_events(run_id)
-        assert [event.event_type for event in events][-3:] == [
+        assert [event.event_type for event in events][-4:] == [
             "run.stop_requested",
             "task.cancelled",
+            "tool.cancelled",
             "run.cancelled",
         ]
         assert events[-1].payload["reason"] == "Operator ended the review"

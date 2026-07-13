@@ -1,0 +1,61 @@
+api_version: tools.nebula.security/v1
+kind: ToolPack
+metadata:
+  publisher: berylliumsec
+  name: safe-web
+  version: 0.1.0
+  minimum_nebula_version: 3.0.0a1
+  description: Bounded Nuclei and Nikto web observations.
+  licenses: [MIT, GPL-2.0-only]
+images:
+  - {name: nuclei, platform: linux/amd64, image: "ghcr.io/berylliumsec/nebula-tools/nuclei@{{sha256:nuclei-amd64}}", sbom: sbom/nuclei-amd64.cdx.json, provenance: provenance/nuclei-amd64.intoto.jsonl}
+  - {name: nuclei, platform: linux/arm64, image: "ghcr.io/berylliumsec/nebula-tools/nuclei@{{sha256:nuclei-arm64}}", sbom: sbom/nuclei-arm64.cdx.json, provenance: provenance/nuclei-arm64.intoto.jsonl}
+  - {name: nikto, platform: linux/amd64, image: "ghcr.io/berylliumsec/nebula-tools/nikto@{{sha256:nikto-amd64}}", sbom: sbom/nikto-amd64.cdx.json, provenance: provenance/nikto-amd64.intoto.jsonl}
+  - {name: nikto, platform: linux/arm64, image: "ghcr.io/berylliumsec/nebula-tools/nikto@{{sha256:nikto-arm64}}", sbom: sbom/nikto-arm64.cdx.json, provenance: provenance/nikto-arm64.intoto.jsonl}
+permissions: {network: true, workspace: none, credentials: []}
+tools:
+  - name: nuclei.scan
+    description: Run curated non-headless templates without OAST, code, or file templates.
+    image: nuclei
+    executable: /usr/local/bin/nuclei
+    fixed_arguments: [-jsonl, -silent, -no-interactsh, -disable-update-check, -templates, /opt/nebula/nuclei-templates, -exclude-tags, "headless,code,file,fuzz"]
+    argument_bindings:
+      - {argument: target, kind: value, flag: -u}
+      - {argument: severity, kind: csv, flag: -severity}
+    input_schema:
+      type: object
+      properties:
+        target: {type: string, format: uri, maxLength: 2048}
+        severity: {type: array, minItems: 1, maxItems: 5, uniqueItems: true, items: {enum: [info, low, medium, high, critical]}}
+      required: [target, severity]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties: {findings: {type: array}}
+      required: [findings]
+      additionalProperties: false
+    policy: {risk_class: active_scan, target_argument: target, network_access: true, filesystem_access: none, requires_approval: true, idempotency: key_required}
+    parser: {built_in: nuclei.jsonl/v1}
+    smoke_tests:
+      - {arguments: {target: "http://127.0.0.1:1/", severity: [info]}, expected_exit_code: 0, timeout_seconds: 30}
+  - name: nikto.scan
+    description: Run a bounded Nikto web-server scan against one approved URL.
+    image: nikto
+    executable: /usr/local/bin/nikto
+    fixed_arguments: [-ask, "no", -Format, json, -output, -]
+    argument_bindings:
+      - {argument: target, kind: value, flag: -host}
+    input_schema:
+      type: object
+      properties: {target: {type: string, format: uri, maxLength: 2048}}
+      required: [target]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties: {vulnerabilities: {type: array}}
+      required: [vulnerabilities]
+      additionalProperties: false
+    policy: {risk_class: active_scan, target_argument: target, network_access: true, filesystem_access: none, requires_approval: true, idempotency: key_required}
+    parser: {built_in: nikto.json/v1}
+    smoke_tests:
+      - {arguments: {target: "http://127.0.0.1:1/"}, expected_exit_code: 0, timeout_seconds: 30}

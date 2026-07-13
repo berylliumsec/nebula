@@ -3,27 +3,39 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterator
+import re
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
 from .domain import (
     AgentAttempt,
     AgentRun,
+    Approval,
+    ApprovalStatus,
     Engagement,
+    EngagementToolAssignment,
     ProviderProfile,
     RunBudget,
     RunStatus,
+    ScopePolicy,
     Task,
     TaskStatus,
+    ToolPackInstallation,
+    ToolPackInstallationStatus,
+    ToolCall,
+    ToolCallStatus,
     utc_now,
 )
 from .orchestration import (
     MissionRuntime,
     ModelSpecialist,
+    Specialist,
     SpecialistRole,
     StaticSupervisor,
+    Supervisor,
     sqlite_mission_runtime,
 )
 from .providers import ModelProvider, ProviderError, provider_from_profile
@@ -71,6 +83,18 @@ ProviderFactory = Callable[[ProviderProfile], ModelProvider]
 RuntimeFactory = Callable[..., AbstractAsyncContextManager[MissionRuntime]]
 
 
+@dataclass(frozen=True)
+class MissionComponents:
+    """Fully validated runtime capabilities for one durable mission."""
+
+    supervisor: Supervisor
+    specialists: Mapping[SpecialistRole, Specialist]
+    context: dict[str, object] = field(default_factory=dict)
+
+
+ToolComponentsFactory = Callable[[AgentRun, ModelProvider], MissionComponents]
+
+
 def default_checkpoint_path(store: NebulaStore) -> Path | None:
     """Keep local mission checkpoints beside the authoritative SQLite database."""
 
@@ -94,6 +118,7 @@ class MissionService:
         checkpoint_path: str | Path | None = None,
         provider_factory: ProviderFactory = provider_from_profile,
         runtime_factory: RuntimeFactory = sqlite_mission_runtime,
+        tool_components_factory: ToolComponentsFactory | None = None,
         max_active_missions: int = 4,
         cancellation_timeout_seconds: float = 5.0,
     ) -> None:
@@ -109,6 +134,7 @@ class MissionService:
         )
         self.provider_factory = provider_factory
         self.runtime_factory = runtime_factory
+        self.tool_components_factory = tool_components_factory
         self.max_active_missions = max_active_missions
         self.cancellation_timeout_seconds = cancellation_timeout_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -152,6 +178,7 @@ class MissionService:
         provider_id: str,
         model: str,
         budget: RunBudget,
+        tool_names: list[str] | None = None,
         actor_id: str = "operator",
     ) -> AgentRun:
         """Validate, queue, and schedule one explicit analysis-only mission."""
@@ -159,13 +186,20 @@ class MissionService:
         clean_objective = objective.strip()
         clean_provider_id = provider_id.strip()
         clean_model = model.strip()
+        selected_tools = list(dict.fromkeys(tool_names or ()))
         if not clean_objective:
             raise MissionConfigurationError("mission objective cannot be empty")
         if not clean_provider_id or not clean_model:
             raise MissionConfigurationError(
                 "missions require an explicit provider and model"
             )
-        self._validate_budget(budget)
+        if any(
+            not isinstance(name, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_.-]{1,127}", name)
+            for name in selected_tools
+        ):
+            raise MissionConfigurationError("mission tool names are invalid")
+        self._validate_budget(budget, tool_names=selected_tools)
         if self.checkpoint_path is None:
             raise MissionServiceUnavailable(
                 "API missions require a file-backed local SQLite checkpoint store"
@@ -193,10 +227,90 @@ class MissionService:
             raise MissionConfigurationError(
                 f"provider profile {clean_provider_id!r} is disabled"
             )
+        pack_digests: list[str] = []
+        if selected_tools:
+            if not (provider.capabilities.tools and provider.capabilities.strict_tools):
+                raise MissionConfigurationError(
+                    "executable missions require reliable strict structured tool calling"
+                )
+            if not engagement.scope_policy_id:
+                raise MissionConfigurationError(
+                    "executable missions require an engagement scope policy"
+                )
+            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if scope.engagement_id != engagement.id:
+                raise MissionConfigurationError(
+                    "engagement scope policy ownership is inconsistent"
+                )
+            if budget.max_concurrency > scope.max_concurrency:
+                raise MissionConfigurationError(
+                    "mission concurrency exceeds the engagement scope policy"
+                )
+            assignments = [
+                assignment
+                for assignment in self.store.list_entities(
+                    EngagementToolAssignment, limit=1_000
+                )
+                if assignment.engagement_id == engagement.id and assignment.enabled
+            ]
+            allowed = {
+                name: assignment.manifest_digest
+                for assignment in assignments
+                for name in assignment.allowed_tool_names
+            }
+            missing = sorted(set(selected_tools) - allowed.keys())
+            if missing:
+                raise MissionConfigurationError(
+                    f"mission tools are not assigned to the engagement: {missing}"
+                )
+            pack_digests = sorted({allowed[name] for name in selected_tools})
+            installations = self.store.list_entities(ToolPackInstallation, limit=1_000)
+            ready = {
+                item.manifest_digest
+                for item in installations
+                if item.status == ToolPackInstallationStatus.READY
+            }
+            unavailable = sorted(set(pack_digests) - ready)
+            if unavailable:
+                raise MissionConfigurationError(
+                    f"mission tool packs are not verified and ready: {unavailable}"
+                )
         try:
             validate_engagement_provider_privacy(self.store, engagement, provider)
         except ProviderPrivacyViolation as exc:
             raise MissionConfigurationError(str(exc)) from exc
+
+        run = AgentRun(
+            id=str(uuid4()),
+            engagement_id=engagement_id,
+            objective=clean_objective,
+            status=RunStatus.QUEUED,
+            supervisor_provider_id=profile.id,
+            supervisor_model=clean_model,
+            budget=budget,
+            tool_pack_digests=pack_digests,
+            metadata={
+                "analysis_only": not selected_tools,
+                "origin": "api",
+                **({"tool_names": selected_tools} if selected_tools else {}),
+            },
+        )
+        if selected_tools:
+            if self.tool_components_factory is None:
+                raise MissionServiceUnavailable(
+                    "tool mission runtime is not configured"
+                )
+            try:
+                # Build the locked registry before persistence so arbitrary
+                # assignment names and unavailable runners fail as explicit
+                # configuration errors rather than queued background work.
+                self.tool_components_factory(run, provider)
+            except MissionServiceError:
+                raise
+            except Exception as exc:
+                raise MissionConfigurationError(
+                    f"tool mission preflight failed: {self._safe_error(exc)}"
+                ) from exc
 
         async with self._lock:
             if self._closed:
@@ -206,16 +320,6 @@ class MissionService:
                 raise MissionCapacityError(
                     "local mission concurrency limit has been reached"
                 )
-            run = AgentRun(
-                id=str(uuid4()),
-                engagement_id=engagement_id,
-                objective=clean_objective,
-                status=RunStatus.QUEUED,
-                supervisor_provider_id=profile.id,
-                supervisor_model=clean_model,
-                budget=budget,
-                metadata={"analysis_only": True, "origin": "api"},
-            )
             run, _ = self.store.create_with_event(
                 run,
                 run_id=run.id,
@@ -225,7 +329,15 @@ class MissionService:
                     "provider_id": profile.id,
                     "model": clean_model,
                     "budget": budget.model_dump(mode="json"),
-                    "analysis_only": True,
+                    "analysis_only": not selected_tools,
+                    **(
+                        {
+                            "tool_names": selected_tools,
+                            "tool_pack_digests": pack_digests,
+                        }
+                        if selected_tools
+                        else {}
+                    ),
                 },
                 actor_id=actor_id,
                 idempotency_key="run:queued",
@@ -297,6 +409,66 @@ class MissionService:
             return self.store.get(AgentRun, run.id)
         return self.store.get(AgentRun, run.id)
 
+    async def resume_after_approval(
+        self, approval: Approval, *, actor_id: str = "operator"
+    ) -> AgentRun:
+        """Resume the durable graph using only the persisted operator decision."""
+
+        if approval.status not in {
+            ApprovalStatus.APPROVED,
+            ApprovalStatus.EDITED,
+            ApprovalStatus.REJECTED,
+            ApprovalStatus.CANCELLED,
+        }:
+            raise MissionStateError("approval does not contain a terminal decision")
+        run = self.store.get(AgentRun, approval.run_id)
+        if run.status != RunStatus.WAITING_APPROVAL:
+            raise MissionStateError(
+                f"run {run.id} is not waiting for approval ({run.status.value})"
+            )
+        if not run.supervisor_provider_id:
+            raise MissionStateError("approval run has no provider profile")
+        profile = self.store.get(ProviderProfile, run.supervisor_provider_id)
+        provider = self.provider_factory(profile)
+        response: dict[str, object] = {
+            "approval_id": approval.id,
+            "status": approval.status.value,
+            "decided_by": approval.decided_by,
+            "decided_at": (
+                approval.decided_at.isoformat() if approval.decided_at else None
+            ),
+        }
+        async with self._lock:
+            if self._closed:
+                raise MissionServiceUnavailable("mission service is shutting down")
+            self._discard_finished_tasks()
+            if run.id in self._tasks:
+                raise MissionStateError("mission already has active work")
+            if len(self._tasks) >= self.max_active_missions:
+                raise MissionCapacityError(
+                    "local mission concurrency limit has been reached"
+                )
+            resumed, _ = self.store.update_with_event(
+                AgentRun,
+                run.id,
+                {
+                    "status": RunStatus.RUNNING,
+                    "metadata": {**run.metadata, "waiting_approval": False},
+                },
+                expected_revision=run.revision,
+                run_id=run.id,
+                event_type="run.approval_resume_queued",
+                event_payload={"approval_id": approval.id},
+                actor_id=actor_id,
+                idempotency_key=f"run:{run.id}:approval:{approval.id}:resume",
+            )
+            task = asyncio.create_task(
+                self._resume_execute(resumed, provider, response),
+                name=f"nebula-mission-resume-{run.id}",
+            )
+            self._tasks[run.id] = task
+            return resumed
+
     async def shutdown(self) -> None:
         """Request cancellation for every owned task and wait only a bounded time."""
 
@@ -341,18 +513,13 @@ class MissionService:
                 {"status": RunStatus.PLANNING, "started_at": started_at},
                 expected_revision=current.revision,
             )
-            max_tokens = queued.budget.max_tokens or 2_048
-            specialist = ModelSpecialist(
-                provider,
-                model=queued.supervisor_model,
-                max_output_tokens=min(2_048, max_tokens),
-            )
+            components = self._components(queued, provider)
             assert self.checkpoint_path is not None
             async with self.runtime_factory(
                 checkpoint_path=self.checkpoint_path,
                 store=self.store,
-                supervisor=StaticSupervisor(),
-                specialists={SpecialistRole.SCOPE_PLANNING: specialist},
+                supervisor=components.supervisor,
+                specialists=components.specialists,
             ) as runtime:
                 try:
                     state = await runtime.start(
@@ -362,6 +529,7 @@ class MissionService:
                         run_id=queued.id,
                         provider_id=queued.supervisor_provider_id,
                         model=queued.supervisor_model,
+                        context=components.context,
                     )
                 except asyncio.CancelledError as exc:
                     # LangGraph attaches its background-executor exit task to the
@@ -415,6 +583,100 @@ class MissionService:
                 if self._tasks.get(queued.id) is current_task:
                     self._tasks.pop(queued.id, None)
                 self._cancel_reasons.pop(queued.id, None)
+
+    async def _resume_execute(
+        self,
+        run: AgentRun,
+        provider: ModelProvider,
+        response: dict[str, object],
+    ) -> None:
+        try:
+            components = self._components(run, provider)
+            assert self.checkpoint_path is not None
+            async with self.runtime_factory(
+                checkpoint_path=self.checkpoint_path,
+                store=self.store,
+                supervisor=components.supervisor,
+                specialists=components.specialists,
+            ) as runtime:
+                try:
+                    state = await runtime.resume(run.id, response)
+                except asyncio.CancelledError as exc:
+                    await self._await_graph_cleanup(exc)
+                    raise
+            latest = self.store.get(AgentRun, run.id)
+            if latest.status not in _TERMINAL_RUN_STATUSES:
+                if state.get("__interrupt__"):
+                    self.store.update_with_event(
+                        AgentRun,
+                        latest.id,
+                        {
+                            "status": RunStatus.WAITING_APPROVAL,
+                            "metadata": {
+                                **latest.metadata,
+                                "waiting_approval": True,
+                            },
+                        },
+                        expected_revision=latest.revision,
+                        run_id=latest.id,
+                        event_type="run.waiting_approval",
+                        event_payload={
+                            "reason": "mission requires another operator decision"
+                        },
+                        actor_id="system",
+                        idempotency_key=(
+                            f"run:{latest.id}:waiting_approval:"
+                            f"{response.get('approval_id')}"
+                        ),
+                    )
+                else:
+                    self._finalize_failed(
+                        latest.id, "resumed mission ended without a terminal result"
+                    )
+        except asyncio.CancelledError:
+            reason, actor = self._cancel_reasons.get(
+                run.id, ("Mission background task was cancelled", "system")
+            )
+            self._finalize_cancelled(run.id, reason, actor)
+        except Exception as exc:
+            latest = self.store.get(AgentRun, run.id)
+            if latest.status == RunStatus.CANCELLING:
+                reason, actor = self._cancel_reasons.get(
+                    run.id, ("Stopped by operator", "operator")
+                )
+                self._finalize_cancelled(run.id, reason, actor)
+            elif latest.status not in _TERMINAL_RUN_STATUSES:
+                self._finalize_failed(run.id, self._safe_error(exc))
+        finally:
+            async with self._lock:
+                current_task = asyncio.current_task()
+                if self._tasks.get(run.id) is current_task:
+                    self._tasks.pop(run.id, None)
+                self._cancel_reasons.pop(run.id, None)
+
+    def _components(self, run: AgentRun, provider: ModelProvider) -> MissionComponents:
+        tool_names = run.metadata.get("tool_names", [])
+        if tool_names:
+            if self.tool_components_factory is None:
+                raise MissionServiceUnavailable(
+                    "tool mission runtime is not configured"
+                )
+            components = self.tool_components_factory(run, provider)
+            if not components.specialists:
+                raise MissionConfigurationError(
+                    "tool mission did not produce any bounded specialists"
+                )
+            return components
+        max_tokens = run.budget.max_tokens or 2_048
+        specialist = ModelSpecialist(
+            provider,
+            model=run.supervisor_model,
+            max_output_tokens=min(2_048, max_tokens),
+        )
+        return MissionComponents(
+            supervisor=StaticSupervisor(),
+            specialists={SpecialistRole.SCOPE_PLANNING: specialist},
+        )
 
     def _finalize_cancelled(self, run_id: str, reason: str, actor_id: str) -> AgentRun:
         run = self.store.get(AgentRun, run_id)
@@ -507,6 +769,29 @@ class MissionService:
                 },
                 expected_revision=attempt.revision,
             )
+        for call in self._run_tool_calls(run):
+            if call.status in {
+                ToolCallStatus.COMPLETE,
+                ToolCallStatus.FAILED,
+                ToolCallStatus.DENIED,
+                ToolCallStatus.CANCELLED,
+            }:
+                continue
+            self.store.update_with_event(
+                ToolCall,
+                call.id,
+                {
+                    "status": ToolCallStatus.CANCELLED,
+                    "completed_at": utc_now(),
+                    "error": reason,
+                },
+                expected_revision=call.revision,
+                run_id=run.id,
+                event_type="tool.cancelled",
+                event_payload={"tool_call_id": call.id, "reason": reason},
+                actor_id="system",
+                idempotency_key=f"tool:{call.id}:mission_cancelled",
+            )
 
     def _fail_open_work(self, run: AgentRun, error: str) -> None:
         for task in self._run_tasks(run):
@@ -565,6 +850,20 @@ class MissionService:
                 return
             offset += len(page)
 
+    def _run_tool_calls(self, run: AgentRun) -> Iterator[ToolCall]:
+        offset = 0
+        while True:
+            page = self.store.list_entities(
+                ToolCall,
+                engagement_id=run.engagement_id,
+                offset=offset,
+                limit=1_000,
+            )
+            yield from (call for call in page if call.run_id == run.id)
+            if len(page) < 1_000:
+                return
+            offset += len(page)
+
     def _discard_finished_tasks(self) -> None:
         for run_id, task in list(self._tasks.items()):
             if task.done():
@@ -583,13 +882,29 @@ class MissionService:
                 # handled by durable run/task terminalization below.
                 pass
 
-    @staticmethod
-    def _validate_budget(budget: RunBudget) -> None:
-        if budget.max_tool_calls != 0:
-            raise MissionConfigurationError("API missions are analysis-only")
-        if budget.max_concurrency != 1 or budget.max_delegation_depth != 0:
+    def _validate_budget(self, budget: RunBudget, *, tool_names: list[str]) -> None:
+        if tool_names:
+            if self.tool_components_factory is None:
+                raise MissionConfigurationError(
+                    "executable mission tools are unavailable in this Core"
+                )
+            if budget.max_tool_calls < 1:
+                raise MissionConfigurationError(
+                    "executable missions require a positive tool-call budget"
+                )
+            if budget.max_tool_calls > 100:
+                raise MissionConfigurationError("mission tool-call budget exceeds 100")
+            if budget.max_concurrency > 2 or budget.max_delegation_depth != 1:
+                raise MissionConfigurationError(
+                    "executable missions allow concurrency up to 2 and delegation depth 1"
+                )
+        elif (
+            budget.max_tool_calls != 0
+            or budget.max_concurrency != 1
+            or budget.max_delegation_depth != 0
+        ):
             raise MissionConfigurationError(
-                "API missions require one non-delegating analysis task"
+                "analysis-only missions require zero tools and one non-delegating task"
             )
         if budget.max_duration_seconds > MAX_API_MISSION_DURATION_SECONDS:
             raise MissionConfigurationError("mission duration exceeds the API limit")
@@ -620,6 +935,7 @@ __all__ = [
     "MAX_API_MISSION_TOKENS",
     "MissionCapacityError",
     "MissionConfigurationError",
+    "MissionComponents",
     "MissionService",
     "MissionServiceError",
     "MissionServiceUnavailable",

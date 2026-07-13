@@ -13,7 +13,7 @@ import { NebulaEventStream, type StreamState } from "../api/events";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
 import type {
   AgentRunSummary,
-  ApprovalDecision,
+  ApprovalDecisionRequest,
   ApprovalSummary,
   AssetSummary,
   AssetCreateRequest,
@@ -99,7 +99,7 @@ interface WorkspaceContextValue {
   providerCatalog: ProviderCatalogEntry[];
   knowledgeSources: KnowledgeSource[];
   previewMode: boolean;
-  resolveApproval: (id: string, decision: ApprovalDecision) => Promise<void>;
+  resolveApproval: (id: string, request: ApprovalDecisionRequest) => Promise<void>;
   refreshProvider: (id: string) => Promise<void>;
   addProvider: (request: ProviderCreateRequest) => Promise<void>;
   updateProvider: (id: string, request: ProviderUpdateRequest) => Promise<ProviderHealth>;
@@ -305,9 +305,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   }, [api, coreState]);
 
   const resolveApproval = useCallback(
-    async (id: string, decision: ApprovalDecision) => {
+    async (id: string, request: ApprovalDecisionRequest) => {
       if (coreState === "online" && api) {
-        const updated = await api.decideApproval(id, { decision });
+        const updated = await api.decideApproval(id, request);
         setApprovals((current) =>
           current
             .map((item) => (item.id === id ? updated : item))

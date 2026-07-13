@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-from sqlalchemy import and_, delete, exists, or_, select, update
+from sqlalchemy import and_, delete, exists, insert, or_, select, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
@@ -92,7 +92,7 @@ class OperatorProfileService:
                         update={"active": True, "activated_at": utc_now()}
                     )
                 connection.execute(
-                    EntityRow.__table__.insert().values(
+                    insert(EntityRow).values(
                         id=candidate.id,
                         kind=candidate.entity_kind,
                         engagement_id=None,

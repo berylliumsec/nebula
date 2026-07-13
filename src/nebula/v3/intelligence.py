@@ -17,7 +17,7 @@ from urllib.parse import unquote
 import httpx
 from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel, Field
-from semantic_version import Version as SemanticVersion
+from semantic_version import Version as SemanticVersion  # type: ignore[import-untyped]
 
 from .artifacts import ArtifactStore
 from .domain import (
@@ -178,23 +178,24 @@ def _version(value: str) -> Version | tuple[tuple[int, int | str], ...]:
         return Version(value)
     except InvalidVersion:
         tokens = re.findall(r"\d+|[a-zA-Z]+", value.lower())
-        return tuple(
-            (0, int(token)) if token.isdigit() else (1, token) for token in tokens
-        )
+        normalized: list[tuple[int, int | str]] = []
+        for token in tokens:
+            normalized.append((0, int(token)) if token.isdigit() else (1, token))
+        return tuple(normalized)
 
 
 def _compare(left: str, right: str) -> int:
     a = _version(left)
     b = _version(right)
-    if type(a) is not type(b):
-        # Invalid vendor versions compare through a stable token representation.
-        a = tuple(
-            (1, str(a)),
-        )
-        b = tuple(
-            (1, str(b)),
-        )
-    return (a > b) - (a < b)
+    if isinstance(a, Version) and isinstance(b, Version):
+        return (a > b) - (a < b)
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return (a > b) - (a < b)
+    # Mixed valid/vendor versions compare through the same stable fallback
+    # representation used previously.
+    fallback_a: tuple[tuple[int, int | str], ...] = ((1, str(a)),)
+    fallback_b: tuple[tuple[int, int | str], ...] = ((1, str(b)),)
+    return (fallback_a > fallback_b) - (fallback_a < fallback_b)
 
 
 def _range_is_comparable(
@@ -213,7 +214,10 @@ def _range_is_comparable(
         affected.end_including,
         affected.end_excluding,
     ]
-    values = [version, *(value for value in bounds if value not in {None, "0"})]
+    values: list[str] = [
+        version,
+        *(value for value in bounds if value is not None and value != "0"),
+    ]
     scheme = (affected.scheme or "").upper()
     if scheme == "SEMVER":
         try:
@@ -255,9 +259,11 @@ def version_in_range(
             return (a > b) - (a < b)
         return _compare(left, right)
 
+    introduced = affected.introduced
     if (
-        affected.introduced not in {None, "0"}
-        and compare(version, affected.introduced) < 0
+        introduced is not None
+        and introduced != "0"
+        and compare(version, introduced) < 0
     ):
         return False
     if affected.fixed is not None and compare(version, affected.fixed) >= 0:
@@ -508,10 +514,14 @@ class CorrelationEngine:
                     and observed.name == expected.name
                 )
             else:
+                expected_ecosystem = product.ecosystem
+                expected_package = product.package
                 identity_match = (
-                    bool(product.ecosystem and product.package)
-                    and observed.ecosystem == product.ecosystem.lower()
-                    and observed.name == product.package.rsplit("/", 1)[-1].lower()
+                    bool(expected_ecosystem and expected_package)
+                    and expected_ecosystem is not None
+                    and expected_package is not None
+                    and observed.ecosystem == expected_ecosystem.lower()
+                    and observed.name == expected_package.rsplit("/", 1)[-1].lower()
                 )
             if not identity_match:
                 continue
@@ -928,7 +938,7 @@ class VulnerabilityFeeds:
         )
 
     async def osv(self, *, purl: str, version: str | None = None) -> FeedPage:
-        request = {"package": {"purl": purl}}
+        request: dict[str, Any] = {"package": {"purl": purl}}
         if version:
             request["version"] = version
         if self._external_client is not None:

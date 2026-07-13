@@ -15,3 +15,24 @@ The protected `desktop-release` GitHub environment must define:
 - `NEBULA_UPDATER_PUBLIC_KEY`, embedded into direct builds and backed up with the private key offline.
 
 Tag pushes build signed direct and managed installers on native macOS arm64, macOS x64, and Ubuntu 22.04 x64 runners. A workflow dispatch may validate an existing tag without publishing. Publication always creates a draft GitHub Release; a release manager publishes it only after notarization, installer inspection, SBOM, provenance, and upgrade evidence are reviewed. Publishing triggers channel-specific updater manifest generation.
+
+## Tool-pack release inputs
+
+Tool packs have a separate manual, protected release boundary. See the
+[tool-pack operator and author guide](../docs/TOOL_PACKS.md) before preparing
+one.
+
+The **Tool-pack publication readiness** workflow targets the
+`tool-pack-release` environment with read-only repository permissions.
+Repository administrators must configure that environment with required
+reviewers; the workflow file cannot create its protection rules. Source
+validation reports unresolved placeholders without manufacturing values. Its
+candidate mode requires an immutable `nebula-tools-v*` tag, exact image
+digests, and the declared SBOM/provenance files, then emits unsigned archives
+for offline review only.
+
+That workflow does not push OCI images, sign manifests/catalogs, or publish a
+catalog. Do not add placeholder keys or digests to make it pass. Enabling real
+publication requires a separately reviewed offline Ed25519 signing ceremony,
+key-distribution and rotation procedure, immutable hosting, provenance policy,
+and clean-machine install verification.

@@ -8,6 +8,8 @@ from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    Artifact,
+    Evidence,
     RiskClass,
     ScopePolicy,
     ToolCall,
@@ -205,6 +207,57 @@ def test_analysis_tool_result_is_persisted_and_idempotently_replayed(tmp_path):
         "tool.running",
         "tool.complete",
     ]
+
+
+def test_parser_failure_still_records_raw_immutable_execution_evidence(tmp_path):
+    plugin = SandboxCommandTool(
+        ToolSpec(
+            name="parse.failing",
+            description="Exercise parser failure evidence",
+            input_schema=OBJECT_SCHEMA,
+            output_schema={
+                "type": "object",
+                "properties": {"result": {"type": "string"}},
+                "required": ["result"],
+                "additionalProperties": False,
+            },
+            risk_class=RiskClass.LOCAL_READ,
+        ),
+        image="example.invalid/parser@sha256:" + "c" * 64,
+        command_builder=lambda arguments: ["/usr/bin/parser", "--json"],
+        output_parser=lambda stdout, stderr, exit_code: (_ for _ in ()).throw(
+            ValueError("malformed parser fixture")
+        ),
+    )
+    store = NebulaStore(Database(tmp_path / "failed-evidence.db"))
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    registry = ToolRegistry()
+    registry.register(plugin)
+    broker = ToolBroker(
+        registry=registry,
+        policy_engine=PolicyEngine(),
+        runner=CapturingRunner(),
+        ledger=StoreToolLedger(store, enforce_run_budget=False),
+        workspace_resolver=lambda engagement_id: tmp_path,
+        evidence_recorder=StoreToolEvidenceRecorder(store, artifacts),
+    )
+    invocation = ToolInvocation(
+        engagement_id="eng-1",
+        run_id="run-parser-failure",
+        tool_name=plugin.spec.name,
+        workspace=tmp_path,
+    )
+
+    with pytest.raises(ToolBrokerError, match="output parsing failed"):
+        asyncio.run(broker.execute(invocation, ScopePolicy(engagement_id="eng-1")))
+
+    [call] = store.list_entities(ToolCall, engagement_id="eng-1")
+    assert call.status == ToolCallStatus.FAILED
+    [evidence] = store.list_entities(Evidence, engagement_id="eng-1")
+    artifact = store.get(Artifact, evidence.artifact_id)
+    envelope = artifacts.path_for(artifact).read_text(encoding="utf-8")
+    assert '"stdout":"{}"' in envelope
+    assert "malformed parser fixture" in envelope
 
 
 def test_active_tool_creates_durable_approval_and_resumes_after_decision(tmp_path):

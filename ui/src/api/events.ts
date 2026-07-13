@@ -56,7 +56,7 @@ function parseEventFrame(value: unknown): RunEvent | undefined {
   };
 }
 
-function authProtocol(token: string): string {
+export function websocketAuthProtocol(token: string): string {
   const bytes = new TextEncoder().encode(token);
   let binary = "";
   bytes.forEach((byte) => (binary += String.fromCharCode(byte)));
@@ -115,7 +115,7 @@ export class NebulaEventStream {
 
     this.options.onStateChange?.(reconnecting ? "reconnecting" : "connecting");
     const protocols = ["nebula.events.v1"];
-    if (this.options.token) protocols.push(authProtocol(this.options.token));
+    if (this.options.token) protocols.push(websocketAuthProtocol(this.options.token));
     const socket = new WebSocket(websocketUrl(this.options.apiBaseUrl, this.cursor), protocols);
     this.socket = socket;
 

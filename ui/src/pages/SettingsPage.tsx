@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Check, Contrast, Download, KeyRound, Moon, PackageCheck, Pencil, Plus, Server, ShieldCheck, Sun, Trash2, UserRound, X } from "lucide-react";
+import { Check, Contrast, Download, KeyRound, Moon, PackageCheck, Pencil, Plus, Server, Sun, Trash2, UserRound, X } from "lucide-react";
 import type { OperatorProfile, ProviderCatalogEntry, ProviderHealth } from "../api/types";
 import {
   checkForUpdate,
@@ -10,6 +10,8 @@ import {
 } from "../api/updater";
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
+import { EngagementPolicySettings } from "../components/EngagementPolicySettings";
+import { RunnerSettings, ToolPackSettings } from "../components/ToolingSettings";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 
@@ -29,8 +31,6 @@ export function SettingsPage() {
   const { preference, setPreference } = useTheme();
   const {
     previewMode,
-    runtime,
-    health,
     providers,
     providerCatalog,
     refreshProvider,
@@ -313,8 +313,8 @@ export function SettingsPage() {
   const dialogAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
   return (
     <div className="page settings-page">
-      <PageHeader eyebrow="Workspace configuration" title="Settings" description="Provider, runtime, privacy, local attribution, and appearance controls." />
-      <nav className="settings-tabs" aria-label="Settings sections">{[["provider-settings", "Providers"], ["operator-settings", "Operators"], ["runtime-settings", "Runners"], ["security-settings", "Security"]].map(([id, label]) => <a className={settingsSection === id ? "active" : undefined} aria-current={settingsSection === id ? "location" : undefined} href={`#${id}`} key={id} onClick={() => setSettingsSection(id)}>{label}</a>)}<span aria-disabled="true" title="Team access is release-gated in the local developer preview">Team access · unavailable</span><a className={settingsSection === "appearance-settings" ? "active" : undefined} aria-current={settingsSection === "appearance-settings" ? "location" : undefined} href="#appearance-settings" onClick={() => setSettingsSection("appearance-settings")}>Appearance</a></nav>
+      <PageHeader eyebrow="Workspace configuration" title="Settings" description="Provider, sandbox runner, tool-pack, engagement policy, attribution, and privacy controls." />
+      <nav className="settings-tabs" aria-label="Settings sections">{[["provider-settings", "Providers"], ["tool-pack-settings", "Tool packs"], ["runtime-settings", "Runners"], ["engagement-policy-settings", "Engagement policy"], ["operator-settings", "Operators"], ["security-settings", "Security"]].map(([id, label]) => <a className={settingsSection === id ? "active" : undefined} aria-current={settingsSection === id ? "location" : undefined} href={`#${id}`} key={id} onClick={() => setSettingsSection(id)}>{label}</a>)}<a className={settingsSection === "appearance-settings" ? "active" : undefined} aria-current={settingsSection === "appearance-settings" ? "location" : undefined} href="#appearance-settings" onClick={() => setSettingsSection("appearance-settings")}>Appearance</a></nav>
       <section className="settings-section" id="provider-settings">
         <div className="section-heading"><div><h2>Model providers</h2><p>Configured provider profiles and their declared capabilities.</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <div className="knowledge-status error" role="alert">{providerActionError}</div>}
@@ -324,17 +324,15 @@ export function SettingsPage() {
           <div className="empty-state compact"><Server size={23} /><strong>No provider profiles</strong><p>Add a provider profile in Core before assigning a model to a mission.</p></div>
         )}
       </section>
+      <ToolPackSettings />
+      <RunnerSettings />
+      <EngagementPolicySettings />
       <section className="settings-section" id="operator-settings">
         <div className="section-heading"><div><h2>Local operator profiles</h2><p>Durable attribution for local activity. Profiles do not grant authentication or RBAC permissions.</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openOperator()}><Plus size={16} /> Add operator</button></div>
         {operatorError && <div className="knowledge-status error" role="alert">{operatorError}</div>}
         {operatorProfiles.length ? <div className="operator-profile-list">{operatorProfiles.map((profile) => <article className={profile.active ? "active" : undefined} key={profile.id}><span className="operator-profile-avatar">{profile.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "OP"}</span><div><h3>{profile.displayName}</h3><p>{profile.role || "Local operator"}{profile.email ? ` · ${profile.email}` : ""}</p></div>{profile.active ? <span className="operator-active"><Check size={13} /> Active</span> : <button className="button quiet" type="button" disabled={operatorBusy === profile.id} onClick={() => void activateOperator(profile)}>Activate</button>}<button className="icon-button subtle" type="button" aria-label={`Edit ${profile.displayName}`} disabled={operatorBusy === profile.id} onClick={() => openOperator(profile)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete ${profile.displayName}`} title={profile.active ? "Activate another profile before deleting this one" : operatorProfiles.length <= 1 ? "The last operator profile cannot be deleted" : "Delete operator profile"} disabled={operatorBusy === profile.id || profile.active || operatorProfiles.length <= 1} onClick={() => void removeOperator(profile)}><Trash2 size={14} /></button></article>)}</div> : <div className="empty-state compact"><UserRound size={23} /><strong>No durable operator profile</strong><p>Create a local profile so new evidence has explicit attribution and the workspace can show who is active.</p></div>}
       </section>
       <div className="settings-bottom-grid">
-        <section className="panel runtime-panel" id="runtime-settings">
-          <header className="panel-header compact"><div><h2>Local runtime</h2><p>Desktop control-plane boundary</p></div><Server size={19} /></header>
-          <dl><div><dt>Shell</dt><dd>{runtime?.mode ?? "Detecting…"}</dd></div><div><dt>Core version</dt><dd>{health?.version ?? "Unavailable"}</dd></div><div><dt>Sandbox runner</dt><dd><span className={`status-dot ${health?.runner === "ready" ? "healthy" : "unavailable"}`} /> {health?.runner ?? "Not connected"}</dd></div><div><dt>Host fallback</dt><dd><span className="status-dot healthy" /> Disabled</dd></div></dl>
-          <div className="security-note"><ShieldCheck size={17} /><span><strong>Secure by construction</strong><small>The desktop shell only starts a fixed sibling binary on loopback and transfers its one-time token over stdin.</small></span></div>
-        </section>
         <section className="panel appearance-panel" id="appearance-settings">
           <header className="panel-header compact"><div><h2>Appearance</h2><p>Saved on this device</p></div><Contrast size={19} /></header>
           <div className="theme-options">

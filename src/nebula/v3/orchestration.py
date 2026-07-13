@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import Any, Protocol, TypedDict, cast
 from uuid import uuid4
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -54,6 +54,7 @@ class SpecialistRole(str, Enum):
     NETWORK_SERVICE = "network_service"
     WEB_API = "web_api"
     VULNERABILITY_INTELLIGENCE = "vulnerability_intelligence"
+    CODE_ANALYSIS = "code_analysis"
     EVIDENCE_VERIFICATION = "evidence_verification"
     REPORTING_REMEDIATION = "reporting_remediation"
 
@@ -451,15 +452,21 @@ class MissionRuntime:
             "cost_usd": 0.0,
             "tool_calls": 0,
         }
-        return await self.graph.ainvoke(
-            state,
-            config={"configurable": {"thread_id": run.id}},
+        return cast(
+            MissionState,
+            await self.graph.ainvoke(
+                state,
+                config={"configurable": {"thread_id": run.id}},
+            ),
         )
 
     async def resume(self, run_id: str, response: dict[str, Any]) -> MissionState:
-        return await self.graph.ainvoke(
-            Command(resume=response),
-            config={"configurable": {"thread_id": run_id}},
+        return cast(
+            MissionState,
+            await self.graph.ainvoke(
+                Command(resume=response),
+                config={"configurable": {"thread_id": run_id}},
+            ),
         )
 
     async def stream(

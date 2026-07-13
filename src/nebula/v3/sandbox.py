@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import os
+import platform as host_platform
+import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from time import monotonic
+from typing import Any, Literal
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -28,6 +34,167 @@ class SandboxUnavailable(SandboxError):
 class SandboxNetwork(str, Enum):
     NONE = "none"
     SCOPED = "scoped"
+
+
+class SandboxExecutionKind(str, Enum):
+    """The isolation contract selected for one disposable invocation."""
+
+    LOCAL_TOOL = "local_tool"
+    PARSER = "parser"
+    NETWORK_TOOL = "network_tool"
+
+
+class EgressProtocol(str, Enum):
+    TCP = "tcp"
+
+
+class EgressRule(BaseModel):
+    """One broker-approved destination; hostnames are deliberately excluded."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    address: str
+    ports: list[int] = Field(min_length=1)
+    protocol: EgressProtocol = EgressProtocol.TCP
+
+    @field_validator("address")
+    @classmethod
+    def valid_address(cls, value: str) -> str:
+        return str(ipaddress.ip_address(value))
+
+    @field_validator("ports")
+    @classmethod
+    def valid_ports(cls, value: list[int]) -> list[int]:
+        if any(isinstance(port, bool) or port < 1 or port > 65_535 for port in value):
+            raise ValueError("egress ports must be integers between 1 and 65535")
+        return sorted(set(value))
+
+
+class ContainerRuntimeType(str, Enum):
+    PODMAN = "podman"
+    DOCKER = "docker"
+
+
+class RunnerPlatform(str, Enum):
+    LINUX = "linux"
+    MACOS = "macos"
+
+
+class RunnerIsolationMode(str, Enum):
+    LINUX_ROOTLESS = "linux_rootless"
+    PODMAN_MACHINE = "podman_machine"
+    DOCKER_DESKTOP_VM = "docker_desktop_vm"
+
+
+def _current_runner_platform() -> RunnerPlatform:
+    current = host_platform.system().lower()
+    if current == "darwin":
+        return RunnerPlatform.MACOS
+    if current == "linux":
+        return RunnerPlatform.LINUX
+    raise ValueError(f"unsupported container runner platform: {current or 'unknown'}")
+
+
+class RunnerProfile(BaseModel):
+    """Explicit, certifiable container-runtime configuration.
+
+    The executable and runtime connection are configuration, never ambient
+    PATH/DOCKER_HOST/CONTAINER_HOST state.  Profiles intentionally cover only
+    the local runtime arrangements Nebula has an isolation contract for.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_type: ContainerRuntimeType
+    executable: Path
+    platform: RunnerPlatform = Field(default_factory=_current_runner_platform)
+    isolation_mode: RunnerIsolationMode
+    context: str | None = Field(default=None, min_length=1, max_length=128)
+    machine_name: str | None = Field(default=None, min_length=1, max_length=128)
+    seccomp_profile: Path | None = None
+
+    @field_validator("executable")
+    @classmethod
+    def absolute_matching_executable(cls, value: Path) -> Path:
+        candidate = value.expanduser()
+        if not candidate.is_absolute():
+            raise ValueError("container runtime executable must be an absolute path")
+        if candidate.name not in {"docker", "podman"}:
+            raise ValueError("container runtime executable must be docker or podman")
+        return candidate
+
+    @field_validator("seccomp_profile")
+    @classmethod
+    def absolute_seccomp_profile(cls, value: Path | None) -> Path | None:
+        if value is None:
+            return None
+        candidate = value.expanduser()
+        if not candidate.is_absolute():
+            raise ValueError("seccomp profile must be an absolute path")
+        return candidate
+
+    @field_validator("context", "machine_name")
+    @classmethod
+    def safe_runtime_identifier(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value):
+            raise ValueError(
+                "runtime identifiers may contain only letters, digits, ._- "
+            )
+        return value
+
+    @model_validator(mode="after")
+    def supported_combination(self) -> "RunnerProfile":
+        if self.executable.name != self.runtime_type.value:
+            raise ValueError("runtime_type must match the configured executable")
+        if self.platform == RunnerPlatform.LINUX:
+            if self.isolation_mode != RunnerIsolationMode.LINUX_ROOTLESS:
+                raise ValueError("Linux runners must use linux_rootless isolation")
+            if self.machine_name is not None:
+                raise ValueError("machine_name is only valid for Podman Machine")
+        elif self.runtime_type == ContainerRuntimeType.PODMAN:
+            if self.isolation_mode != RunnerIsolationMode.PODMAN_MACHINE:
+                raise ValueError(
+                    "macOS Podman runners must use podman_machine isolation"
+                )
+            if not self.machine_name:
+                raise ValueError("Podman Machine profiles require machine_name")
+            if self.context is None:
+                self.context = self.machine_name
+        else:
+            if self.isolation_mode != RunnerIsolationMode.DOCKER_DESKTOP_VM:
+                raise ValueError(
+                    "macOS Docker runners must use docker_desktop_vm isolation"
+                )
+            if self.machine_name is not None:
+                raise ValueError("machine_name is only valid for Podman Machine")
+        return self
+
+    @classmethod
+    def from_runtime(
+        cls,
+        executable: str | Path,
+        *,
+        platform: RunnerPlatform | None = None,
+    ) -> "RunnerProfile":
+        path = Path(executable).expanduser()
+        runtime_type = ContainerRuntimeType(path.name)
+        selected_platform = platform or _current_runner_platform()
+        if selected_platform == RunnerPlatform.LINUX:
+            mode = RunnerIsolationMode.LINUX_ROOTLESS
+            machine_name = None
+        elif runtime_type == ContainerRuntimeType.PODMAN:
+            mode = RunnerIsolationMode.PODMAN_MACHINE
+            machine_name = "podman-machine-default"
+        else:
+            mode = RunnerIsolationMode.DOCKER_DESKTOP_VM
+            machine_name = None
+        return cls(
+            runtime_type=runtime_type,
+            executable=path,
+            platform=selected_platform,
+            isolation_mode=mode,
+            machine_name=machine_name,
+        )
 
 
 class SandboxWorkspaceAccess(str, Enum):
@@ -53,6 +220,11 @@ class SandboxRequest(BaseModel):
     workspace_access: SandboxWorkspaceAccess = SandboxWorkspaceAccess.NONE
     environment: dict[str, str] = Field(default_factory=dict)
     network: SandboxNetwork = SandboxNetwork.NONE
+    execution_kind: SandboxExecutionKind | None = None
+    egress_rules: list[EgressRule] = Field(default_factory=list)
+    # Kept for wire compatibility with the earlier prototype. A named bridge
+    # is never sufficient authorization for run(); certified egress uses a
+    # fresh helper namespace and egress_rules instead.
     network_name: str | None = None
     pinned_hosts: dict[str, str] = Field(default_factory=dict)
     limits: SandboxLimits = Field(default_factory=SandboxLimits)
@@ -74,8 +246,45 @@ class SandboxRequest(BaseModel):
 
     @model_validator(mode="after")
     def scoped_network_has_boundary(self) -> "SandboxRequest":
-        if self.network == SandboxNetwork.SCOPED and not self.network_name:
-            raise ValueError("scoped network execution requires a network_name")
+        if self.execution_kind is None:
+            self.execution_kind = (
+                SandboxExecutionKind.NETWORK_TOOL
+                if self.network == SandboxNetwork.SCOPED
+                else SandboxExecutionKind.LOCAL_TOOL
+            )
+        if self.execution_kind == SandboxExecutionKind.NETWORK_TOOL:
+            if self.network != SandboxNetwork.SCOPED:
+                raise ValueError("network tools require scoped network execution")
+            if not self.network_name and not self.egress_rules:
+                raise ValueError(
+                    "scoped network execution requires a legacy network_name "
+                    "or certified egress rules"
+                )
+        elif self.network != SandboxNetwork.NONE:
+            raise ValueError("local tools and parsers must use network=none")
+        if (
+            self.execution_kind == SandboxExecutionKind.PARSER
+            and self.workspace_access
+            not in {
+                SandboxWorkspaceAccess.NONE,
+                SandboxWorkspaceAccess.READ,
+            }
+        ):
+            raise ValueError("parser containers cannot write to the workspace")
+        if self.network == SandboxNetwork.NONE:
+            if self.egress_rules:
+                raise ValueError("offline execution cannot declare egress rules")
+            if self.pinned_hosts:
+                raise ValueError("offline execution cannot declare pinned hosts")
+        if self.egress_rules:
+            allowed_addresses = {rule.address for rule in self.egress_rules}
+            if any(
+                address not in allowed_addresses
+                for address in self.pinned_hosts.values()
+            ):
+                raise ValueError(
+                    "pinned host addresses must be present in egress rules"
+                )
         return self
 
 
@@ -91,6 +300,199 @@ class SandboxResult(BaseModel):
     stderr: str
     timed_out: bool = False
     output_truncated: bool = False
+
+
+class EgressLease(ABC):
+    """A short-lived, policy-configured network namespace."""
+
+    network_mode: str
+
+    @abstractmethod
+    async def close(self) -> None:
+        raise NotImplementedError
+
+
+class EgressController(ABC):
+    """Creates a fresh egress boundary for exactly one tool invocation."""
+
+    certified: bool = False
+
+    @abstractmethod
+    async def acquire(
+        self,
+        *,
+        runtime_argv: list[str],
+        runtime_environment: dict[str, str],
+        request: SandboxRequest,
+        container_name: str,
+        seccomp_profile: Path | None,
+    ) -> EgressLease:
+        raise NotImplementedError
+
+
+class NoEgressController(EgressController):
+    async def acquire(
+        self,
+        *,
+        runtime_argv: list[str],
+        runtime_environment: dict[str, str],
+        request: SandboxRequest,
+        container_name: str,
+        seccomp_profile: Path | None,
+    ) -> EgressLease:
+        del runtime_argv, runtime_environment, request, container_name, seccomp_profile
+        raise SandboxUnavailable(
+            "network tool execution requires a certified per-invocation egress helper"
+        )
+
+
+@dataclass
+class _ContainerEgressLease(EgressLease):
+    network_mode: str
+    helper_name: str
+    runtime_argv: list[str]
+    runtime_environment: dict[str, str]
+    process: asyncio.subprocess.Process
+    drain_task: asyncio.Task[None]
+
+    async def close(self) -> None:
+        try:
+            stop = await asyncio.create_subprocess_exec(
+                *self.runtime_argv,
+                "stop",
+                "--time=0",
+                self.helper_name,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=self.runtime_environment,
+            )
+            await asyncio.wait_for(stop.wait(), timeout=10)
+        except (OSError, asyncio.TimeoutError):
+            if self.process.returncode is None:
+                self.process.kill()
+        try:
+            await asyncio.wait_for(self.process.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            self.process.kill()
+            await self.process.wait()
+        self.drain_task.cancel()
+        try:
+            await self.drain_task
+        except asyncio.CancelledError:
+            pass
+
+
+class ContainerEgressController(EgressController):
+    """Run a digest-pinned helper and share only its filtered namespace.
+
+    The certified helper contract is deliberately small: configure the exact
+    IP/protocol/port rules passed as argv, print ``READY`` followed by a newline
+    only after the rules are active, then remain alive and otherwise quiet.
+    The tool container never receives NET_ADMIN and joins the helper's network
+    namespace with ``--network=container:<helper>``.
+    """
+
+    certified = True
+    _digest_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+
+    def __init__(
+        self,
+        *,
+        helper_image: str,
+        helper_executable: str = "/usr/local/bin/nebula-egress",
+        readiness_timeout_seconds: float = 10.0,
+    ) -> None:
+        if not self._digest_pattern.fullmatch(helper_image):
+            raise ValueError("egress helper image must be pinned by sha256 digest")
+        if "\x00" in helper_executable or not Path(helper_executable).is_absolute():
+            raise ValueError("egress helper executable must be absolute")
+        if readiness_timeout_seconds <= 0 or readiness_timeout_seconds > 60:
+            raise ValueError("egress helper readiness timeout must be between 0 and 60")
+        self.helper_image = helper_image
+        self.helper_executable = helper_executable
+        self.readiness_timeout_seconds = readiness_timeout_seconds
+
+    async def acquire(
+        self,
+        *,
+        runtime_argv: list[str],
+        runtime_environment: dict[str, str],
+        request: SandboxRequest,
+        container_name: str,
+        seccomp_profile: Path | None,
+    ) -> EgressLease:
+        if request.execution_kind != SandboxExecutionKind.NETWORK_TOOL:
+            raise SandboxError("egress leases are only valid for network tools")
+        if not request.egress_rules:
+            raise SandboxUnavailable(
+                "network execution requires at least one broker-approved egress rule"
+            )
+        helper_name = f"{container_name}-egress"
+        argv = [
+            *runtime_argv,
+            "run",
+            "--rm",
+            f"--name={helper_name}",
+            "--pull=never",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--cap-add=NET_ADMIN",
+            "--security-opt=no-new-privileges",
+            "--network=bridge",
+            "--user=0:0",
+            "--pids-limit=32",
+            "--memory=64m",
+            "--cpus=0.25",
+            "--tmpfs=/run:rw,noexec,nosuid,nodev,size=4m",
+            f"--entrypoint={self.helper_executable}",
+        ]
+        if seccomp_profile is not None:
+            argv.append(f"--security-opt=seccomp={seccomp_profile}")
+        argv.extend([self.helper_image, "serve"])
+        for rule in request.egress_rules:
+            for port in rule.ports:
+                argv.extend(
+                    [
+                        "--allow",
+                        f"{rule.protocol.value}://{_bracket_ip(rule.address)}:{port}",
+                    ]
+                )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=runtime_environment,
+            )
+        except OSError as exc:
+            raise SandboxUnavailable(f"could not start egress helper: {exc}") from exc
+        assert process.stdout is not None
+        try:
+            line = await asyncio.wait_for(
+                process.stdout.readline(), timeout=self.readiness_timeout_seconds
+            )
+        except asyncio.TimeoutError as exc:
+            process.kill()
+            await process.wait()
+            raise SandboxUnavailable("egress helper did not become ready") from exc
+        if line.rstrip(b"\r\n") != b"READY" or process.returncode is not None:
+            process.kill()
+            await process.wait()
+            detail = line.decode("utf-8", errors="replace").strip()
+            raise SandboxUnavailable(
+                f"egress helper failed closed before readiness: {detail or 'no status'}"
+            )
+        drain_task = asyncio.create_task(_discard_stream(process.stdout))
+        return _ContainerEgressLease(
+            network_mode=f"container:{helper_name}",
+            helper_name=helper_name,
+            runtime_argv=runtime_argv,
+            runtime_environment=runtime_environment,
+            process=process,
+            drain_task=drain_task,
+        )
 
 
 class SandboxRunner(ABC):
@@ -120,9 +522,9 @@ class AnalysisOnlyRunner(SandboxRunner):
 class ContainerSandboxRunner(SandboxRunner):
     """Execute argv directly in a rootless, resource-limited OCI container.
 
-    Network-capable execution is accepted only when the operator has declared a
-    pre-created network as egress-enforced.  Nebula does not pretend that a
-    regular bridge network limits destinations.
+    Network-capable execution is accepted only through a certified egress
+    controller which creates a fresh filtered namespace for each invocation.
+    A named ordinary bridge is never considered an isolation boundary.
     """
 
     _forbidden_environment_fragments = (
@@ -155,16 +557,32 @@ class ContainerSandboxRunner(SandboxRunner):
     def __init__(
         self,
         *,
+        profile: RunnerProfile | None = None,
         runtime: str | None = None,
         rootless_required: bool = True,
         egress_enforced_networks: set[str] | None = None,
+        egress_controller: EgressController | None = None,
         allow_unpinned_images: bool = False,
         allowed_environment: set[str] | None = None,
+        workspace_roots: list[Path] | None = None,
     ) -> None:
+        if profile is not None and runtime is not None:
+            raise ValueError("configure either profile or runtime, not both")
+        if not rootless_required:
+            raise ValueError("non-rootless container runners are not supported")
         configured_runtime = runtime or os.getenv("NEBULA_V3_CONTAINER_RUNTIME")
-        self.runtime = self._resolve_runtime(configured_runtime)
-        self.rootless_required = rootless_required
+        resolved_runtime = (
+            self._resolve_runtime(configured_runtime) if profile is None else None
+        )
+        self.profile = profile or (
+            RunnerProfile.from_runtime(resolved_runtime) if resolved_runtime else None
+        )
+        self.runtime = str(self.profile.executable) if self.profile else None
+        self.rootless_required = True
+        # Compatibility-only validation for old SandboxRequest.network_name
+        # callers. This set never authorizes run(); only egress_controller does.
         self.egress_enforced_networks = egress_enforced_networks or set()
+        self.egress_controller = egress_controller or NoEgressController()
         self.allow_unpinned_images = allow_unpinned_images
         self.allowed_environment = allowed_environment or {
             "LANG",
@@ -173,6 +591,15 @@ class ContainerSandboxRunner(SandboxRunner):
             "TERM",
             "NO_COLOR",
         }
+        self.workspace_roots = (
+            [root.expanduser().resolve(strict=True) for root in workspace_roots]
+            if workspace_roots is not None
+            else None
+        )
+        if self.workspace_roots is not None and any(
+            not root.is_dir() for root in self.workspace_roots
+        ):
+            raise ValueError("configured workspace roots must be directories")
 
     @classmethod
     def _resolve_runtime(cls, configured: str | None) -> str | None:
@@ -192,45 +619,185 @@ class ContainerSandboxRunner(SandboxRunner):
         return None
 
     async def available(self) -> tuple[bool, str]:
-        if not self.runtime:
+        if not self.runtime or self.profile is None:
             return False, "neither podman nor docker is installed"
-        executable = Path(self.runtime).name
         try:
-            if executable == "podman":
-                command = [
-                    self.runtime,
-                    "info",
-                    "--format",
-                    "{{.Host.Security.Rootless}}",
-                ]
-            else:
-                command = [
-                    self.runtime,
-                    "info",
-                    "--format",
-                    "{{json .SecurityOptions}}",
-                ]
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
-        except (OSError, asyncio.TimeoutError) as exc:
+            return await self._validate_runtime_profile()
+        except (
+            OSError,
+            asyncio.TimeoutError,
+            json.JSONDecodeError,
+            SandboxError,
+        ) as exc:
             return False, f"container runtime health check failed: {exc}"
-        if process.returncode != 0:
-            detail = stderr.decode(errors="replace").strip()
-            return False, detail or "container runtime is unavailable"
-        description = stdout.decode(errors="replace").strip().lower()
-        if self.rootless_required:
-            is_rootless = (
-                description == "true"
-                if executable == "podman"
-                else "rootless" in description
+
+    async def _validate_runtime_profile(self) -> tuple[bool, str]:
+        assert self.profile is not None
+        endpoint_override = (
+            os.environ.get("DOCKER_HOST")
+            if self.profile.runtime_type == ContainerRuntimeType.DOCKER
+            else os.environ.get("CONTAINER_HOST")
+        )
+        if endpoint_override and _is_remote_endpoint(endpoint_override):
+            return False, "remote TCP/SSH container runtime endpoints are forbidden"
+        if self.profile.seccomp_profile is not None:
+            try:
+                seccomp = self.profile.seccomp_profile.resolve(strict=True)
+            except OSError as exc:
+                return False, f"configured seccomp profile is unavailable: {exc}"
+            if not seccomp.is_file():
+                return False, "configured seccomp profile is not a regular file"
+
+        if self.profile.runtime_type == ContainerRuntimeType.DOCKER:
+            return await self._validate_docker_profile()
+        return await self._validate_podman_profile()
+
+    async def _validate_docker_profile(self) -> tuple[bool, str]:
+        assert self.profile is not None
+        context_name = self.profile.context or "default"
+        context_output, context_error, return_code = await self._capture(
+            "context", "inspect", context_name
+        )
+        if return_code != 0:
+            return False, context_error or "Docker context is unavailable"
+        context_document = _first_document(json.loads(context_output))
+        endpoints = _mapping_get(context_document, "Endpoints", "endpoints")
+        docker_endpoint = _mapping_get(endpoints, "docker", "Docker")
+        endpoint = _mapping_get(docker_endpoint, "Host", "host")
+        if not isinstance(endpoint, str) or not _is_local_unix_endpoint(endpoint):
+            return False, "Docker context must use a local absolute Unix socket"
+
+        info_output, info_error, return_code = await self._capture(
+            "info", "--format", "{{json .}}"
+        )
+        if return_code != 0:
+            return False, info_error or "Docker daemon is unavailable"
+        info = json.loads(info_output)
+        if str(_mapping_get(info, "OSType", "OsType")).lower() != "linux":
+            return False, "Docker runner must execute Linux containers"
+        security_options = _mapping_get(info, "SecurityOptions")
+        if not isinstance(security_options, list):
+            security_options = []
+        if self.profile.platform == RunnerPlatform.LINUX:
+            if not any(
+                "rootless" in str(option).lower() for option in security_options
+            ):
+                return False, "Docker daemon is not operating in rootless mode"
+            detail = "approved local rootless Docker runner is available"
+        else:
+            operating_system = str(_mapping_get(info, "OperatingSystem")).lower()
+            if "docker desktop" not in operating_system:
+                return False, "macOS Docker runner must be a local Docker Desktop VM"
+            detail = "approved local Docker Desktop VM runner is available"
+        return True, detail
+
+    async def _validate_podman_profile(self) -> tuple[bool, str]:
+        assert self.profile is not None
+        if self.profile.platform == RunnerPlatform.MACOS:
+            assert self.profile.machine_name is not None
+            machine_output, machine_error, return_code = await self._capture(
+                "machine", "inspect", self.profile.machine_name, "--format", "json"
             )
-            if not is_rootless:
-                return False, "container runtime is not operating in rootless mode"
-        return True, f"approved rootless {executable} runner is available"
+            if return_code != 0:
+                return False, machine_error or "Podman Machine is unavailable"
+            machine = _first_document(json.loads(machine_output))
+            if str(_mapping_get(machine, "State", "state")).lower() != "running":
+                return False, "Podman Machine is not running"
+            if _mapping_get(machine, "Rootful", "rootful") is not False:
+                return False, "Podman Machine rootless state could not be certified"
+
+            connection_ok, connection_detail = await self._validate_podman_connection(
+                machine=True
+            )
+            if not connection_ok:
+                return False, connection_detail
+        elif self.profile.context is not None:
+            connection_ok, connection_detail = await self._validate_podman_connection(
+                machine=False
+            )
+            if not connection_ok:
+                return False, connection_detail
+
+        info_output, info_error, return_code = await self._capture(
+            "info", "--format", "json"
+        )
+        if return_code != 0:
+            return False, info_error or "Podman service is unavailable"
+        info = json.loads(info_output)
+        host = _mapping_get(info, "host", "Host")
+        security = _mapping_get(host, "security", "Security")
+        if _mapping_get(security, "rootless", "Rootless") is not True:
+            return False, "Podman service is not operating in rootless mode"
+        host_os = str(_mapping_get(host, "os", "OS", "Os")).lower()
+        if host_os and host_os != "linux":
+            return False, "Podman runner must execute Linux containers"
+        detail = (
+            "approved rootless Podman Machine runner is available"
+            if self.profile.platform == RunnerPlatform.MACOS
+            else "approved local rootless Podman runner is available"
+        )
+        return True, detail
+
+    async def _validate_podman_connection(self, *, machine: bool) -> tuple[bool, str]:
+        assert self.profile is not None
+        connections_output, connections_error, return_code = await self._capture(
+            "system", "connection", "list", "--format", "json"
+        )
+        if return_code != 0:
+            return False, connections_error or "Podman connection is unavailable"
+        connections = json.loads(connections_output)
+        if not isinstance(connections, list):
+            return False, "Podman connection inspection returned invalid data"
+        connection = next(
+            (
+                item
+                for item in connections
+                if isinstance(item, dict)
+                and _mapping_get(item, "Name", "name") == self.profile.context
+            ),
+            None,
+        )
+        uri = _mapping_get(connection or {}, "URI", "Uri", "uri")
+        valid = isinstance(uri, str) and (
+            _is_local_machine_endpoint(uri) if machine else _is_local_unix_endpoint(uri)
+        )
+        if not valid:
+            expected = (
+                "terminate on localhost" if machine else "use a local Unix socket"
+            )
+            return False, f"Podman connection must {expected}"
+        return True, "Podman connection is local"
+
+    async def _capture(self, *arguments: str) -> tuple[str, str, int]:
+        process = await asyncio.create_subprocess_exec(
+            *self._runtime_argv(),
+            *arguments,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        stdout, stderr = await _communicate_limited(
+            process, timeout_seconds=10, output_bytes=2_000_000
+        )
+        return (
+            stdout.decode("utf-8", errors="replace").strip(),
+            stderr.decode("utf-8", errors="replace").strip(),
+            int(process.returncode or 0),
+        )
+
+    def _runtime_argv(self) -> list[str]:
+        if self.profile is None:
+            raise SandboxUnavailable("no container runtime is configured")
+        argv = [str(self.profile.executable)]
+        if self.profile.context:
+            option = (
+                "--context"
+                if self.profile.runtime_type == ContainerRuntimeType.DOCKER
+                else "--connection"
+            )
+            argv.extend([option, self.profile.context])
+        return argv
 
     def _validate(self, request: SandboxRequest) -> Path | None:
         workspace: Path | None = None
@@ -238,9 +805,22 @@ class ContainerSandboxRunner(SandboxRunner):
             workspace = request.workspace.expanduser().resolve(strict=True)
             if not workspace.is_dir():
                 raise SandboxError("workspace must be an existing directory")
-        if not self.allow_unpinned_images and "@sha256:" not in request.image:
+            if any(character in str(workspace) for character in {",", "\n", "\r"}):
+                raise SandboxError(
+                    "workspace path cannot be encoded as a safe OCI mount"
+                )
+            if self.workspace_roots is not None and not any(
+                workspace == root or workspace.is_relative_to(root)
+                for root in self.workspace_roots
+            ):
+                raise SandboxError(
+                    "workspace is outside the configured workspace roots"
+                )
+        if not self.allow_unpinned_images and not re.fullmatch(
+            r"[^\s@]+@sha256:[0-9a-f]{64}", request.image
+        ):
             raise SandboxError("sandbox images must be pinned by sha256 digest")
-        if request.network == SandboxNetwork.SCOPED:
+        if request.network_name is not None:
             if request.network_name not in self.egress_enforced_networks:
                 raise SandboxUnavailable(
                     "scoped execution requires an operator-approved egress-enforced network"
@@ -261,12 +841,13 @@ class ContainerSandboxRunner(SandboxRunner):
         workspace: Path | None,
         *,
         container_name: str = "nebula-tool",
+        network_mode: str | None = None,
     ) -> list[str]:
-        if not self.runtime:
+        if not self.runtime or self.profile is None:
             raise SandboxUnavailable("no container runtime is configured")
         limits = request.limits
         argv = [
-            self.runtime,
+            *self._runtime_argv(),
             "run",
             "--rm",
             f"--name={container_name}",
@@ -280,6 +861,8 @@ class ContainerSandboxRunner(SandboxRunner):
             "--user=65532:65532",
             "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m",
         ]
+        if self.profile.seccomp_profile is not None:
+            argv.append(f"--security-opt=seccomp={self.profile.seccomp_profile}")
         if workspace is None:
             argv.append("--workdir=/tmp")
         else:
@@ -297,7 +880,12 @@ class ContainerSandboxRunner(SandboxRunner):
         if request.network == SandboxNetwork.NONE:
             argv.append("--network=none")
         else:
-            argv.append(f"--network={request.network_name}")
+            selected_network = network_mode or request.network_name
+            if not selected_network:
+                raise SandboxUnavailable(
+                    "scoped execution requires an acquired egress namespace"
+                )
+            argv.append(f"--network={selected_network}")
             for host, address in sorted(request.pinned_hosts.items()):
                 argv.append(f"--add-host={host}:{address}")
         for name, value in sorted(request.environment.items()):
@@ -309,9 +897,38 @@ class ContainerSandboxRunner(SandboxRunner):
         healthy, detail = await self.available()
         if not healthy:
             raise SandboxUnavailable(detail)
+        if (
+            request.workspace_access != SandboxWorkspaceAccess.NONE
+            and self.workspace_roots is None
+        ):
+            raise SandboxUnavailable(
+                "workspace tool execution requires explicitly configured workspace roots"
+            )
         workspace = self._validate(request)
         container_name = f"nebula-{uuid4().hex}"
-        argv = self._argv(request, workspace, container_name=container_name)
+        lease: EgressLease | None = None
+        if request.network == SandboxNetwork.SCOPED:
+            if not request.egress_rules:
+                raise SandboxUnavailable(
+                    "network tool execution requires explicit broker-approved egress rules"
+                )
+            if not self.egress_controller.certified:
+                raise SandboxUnavailable(
+                    "network tool execution requires a certified per-invocation egress helper"
+                )
+            lease = await self.egress_controller.acquire(
+                runtime_argv=self._runtime_argv(),
+                runtime_environment=_runtime_environment(),
+                request=request,
+                container_name=container_name,
+                seccomp_profile=self.profile.seccomp_profile if self.profile else None,
+            )
+        argv = self._argv(
+            request,
+            workspace,
+            container_name=container_name,
+            network_mode=lease.network_mode if lease else None,
+        )
         started_at = utc_now()
         started = monotonic()
         try:
@@ -323,6 +940,8 @@ class ContainerSandboxRunner(SandboxRunner):
                 env=_runtime_environment(),
             )
         except OSError as exc:
+            if lease is not None:
+                await lease.close()
             raise SandboxUnavailable(
                 f"could not start container runtime: {exc}"
             ) from exc
@@ -337,43 +956,47 @@ class ContainerSandboxRunner(SandboxRunner):
         )
         timed_out = False
         try:
-            await asyncio.wait_for(
-                process.wait(), timeout=request.limits.timeout_seconds
+            try:
+                await asyncio.wait_for(
+                    process.wait(), timeout=request.limits.timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                timed_out = True
+                process.kill()
+                await process.wait()
+                await self._force_remove(container_name)
+            except asyncio.CancelledError:
+                process.kill()
+                await process.wait()
+                await self._force_remove(container_name)
+                stdout_task.cancel()
+                stderr_task.cancel()
+                raise
+            stdout, stdout_truncated = await stdout_task
+            stderr, stderr_truncated = await stderr_task
+            return SandboxResult(
+                command=request.command,
+                image=request.image,
+                runtime=Path(self.runtime or "unknown").name,
+                started_at=started_at,
+                completed_at=utc_now(),
+                duration_seconds=monotonic() - started,
+                exit_code=None if timed_out else process.returncode,
+                stdout=stdout.decode("utf-8", errors="replace"),
+                stderr=stderr.decode("utf-8", errors="replace"),
+                timed_out=timed_out,
+                output_truncated=stdout_truncated or stderr_truncated,
             )
-        except asyncio.TimeoutError:
-            timed_out = True
-            process.kill()
-            await process.wait()
-            await self._force_remove(container_name)
-        except asyncio.CancelledError:
-            process.kill()
-            await process.wait()
-            await self._force_remove(container_name)
-            stdout_task.cancel()
-            stderr_task.cancel()
-            raise
-        stdout, stdout_truncated = await stdout_task
-        stderr, stderr_truncated = await stderr_task
-        return SandboxResult(
-            command=request.command,
-            image=request.image,
-            runtime=Path(self.runtime or "unknown").name,
-            started_at=started_at,
-            completed_at=utc_now(),
-            duration_seconds=monotonic() - started,
-            exit_code=None if timed_out else process.returncode,
-            stdout=stdout.decode("utf-8", errors="replace"),
-            stderr=stderr.decode("utf-8", errors="replace"),
-            timed_out=timed_out,
-            output_truncated=stdout_truncated or stderr_truncated,
-        )
+        finally:
+            if lease is not None:
+                await lease.close()
 
     async def _force_remove(self, container_name: str) -> None:
-        if not self.runtime:
+        if not self.runtime or self.profile is None:
             return
         try:
             cleanup = await asyncio.create_subprocess_exec(
-                self.runtime,
+                *self._runtime_argv(),
                 "rm",
                 "--force",
                 container_name,
@@ -384,6 +1007,175 @@ class ContainerSandboxRunner(SandboxRunner):
             await asyncio.wait_for(cleanup.wait(), timeout=10)
         except (OSError, asyncio.TimeoutError):
             return
+
+
+class ContainerToolPackRuntimeAdapter:
+    """Installation-only OCI operations backed by a validated runner profile.
+
+    Mission execution still uses ``--pull=never``. This adapter is handed only
+    to the explicit tool-pack installer, which is the sole component allowed to
+    pull images. Smoke tests consume a command already rendered from the signed
+    manifest's typed bindings; the adapter never guesses how inputs map to argv.
+    """
+
+    def __init__(
+        self,
+        *,
+        runner: ContainerSandboxRunner,
+        platform: Literal["linux/amd64", "linux/arm64"],
+        pull_timeout_seconds: int = 900,
+    ) -> None:
+        if platform not in {"linux/amd64", "linux/arm64"}:
+            raise ValueError(
+                "tool-pack runtime platform must be linux/amd64 or linux/arm64"
+            )
+        if pull_timeout_seconds < 1 or pull_timeout_seconds > 3600:
+            raise ValueError("pull timeout must be between 1 and 3600 seconds")
+        if runner.profile is None:
+            raise ValueError(
+                "tool-pack runtime adapter requires an explicit runner profile"
+            )
+        self.runner = runner
+        self.platform = platform
+        self.pull_timeout_seconds = pull_timeout_seconds
+
+    async def pull(self, image: str) -> None:
+        self._validate_image(image)
+        await self._require_runner()
+        stdout, stderr, return_code = await self._runtime_command(
+            "pull",
+            f"--platform={self.platform}",
+            image,
+            timeout_seconds=self.pull_timeout_seconds,
+        )
+        if return_code != 0:
+            detail = stderr.strip() or stdout.strip()
+            raise SandboxError(f"tool image pull failed: {detail or return_code}")
+
+    async def inspect(self, image: str) -> Any:
+        # Imported lazily to avoid sandbox -> toolpacks -> tools -> sandbox.
+        from .toolpacks import RuntimeImageInfo
+
+        expected_digest = self._validate_image(image)
+        await self._require_runner()
+        stdout, stderr, return_code = await self._runtime_command(
+            "image",
+            "inspect",
+            image,
+            "--format",
+            "{{json .}}",
+            timeout_seconds=30,
+        )
+        if return_code != 0:
+            raise SandboxError(
+                f"tool image inspection failed: {stderr.strip() or return_code}"
+            )
+        try:
+            document = _first_document(json.loads(stdout))
+        except json.JSONDecodeError as exc:
+            raise SandboxError("tool image inspection returned invalid JSON") from exc
+        observed_digests: set[str] = set()
+        digest = _mapping_get(document, "Digest", "digest")
+        if isinstance(digest, str):
+            observed_digests.add(digest)
+        repo_digests = _mapping_get(document, "RepoDigests", "repoDigests")
+        if isinstance(repo_digests, list):
+            observed_digests.update(
+                value.rsplit("@", 1)[1]
+                for value in repo_digests
+                if isinstance(value, str) and "@sha256:" in value
+            )
+        if expected_digest not in observed_digests:
+            raise SandboxError("runtime did not prove the requested image digest")
+        os_name = str(_mapping_get(document, "Os", "OS", "os")).lower()
+        architecture = str(
+            _mapping_get(document, "Architecture", "architecture", "Arch")
+        ).lower()
+        observed_platform = f"{os_name}/{architecture}"
+        if observed_platform != self.platform:
+            raise SandboxError(
+                f"tool image platform mismatch: expected {self.platform}, "
+                f"observed {observed_platform}"
+            )
+        config = _mapping_get(document, "Config", "config")
+        user = _mapping_get(config, "User", "user")
+        if not isinstance(user, str):
+            raise SandboxError("tool image did not declare a container user")
+        return RuntimeImageInfo(
+            image=image,
+            digest=expected_digest,
+            platform=self.platform,
+            user=user,
+        )
+
+    async def smoke_test(
+        self,
+        *,
+        image: str,
+        command: list[str],
+        timeout_seconds: int,
+    ) -> Any:
+        from .toolpacks import RuntimeSmokeResult
+
+        self._validate_image(image)
+        if (
+            not command
+            or not Path(command[0]).is_absolute()
+            or any(not isinstance(value, str) or "\x00" in value for value in command)
+        ):
+            raise SandboxError("smoke-test command must be safe absolute argv")
+        result = await self.runner.run(
+            SandboxRequest(
+                image=image,
+                command=command,
+                workspace=Path("/"),
+                workspace_access=SandboxWorkspaceAccess.NONE,
+                network=SandboxNetwork.NONE,
+                execution_kind=SandboxExecutionKind.LOCAL_TOOL,
+                limits=SandboxLimits(timeout_seconds=timeout_seconds),
+            )
+        )
+        return RuntimeSmokeResult(
+            exit_code=result.exit_code if result.exit_code is not None else 124,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+
+    async def _require_runner(self) -> None:
+        available, detail = await self.runner.available()
+        if not available:
+            raise SandboxUnavailable(detail)
+
+    async def _runtime_command(
+        self,
+        *arguments: str,
+        timeout_seconds: int,
+    ) -> tuple[str, str, int]:
+        process = await asyncio.create_subprocess_exec(
+            *self.runner._runtime_argv(),
+            *arguments,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        try:
+            stdout, stderr = await _communicate_limited(
+                process, timeout_seconds=timeout_seconds, output_bytes=5_000_000
+            )
+        except asyncio.TimeoutError as exc:
+            raise SandboxUnavailable("container runtime operation timed out") from exc
+        return (
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+            int(process.returncode or 0),
+        )
+
+    @staticmethod
+    def _validate_image(image: str) -> str:
+        if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image):
+            raise SandboxError("tool images must be pinned by sha256 digest")
+        return image.rsplit("@", 1)[1]
 
 
 async def _read_limited(stream: asyncio.StreamReader, limit: int) -> tuple[bytes, bool]:
@@ -403,13 +1195,89 @@ async def _read_limited(stream: asyncio.StreamReader, limit: int) -> tuple[bytes
     return b"".join(chunks), truncated
 
 
+async def _communicate_limited(
+    process: asyncio.subprocess.Process,
+    *,
+    timeout_seconds: int,
+    output_bytes: int,
+) -> tuple[bytes, bytes]:
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout_task = asyncio.create_task(_read_limited(process.stdout, output_bytes))
+    stderr_task = asyncio.create_task(_read_limited(process.stderr, output_bytes))
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        process.kill()
+        await process.wait()
+        stdout_task.cancel()
+        stderr_task.cancel()
+        raise
+    stdout, stdout_truncated = await stdout_task
+    stderr, stderr_truncated = await stderr_task
+    if stdout_truncated or stderr_truncated:
+        raise SandboxError("container runtime control output exceeded its limit")
+    return stdout, stderr
+
+
+async def _discard_stream(stream: asyncio.StreamReader) -> None:
+    while await stream.read(65_536):
+        pass
+
+
+def _bracket_ip(address: str) -> str:
+    parsed = ipaddress.ip_address(address)
+    return f"[{parsed}]" if parsed.version == 6 else str(parsed)
+
+
+def _mapping_get(value: Any, *keys: str) -> Any:
+    if not isinstance(value, dict):
+        return None
+    for key in keys:
+        if key in value:
+            return value[key]
+    return None
+
+
+def _first_document(value: Any) -> dict[str, Any]:
+    if isinstance(value, list):
+        if not value or not isinstance(value[0], dict):
+            raise json.JSONDecodeError("expected a JSON object", "", 0)
+        return value[0]
+    if not isinstance(value, dict):
+        raise json.JSONDecodeError("expected a JSON object", "", 0)
+    return value
+
+
+def _is_remote_endpoint(endpoint: str) -> bool:
+    scheme = urlsplit(endpoint).scheme.lower()
+    return scheme in {"tcp", "http", "https", "ssh"}
+
+
+def _is_local_unix_endpoint(endpoint: str) -> bool:
+    parsed = urlsplit(endpoint)
+    return parsed.scheme.lower() == "unix" and Path(parsed.path).is_absolute()
+
+
+def _is_local_machine_endpoint(endpoint: str) -> bool:
+    parsed = urlsplit(endpoint)
+    if parsed.scheme.lower() == "unix":
+        return Path(parsed.path).is_absolute()
+    return parsed.scheme.lower() == "ssh" and parsed.hostname in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }
+
+
 def _runtime_environment() -> dict[str, str]:
+    # Endpoint variables are intentionally absent. Runtime connections are
+    # selected only by an inspected RunnerProfile, preventing a desktop launch
+    # environment from silently redirecting execution to a remote daemon.
     retained = {
         "PATH",
         "HOME",
         "XDG_RUNTIME_DIR",
-        "DOCKER_HOST",
-        "CONTAINER_HOST",
     }
     return {
         name: value for name in retained if (value := os.environ.get(name)) is not None
@@ -418,8 +1286,20 @@ def _runtime_environment() -> dict[str, str]:
 
 __all__ = [
     "AnalysisOnlyRunner",
+    "ContainerEgressController",
+    "ContainerRuntimeType",
     "ContainerSandboxRunner",
+    "ContainerToolPackRuntimeAdapter",
+    "EgressController",
+    "EgressLease",
+    "EgressProtocol",
+    "EgressRule",
+    "NoEgressController",
+    "RunnerIsolationMode",
+    "RunnerPlatform",
+    "RunnerProfile",
     "SandboxError",
+    "SandboxExecutionKind",
     "SandboxLimits",
     "SandboxNetwork",
     "SandboxRequest",

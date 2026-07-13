@@ -37,6 +37,14 @@ jobs:
         run: poetry run pytest -q
       - name: Lint Nebula 3
         run: poetry run ruff check src/nebula/v3 tests/v3
+      - name: Check Nebula 3 formatting
+        run: poetry run ruff format --check src/nebula/v3 tests/v3
+      - name: Type-check Nebula 3
+        if: matrix.python-version == '3.12'
+        run: poetry run mypy src/nebula/v3
+      - name: Validate Safe Foundation release source
+        if: matrix.python-version == '3.12'
+        run: poetry run python -m scripts.validate_tool_pack_release --json
       - name: Build distributions
         run: poetry build
 

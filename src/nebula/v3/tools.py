@@ -6,12 +6,13 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import re
 import socket
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -32,6 +33,8 @@ from .domain import (
 )
 from .policy import PolicyDecision, PolicyEffect, PolicyEngine, PolicyRequest
 from .sandbox import (
+    EgressRule,
+    SandboxExecutionKind,
     SandboxLimits,
     SandboxNetwork,
     SandboxRequest,
@@ -77,6 +80,25 @@ class IdempotencyBehavior(str, Enum):
     NON_IDEMPOTENT = "non_idempotent"
 
 
+class ToolArgumentBinding(BaseModel):
+    """Declaratively map one typed input property to deterministic argv."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    argument: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
+    kind: Literal["value", "repeat", "csv", "boolean_flag", "positional"] = "value"
+    flag: str | None = None
+
+    @model_validator(mode="after")
+    def binding_shape_is_safe(self) -> "ToolArgumentBinding":
+        if self.kind == "positional":
+            if self.flag is not None:
+                raise ValueError("positional bindings cannot declare a flag")
+        elif not self.flag or not self.flag.startswith("-") or "\x00" in self.flag:
+            raise ValueError("non-positional bindings require a fixed option flag")
+        return self
+
+
 class ToolSpec(BaseModel):
     """Security and data contract for one installed tool capability."""
 
@@ -102,6 +124,14 @@ class ToolSpec(BaseModel):
     path_arguments: list[str] = Field(default_factory=list)
     action: str | None = None
     cloud_transfer: bool = False
+    pack_id: str | None = Field(default=None, max_length=400)
+    manifest_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    image: str | None = None
+    executable: str | None = None
+    fixed_arguments: list[str] = Field(default_factory=list)
+    argument_bindings: list[ToolArgumentBinding] = Field(default_factory=list)
+    parser_contract: dict[str, Any] | None = None
+    smoke_test_fixture: dict[str, Any] | None = None
 
     @field_validator("input_schema", "output_schema")
     @classmethod
@@ -147,7 +177,124 @@ class ToolSpec(BaseModel):
             "required", []
         ):
             raise ValueError("target_argument must be required by the input schema")
+        execution_fields = (
+            self.image,
+            self.executable,
+            self.pack_id,
+            self.manifest_digest,
+        )
+        if any(value is not None for value in execution_fields):
+            if any(value is None for value in execution_fields):
+                raise ValueError(
+                    "declarative tools require image, executable, pack_id, and "
+                    "manifest_digest"
+                )
+            assert self.image is not None
+            assert self.executable is not None
+            if not _is_digest_pinned_image(self.image):
+                raise ValueError("tool image must be pinned by SHA-256 without a tag")
+            if not self.executable.startswith("/") or "\x00" in self.executable:
+                raise ValueError("tool executable must be an absolute container path")
+            if Path(self.executable).name.lower() in {
+                "sh",
+                "bash",
+                "dash",
+                "zsh",
+                "fish",
+                "cmd",
+                "powershell",
+                "pwsh",
+            }:
+                raise ValueError("shell interpreters cannot be tool executables")
+            if self.input_schema.get("additionalProperties") is not False:
+                raise ValueError(
+                    "executable tool schemas must set additionalProperties=false"
+                )
+            if any("\x00" in value for value in self.fixed_arguments):
+                raise ValueError("fixed arguments cannot contain NUL bytes")
+            bound = [binding.argument for binding in self.argument_bindings]
+            if len(bound) != len(set(bound)):
+                raise ValueError("an input argument may be bound to argv only once")
+            missing = [name for name in bound if name not in properties]
+            if missing:
+                raise ValueError(f"argv bindings are absent from schema: {missing}")
         return self
+
+
+def _is_digest_pinned_image(image: str) -> bool:
+    """Accept repository@sha256:digest and reject a mutable tag before @."""
+
+    match = re.fullmatch(
+        r"(?P<repository>[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?"
+        r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+)@sha256:[0-9a-f]{64}",
+        image,
+    )
+    if match is None:
+        return False
+    return ":" not in match.group("repository").rsplit("/", 1)[-1]
+
+
+def build_declared_command(spec: ToolSpec, arguments: dict[str, Any]) -> list[str]:
+    """Build argv only from a validated declarative spec and typed values."""
+
+    if spec.executable is None:
+        raise InvalidToolArguments("tool has no declarative executable")
+    command = [spec.executable, *spec.fixed_arguments]
+    for binding in spec.argument_bindings:
+        if binding.argument not in arguments:
+            continue
+        value = arguments[binding.argument]
+        if binding.kind == "boolean_flag":
+            if not isinstance(value, bool):
+                raise InvalidToolArguments(
+                    f"{binding.argument} must be a boolean for boolean_flag"
+                )
+            if value:
+                assert binding.flag is not None
+                command.append(binding.flag)
+            continue
+        if binding.kind == "repeat":
+            if not isinstance(value, list):
+                raise InvalidToolArguments(
+                    f"{binding.argument} must be an array for repeat"
+                )
+            assert binding.flag is not None
+            for item in value:
+                command.extend([binding.flag, _argv_scalar(binding.argument, item)])
+            continue
+        if binding.kind == "csv":
+            if not isinstance(value, list):
+                raise InvalidToolArguments(
+                    f"{binding.argument} must be an array for csv"
+                )
+            assert binding.flag is not None
+            command.extend(
+                [
+                    binding.flag,
+                    ",".join(_argv_scalar(binding.argument, item) for item in value),
+                ]
+            )
+            continue
+        rendered = _argv_scalar(binding.argument, value)
+        if binding.kind == "positional":
+            if rendered.startswith("-"):
+                raise InvalidToolArguments(
+                    f"{binding.argument} cannot be interpreted as an option"
+                )
+            command.append(rendered)
+        else:
+            assert binding.flag is not None
+            command.extend([binding.flag, rendered])
+    return command
+
+
+def _argv_scalar(name: str, value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise InvalidToolArguments(f"{name} must be a string or number")
+    rendered = str(value)
+    if "\x00" in rendered:
+        raise InvalidToolArguments(f"{name} contains a NUL byte")
+    return rendered
 
 
 class ToolInvocation(BaseModel):
@@ -175,6 +322,7 @@ class ToolExecutionResult(BaseModel):
     stderr: str = ""
     exit_code: int | None = None
     output_truncated: bool = False
+    parser_error: str | None = Field(default=None, max_length=1_000)
     execution: dict[str, Any] = Field(default_factory=dict)
     evidence_ids: list[str] = Field(default_factory=list)
 
@@ -235,9 +383,9 @@ class SandboxCommandTool(ToolPlugin):
         self,
         spec: ToolSpec,
         *,
-        image: str,
-        command_builder: CommandBuilder,
         output_parser: OutputParser,
+        image: str | None = None,
+        command_builder: CommandBuilder | None = None,
         network_name: str | None = None,
     ) -> None:
         if spec.input_schema.get("additionalProperties") is not False:
@@ -245,8 +393,13 @@ class SandboxCommandTool(ToolPlugin):
                 "executable tool schemas must set additionalProperties=false"
             )
         self.spec = spec
-        self.image = image
-        self.command_builder = command_builder
+        selected_image = image or spec.image
+        if selected_image is None:
+            raise ValueError("command tools require an image")
+        self.image: str = selected_image
+        self.command_builder = command_builder or (
+            lambda arguments: build_declared_command(spec, arguments)
+        )
         self.output_parser = output_parser
         self.network_name = network_name
 
@@ -262,11 +415,33 @@ class SandboxCommandTool(ToolPlugin):
             )
         pins: dict[str, str] = {}
         if invocation.target and invocation.resolved_ips:
-            host = invocation.target.split("://", 1)[-1].split("/", 1)[0]
-            host = host.rsplit(":", 1)[0].strip("[]").rstrip(".").lower()
+            parsed = urlsplit(invocation.target)
+            host = (
+                parsed.hostname
+                if parsed.scheme
+                else invocation.target.split("/", 1)[0].rsplit(":", 1)[0].strip("[]")
+            )
+            if host is None:
+                raise InvalidToolArguments("network target URL requires a hostname")
+            host = host.rstrip(".").lower()
             # The first address is used in /etc/hosts; the egress boundary must
             # independently allow only the complete policy-approved set.
             pins[host] = invocation.resolved_ips[0]
+        egress_rules: list[EgressRule] = []
+        if self.spec.network_access:
+            if not invocation.resolved_ips:
+                raise InvalidToolArguments(
+                    "network tools require broker-resolved destination addresses"
+                )
+            ports = _egress_ports(self.spec, invocation.arguments, invocation.target)
+            if not ports:
+                raise InvalidToolArguments(
+                    "network tools require policy-mapped destination ports"
+                )
+            egress_rules = [
+                EgressRule(address=address, ports=ports)
+                for address in invocation.resolved_ips
+            ]
         result = await runner.run(
             SandboxRequest(
                 image=self.image,
@@ -278,20 +453,31 @@ class SandboxCommandTool(ToolPlugin):
                     if self.spec.network_access
                     else SandboxNetwork.NONE
                 ),
-                network_name=self.network_name if self.spec.network_access else None,
+                execution_kind=(
+                    SandboxExecutionKind.NETWORK_TOOL
+                    if self.spec.network_access
+                    else SandboxExecutionKind.LOCAL_TOOL
+                ),
+                egress_rules=egress_rules,
                 pinned_hosts=pins,
                 limits=self.spec.resource_limits.model_copy(
                     update={"timeout_seconds": self.spec.timeout_seconds}
                 ),
             )
         )
-        output = self.output_parser(result.stdout, result.stderr, result.exit_code)
+        parser_error: str | None = None
+        try:
+            output = self.output_parser(result.stdout, result.stderr, result.exit_code)
+        except Exception as exc:
+            output = {}
+            parser_error = _bounded_execution_error(exc)
         return ToolExecutionResult(
             output=output,
             stdout=result.stdout,
             stderr=result.stderr,
             exit_code=result.exit_code,
             output_truncated=result.output_truncated,
+            parser_error=parser_error,
             execution={
                 "command": result.command,
                 "image": result.image,
@@ -302,6 +488,33 @@ class SandboxCommandTool(ToolPlugin):
                 "timed_out": result.timed_out,
             },
         )
+
+
+def _egress_ports(
+    spec: ToolSpec, arguments: dict[str, Any], target: str | None
+) -> list[int]:
+    ports: list[int] = []
+    if spec.port_argument and spec.port_argument in arguments:
+        value = arguments[spec.port_argument]
+        candidates = value if isinstance(value, list) else [value]
+        for candidate in candidates:
+            if isinstance(candidate, bool) or not isinstance(candidate, int):
+                raise InvalidToolArguments("mapped destination ports must be integers")
+            if not 1 <= candidate <= 65535:
+                raise InvalidToolArguments(
+                    "mapped destination ports must be between 1 and 65535"
+                )
+            ports.append(candidate)
+    if not ports and target:
+        parsed = urlsplit(target)
+        if parsed.scheme in {"http", "https"}:
+            try:
+                ports.append(parsed.port or (443 if parsed.scheme == "https" else 80))
+            except ValueError as exc:
+                raise InvalidToolArguments(
+                    "target URL contains an invalid port"
+                ) from exc
+    return sorted(set(ports))
 
 
 class ToolLedger(Protocol):
@@ -463,6 +676,19 @@ class StoreToolLedger:
         try:
             approval = await asyncio.to_thread(self.store.get, Approval, approval_id)
         except NotFoundError:
+            exact_request: dict[str, Any] = {
+                "tool_name": invocation.tool_name,
+                "arguments": invocation.arguments,
+            }
+            if spec.executable is not None:
+                exact_request.update(
+                    {
+                        "argv": build_declared_command(spec, invocation.arguments),
+                        "pack_id": spec.pack_id,
+                        "manifest_digest": spec.manifest_digest,
+                        "image": spec.image,
+                    }
+                )
             approval = Approval(
                 id=approval_id,
                 engagement_id=invocation.engagement_id,
@@ -470,10 +696,7 @@ class StoreToolLedger:
                 task_id=invocation.task_id,
                 tool_call_id=call.id,
                 risk_class=spec.risk_class,
-                exact_request={
-                    "tool_name": invocation.tool_name,
-                    "arguments": invocation.arguments,
-                },
+                exact_request=exact_request,
                 target=invocation.target,
                 credential_class=invocation.credential_class,
                 expected_effects=[spec.description],
@@ -544,6 +767,12 @@ class StoreToolEvidenceRecorder:
             "run_id": call.run_id,
             "task_id": call.task_id,
             "tool": {"name": spec.name, "version": spec.version},
+            "tool_pack": {
+                "identity": spec.pack_id,
+                "manifest_digest": spec.manifest_digest,
+                "image": spec.image,
+                "parser": spec.parser_contract,
+            },
             "risk_class": spec.risk_class.value,
             "arguments": invocation.arguments,
             "target": invocation.target,
@@ -553,6 +782,7 @@ class StoreToolEvidenceRecorder:
             "stderr": result.stderr,
             "exit_code": result.exit_code,
             "output_truncated": result.output_truncated,
+            "parser_error": result.parser_error,
             "execution": result.execution,
         }
         payload = json.dumps(
@@ -565,7 +795,13 @@ class StoreToolEvidenceRecorder:
             filename=f"tool-call-{call.id}.json",
             media_type="application/json",
             source=f"tool:{spec.name}@{spec.version}",
-            metadata={"tool_call_id": call.id, "run_id": call.run_id},
+            metadata={
+                "tool_call_id": call.id,
+                "run_id": call.run_id,
+                "tool_pack": spec.pack_id,
+                "manifest_digest": spec.manifest_digest,
+                "image": spec.image,
+            },
         )
         evidence = Evidence(
             engagement_id=invocation.engagement_id,
@@ -575,10 +811,16 @@ class StoreToolEvidenceRecorder:
             tool_call_id=call.id,
             sha256=stored.artifact.sha256,
             captured_by=invocation.requested_by,
-            source_version=f"{spec.name}@{spec.version}",
+            source_version=(
+                f"{spec.pack_id}:{spec.name}@{spec.version}"
+                if spec.pack_id
+                else f"{spec.name}@{spec.version}"
+            ),
             metadata={
                 "target": invocation.target,
                 "image": result.execution.get("image"),
+                "manifest_digest": spec.manifest_digest,
+                "tool_pack": spec.pack_id,
                 "exit_code": result.exit_code,
             },
         )
@@ -786,7 +1028,6 @@ class ToolBroker:
             )
             try:
                 result = await plugin.execute(invocation, self.runner)
-                self._validate(plugin.spec.output_schema, result.output, "output")
                 if not isinstance(plugin, AnalysisTool):
                     if self.evidence_recorder is None:
                         raise ToolBrokerError(
@@ -796,6 +1037,11 @@ class ToolBroker:
                         running, invocation, plugin.spec, result
                     )
                     result = result.model_copy(update={"evidence_ids": evidence_ids})
+                if result.parser_error is not None:
+                    raise ToolBrokerError(
+                        f"tool output parsing failed: {result.parser_error}"
+                    )
+                self._validate(plugin.spec.output_schema, result.output, "output")
             except asyncio.CancelledError:
                 await self.ledger.transition(running, ToolCallStatus.CANCELLED)
                 raise
@@ -824,7 +1070,7 @@ class ToolBroker:
             raise InvalidToolArguments(
                 "tool workspace does not match the engagement-owned workspace"
             )
-        arguments = invocation.arguments
+        arguments = dict(invocation.arguments)
         target: str | None = None
         if spec.target_argument:
             value = arguments.get(spec.target_argument)
@@ -849,6 +1095,7 @@ class ToolBroker:
         for field in spec.path_arguments:
             values = arguments.get(field)
             paths = values if isinstance(values, list) else [values]
+            container_paths: list[str] = []
             for value in paths:
                 if not isinstance(value, str):
                     raise InvalidToolArguments(
@@ -862,6 +1109,19 @@ class ToolBroker:
                     raise InvalidToolArguments(
                         f"mapped path argument {field!r} escapes the engagement workspace"
                     )
+                if spec.filesystem_access == "read" and not candidate.exists():
+                    raise InvalidToolArguments(
+                        f"mapped path argument {field!r} does not exist"
+                    )
+                relative = candidate.relative_to(workspace)
+                container_paths.append(
+                    "/workspace"
+                    if relative == Path(".")
+                    else f"/workspace/{relative.as_posix()}"
+                )
+            arguments[field] = (
+                container_paths if isinstance(values, list) else container_paths[0]
+            )
         if invocation.credential_class and (
             invocation.credential_class not in spec.credential_classes
         ):
@@ -886,6 +1146,7 @@ class ToolBroker:
         return invocation.model_copy(
             update={
                 "workspace": workspace,
+                "arguments": arguments,
                 "target": target,
                 "port": port,
                 "resolved_ips": resolved_ips,
@@ -926,6 +1187,11 @@ def invocation_digest(invocation: ToolInvocation) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _bounded_execution_error(exc: Exception) -> str:
+    detail = " ".join(str(exc).split()) or exc.__class__.__name__
+    return f"{exc.__class__.__name__}: {detail}"[:1_000]
+
+
 def _mapped_ports(spec: ToolSpec, arguments: dict[str, Any]) -> list[int]:
     if not spec.port_argument:
         return []
@@ -960,7 +1226,7 @@ def _target_host(target: str) -> str:
 async def _resolve_addresses(host: str) -> list[str]:
     def resolve() -> list[str]:
         return [
-            result[4][0]
+            str(result[4][0])
             for result in socket.getaddrinfo(
                 host,
                 None,

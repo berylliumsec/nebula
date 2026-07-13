@@ -108,14 +108,45 @@ def test_worker_rejects_unimplemented_daemon_mode():
     assert "durable worker mode is release-gated" in result.output
 
 
-def test_cli_run_rejects_unattached_executable_tool_budget():
+def test_cli_run_rejects_tool_budget_without_selected_tools():
     result = CliRunner().invoke(
         app,
         ["run", "engagement", "objective", "--max-tool-calls", "1"],
     )
 
     assert result.exit_code != 0
-    assert "executable mission tools are release-gated" in result.output
+    assert "positive --max-tool-calls budget requires at least one" in result.output
+    assert "--tool" in result.output
+
+
+def test_cli_tool_missions_are_release_gated_outside_acceptance_environment():
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "engagement",
+            "objective",
+            "--tool",
+            "nmap.connect_scan",
+            "--max-tool-calls",
+            "1",
+            "--provider",
+            "provider",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "release-gated" in result.output
+
+
+def test_tools_cli_accepts_stable_json_output_flag(tmp_path):
+    result = CliRunner().invoke(
+        app,
+        ["tools", "--json", "list", "--data-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {"installations": [], "tools": []}
 
 
 def test_cli_imports_legacy_side_by_side_then_exports_bundle(tmp_path, monkeypatch):

@@ -40,9 +40,7 @@ def build_metadata() -> BuildMetadata:
             "version": __version__,
             "commit": os.getenv("NEBULA_BUILD_COMMIT", "unknown"),
             "target": os.getenv("NEBULA_BUILD_TARGET", sysconfig.get_platform()),
-            "build_timestamp": os.getenv(
-                "NEBULA_BUILD_TIMESTAMP", "development"
-            ),
+            "build_timestamp": os.getenv("NEBULA_BUILD_TIMESTAMP", "development"),
             "distribution_channel": os.getenv(
                 "NEBULA_DISTRIBUTION_CHANNEL", "development"
             ),

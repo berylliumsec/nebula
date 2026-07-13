@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, TypeVar, cast
+from typing import Any, Iterator, Sequence, TypeVar, cast
 from uuid import uuid4
 
 from sqlalchemy import and_, delete, exists, func, insert, or_, select, text, update
@@ -86,7 +86,7 @@ class StoreTransaction:
             raise ConflictError(f"entity already exists: {entity.id}") from exc
         return entity
 
-    def add_all(self, entities: list[Entity]) -> list[Entity]:
+    def add_all(self, entities: Sequence[Entity]) -> Sequence[Entity]:
         for entity in entities:
             self.add(entity)
         return entities
@@ -311,13 +311,13 @@ class NebulaStore:
                 )
             if counter:
                 connection.execute(
-                    RunBudgetCounterRow.__table__.update()
+                    update(RunBudgetCounterRow)
                     .where(RunBudgetCounterRow.run_id == call.run_id)
                     .values(tool_calls=current + 1, updated_at=utc_now())
                 )
             else:
                 connection.execute(
-                    RunBudgetCounterRow.__table__.insert().values(
+                    insert(RunBudgetCounterRow).values(
                         run_id=call.run_id,
                         tool_calls=1,
                         input_tokens=0,
@@ -327,7 +327,7 @@ class NebulaStore:
                     )
                 )
             connection.execute(
-                EntityRow.__table__.insert().values(
+                insert(EntityRow).values(
                     id=call.id,
                     kind=call.entity_kind,
                     engagement_id=call.engagement_id,

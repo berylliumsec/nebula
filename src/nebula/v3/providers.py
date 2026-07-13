@@ -19,7 +19,7 @@ from enum import Enum
 from typing import Any
 from urllib.parse import urlsplit
 
-import boto3
+import boto3  # type: ignore[import-untyped]
 import httpx
 from pydantic import (
     BaseModel,

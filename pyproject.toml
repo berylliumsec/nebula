@@ -13,7 +13,7 @@ license = "BSD"
 homepage = "https://github.com/berylliumsec/nebula"
 keywords = [ "AI", "ethical hacking", "nmap", "zap", "crackmapexec",]
 classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Developers", "License :: OSI Approved :: BSD License", "Programming Language :: Python :: 3",]
-include = [ "src/nebula/images/*",]
+include = [ "src/nebula/images/*", "src/nebula/v3/tool_pack_assets/**/*",]
 [[tool.poetry.packages]]
 include = "nebula"
 from = "src"
@@ -37,6 +37,8 @@ typer = ">=0.16,<1"
 langgraph = ">=1.1,<2"
 langgraph-checkpoint-sqlite = ">=3.1,<4"
 jsonschema = ">=4.23,<5"
+PyYAML = ">=6.0.2,<7"
+cryptography = ">=44,<47"
 packaging = "*"
 semantic-version = "2.10.0"
 pypdf = ">=6,<7"
@@ -103,6 +105,8 @@ pytest = ">=8.3,<10"
 pytest-cov = ">=6,<8"
 ruff = ">=0.11,<1"
 mypy = ">=1.15,<2"
+types-jsonschema = ">=4.23,<5"
+types-PyYAML = ">=6.0,<7"
 pyinstaller = ">=6.12,<7"
 tomli = ">=2.2,<3"
 

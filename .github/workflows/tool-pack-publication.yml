@@ -1,0 +1,112 @@
+name: Tool-pack publication readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Branch, commit, or immutable nebula-tools-v* tag to validate
+        required: true
+        default: main
+        type: string
+      mode:
+        description: Validation depth
+        required: true
+        default: validate-source
+        type: choice
+        options:
+          - validate-source
+          - stage-release-candidate
+
+# This scaffold cannot push images, write repository content, sign manifests,
+# or publish a catalog. Publication remains unavailable until offline signing
+# and immutable image/SBOM/provenance inputs are configured deliberately.
+permissions:
+  contents: read
+
+concurrency:
+  group: tool-pack-publication-${{ inputs.release_ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate protected release input
+    runs-on: ubuntu-22.04
+    environment: tool-pack-release
+    steps:
+      - name: Check out the selected release input
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_ref }}
+
+      - name: Require an immutable tag for a release candidate
+        if: inputs.mode == 'stage-release-candidate'
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: |
+          case "$RELEASE_REF" in
+            nebula-tools-v*) ;;
+            *) printf 'release candidates require a nebula-tools-v* tag\n' >&2; exit 1 ;;
+          esac
+          git show-ref --verify --quiet "refs/tags/$RELEASE_REF"
+          test "$(git rev-list -n 1 "$RELEASE_REF")" = "$(git rev-parse HEAD)"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the locked validation boundary
+        run: |
+          python -m pip install "poetry==2.1.3"
+          poetry install --without legacy,legacy-dev --with dev --no-interaction
+
+      - name: Validate source manifests without manufacturing release data
+        if: inputs.mode == 'validate-source'
+        run: |
+          poetry run python -m scripts.validate_tool_pack_release --json \
+            > tool-pack-readiness.json
+
+      - name: Require resolved digests, SBOMs, and provenance
+        if: inputs.mode == 'stage-release-candidate'
+        run: |
+          poetry run python -m scripts.validate_tool_pack_release \
+            --require-candidate-ready --json > tool-pack-readiness.json
+
+      - name: Build deterministic unsigned candidate bundles
+        if: inputs.mode == 'stage-release-candidate'
+        run: |
+          install -d -m 0700 tool-pack-candidate
+          for manifest in src/nebula/v3/tool_pack_assets/safe_foundation/*/nebula-tool-pack.yaml; do
+            pack_dir="$(dirname "$manifest")"
+            pack_name="$(basename "$pack_dir")"
+            poetry run nebula3 tools validate "$pack_dir" --require-digests
+            poetry run nebula3 tools test "$pack_dir"
+            poetry run nebula3 tools pack \
+              "$pack_dir" "tool-pack-candidate/$pack_name.nebula-toolpack"
+          done
+          sha256sum tool-pack-candidate/*.nebula-toolpack \
+            > tool-pack-candidate/SHA256SUMS
+          {
+            printf 'NOT PUBLISHED OR SIGNED\n'
+            printf 'These deterministic bundles require offline manifest/catalog signing.\n'
+            printf 'This workflow has read-only permissions and cannot publish OCI images or catalogs.\n'
+          } > tool-pack-candidate/NOT-PUBLISHED.txt
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tool-pack-readiness-${{ github.run_id }}
+          path: tool-pack-readiness.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload unsigned candidate for offline review
+        if: inputs.mode == 'stage-release-candidate'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-tool-pack-candidate-${{ github.run_id }}
+          path: tool-pack-candidate
+          if-no-files-found: error
+          retention-days: 7
