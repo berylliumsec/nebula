@@ -65,7 +65,7 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
       </div>
 
       <div className="engagement-picker">
-        <button className="engagement-switcher" type="button" aria-label="Switch engagement" aria-expanded={open} disabled={previewMode} onClick={() => setOpen((value) => !value)}>
+        <button className="engagement-switcher" type="button" title={engagementName} aria-label="Switch engagement" aria-expanded={open} disabled={previewMode} onClick={() => setOpen((value) => !value)}>
           <span className="engagement-avatar">{initials}</span>
           <span className="engagement-copy"><small>Active engagement</small><strong>{engagementName}</strong></span>
           <ChevronDown size={16} aria-hidden="true" />
@@ -126,7 +126,7 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
         <div className="operator-row">
           <span className="operator-avatar">{operatorInitials}</span>
           <span>
-            <strong>{operatorName}</strong>
+            <strong title={operatorName}>{operatorName}</strong>
             <small>{previewMode ? "Engagement lead" : activeOperator?.role ?? activeOperator?.email ?? "Configure in Settings"}</small>
           </span>
           <LockKeyhole size={15} aria-label="Local attribution profile" />

@@ -215,6 +215,7 @@ body {
 
 .top-bar-leading, .top-bar-actions, .toolbar-page-actions { display: flex; align-items: center; gap: 8px; }
 .top-bar-leading { min-width: 190px; }
+.top-bar-title, .top-bar-page-actions { min-width: 0; }
 .top-bar-title { font-size: 12px; }
 .top-bar-title > span:first-child { display: none; }
 .top-bar-title > span[aria-hidden] { display: none; }
@@ -262,6 +263,13 @@ body {
 .page-header p { max-width: 720px; font-size: 13px; line-height: 1.5; }
 .eyebrow { margin-bottom: 8px; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .04em; }
 
+/* API-backed labels can contain hostnames, model IDs, and filenames without
+   natural spaces. Keep those values inside their owning surface. */
+.page :where(h1, h2, h3, p, dd, li),
+.activity-center :where(h2, h3, p, dd, li) { overflow-wrap: anywhere; }
+.panel-header > div:first-child, .section-heading > div:first-child,
+.callout > div, .mission-hero > div:first-child { min-width: 0; }
+
 .button {
   min-height: 34px;
   padding-inline: 13px;
@@ -307,6 +315,9 @@ body {
 .metric-card small, .metric-card div span { font-size: 11px; }
 .metric-card strong { font-size: 21px; }
 .metric-icon { border: 0; border-radius: 10px; }
+
+.agent-graph-panel { min-width: 0; overflow: hidden; }
+.agent-graph { max-width: 100%; }
 
 .overview-grid { gap: 16px; }
 .mission-panel { grid-row: span 2; }
@@ -685,6 +696,26 @@ body {
   .terminal-launch-form { border-right: 0; border-bottom: 1px solid var(--border-soft); }
 }
 
+@media (max-width: 900px) {
+  .finding-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-workspace { display: block; }
+  .settings-tabs {
+    display: grid;
+    top: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-bottom: 20px;
+  }
+  .settings-tabs a {
+    min-width: 0;
+    justify-content: center;
+    padding: 7px 8px;
+    text-align: center;
+  }
+  .settings-bottom-grid { grid-template-columns: 1fr; }
+  .settings-detail[data-section="general-settings"] .appearance-panel,
+  .settings-detail[data-section="general-settings"] .release-panel { grid-column: auto; }
+}
+
 @media (max-width: 760px) {
   :root { --side-width: 0px; --side-collapsed-width: 0px; --top-height: 58px; }
   .app-shell, .app-shell.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) 0; }
@@ -721,20 +752,22 @@ body {
   .metric-grid { grid-template-columns: 1fr 1fr; }
   .metric-card:nth-child(2) { border-right: 0; }
   .metric-card:nth-child(-n + 2) { border-bottom: 1px solid var(--border-soft); }
-  .settings-tabs { overflow-x: auto; }
+  .activity-center { width: min(var(--activity-width), calc(100vw - 24px)); }
+  .settings-tabs { overflow: visible; }
   .settings-workspace { display: block; }
-  .settings-tabs { position: sticky; top: 0; align-items: center; flex-direction: row; margin-bottom: 20px; }
-  .settings-tabs a { flex: 0 0 auto; }
+  .settings-tabs { position: sticky; top: 0; align-items: stretch; margin-bottom: 20px; }
   .settings-bottom-grid { grid-template-columns: 1fr; }
   .settings-detail[data-section="general-settings"] .appearance-panel,
   .settings-detail[data-section="general-settings"] .release-panel { grid-column: auto; }
   .approval-review-facts { grid-template-columns: 1fr; }
   .approval-review-actions { grid-template-columns: 1fr 1fr; }
   .approval-review-actions > span { display: none; }
-  .session-toolbar { gap: 6px; }
-  .session-tabs button { padding-inline: 8px; }
+  .session-toolbar { flex-wrap: wrap; gap: 6px; overflow: hidden; }
+  .session-tabs { display: grid; width: 100%; min-width: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; }
+  .session-tabs button { min-width: 0; justify-content: center; gap: 4px; padding-inline: 4px; line-height: 1.15; text-align: center; }
+  .session-tabs button > svg { flex: 0 0 auto; }
   .session-scope { display: none; }
-  .session-mobile-list { display: inline-flex; min-height: 34px; align-items: center; gap: 6px; margin-left: auto; padding: 0 9px; border: 0; border-radius: 8px; color: var(--muted-strong); background: var(--surface-hover); }
+  .session-mobile-list { display: inline-flex; width: 100%; min-height: 34px; align-items: center; justify-content: center; gap: 6px; margin-left: 0; padding: 0 9px; border: 0; border-radius: 8px; color: var(--muted-strong); background: var(--surface-hover); }
   .session-layout.chat { display: block; min-height: 620px; }
   .session-layout.chat .session-list { display: none; min-height: 620px; border-right: 0; }
   .session-layout.chat.mobile-list-open .session-list { display: block; }
@@ -776,6 +809,23 @@ body {
   .findings-table td:nth-child(5)::before { content: "Evidence"; }
   .findings-table td:nth-child(6)::before { content: "Updated"; }
   .table-footer { align-items: flex-start; flex-direction: column; gap: 4px; }
+
+  .source-list article { grid-template-columns: 35px minmax(0, 1fr) auto auto; gap: 8px; }
+}
+
+@media (max-width: 600px) {
+  .metric-grid { grid-template-columns: 1fr; }
+  .metric-card, .metric-card:nth-child(2) { min-height: 76px; border-right: 0; border-bottom: 1px solid var(--border-soft); }
+  .metric-card:last-child { border-bottom: 0; }
+}
+
+@media (max-width: 480px) {
+  .settings-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 360px) {
+  .top-bar-title { display: none; }
+  .toolbar-page-actions .button.primary { width: 36px; flex: 0 0 36px; gap: 0; padding: 0; font-size: 0; }
 }
 
 @media (prefers-reduced-transparency: reduce) {

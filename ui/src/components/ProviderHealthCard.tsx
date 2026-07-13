@@ -34,7 +34,7 @@ export function ProviderHealthCard({ provider, preview = false, busy = false, on
           <KindIcon size={19} aria-hidden="true" />
         </span>
         <div>
-          <h3>{provider.name}</h3>
+          <h3 title={provider.name}>{provider.name}</h3>
           <p>{provider.kind === "local" ? "Local inference" : provider.kind}</p>
         </div>
         <span className={`health-label ${provider.state}`}>

@@ -19,6 +19,29 @@ interface ContainerTerminalPanelProps {
   engagementName: string;
 }
 
+const localShellCapability = "environment.shell_local";
+
+async function ensureTerminalAssignment(api: ApiClient, engagementId: string, signal: AbortSignal): Promise<void> {
+  const [packs, assignments] = await Promise.all([
+    api.listToolPacks(signal),
+    api.listEngagementToolAssignments(engagementId, signal),
+  ]);
+  const readyShellPacks = packs.filter((pack) => pack.status === "ready" && pack.toolNames.includes(localShellCapability));
+  const existing = assignments.find((assignment) => readyShellPacks.some((pack) => pack.manifestDigest === assignment.manifestDigest));
+  const selected = existing
+    ? readyShellPacks.find((pack) => pack.manifestDigest === existing.manifestDigest)
+    : readyShellPacks[0];
+  if (!selected) {
+    throw new Error("Terminal needs a ready installed Toolbox execution environment.");
+  }
+  await api.updateEngagementToolAssignment(engagementId, {
+    manifestDigest: selected.manifestDigest,
+    toolNames: existing?.toolNames ?? [],
+    enabled: true,
+    expectedRevision: existing?.revision,
+  }, signal);
+}
+
 function idempotencyKey(): string {
   return `container-terminal-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`;
 }
@@ -135,7 +158,7 @@ function LiveContainerTerminal({
 export function ContainerTerminalPanel({ api, engagementId, engagementName }: ContainerTerminalPanelProps) {
   const instanceKey = useRef(idempotencyKey());
   const [launchAttempt, setLaunchAttempt] = useState(0);
-  const [phase, setPhase] = useState<"checking" | "reviewing" | "starting">("checking");
+  const [phase, setPhase] = useState<"checking" | "assigning" | "reviewing" | "starting">("checking");
   const [session, setSession] = useState<{ engagementId: string; value: ContainerTerminalSession }>();
   const [error, setError] = useState<string>();
 
@@ -152,7 +175,12 @@ export function ContainerTerminalPanel({ api, engagementId, engagementName }: Co
     const launch = async () => {
       try {
         setPhase("checking");
-        const capabilities = await api.containerTerminalCapabilities(engagementId, controller.signal);
+        let capabilities = await api.containerTerminalCapabilities(engagementId, controller.signal);
+        if (!capabilities.ready || !capabilities.offline) {
+          setPhase("assigning");
+          await ensureTerminalAssignment(api, engagementId, controller.signal);
+          capabilities = await api.containerTerminalCapabilities(engagementId, controller.signal);
+        }
         if (!capabilities.ready || !capabilities.offline) {
           throw new Error(capabilities.detail ?? "A ready offline Toolbox runtime is required to use Terminal.");
         }
@@ -189,9 +217,11 @@ export function ContainerTerminalPanel({ api, engagementId, engagementName }: Co
 
   const status = phase === "checking"
     ? "Checking the assigned Toolbox runtime…"
-    : phase === "reviewing"
-      ? "Validating the isolated terminal boundary…"
-      : "Starting Terminal…";
+    : phase === "assigning"
+      ? "Assigning the installed Toolbox environment…"
+      : phase === "reviewing"
+        ? "Validating the isolated terminal boundary…"
+        : "Starting Terminal…";
 
   return <div className="container-terminal-panel">
     <section className="container-terminal-intro">

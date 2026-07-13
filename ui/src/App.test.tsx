@@ -306,21 +306,35 @@ describe("Nebula workspace", () => {
 
   it("starts Terminal automatically inside the reviewed container boundary", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const digest = "a".repeat(64);
+    let environmentAssigned = false;
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable", container_terminal: "configured" }), { status: 200 });
       if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Terminal review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
       if (path.endsWith("/container-terminal/capabilities")) return new Response(JSON.stringify({
-        engagement_id: "engagement-1", ready: true, offline: true, scoped_network: true, workspace: "/workspace",
+        engagement_id: "engagement-1", ready: environmentAssigned, offline: environmentAssigned, scoped_network: environmentAssigned, workspace: "/workspace",
         limits: { cpu_count: 1, memory_mb: 512, pids: 128, timeout_seconds: 1800, output_bytes_per_stream: 2_000_000 },
-        idle_timeout_seconds: 900, fresh_container: true, host_access: false,
+        idle_timeout_seconds: 900, fresh_container: true, host_access: false, detail: environmentAssigned ? null : "engagement is not assigned environment.shell_local",
       }), { status: 200 });
+      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{
+        ...entity, id: "pack-1", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", manifest_digest: digest,
+        source: "catalog", trust_state: "trusted", runtime_profile_id: "runner-1", image_locks: {}, status: "ready",
+        tool_names: ["environment.shell_local", "environment.shell_network"], permissions: ["network", "workspace_write"],
+      }]), { status: 200 });
+      if (path.endsWith("/tool-assignment")) {
+        if (init?.method === "PUT") {
+          environmentAssigned = true;
+          return new Response(JSON.stringify({ ...entity, id: "assignment-1", engagement_id: "engagement-1", manifest_digest: digest, allowed_tool_names: ["environment.shell_local", "environment.shell_network"], enabled: true }), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
       if (path.endsWith("/container-terminal/preflight") && init?.method === "POST") return new Response(JSON.stringify({
         allowed: true,
         detail: "request is confined to the workspace",
         runtime: {
           language: "bash", interpreter: "/bin/bash", arguments: ["--noprofile", "--norc", "-i"],
-          tool_pack_installation_id: "pack-1", manifest_digest: "a".repeat(64), image: `example.invalid/toolbox@sha256:${"b".repeat(64)}`,
+          tool_pack_installation_id: "pack-1", manifest_digest: digest, image: `example.invalid/toolbox@sha256:${"b".repeat(64)}`,
           runner_profile_id: "runner-1", runner_profile_revision: 2, runner_runtime: "podman", runner_isolation: "rootless",
           runner_executable: "/usr/bin/podman", runner_platform: "linux/amd64", trusted: true,
         },
@@ -346,6 +360,8 @@ describe("Nebula workspace", () => {
     expect(screen.getByText("No host shell")).toBeVisible();
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/sessions") && request?.method === "POST")).toBe(true));
 
+    const assignmentCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-assignment") && request?.method === "PUT");
+    expect(JSON.parse(String(assignmentCall?.[1]?.body))).toMatchObject({ manifest_digest: digest, tool_names: [], enabled: true });
     const preflightCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/preflight") && request?.method === "POST");
     expect(JSON.parse(String(preflightCall?.[1]?.body))).toEqual({ engagement_id: "engagement-1", network: { mode: "none", ports: [] }, columns: 100, rows: 30 });
     const startCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/sessions") && request?.method === "POST");

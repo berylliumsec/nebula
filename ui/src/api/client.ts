@@ -1962,9 +1962,10 @@ export class ApiClient {
       .then((value) => wireItems(value).map(mapToolAssignment));
   }
 
-  updateEngagementToolAssignment(engagementId: string, body: EngagementToolAssignmentUpdateRequest): Promise<EngagementToolAssignment> {
+  updateEngagementToolAssignment(engagementId: string, body: EngagementToolAssignmentUpdateRequest, signal?: AbortSignal): Promise<EngagementToolAssignment> {
     return this.request<WireEngagementToolAssignment>(`engagements/${encodeURIComponent(engagementId)}/tool-assignment`, {
       method: "PUT",
+      signal,
       body: JSON.stringify({
         manifest_digest: body.manifestDigest,
         tool_names: body.toolNames,

@@ -229,7 +229,7 @@ export function KnowledgePage() {
               return (
                 <article key={source.id}>
                   <span className="source-icon"><Icon size={19} /></span>
-                  <div><h3>{source.name}</h3><p>{sourceType(source)}</p></div>
+                  <div><h3 title={source.name}>{source.name}</h3><p>{sourceType(source)}</p></div>
                   <span><strong>{source.documentCount || "—"}</strong><small>chunks</small></span>
                   <span className={`source-state ${busy ? "indexing" : source.status}`}>{busy && <RefreshCw className="spin" size={13} />}{busy ? "working" : source.status}</span>
                   <span className="source-updated">{displayTime(source.updatedAt)}</span>

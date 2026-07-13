@@ -177,7 +177,7 @@ export function ReportsPage() {
       {!selected ? <section className="panel empty-state"><FileText size={28} /><strong>{previewMode ? "Core unavailable" : "No reports yet"}</strong><p>{previewMode ? "Connect Nebula Core to create and edit persisted reports." : "Create a draft report to begin composing an executive summary."}</p></section> : <div className="report-layout">
         <aside className="panel report-outline">
           <header><div><span>{reports.length} report{reports.length === 1 ? "" : "s"}</span><strong>{engagement?.name}</strong></div></header>
-          <nav aria-label="Reports">{reports.map((report) => <button className={report.id === selected.id ? "active" : undefined} type="button" key={report.id} onClick={() => void selectReport(report.id)}><FileText size={15} /><span className="report-list-label">{report.title}<small>{report.status} · revision {report.revision}</small></span></button>)}</nav>
+          <nav aria-label="Reports">{reports.map((report) => <button className={report.id === selected.id ? "active" : undefined} type="button" title={report.title} key={report.id} onClick={() => void selectReport(report.id)}><FileText size={15} /><span className="report-list-label">{report.title}<small>{report.status} · revision {report.revision}</small></span></button>)}</nav>
           <footer><span>Persisted by Core</span><strong>{reports.length}</strong></footer>
         </aside>
         <section className="panel report-editor" aria-readonly={readOnly || undefined}>

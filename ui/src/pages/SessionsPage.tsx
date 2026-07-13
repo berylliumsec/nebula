@@ -698,7 +698,7 @@ export function SessionsPage() {
           <header><div><span>Conversations</span><strong>{previewMode ? "Preview" : `${sessions.length} saved`}</strong></div><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={previewMode || !engagement} onClick={newConversation}><Plus size={16} /></button></header>
           <nav>
             <button className={!sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{selectedProvider?.name ?? "Choose a provider"}</small></span></button>
-            {sessions.map((session) => <button className={session.id === sessionId ? "active" : undefined} type="button" key={session.id} onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong>{session.title}</strong><small>{session.model || "Saved conversation"}</small></span></button>)}
+            {sessions.map((session) => <button className={session.id === sessionId ? "active" : undefined} type="button" key={session.id} onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button>)}
             {previewMode && <button className="active" type="button" onClick={() => setMobileListOpen(false)}><MessageSquare size={16} /><span><strong>Gateway applicability review</strong><small>Local preview</small></span></button>}
           </nav>
         </aside>}
