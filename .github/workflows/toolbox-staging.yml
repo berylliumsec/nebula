@@ -9,6 +9,7 @@ on:
       - "poetry.lock"
       - "pyproject.toml"
       - "scripts/build_toolbox_staging_bundle.py"
+      - "scripts/compare_toolbox_interface_catalogs.py"
       - "scripts/smoke_test_toolbox_image.sh"
       - "src/nebula/v3/tool_pack_assets/toolbox/**"
       - "src/nebula/v3/tool_interfaces.py"
@@ -107,8 +108,9 @@ jobs:
           poetry install --without legacy,legacy-dev --with dev --no-interaction
       - name: Require architecture-independent command interfaces
         run: |
-          cmp release-input/toolbox-amd64.model-catalog.json \
-            release-input/toolbox-arm64.model-catalog.json
+          poetry run python -m scripts.compare_toolbox_interface_catalogs \
+            --amd64 release-input/toolbox-amd64.model-catalog.json \
+            --arm64 release-input/toolbox-arm64.model-catalog.json
       - name: Build unsigned staging tool pack
         env:
           STAGING_VERSION: 0.1.0.dev${{ github.run_number }}
