@@ -33,7 +33,8 @@ For the first release of each GHCR component, an organization owner must make
 the new package public in GitHub's Package settings. GitHub does not provide a
 public API for this visibility transition. The anonymous-pull gate must pass
 before catalog signing or Pages deployment; rerun failed jobs after completing
-the one-time visibility change.
+the one-time visibility change. The failed job summary provides the five
+package-settings links and the exact `gh run rerun <run-id> --failed` command.
 
 Never commit the private key, resolved digests, or generated release evidence
 to the source branch. Back up the release key offline before approving the

@@ -273,12 +273,31 @@ jobs:
       - name: Require anonymous image access before catalog publication
         run: |
           docker logout ghcr.io
+          failed=()
           for component in nmap nuclei nikto searchsploit semgrep; do
             for arch in amd64 arm64; do
               digest="$(cat "release-input/$component-$arch.digest")"
-              docker buildx imagetools inspect "$REGISTRY/$component@$digest" >/dev/null
+              if ! docker buildx imagetools inspect "$REGISTRY/$component@$digest" >/dev/null 2>&1; then
+                failed+=("$component ($arch)")
+              fi
             done
           done
+          if [ "${#failed[@]}" -ne 0 ]; then
+            {
+              printf '### GHCR packages are not publicly readable\n\n'
+              printf 'The images were built and pushed, but GitHub creates new container packages as private. '
+              printf 'An organization owner must make each component public once before the signed catalog can be published.\n\n'
+              for component in nmap nuclei nikto searchsploit semgrep; do
+                printf -- '- [%s package settings](https://github.com/orgs/%s/packages/container/package/nebula-tools%%2F%s/settings)\n' \
+                  "$component" "$GITHUB_REPOSITORY_OWNER" "$component"
+              done
+              printf '\nAfter changing **Danger Zone → Change visibility → Public**, rerun only the failed jobs:\n\n'
+              printf '```bash\ngh run rerun %s --failed\n```\n' "$GITHUB_RUN_ID"
+              printf '\nFailed anonymous checks: `%s`\n' "${failed[*]}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            printf '::error title=GHCR packages are private::Make the five Safe Foundation packages public using the links in the job summary, then rerun failed jobs.\n'
+            exit 1
+          fi
       - name: Assemble resolved release inputs
         run: |
           python - <<'PY'

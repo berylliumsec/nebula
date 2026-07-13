@@ -384,7 +384,9 @@ visibility changes through its public API. On the first publication of a new
 component, an organization owner must open that component's **Package
 settings**, choose **Change visibility → Public**, and confirm the package name.
 The workflow deliberately fails its anonymous-pull gate until this is done.
-Afterward, rerun only the failed jobs; successful image builds are retained.
+The failed job summary contains direct settings links for every component.
+Afterward, rerun only the failed jobs with
+`gh run rerun <run-id> --failed`; successful image builds are retained.
 
 Run the same gate locally:
 
