@@ -2,6 +2,7 @@ import hashlib
 import json
 
 import httpx
+from click import unstyle
 from typer.testing import CliRunner
 
 from nebula.v3.cli import _is_loopback, app
@@ -115,7 +116,7 @@ def test_cli_run_rejects_tool_budget_without_selected_tools():
     )
 
     assert result.exit_code != 0
-    normalized_output = " ".join(result.output.split())
+    normalized_output = " ".join(unstyle(result.output).split())
     assert "positive --max-tool-calls budget requires at least one" in normalized_output
     assert "--tool" in normalized_output
 
