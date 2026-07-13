@@ -52,6 +52,7 @@ from .providers import (
     StreamEventType,
     provider_from_profile,
 )
+from .redaction import redact_text
 from .storage import NebulaStore
 
 
@@ -104,6 +105,7 @@ class ChatCompletionRequest(NebulaModel):
 
 
 class ChatResponseMessage(NebulaModel):
+    id: str | None = Field(default=None, max_length=200)
     role: ChatRole = ChatRole.ASSISTANT
     content: str
 
@@ -165,22 +167,6 @@ _STOP_WORDS = {
     "what",
     "with",
 }
-
-_PRIVATE_KEY = re.compile(
-    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?"
-    r"-----END [A-Z0-9 ]*PRIVATE KEY-----",
-    re.DOTALL,
-)
-_BEARER_TOKEN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
-_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
-_KNOWN_TOKEN = re.compile(
-    r"\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|"
-    r"sk-[A-Za-z0-9_-]{20,})\b"
-)
-_LABELED_SECRET = re.compile(
-    r"(?i)(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|"
-    r"passwd|secret)\b\s*[:=]\s*[\"']?)[^\s\"',;]{8,}"
-)
 
 _CHAT_INSTRUCTIONS = """You are Nebula's analysis-only analyst assistant.
 Answer the operator's question directly and concisely. Never claim to execute a
@@ -823,11 +809,7 @@ class ChatService:
 
     @staticmethod
     def _redact_secrets(value: str) -> str:
-        redacted = _PRIVATE_KEY.sub("[REDACTED PRIVATE KEY]", value)
-        redacted = _BEARER_TOKEN.sub("Bearer [REDACTED]", redacted)
-        redacted = _JWT.sub("[REDACTED JWT]", redacted)
-        redacted = _KNOWN_TOKEN.sub("[REDACTED TOKEN]", redacted)
-        return _LABELED_SECRET.sub(r"\1[REDACTED]", redacted)
+        return redact_text(value)
 
     @staticmethod
     def _title(messages: list[ChatRequestMessage]) -> str:
@@ -883,8 +865,11 @@ class ChatService:
             )
             for index, message in enumerate(prepared.new_messages)
         ]
+        assistant_message_id = str(uuid4())
+        completion.message.id = assistant_message_id
         messages.append(
             ChatMessage(
+                id=assistant_message_id,
                 engagement_id=prepared.engagement_id,
                 session_id=session.id,
                 sequence=start + len(prepared.new_messages),

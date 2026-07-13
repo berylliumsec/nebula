@@ -129,7 +129,15 @@ def test_runtime_dependency_boundary_keeps_legacy_stacks_out_of_main():
         project = tomli.load(stream)["tool"]["poetry"]
     runtime = {name.lower() for name in project["dependencies"]}
     legacy = {name.lower() for name in project["group"]["legacy"]["dependencies"]}
-    assert {"fastapi", "sqlalchemy", "langgraph", "boto3", "pypdf"} <= runtime
+    assert {
+        "fastapi",
+        "sqlalchemy",
+        "langgraph",
+        "boto3",
+        "pypdf",
+        "reportlab",
+        "pillow",
+    } <= runtime
     assert {"pyqt6", "torch", "transformers", "chromadb"} <= legacy
     assert not ({"pyqt6", "torch", "transformers", "chromadb"} & runtime)
     assert project["group"]["legacy"]["optional"] is False
@@ -227,8 +235,15 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
     result = validate_members(
         {
             "nebula.v3.cli",
+            "reportlab",
+            "PIL",
             "nebula/v3/BUILD_INFO.json",
             "nebula/v3/migrations/script.py.mako",
+            "nebula/v3/report_assets/fonts/NotoSans-Regular.ttf",
+            "nebula/v3/report_assets/fonts/NotoSans-Bold.ttf",
+            "nebula/v3/report_assets/fonts/NotoSansMono-Regular.ttf",
+            "nebula/v3/report_assets/fonts/NotoSansMono-Bold.ttf",
+            "nebula/v3/report_assets/fonts/OFL.txt",
             "ui/dist/index.html",
             "licenses/LICENSE.md",
             "licenses/THIRD_PARTY_NOTICES.txt",

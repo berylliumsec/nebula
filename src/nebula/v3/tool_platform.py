@@ -31,6 +31,7 @@ from .domain import (
     ScopePolicy,
     ToolPackInstallation,
     ToolPackInstallationStatus,
+    ToolPackTrust,
     utc_now,
 )
 from .missions import MissionComponents, MissionConfigurationError
@@ -56,6 +57,7 @@ from .toolpacks import (
     ToolCatalogEntry,
     ToolPackInstaller,
     ToolPackManifestV1,
+    ToolPackOperatorRuntime,
     ToolPackRuntimeAdapter,
     build_tool_registry,
     canonical_manifest_json,
@@ -250,6 +252,19 @@ class _ProgressRuntimeAdapter:
 
 class ToolPlatformError(RuntimeError):
     """Operator-safe tool-platform configuration or lifecycle failure."""
+
+
+@dataclass(frozen=True)
+class OperatorRuntimeResolution:
+    canonical_language: str
+    runtime: ToolPackOperatorRuntime
+    installation: ToolPackInstallation
+    manifest: ToolPackManifestV1
+    profile: StoredRunnerProfile
+    image: str
+    runner: ContainerSandboxRunner
+    workspace: Path
+    trusted: bool
 
 
 def _load_public_keys(path: Path) -> dict[str, Any]:
@@ -883,6 +898,93 @@ class ToolPlatform:
         workspace.chmod(0o777)
         return workspace
 
+    def resolve_operator_runtime(
+        self, engagement_id: str, language: str, *, network: bool
+    ) -> OperatorRuntimeResolution:
+        """Resolve a signed runtime through the engagement's shell grant."""
+
+        if not self.execution_enabled:
+            raise ToolPlatformError("operator execution is disabled in this Core")
+        self.store.get(Engagement, engagement_id)
+        capability = (
+            "environment.shell_network" if network else "environment.shell_local"
+        )
+        assignments = [
+            item
+            for item in self.store.list_entities(
+                EngagementToolAssignment,
+                engagement_id=engagement_id,
+                limit=1_000,
+            )
+            if item.enabled and capability in item.allowed_tool_names
+        ]
+        if not assignments:
+            raise ToolPlatformError(f"engagement is not assigned {capability}")
+        candidates: list[
+            tuple[
+                ToolPackInstallation,
+                ToolPackManifestV1,
+                ToolPackOperatorRuntime,
+            ]
+        ] = []
+        normalized = language.casefold()
+        installations = self.store.list_entities(ToolPackInstallation, limit=1_000)
+        for assignment in assignments:
+            for installation in installations:
+                if (
+                    installation.manifest_digest != assignment.manifest_digest
+                    or installation.status != ToolPackInstallationStatus.READY
+                ):
+                    continue
+                manifest = self.manifests.get(installation.manifest_digest)
+                runtime = next(
+                    (
+                        item
+                        for item in manifest.operator_runtimes
+                        if normalized in item.aliases
+                    ),
+                    None,
+                )
+                if runtime is not None:
+                    candidates.append((installation, manifest, runtime))
+        if not candidates:
+            raise ToolPlatformError(
+                f"no ready assigned Toolbox declares runtime {language!r}"
+            )
+        if len(candidates) != 1:
+            raise ToolPlatformError(
+                f"runtime {language!r} is ambiguous across assigned environments"
+            )
+        installation, manifest, runtime = candidates[0]
+        if (
+            installation.trust == ToolPackTrust.LOCAL_UNSIGNED
+            and not self.developer_mode
+        ):
+            raise ToolPlatformError(
+                "release mode requires a signed, digest-pinned Toolbox runtime"
+            )
+        profile = self.store.get(StoredRunnerProfile, installation.runtime_profile_id)
+        if not profile.enabled or not profile.healthy:
+            raise ToolPlatformError("selected runner is not verified healthy")
+        image = manifest.image_for(runtime.image, profile.platform).image
+        runner = self._runner(
+            profile,
+            egress_helper_image=(
+                (profile.egress_helper_image or image) if network else None
+            ),
+        )
+        return OperatorRuntimeResolution(
+            canonical_language=runtime.language,
+            runtime=runtime,
+            installation=installation,
+            manifest=manifest,
+            profile=profile,
+            image=image,
+            runner=runner,
+            workspace=self.workspace_for(engagement_id),
+            trusted=installation.trust != ToolPackTrust.LOCAL_UNSIGNED,
+        )
+
     def _begin_operation(self, operation: ToolPackOperation) -> _OperationProgress:
         progress = _OperationProgress(self.events, operation)
         progress.emit("pending")
@@ -1080,6 +1182,7 @@ def default_tool_platform(
 __all__ = [
     "DEFAULT_EVENT_RETENTION",
     "MAX_EVENT_RETENTION",
+    "OperatorRuntimeResolution",
     "ToolPackEventJournal",
     "ToolPackEventReplay",
     "ToolPlatform",

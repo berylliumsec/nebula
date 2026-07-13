@@ -9,10 +9,12 @@ import hmac
 import json
 import re
 import secrets
+import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import (
@@ -33,6 +35,7 @@ from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import Field, ValidationError
+from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import Scope
@@ -73,12 +76,17 @@ from .domain import (
     EngagementToolAssignment,
     Entity,
     Evidence,
+    GeneratedDraft,
     KnowledgeSource,
     MissionGrant,
     NebulaModel,
+    OperationEvent,
     OperatorProfile,
+    OperatorExecution,
+    OperatorExecutionStatus,
     ProviderProfile,
     Task,
+    ReportRender,
     RunnerIsolation,
     RunnerProfile,
     RunnerRuntime,
@@ -96,6 +104,24 @@ from .evidence import (
     EvidenceUploadRequest,
     InvalidEvidenceUploadError,
     upload_evidence,
+)
+from .exporter import ExportError, export_engagement
+from .executions import (
+    ExecutionCapabilities,
+    ExecutionPreflightRequest,
+    ExecutionPreflightResponse,
+    ExecutionService,
+    ExecutionServiceError,
+    ExecutionStartRequest,
+)
+from .execution_ai import (
+    DraftEditRequest,
+    DraftNoteRequest,
+    DraftTransitionRequest,
+    ExecutionAIError,
+    ExecutionAIService,
+    ExecutionChatAttachRequest,
+    ExecutionChatAttachment,
 )
 from .knowledge import (
     MAX_DOCUMENT_BYTES,
@@ -124,10 +150,18 @@ from .providers import (
     ProviderHealth,
     provider_from_profile,
 )
-from .pty import HumanPtyService
+from .reporting import ReportRenderError, ReportRenderService
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .tool_platform import ToolPlatform, ToolPlatformError
 from .version import __version__, build_metadata
+from .workspace import (
+    WorkspaceListing,
+    WorkspacePreview,
+    WorkspacePromotionRequest,
+    WorkspaceResetRequest,
+    WorkspaceResetResult,
+    WorkspaceService,
+)
 
 READ_ONLY_RESOURCES = {
     "agent_attempts",
@@ -137,6 +171,9 @@ READ_ONLY_RESOURCES = {
     "chat_sessions",
     "evidence",
     "knowledge",
+    "generated_drafts",
+    "operator_executions",
+    "report_renders",
     "runs",
     "source_snapshots",
     "tasks",
@@ -182,6 +219,11 @@ class EventAppendRequest(NebulaModel):
 
 class EventList(NebulaModel):
     events: list[RunEvent]
+    next_sequence: int
+
+
+class OperationEventList(NebulaModel):
+    events: list[OperationEvent]
     next_sequence: int
 
 
@@ -299,6 +341,10 @@ class OperatorProfileActivateRequest(NebulaModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class ReportRenderRequest(NebulaModel):
+    report_revision: int = Field(ge=1)
+
+
 def create_app(
     store: NebulaStore | None = None,
     *,
@@ -309,12 +355,15 @@ def create_app(
     allow_internal_event_append: bool = False,
     cors_origins: list[str] | None = None,
     static_dir: str | Path | None = None,
-    enable_human_pty: bool = False,
-    human_pty_root: str | Path | None = None,
     mission_service: MissionService | None = None,
     mission_checkpoint_path: str | Path | None = None,
     tool_platform: ToolPlatform | None = None,
     enable_executable_missions: bool | None = None,
+    execution_service: ExecutionService | None = None,
+    execution_data_root: str | Path | None = None,
+    workspace_service: WorkspaceService | None = None,
+    report_render_service: ReportRenderService | None = None,
+    execution_ai_service: ExecutionAIService | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -352,13 +401,69 @@ def create_app(
     entity_validator = ApiEntityValidator(store)
     operators = OperatorProfileService(store)
 
+    def active_operator_id() -> str:
+        active = operators.active_profile_or_none()
+        return active.id if active is not None else "operator"
+
+    executions = execution_service
+    if executions is None and artifact_store is not None and tool_platform is not None:
+        executions = ExecutionService(
+            store=store,
+            artifact_store=artifact_store,
+            tool_platform=tool_platform,
+            data_root=execution_data_root or artifact_store.root.parent,
+            operator_id=active_operator_id,
+        )
+    if executions is not None and executions.store is not store:
+        raise ValueError("execution_service must use the API store")
+    workspaces = workspace_service
+    if workspaces is None and artifact_store is not None and tool_platform is not None:
+        workspaces = WorkspaceService(
+            store=store,
+            artifact_store=artifact_store,
+            tool_platform=tool_platform,
+            operator_id=active_operator_id,
+        )
+    if workspaces is not None and workspaces.store is not store:
+        raise ValueError("workspace_service must use the API store")
+    report_renders = report_render_service
+    if report_renders is None and artifact_store is not None:
+        report_renders = ReportRenderService(
+            store=store,
+            artifact_store=artifact_store,
+            operator_id=active_operator_id,
+        )
+    if report_renders is not None and report_renders.store is not store:
+        raise ValueError("report_render_service must use the API store")
+    execution_ai = execution_ai_service
+    if execution_ai is None and artifact_store is not None:
+        execution_ai = ExecutionAIService(
+            store=store,
+            artifact_store=artifact_store,
+            operator_id=active_operator_id,
+        )
+    if execution_ai is not None and execution_ai.store is not store:
+        raise ValueError("execution_ai_service must use the API store")
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        if executions is not None:
+            await executions.startup()
+        if report_renders is not None:
+            await report_renders.startup()
+        if execution_ai is not None:
+            await execution_ai.startup()
         await missions.startup()
         try:
             yield
         finally:
             await missions.shutdown()
+            if report_renders is not None:
+                await report_renders.shutdown()
+            if execution_ai is not None:
+                await execution_ai.shutdown()
+            if executions is not None:
+                await executions.shutdown()
 
     app = FastAPI(
         title="Nebula 3 Core API",
@@ -373,14 +478,11 @@ def create_app(
     app.state.mission_service = missions
     app.state.operator_profile_service = operators
     app.state.tool_platform = tool_platform
+    app.state.execution_service = executions
+    app.state.workspace_service = workspaces
+    app.state.report_render_service = report_renders
+    app.state.execution_ai_service = execution_ai
     app.state.executable_missions_enabled = executable_missions_enabled
-    pty_service = (
-        HumanPtyService(human_pty_root)
-        if enable_human_pty and human_pty_root is not None
-        else None
-    )
-    if enable_human_pty and pty_service is None:
-        raise ValueError("enable_human_pty requires a human_pty_root")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins
@@ -392,7 +494,12 @@ def create_app(
         ],
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "If-Match"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "If-Match",
+            "X-Nebula-Sensitive-Data-Acknowledged",
+        ],
     )
 
     bearer = HTTPBearer(auto_error=False)
@@ -467,6 +574,37 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
+    @app.exception_handler(ExecutionServiceError)
+    async def execution_error_handler(
+        _: Request, exc: ExecutionServiceError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail, "code": exc.code},
+        )
+
+    @app.exception_handler(ReportRenderError)
+    async def report_render_error_handler(
+        _: Request, exc: ReportRenderError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail, "code": exc.code},
+        )
+
+    @app.exception_handler(ExecutionAIError)
+    async def execution_ai_error_handler(
+        _: Request, exc: ExecutionAIError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail, "code": exc.code},
+        )
+
+    @app.exception_handler(ExportError)
+    async def export_error_handler(_: Request, exc: ExportError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
     @app.exception_handler(ChatHistoryConflict)
     @app.exception_handler(ChatPrivacyError)
     async def chat_conflict_handler(_: Request, exc: ChatError) -> JSONResponse:
@@ -505,14 +643,519 @@ def create_app(
             # Runner health belongs to the separately configured worker. The
             # API never assumes that presence of a container CLI makes it safe.
             "runner": "unavailable",
-            "human_pty": (
-                "ready"
-                if pty_service is not None and pty_service.available
-                else "unavailable"
-            ),
+            # Compatibility field; the host-backed terminal implementation is gone.
+            "human_pty": "unavailable",
             "api_version": "v1",
             **store.database.health(),
         }
+
+    def require_execution_service() -> ExecutionService:
+        if executions is None:
+            raise ExecutionServiceError(
+                "runner_unavailable",
+                "operator execution is not configured",
+                status_code=503,
+            )
+        return executions
+
+    def require_workspace_service() -> WorkspaceService:
+        if workspaces is None:
+            raise ExecutionServiceError(
+                "runner_unavailable",
+                "engagement workspace is not configured",
+                status_code=503,
+            )
+        return workspaces
+
+    def require_report_render_service() -> ReportRenderService:
+        if report_renders is None:
+            raise ReportRenderError(
+                "renderer_unavailable",
+                "server-rendered PDF export is not configured",
+                status_code=503,
+            )
+        return report_renders
+
+    def require_execution_ai_service() -> ExecutionAIService:
+        if execution_ai is None:
+            raise ExecutionAIError(
+                "ai_unavailable",
+                "execution AI actions are not configured",
+                status_code=503,
+            )
+        return execution_ai
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/execution-capabilities",
+        response_model=ExecutionCapabilities,
+        tags=["executions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def execution_capabilities(engagement_id: str) -> ExecutionCapabilities:
+        return require_execution_service().capabilities(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/executions/preflight",
+        response_model=ExecutionPreflightResponse,
+        tags=["executions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def preflight_execution(
+        request: ExecutionPreflightRequest,
+    ) -> ExecutionPreflightResponse:
+        return await require_execution_service().preflight(request)
+
+    @app.post(
+        f"{API_PREFIX}/executions",
+        response_model=OperatorExecution,
+        status_code=202,
+        tags=["executions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_execution(request: ExecutionStartRequest) -> OperatorExecution:
+        return await require_execution_service().start(request)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/executions",
+        response_model=list[OperatorExecution],
+        tags=["executions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_engagement_executions(
+        engagement_id: str,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=1000),
+        execution_status: OperatorExecutionStatus | None = Query(
+            default=None, alias="status"
+        ),
+        language: str | None = Query(default=None, max_length=32),
+        operator_id: str | None = Query(default=None, max_length=200),
+        date_from: datetime | None = Query(default=None),
+        date_to: datetime | None = Query(default=None),
+        query: str | None = Query(default=None, max_length=500),
+    ) -> list[OperatorExecution]:
+        store.get(Engagement, engagement_id)
+        return require_execution_service().list_executions(
+            engagement_id,
+            offset=offset,
+            limit=limit,
+            status=execution_status,
+            language=language,
+            operator_id=operator_id,
+            date_from=date_from,
+            date_to=date_to,
+            query=query,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/executions/{{execution_id}}",
+        response_model=OperatorExecution,
+        tags=["executions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def execution_detail(execution_id: str) -> OperatorExecution:
+        return store.get(OperatorExecution, execution_id)
+
+    @app.post(
+        f"{API_PREFIX}/executions/{{execution_id}}/cancel",
+        response_model=OperatorExecution,
+        tags=["executions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def cancel_execution(execution_id: str) -> OperatorExecution:
+        return await require_execution_service().cancel(execution_id)
+
+    @app.get(
+        f"{API_PREFIX}/executions/{{execution_id}}/events",
+        response_model=OperationEventList,
+        tags=["executions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def replay_execution_events(
+        execution_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=1000, ge=1, le=10_000),
+    ) -> OperationEventList:
+        store.get(OperatorExecution, execution_id)
+        events = store.replay_operation_events(
+            execution_id, after_sequence=after, limit=limit
+        )
+        return OperationEventList(
+            events=events,
+            next_sequence=events[-1].sequence if events else after,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/executions/{{execution_id}}/output/{{stream}}",
+        tags=["executions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def execution_output(
+        execution_id: str,
+        stream: str,
+        raw: bool = Query(default=False),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=256 * 1024, ge=1, le=256 * 1024),
+        sensitive_acknowledged: str | None = Header(
+            default=None, alias="X-Nebula-Sensitive-Data-Acknowledged"
+        ),
+    ) -> Response:
+        if raw and sensitive_acknowledged != "true":
+            raise ExecutionServiceError(
+                "sensitive_data_acknowledgement_required",
+                "raw output may contain unredacted secrets; acknowledge the warning to download it",
+                status_code=428,
+            )
+        data, media_type = require_execution_service().output_bytes(
+            execution_id, stream, raw=raw
+        )
+        if offset > len(data):
+            raise ExecutionServiceError(
+                "output_offset_invalid",
+                "output offset is beyond the available stream",
+                status_code=416,
+            )
+        page_end = min(len(data), offset + limit)
+        if not raw:
+            if offset < len(data) and data[offset] & 0xC0 == 0x80:
+                raise ExecutionServiceError(
+                    "output_offset_invalid",
+                    "output offset is not a UTF-8 boundary",
+                    status_code=416,
+                )
+            while page_end < len(data) and data[page_end] & 0xC0 == 0x80:
+                page_end -= 1
+            if page_end == offset and offset < len(data):
+                page_end = min(len(data), offset + 1)
+                while page_end < len(data) and data[page_end] & 0xC0 == 0x80:
+                    page_end += 1
+        page = data[offset:page_end]
+        headers = {
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Nebula-Output-Total": str(len(data)),
+            "X-Nebula-Output-Next": str(page_end),
+        }
+        if raw:
+            headers["Content-Disposition"] = (
+                f'attachment; filename="execution-{execution_id}-{stream}.raw"'
+            )
+            headers["X-Nebula-Sensitive-Data"] = "unredacted"
+        return Response(content=page, media_type=media_type, headers=headers)
+
+    @app.websocket(f"{API_PREFIX}/executions/{{execution_id}}/events/ws")
+    async def execution_event_socket(
+        websocket: WebSocket,
+        execution_id: str,
+        after: int = Query(default=0, ge=0),
+    ) -> None:
+        supplied: str | None = None
+        authorization = websocket.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:]
+        offered_protocols = [
+            value.strip()
+            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if value.strip()
+        ]
+        subprotocol_token: str | None = None
+        for protocol in offered_protocols:
+            if not protocol.startswith("nebula.auth."):
+                continue
+            encoded = protocol.removeprefix("nebula.auth.")
+            try:
+                subprotocol_token = base64.urlsafe_b64decode(
+                    encoded + "=" * (-len(encoded) % 4)
+                ).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                subprotocol_token = None
+            break
+        if (
+            supplied
+            and subprotocol_token
+            and not hmac.compare_digest(supplied, subprotocol_token)
+        ):
+            await websocket.close(code=4401, reason="conflicting authentication tokens")
+            return
+        supplied = subprotocol_token or supplied
+        if not allow_unauthenticated and (
+            not supplied or not hmac.compare_digest(supplied, token)
+        ):
+            await websocket.close(code=4401, reason="valid bearer token required")
+            return
+        try:
+            store.get(OperatorExecution, execution_id)
+        except NotFoundError:
+            await websocket.close(code=4404, reason="execution not found")
+            return
+        event_protocol = (
+            "nebula.events.v1" if "nebula.events.v1" in offered_protocols else None
+        )
+        await websocket.accept(subprotocol=event_protocol)
+        cursor = after
+        try:
+            while True:
+                events = store.replay_operation_events(
+                    execution_id, after_sequence=cursor, limit=1000
+                )
+                for event in events:
+                    await websocket.send_json(
+                        {"kind": "event", "event": event.model_dump(mode="json")}
+                    )
+                    cursor = event.sequence
+                if events:
+                    continue
+                await websocket.send_json(
+                    {"kind": "replay_complete", "after_sequence": cursor}
+                )
+                break
+            idle_ticks = 0
+            while True:
+                await asyncio.sleep(0.25)
+                events = store.replay_operation_events(
+                    execution_id, after_sequence=cursor, limit=1000
+                )
+                if events:
+                    idle_ticks = 0
+                    for event in events:
+                        await websocket.send_json(
+                            {
+                                "kind": "event",
+                                "event": event.model_dump(mode="json"),
+                            }
+                        )
+                        cursor = event.sequence
+                else:
+                    idle_ticks += 1
+                    if idle_ticks >= 20:
+                        await websocket.send_json(
+                            {"kind": "heartbeat", "after_sequence": cursor}
+                        )
+                        idle_ticks = 0
+        except WebSocketDisconnect:
+            return
+
+    @app.post(
+        f"{API_PREFIX}/executions/{{execution_id}}/draft-notes",
+        response_model=GeneratedDraft,
+        status_code=202,
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def generate_execution_draft_note(
+        execution_id: str, request: DraftNoteRequest
+    ) -> GeneratedDraft:
+        return await require_execution_ai_service().generate(execution_id, request)
+
+    @app.patch(
+        f"{API_PREFIX}/generated-drafts/{{draft_id}}",
+        response_model=GeneratedDraft,
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def edit_execution_draft_note(
+        draft_id: str, request: DraftEditRequest
+    ) -> GeneratedDraft:
+        return require_execution_ai_service().edit(draft_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/generated-drafts/{{draft_id}}/accept",
+        response_model=GeneratedDraft,
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def accept_execution_draft_note(
+        draft_id: str, request: DraftTransitionRequest
+    ) -> GeneratedDraft:
+        return require_execution_ai_service().accept(draft_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/generated-drafts/{{draft_id}}/reject",
+        response_model=GeneratedDraft,
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def reject_execution_draft_note(
+        draft_id: str, request: DraftTransitionRequest
+    ) -> GeneratedDraft:
+        return require_execution_ai_service().reject(draft_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/executions/{{execution_id}}/chat-attachments",
+        response_model=ExecutionChatAttachment,
+        status_code=201,
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def attach_execution_to_chat(
+        execution_id: str, request: ExecutionChatAttachRequest
+    ) -> ExecutionChatAttachment:
+        return require_execution_ai_service().attach_to_chat(execution_id, request)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace",
+        response_model=WorkspaceListing,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_workspace(
+        engagement_id: str,
+        path: str = Query(default="", max_length=4096),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> WorkspaceListing:
+        return require_workspace_service().list(
+            engagement_id, path, offset=offset, limit=limit
+        )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/preview",
+        response_model=WorkspacePreview,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def preview_workspace_file(
+        engagement_id: str,
+        path: str = Query(min_length=1, max_length=4096),
+    ) -> WorkspacePreview:
+        return require_workspace_service().preview(engagement_id, path)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/download",
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def download_workspace_file(
+        engagement_id: str,
+        path: str = Query(min_length=1, max_length=4096),
+    ) -> StreamingResponse:
+        download = require_workspace_service().download(engagement_id, path)
+        return StreamingResponse(
+            download.chunks(),
+            media_type=download.media_type,
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": (
+                    "attachment; filename*=UTF-8''" + quote(download.filename, safe="")
+                ),
+                "Content-Length": str(download.size),
+                "Content-Security-Policy": "sandbox; default-src 'none'",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/promote",
+        response_model=Evidence,
+        status_code=201,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def promote_workspace_file(
+        engagement_id: str, request: WorkspacePromotionRequest
+    ) -> Evidence:
+        return require_workspace_service().promote(engagement_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/reset",
+        response_model=WorkspaceResetResult,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def reset_workspace(
+        engagement_id: str, request: WorkspaceResetRequest
+    ) -> WorkspaceResetResult:
+        return require_workspace_service().reset(engagement_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/reports/{{report_id}}/renders",
+        response_model=ReportRender,
+        status_code=202,
+        tags=["reports"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def render_report(
+        report_id: str, request: ReportRenderRequest
+    ) -> ReportRender:
+        return await require_report_render_service().request_render(
+            report_id, report_revision=request.report_revision
+        )
+
+    @app.get(
+        f"{API_PREFIX}/report-renders/{{render_id}}/pdf",
+        tags=["reports"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def download_report_pdf(render_id: str) -> FileResponse:
+        artifact, path = require_report_render_service().pdf(render_id)
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=artifact.filename or f"report-{render_id}.pdf",
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Security-Policy": "sandbox; default-src 'none'",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/export-bundle",
+        tags=["exports"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def export_engagement_bundle(
+        engagement_id: str,
+        sensitive_acknowledged: str | None = Header(
+            default=None, alias="X-Nebula-Sensitive-Data-Acknowledged"
+        ),
+    ) -> FileResponse:
+        if sensitive_acknowledged != "true":
+            raise HTTPException(
+                status_code=428,
+                detail=(
+                    "engagement bundles contain unredacted evidence; "
+                    "acknowledge the sensitive-data warning before export"
+                ),
+            )
+        if artifact_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="engagement bundle export requires an artifact store",
+            )
+        engagement = store.get(Engagement, engagement_id)
+        with tempfile.NamedTemporaryFile(
+            prefix="nebula-export-",
+            suffix=".nebula.zip",
+            dir=artifact_store.root.parent,
+            delete=False,
+        ) as temporary:
+            destination = Path(temporary.name)
+        try:
+            await asyncio.to_thread(
+                export_engagement,
+                engagement_id=engagement.id,
+                destination=destination,
+                store=store,
+                artifact_store=artifact_store,
+                overwrite=True,
+            )
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", engagement.name).strip("-")
+        return FileResponse(
+            destination,
+            media_type="application/zip",
+            filename=f"{safe_name or 'engagement'}.nebula.zip",
+            background=BackgroundTask(destination.unlink, missing_ok=True),
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+                "X-Nebula-Sensitive-Data": "unredacted-evidence",
+                "X-Nebula-Bundle-Version": "2",
+            },
+        )
 
     @app.post(
         f"{API_PREFIX}/approvals/{{approval_id}}/decision",
@@ -1671,63 +2314,6 @@ def create_app(
                         idle_ticks = 0
         except WebSocketDisconnect:
             return
-
-    if pty_service is not None:
-
-        @app.websocket(f"{API_PREFIX}/sessions/{{session_id}}/terminal/ws")
-        async def human_terminal_socket(
-            websocket: WebSocket,
-            session_id: str,
-            columns: int = Query(default=120, ge=1, le=1000),
-            rows: int = Query(default=40, ge=1, le=1000),
-        ) -> None:
-            supplied: str | None = None
-            authorization = websocket.headers.get("authorization", "")
-            if authorization.lower().startswith("bearer "):
-                supplied = authorization[7:]
-            offered = [
-                value.strip()
-                for value in websocket.headers.get("sec-websocket-protocol", "").split(
-                    ","
-                )
-                if value.strip()
-            ]
-            protocol_token: str | None = None
-            for protocol in offered:
-                if protocol.startswith("nebula.auth."):
-                    encoded = protocol.removeprefix("nebula.auth.")
-                    try:
-                        protocol_token = base64.urlsafe_b64decode(
-                            encoded + "=" * (-len(encoded) % 4)
-                        ).decode("utf-8")
-                    except (ValueError, UnicodeDecodeError):
-                        protocol_token = None
-                    break
-            if (
-                supplied
-                and protocol_token
-                and not hmac.compare_digest(supplied, protocol_token)
-            ):
-                await websocket.close(
-                    code=4401, reason="conflicting authentication tokens"
-                )
-                return
-            supplied = protocol_token or supplied
-            if not allow_unauthenticated and (
-                not supplied or not hmac.compare_digest(supplied, token)
-            ):
-                await websocket.close(code=4401, reason="valid bearer token required")
-                return
-            if "nebula.terminal.v1" not in offered:
-                await websocket.close(code=4406, reason="terminal protocol required")
-                return
-            await websocket.accept(subprotocol="nebula.terminal.v1")
-            await pty_service.serve(
-                websocket,
-                session_id=session_id,
-                columns=columns,
-                rows=rows,
-            )
 
     if artifact_store is not None:
 

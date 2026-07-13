@@ -4,7 +4,7 @@ import { ApiClient, ApiError } from "./client";
 describe("ApiClient", () => {
   it("pins requests to /api/v1 and authenticates with the configured token", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "ready" }), {
+      new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready" }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -21,7 +21,7 @@ describe("ApiClient", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://127.0.0.1:8765/api/v1/health");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer one-time-token");
-    expect(health.humanPty).toBe("ready");
+    expect(health.runner).toBe("ready");
   });
 
   it("preserves structured API failures and request IDs", async () => {

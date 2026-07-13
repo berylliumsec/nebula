@@ -581,8 +581,8 @@ describe("Nebula workspace", () => {
     expect(screen.getByLabelText("Executive summary")).toHaveAttribute("readonly");
     expect(screen.getByRole("checkbox", { name: /Verified issue/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Final report" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Markdown" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "JSON" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Export PDF" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Export engagement bundle" })).toBeEnabled();
     expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/reports/report-final") && init?.method === "PATCH")).toBe(false);
   });
 

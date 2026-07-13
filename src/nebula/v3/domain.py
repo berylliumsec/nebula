@@ -141,6 +141,44 @@ class ReportStatus(StringEnum):
     FINAL = "final"
 
 
+class OperatorExecutionStatus(StringEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
+    COMPLETED = "completed"
+    DENIED = "denied"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class ExecutionNetworkMode(StringEnum):
+    NONE = "none"
+    SCOPED = "scoped"
+
+
+class ExecutionOriginKind(StringEnum):
+    ASSISTANT_MESSAGE = "assistant_message"
+    RERUN = "rerun"
+
+
+class GeneratedDraftStatus(StringEnum):
+    GENERATING = "generating"
+    READY = "ready"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+class ReportRenderStatus(StringEnum):
+    QUEUED = "queued"
+    RENDERING = "rendering"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
 class CorrelationMethod(StringEnum):
     PURL = "purl"
     CPE = "cpe"
@@ -524,6 +562,7 @@ class Evidence(Entity):
     finding_id: str | None = None
     asset_ids: list[str] = Field(default_factory=list)
     tool_call_id: str | None = None
+    execution_id: str | None = None
     sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     captured_at: datetime = Field(default_factory=utc_now)
     captured_by: str | None = None
@@ -1018,6 +1057,196 @@ class ChatMessage(Entity):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExecutionOrigin(NebulaModel):
+    kind: ExecutionOriginKind
+    message_id: str | None = Field(default=None, max_length=200)
+    block_ordinal: int | None = Field(default=None, ge=0, le=10_000)
+    block_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    selection_start_byte: int | None = Field(default=None, ge=0, le=1_000_000)
+    selection_end_byte: int | None = Field(default=None, ge=0, le=1_000_000)
+    execution_id: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def complete_origin(self) -> "ExecutionOrigin":
+        if self.kind == ExecutionOriginKind.ASSISTANT_MESSAGE:
+            required = (self.message_id, self.block_ordinal, self.block_sha256)
+            if any(value is None for value in required):
+                raise ValueError(
+                    "assistant-message origins require message, block, and hash"
+                )
+            if self.execution_id is not None:
+                raise ValueError(
+                    "assistant-message origins cannot reference an execution"
+                )
+            if (self.selection_start_byte is None) != (self.selection_end_byte is None):
+                raise ValueError("selection byte offsets must be supplied together")
+            if (
+                self.selection_start_byte is not None
+                and self.selection_end_byte is not None
+                and self.selection_end_byte <= self.selection_start_byte
+            ):
+                raise ValueError("selection end must be greater than selection start")
+        else:
+            if not self.execution_id:
+                raise ValueError("rerun origins require an execution_id")
+            if any(
+                value is not None
+                for value in (
+                    self.message_id,
+                    self.block_ordinal,
+                    self.block_sha256,
+                    self.selection_start_byte,
+                    self.selection_end_byte,
+                )
+            ):
+                raise ValueError("rerun origins cannot contain message coordinates")
+        return self
+
+
+class ExecutionLimitsSnapshot(NebulaModel):
+    cpu_count: float = Field(default=1.0, gt=0)
+    memory_mb: int = Field(default=512, ge=32)
+    pids: int = Field(default=128, ge=1)
+    timeout_seconds: int = Field(default=300, ge=1)
+    output_bytes_per_stream: int = Field(default=2_000_000, ge=1)
+
+
+class ExecutionRuntimeSnapshot(NebulaModel):
+    language: str = Field(pattern=r"^(bash|sh|python)$")
+    interpreter: str = Field(min_length=1, max_length=500)
+    arguments: list[str] = Field(default_factory=list, max_length=32)
+    tool_pack_installation_id: str = Field(min_length=1, max_length=200)
+    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    image: str = Field(min_length=1, max_length=1000)
+    runner_profile_id: str = Field(min_length=1, max_length=200)
+    runner_profile_revision: int = Field(ge=1)
+    runner_runtime: RunnerRuntime
+    runner_isolation: RunnerIsolation
+    runner_executable: str = Field(min_length=1, max_length=2048)
+    runner_platform: str = Field(pattern=r"^linux/(amd64|arm64)$")
+    runner_context: str | None = Field(default=None, max_length=500)
+    runner_socket: str | None = Field(default=None, max_length=2048)
+    trusted: bool
+
+
+class ExecutionNetworkSnapshot(NebulaModel):
+    mode: ExecutionNetworkMode = ExecutionNetworkMode.NONE
+    target: str | None = Field(default=None, max_length=2048)
+    ports: list[int] = Field(default_factory=list, max_length=1024)
+    resolved_addresses: list[str] = Field(default_factory=list, max_length=64)
+    scope_policy_id: str | None = Field(default=None, max_length=200)
+    scope_policy_revision: int | None = Field(default=None, ge=1)
+
+    @field_validator("ports")
+    @classmethod
+    def valid_network_ports(cls, values: list[int]) -> list[int]:
+        if any(
+            isinstance(value, bool) or value < 1 or value > 65_535 for value in values
+        ):
+            raise ValueError("network ports must be integers between 1 and 65535")
+        return sorted(set(values))
+
+    @model_validator(mode="after")
+    def network_fields_match_mode(self) -> "ExecutionNetworkSnapshot":
+        scoped = self.mode == ExecutionNetworkMode.SCOPED
+        if scoped and (
+            not self.target
+            or not self.ports
+            or not self.resolved_addresses
+            or not self.scope_policy_id
+            or self.scope_policy_revision is None
+        ):
+            raise ValueError("scoped network execution requires a pinned policy target")
+        if not scoped and any(
+            (self.target, self.ports, self.resolved_addresses, self.scope_policy_id)
+        ):
+            raise ValueError("offline execution cannot contain network scope")
+        return self
+
+
+class WorkspaceChange(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    change: str = Field(pattern=r"^(added|modified|deleted)$")
+    size: int | None = Field(default=None, ge=0)
+
+
+class OperatorExecution(Entity):
+    """One operator-confirmed, container-isolated code execution."""
+
+    entity_kind: ClassVar[str] = "operator_executions"
+    engagement_id: str
+    operator_id: str
+    origin: ExecutionOrigin
+    language: str = Field(pattern=r"^(bash|sh|python)$")
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_artifact_id: str
+    source_preview: str = Field(default="", max_length=4096)
+    runtime: ExecutionRuntimeSnapshot
+    network: ExecutionNetworkSnapshot = Field(default_factory=ExecutionNetworkSnapshot)
+    limits: ExecutionLimitsSnapshot = Field(default_factory=ExecutionLimitsSnapshot)
+    workspace: str = Field(default="/workspace", pattern=r"^/workspace$")
+    policy_decision: str = Field(default="allowed", max_length=100)
+    preview_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    client_idempotency_key: str = Field(min_length=1, max_length=300)
+    status: OperatorExecutionStatus = OperatorExecutionStatus.QUEUED
+    error_code: str | None = Field(default=None, max_length=100)
+    error_detail: str | None = Field(default=None, max_length=4000)
+    queued_at: datetime = Field(default_factory=utc_now)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    exit_code: int | None = None
+    output_truncated: bool = False
+    stdout_artifact_id: str | None = None
+    stderr_artifact_id: str | None = None
+    redacted_stdout_artifact_id: str | None = None
+    redacted_stderr_artifact_id: str | None = None
+    manifest_artifact_id: str | None = None
+    evidence_id: str | None = None
+    workspace_changes: list[WorkspaceChange] = Field(
+        default_factory=list, max_length=1000
+    )
+
+    @field_validator("queued_at", "started_at", "completed_at")
+    @classmethod
+    def execution_times_are_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("execution timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class PotentialFindingDraft(NebulaModel):
+    title: str = Field(min_length=1, max_length=500)
+    rationale: str = Field(default="", max_length=20_000)
+
+
+class GeneratedDraftContent(NebulaModel):
+    title: str = Field(min_length=1, max_length=500)
+    summary: str = Field(default="", max_length=50_000)
+    observations: list[str] = Field(default_factory=list, max_length=100)
+    potential_findings: list[PotentialFindingDraft] = Field(
+        default_factory=list, max_length=100
+    )
+    evidence_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+class GeneratedDraft(Entity):
+    entity_kind: ClassVar[str] = "generated_drafts"
+    engagement_id: str
+    execution_id: str
+    provider_profile_id: str
+    model: str = Field(min_length=1, max_length=500)
+    prompt_version: str = Field(min_length=1, max_length=100)
+    context_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: GeneratedDraftStatus = GeneratedDraftStatus.GENERATING
+    content: GeneratedDraftContent | None = None
+    observation_id: str | None = None
+    provider_request_id: str | None = Field(default=None, max_length=500)
+    usage: ChatTokenUsage | None = None
+    error_detail: str | None = Field(default=None, max_length=4000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class Report(Entity):
     entity_kind: ClassVar[str] = "reports"
     engagement_id: str
@@ -1025,6 +1254,7 @@ class Report(Entity):
     status: ReportStatus = ReportStatus.DRAFT
     executive_summary: str = ""
     finding_ids: list[str] = Field(default_factory=list)
+    observation_ids: list[str] = Field(default_factory=list)
     artifact_ids: list[str] = Field(default_factory=list)
     signed_off_by: str | None = None
     signed_off_at: datetime | None = None
@@ -1043,6 +1273,30 @@ class Report(Entity):
         return self
 
 
+class ReportRender(Entity):
+    entity_kind: ClassVar[str] = "report_renders"
+    engagement_id: str
+    report_id: str
+    report_revision: int = Field(ge=1)
+    input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    template_version: str = Field(min_length=1, max_length=100)
+    renderer_version: str = Field(min_length=1, max_length=100)
+    font_hashes: dict[str, str] = Field(default_factory=dict)
+    status: ReportRenderStatus = ReportRenderStatus.QUEUED
+    snapshot_artifact_id: str | None = None
+    pdf_artifact_id: str | None = None
+    warnings: list[str] = Field(default_factory=list, max_length=1000)
+    generated_at: datetime | None = None
+    error_detail: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("generated_at")
+    @classmethod
+    def render_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("render timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
 class RunEvent(NebulaModel):
     """An immutable, monotonically sequenced event in an agent run."""
 
@@ -1054,6 +1308,28 @@ class RunEvent(NebulaModel):
     actor_id: str | None = None
     occurred_at: datetime = Field(default_factory=utc_now)
     idempotency_key: str | None = None
+
+
+class OperationEvent(NebulaModel):
+    """An immutable event for operator workflows outside an AgentRun."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    operation_id: str = Field(min_length=1, max_length=200)
+    operation_kind: str = Field(min_length=1, max_length=80)
+    engagement_id: str = Field(min_length=1, max_length=200)
+    sequence: int = Field(ge=1)
+    event_type: str = Field(min_length=1, max_length=200)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    actor_id: str | None = Field(default=None, max_length=200)
+    occurred_at: datetime = Field(default_factory=utc_now)
+    idempotency_key: str | None = Field(default=None, max_length=300)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def event_time_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("event timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
 
 
 ENTITY_MODELS: tuple[type[Entity], ...] = (
@@ -1085,7 +1361,10 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatSession,
     ChatMessage,
     ContextSnapshot,
+    OperatorExecution,
+    GeneratedDraft,
     Report,
+    ReportRender,
 )
 
 ENTITY_MODEL_BY_KIND: dict[str, type[Entity]] = {

@@ -40,7 +40,7 @@ export const navigationItems: NavigationItem[] = [
     path: "/sessions",
     label: "Sessions",
     aliases: ["Chat", "Terminal", "Conversations"],
-    description: "Human terminals and durable analyst chat",
+    description: "Analyst chat, reviewed execution, and workspace",
     icon: SquareTerminal,
     shortcut: "G S",
     group: "workspace",

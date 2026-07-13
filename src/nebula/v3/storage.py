@@ -12,10 +12,17 @@ from sqlalchemy import and_, delete, exists, func, insert, or_, select, text, up
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .database import Database, EntityRow, RunBudgetCounterRow, RunEventRow
+from .database import (
+    Database,
+    EntityRow,
+    OperationEventRow,
+    RunBudgetCounterRow,
+    RunEventRow,
+)
 from .domain import (
     ENTITY_MODEL_BY_KIND,
     Entity,
+    OperationEvent,
     ToolCall,
     RunEvent,
     entity_engagement_id,
@@ -697,6 +704,159 @@ class NebulaStore:
         with self.database.session() as session:
             rows = session.scalars(statement).all()
             return [self._row_to_event(row) for row in rows]
+
+    def append_operation_event(
+        self,
+        operation_id: str,
+        operation_kind: str,
+        engagement_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        actor_id: str | None = None,
+        idempotency_key: str | None = None,
+        occurred_at: datetime | None = None,
+    ) -> OperationEvent:
+        """Append one replayable, immutable operator-workflow event."""
+
+        if not all((operation_id, operation_kind, engagement_id, event_type)):
+            raise ValueError("operation event identifiers and type are required")
+        connection = self.database.engine.connect()
+        try:
+            self._begin_run_write(connection, f"operation:{operation_id}")
+            if idempotency_key:
+                existing = (
+                    connection.execute(
+                        select(OperationEventRow).where(
+                            OperationEventRow.operation_id == operation_id,
+                            OperationEventRow.idempotency_key == idempotency_key,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if existing is not None:
+                    event = self._mapping_to_operation_event(existing)
+                    if (
+                        event.operation_kind != operation_kind
+                        or event.engagement_id != engagement_id
+                        or event.event_type != event_type
+                        or event.payload != (payload or {})
+                        or event.actor_id != actor_id
+                    ):
+                        raise ConflictError(
+                            "idempotency key was reused for a different operation event"
+                        )
+                    connection.commit()
+                    return event
+            last_sequence = connection.scalar(
+                select(func.max(OperationEventRow.sequence)).where(
+                    OperationEventRow.operation_id == operation_id
+                )
+            )
+            event = OperationEvent(
+                operation_id=operation_id,
+                operation_kind=operation_kind,
+                engagement_id=engagement_id,
+                sequence=int(last_sequence or 0) + 1,
+                event_type=event_type,
+                payload=payload or {},
+                actor_id=actor_id,
+                occurred_at=occurred_at or utc_now(),
+                idempotency_key=idempotency_key,
+            )
+            connection.execute(
+                insert(OperationEventRow).values(**event.model_dump(mode="python"))
+            )
+            connection.commit()
+            return event
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def replay_operation_events(
+        self,
+        operation_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 1000,
+    ) -> list[OperationEvent]:
+        if after_sequence < 0:
+            raise ValueError("after_sequence cannot be negative")
+        if not 1 <= limit <= 10_000:
+            raise ValueError("limit must be between 1 and 10000")
+        statement = (
+            select(OperationEventRow)
+            .where(
+                OperationEventRow.operation_id == operation_id,
+                OperationEventRow.sequence > after_sequence,
+            )
+            .order_by(OperationEventRow.sequence)
+            .limit(limit)
+        )
+        with self.database.session() as session:
+            return [
+                self._row_to_operation_event(row)
+                for row in session.scalars(statement).all()
+            ]
+
+    def list_operation_events(
+        self, engagement_id: str, *, offset: int = 0, limit: int = 1000
+    ) -> list[OperationEvent]:
+        if offset < 0 or not 1 <= limit <= 10_000:
+            raise ValueError("invalid operation event page")
+        statement = (
+            select(OperationEventRow)
+            .where(OperationEventRow.engagement_id == engagement_id)
+            .order_by(OperationEventRow.occurred_at, OperationEventRow.id)
+            .offset(offset)
+            .limit(limit)
+        )
+        with self.database.session() as session:
+            return [
+                self._row_to_operation_event(row)
+                for row in session.scalars(statement).all()
+            ]
+
+    @staticmethod
+    def _row_to_operation_event(row: OperationEventRow) -> OperationEvent:
+        occurred_at = row.occurred_at
+        if occurred_at.tzinfo is None:
+            occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+        return OperationEvent(
+            id=row.id,
+            operation_id=row.operation_id,
+            operation_kind=row.operation_kind,
+            engagement_id=row.engagement_id,
+            sequence=row.sequence,
+            event_type=row.event_type,
+            payload=row.payload,
+            actor_id=row.actor_id,
+            occurred_at=occurred_at,
+            idempotency_key=row.idempotency_key,
+        )
+
+    @staticmethod
+    def _mapping_to_operation_event(row: Any) -> OperationEvent:
+        occurred_at = row["occurred_at"]
+        if isinstance(occurred_at, str):
+            occurred_at = datetime.fromisoformat(occurred_at)
+        if occurred_at.tzinfo is None:
+            occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+        return OperationEvent(
+            id=row["id"],
+            operation_id=row["operation_id"],
+            operation_kind=row["operation_kind"],
+            engagement_id=row["engagement_id"],
+            sequence=row["sequence"],
+            event_type=row["event_type"],
+            payload=row["payload"],
+            actor_id=row["actor_id"],
+            occurred_at=occurred_at,
+            idempotency_key=row["idempotency_key"],
+        )
 
     @staticmethod
     def _row_to_event(row: RunEventRow) -> RunEvent:

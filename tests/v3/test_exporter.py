@@ -56,6 +56,7 @@ def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
             title="Proof",
             artifact_id=first.id,
             sha256=first.sha256,
+            captured_by="operator",
         )
     )
     run = store.create(
@@ -76,11 +77,14 @@ def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
         artifact_store=artifacts,
     )
 
+    assert manifest.format_version == 2
     assert manifest.entity_counts["engagements"] == 1
     assert manifest.entity_counts["artifacts"] == 2
     assert manifest.entity_counts["evidence"] == 1
     assert manifest.entity_counts["runs"] == 1
     assert manifest.event_count == 1
+    assert manifest.run_event_count == 1
+    assert manifest.operation_event_count == 0
     blob_name = f"blobs/sha256/{first.sha256}"
     with zipfile.ZipFile(destination) as archive:
         assert archive.namelist().count(blob_name) == 1
@@ -92,6 +96,38 @@ def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
         archived_events = json.loads(archive.read("events.json"))
         assert archived_events[0]["run_id"] == run.id
         assert archived_events[0]["sequence"] == 1
+        assert json.loads(archive.read("operation_events.json")) == []
+
+
+def test_bundle_v2_includes_append_only_operation_events(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Operation event export"))
+    event = store.append_operation_event(
+        "execution-1",
+        "operator_execution",
+        engagement.id,
+        "execution.queued",
+        {"status": "queued"},
+        actor_id="system",
+        idempotency_key="execution-1:queued",
+    )
+    destination = tmp_path / "operations.nebula.zip"
+
+    manifest = export_engagement(
+        engagement_id=engagement.id,
+        destination=destination,
+        store=store,
+        artifact_store=artifacts,
+    )
+
+    assert manifest.format_version == 2
+    assert manifest.event_count == 1
+    assert manifest.run_event_count == 0
+    assert manifest.operation_event_count == 1
+    with zipfile.ZipFile(destination) as archive:
+        archived = json.loads(archive.read("operation_events.json"))
+    assert archived == [event.model_dump(mode="json")]
 
 
 def test_export_is_atomic_on_integrity_failure_and_refuses_overwrite(tmp_path):

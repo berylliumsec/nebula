@@ -21,7 +21,6 @@ FORBIDDEN_MODULES = (
     "PySide6",
     # Heavy legacy model/document stacks.
     "IPython",
-    "PIL",
     "accelerate",
     "chromadb",
     "cloudpickle",
@@ -103,8 +102,15 @@ FORBIDDEN_MODULES = (
 
 REQUIRED_MEMBERS = (
     ("nebula.v3.cli",),
+    ("reportlab",),
+    ("PIL",),
     ("nebula/v3/BUILD_INFO.json", "nebula.v3.BUILD_INFO.json"),
     ("nebula/v3/migrations/script.py.mako",),
+    ("nebula/v3/report_assets/fonts/NotoSans-Regular.ttf",),
+    ("nebula/v3/report_assets/fonts/NotoSans-Bold.ttf",),
+    ("nebula/v3/report_assets/fonts/NotoSansMono-Regular.ttf",),
+    ("nebula/v3/report_assets/fonts/NotoSansMono-Bold.ttf",),
+    ("nebula/v3/report_assets/fonts/OFL.txt",),
     ("ui/dist/index.html",),
     ("licenses/LICENSE.md",),
     ("licenses/THIRD_PARTY_NOTICES.txt",),

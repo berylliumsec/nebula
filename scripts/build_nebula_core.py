@@ -122,6 +122,16 @@ def main() -> None:
     )
     if not (tool_pack_trust / "berylliumsec.json").is_file():
         raise RuntimeError("the embedded tool-pack trust root is required")
+    report_assets = root / "src" / "nebula" / "v3" / "report_assets"
+    required_fonts = (
+        "NotoSans-Regular.ttf",
+        "NotoSans-Bold.ttf",
+        "NotoSansMono-Regular.ttf",
+        "NotoSansMono-Bold.ttf",
+        "OFL.txt",
+    )
+    if any(not (report_assets / "fonts" / name).is_file() for name in required_fonts):
+        raise RuntimeError("the bundled report fonts and OFL license are required")
 
     target = target_triple()
     metadata_root = root / "build" / "nebula-core-metadata"
@@ -161,6 +171,8 @@ def main() -> None:
         f"{notices}:licenses",
         "--add-data",
         f"{tool_pack_trust}:nebula/v3/tool_pack_assets/trust",
+        "--add-data",
+        f"{report_assets}:nebula/v3/report_assets",
     ]
     # Release environments omit the legacy dependency group. These exclusions
     # are a second defense for developer/QA builds created in a full checkout;

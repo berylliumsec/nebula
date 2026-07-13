@@ -26,7 +26,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 
 from .domain import utc_now
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 class Base(DeclarativeBase):
@@ -84,6 +84,35 @@ class RunEventRow(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
 
+class OperationEventRow(Base):
+    __tablename__ = "operation_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "operation_id", "sequence", name="uq_operation_events_sequence"
+        ),
+        UniqueConstraint(
+            "operation_id",
+            "idempotency_key",
+            name="uq_operation_events_idempotency",
+        ),
+        Index("ix_operation_events_replay", "operation_id", "sequence"),
+        Index("ix_operation_events_engagement_time", "engagement_id", "occurred_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    operation_kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    engagement_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(200), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    actor_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
 class RunBudgetCounterRow(Base):
     __tablename__ = "run_budget_counters"
 
@@ -105,6 +134,16 @@ def _prevent_event_update(*_: object) -> None:
 @event.listens_for(RunEventRow, "before_delete")
 def _prevent_event_delete(*_: object) -> None:
     raise RuntimeError("run events are append-only")
+
+
+@event.listens_for(OperationEventRow, "before_update")
+def _prevent_operation_event_update(*_: object) -> None:
+    raise RuntimeError("operation events are append-only")
+
+
+@event.listens_for(OperationEventRow, "before_delete")
+def _prevent_operation_event_delete(*_: object) -> None:
+    raise RuntimeError("operation events are append-only")
 
 
 class SchemaVersionError(RuntimeError):
@@ -224,14 +263,18 @@ class Database:
 
     @staticmethod
     def _migrate(connection: Any, current: int, target: int) -> None:
-        if current == 1 and target == 2:
-            # ``Base.metadata.create_all`` has already installed the additive
-            # budget counter table. Record the migration only after that DDL.
-            connection.execute(
-                insert(SchemaVersionRow).values(version=2, applied_at=utc_now())
-            )
+        if current >= target:
             return
-        raise SchemaVersionError(f"no migration path from schema {current} to {target}")
+        if current < 1 or target > CURRENT_SCHEMA_VERSION:
+            raise SchemaVersionError(
+                f"no migration path from schema {current} to {target}"
+            )
+        # Alembic has already applied the authoritative DDL. Keep the compact
+        # application schema ledger in step with every packaged revision.
+        for version in range(current + 1, target + 1):
+            connection.execute(
+                insert(SchemaVersionRow).values(version=version, applied_at=utc_now())
+            )
 
     @contextmanager
     def session(self) -> Iterator[Session]:

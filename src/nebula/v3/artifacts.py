@@ -133,6 +133,27 @@ class ArtifactStore:
                 metadata=metadata,
             )
 
+    def put_stream_with_status(
+        self,
+        stream: BinaryIO,
+        *,
+        engagement_id: str,
+        filename: str | None = None,
+        media_type: str | None = None,
+        source: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> StoredArtifact:
+        """Copy an already-open, caller-validated stream into immutable storage."""
+
+        return self._put_stream(
+            stream,
+            engagement_id=engagement_id,
+            filename=filename,
+            media_type=media_type,
+            source=source,
+            metadata=metadata,
+        )
+
     def _put_stream(
         self,
         stream: BinaryIO,

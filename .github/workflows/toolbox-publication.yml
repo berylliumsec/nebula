@@ -169,6 +169,21 @@ jobs:
             "test ! -x /usr/local/bin/nebula-egress && test ! -e /opt/nebula/bin/build-tool-catalog" \
             --cwd /workspace --timeout 30 \
             > internal-helper-refusal.json
+          printf "printf 'raw-bash-output\\n'\\n" | \
+            docker run --rm --interactive --platform "$platform" --network none "$reference" \
+            /opt/nebula/bin/nebula-toolbox code --language bash \
+            > code-bash.raw
+          grep -Fx "raw-bash-output" code-bash.raw
+          printf "printf 'raw-sh-output\\n'\\n" | \
+            docker run --rm --interactive --platform "$platform" --network none "$reference" \
+            /opt/nebula/bin/nebula-toolbox code --language sh \
+            > code-sh.raw
+          grep -Fx "raw-sh-output" code-sh.raw
+          printf "import sys\\nprint(repr(sys.stdin.read()))\\n" | \
+            docker run --rm --interactive --platform "$platform" --network none "$reference" \
+            /opt/nebula/bin/nebula-toolbox code --language python \
+            > code-python.raw
+          grep -Fx "''" code-python.raw
           docker run --rm --platform "$platform" --network none "$reference" \
             /opt/nebula/venv/bin/semgrep --version | grep -Fx "$SEMGREP_VERSION"
           if docker run --rm --platform "$platform" --network none "$reference" \

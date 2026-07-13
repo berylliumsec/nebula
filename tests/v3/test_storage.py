@@ -7,6 +7,7 @@ from sqlalchemy.exc import DBAPIError
 from nebula.v3.database import (
     CURRENT_SCHEMA_VERSION,
     Database,
+    OperationEventRow,
     RunEventRow,
     SchemaVersionError,
     SchemaVersionRow,
@@ -46,11 +47,13 @@ def test_schema_bootstrap_is_idempotent_and_refuses_a_newer_database(tmp_path):
     path = tmp_path / "versioned.db"
     first = Database(path)
     assert first.current_schema_version() == CURRENT_SCHEMA_VERSION
+    with first.session() as session:
+        marker_count = session.query(SchemaVersionRow).count()
     first.dispose()
 
     reopened = Database(path)
     with reopened.session() as session:
-        assert session.query(SchemaVersionRow).count() == 1
+        assert session.query(SchemaVersionRow).count() == marker_count
     with reopened.engine.begin() as connection:
         connection.execute(
             SchemaVersionRow.__table__.insert().values(
@@ -225,6 +228,33 @@ def test_orm_rejects_event_updates_and_deletes(store):
         with store.database.engine.begin() as connection:
             connection.exec_driver_sql(
                 "UPDATE run_events SET event_type='raw-rewrite' WHERE id=?",
+                (event.id,),
+            )
+
+
+def test_orm_and_database_reject_operation_event_mutation(store):
+    engagement = store.create(Engagement(name="Immutable operations"))
+    event = store.append_operation_event(
+        "execution-1",
+        "operator_execution",
+        engagement.id,
+        "execution.queued",
+    )
+    with pytest.raises(RuntimeError, match="append-only"):
+        with store.database.session() as session:
+            row = session.get(OperationEventRow, event.id)
+            row.event_type = "rewritten"
+            session.flush()
+    with pytest.raises(RuntimeError, match="append-only"):
+        with store.database.session() as session:
+            row = session.get(OperationEventRow, event.id)
+            session.delete(row)
+            session.flush()
+
+    with pytest.raises(DBAPIError, match="immutable"):
+        with store.database.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE operation_events SET event_type='raw-rewrite' WHERE id=?",
                 (event.id,),
             )
 

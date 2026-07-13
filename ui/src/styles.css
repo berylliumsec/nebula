@@ -410,13 +410,6 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .session-layout { display: grid; grid-template-columns: minmax(0, 1fr) 262px; min-height: 580px; border: 1px solid var(--border-soft); border-radius: 0 0 10px 10px; overflow: hidden; background: var(--surface); }
 .session-workspace { min-width: 0; min-height: 0; padding: 11px; background: #080d14; }
 :root[data-theme="light"] .session-workspace { background: #dce3ec; }
-.terminal-panel { display: flex; height: 100%; min-height: 540px; flex-direction: column; overflow: hidden; border: 1px solid #273345; border-radius: 8px; background: #0a0f18; }
-.terminal-panel > header { display: grid; grid-template-columns: 70px 1fr auto; min-height: 34px; align-items: center; padding: 0 11px; border-bottom: 1px solid #253043; color: #8999ad; background: #111925; font-size: 9px; }
-.terminal-panel > header strong { color: #b9c7d7; text-align: center; font-size: 9px; font-weight: 500; }
-.terminal-dots { display: flex; gap: 5px; }.terminal-dots span { width: 7px; height: 7px; border-radius: 50%; background: #ff6d7f; }.terminal-dots span:nth-child(2) { background: #e9bd5b; }.terminal-dots span:nth-child(3) { background: #4dc99b; }
-.terminal-state { display: inline-flex; align-items: center; gap: 5px; text-transform: capitalize; }.terminal-state span { width: 6px; height: 6px; border-radius: 50%; background: #7e8a9a; }.terminal-state.connected span { background: #55d6a8; }.terminal-state.error span { background: #ff7188; }
-.terminal-host { min-width: 0; min-height: 0; flex: 1; padding: 9px 5px 7px 10px; }
-.terminal-host .xterm { height: 100%; }
 .session-inspector { border-left: 1px solid var(--border-soft); background: var(--surface); }
 .session-inspector > header { display: flex; align-items: center; justify-content: space-between; min-height: 52px; padding: 0 12px 0 15px; border-bottom: 1px solid var(--border-soft); }
 .session-inspector > header div { display: flex; flex-direction: column; }.session-inspector > header span { color: var(--muted); font-size: 8px; text-transform: uppercase; }.session-inspector > header strong { margin-top: 2px; font-size: 10px; }

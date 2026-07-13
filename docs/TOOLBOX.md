@@ -72,9 +72,11 @@ A compatible image must:
   `nebula.toolbox.catalog/v2` and its JSON Schema at
   `/opt/nebula/tool-catalog.schema.json`;
 - provide `/opt/nebula/bin/nebula-toolbox` with the `search`, `help`, `exec`,
-  and `shell` subcommands and `/usr/local/bin/nebula-egress` with the signed helper
-  contract;
-- emit exactly one JSON object matching the Toolbox envelope;
+  `shell`, and bounded `code` subcommands and `/usr/local/bin/nebula-egress`
+  with the signed helper contract;
+- emit exactly one JSON object for catalogued Toolbox envelope operations; the
+  operator-reviewed `code` adapter instead streams the declared interpreter's
+  raw stdout/stderr and never gives it interactive stdin;
 - use `/workspace` for engagement files and run without an OCI `ENTRYPOINT`;
 - pass the offline search, help, local-exec, and loopback network smoke tests.
 
