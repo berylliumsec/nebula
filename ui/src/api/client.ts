@@ -9,6 +9,10 @@ import type {
   ChatCompletionResponse,
   ChatSessionSummary,
   ChatStreamEvent,
+  ContextMemory,
+  ContextSnapshot,
+  ContextSourceReference,
+  ContextStatus,
   EngagementSummary,
   EngagementCreateRequest,
   EvidenceSummary,
@@ -218,9 +222,68 @@ interface WireChatCompletion extends JsonObject {
     output_tokens?: number;
     total_tokens?: number;
   };
+  context_usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  } | null;
   finish_reason?: string | null;
   provider_request_id?: string | null;
   citations?: WireChatCitation[];
+}
+
+interface WireContextSourceReference extends JsonObject {
+  source_kind: string;
+  source_id: string;
+  sequence?: number | null;
+}
+
+interface WireContextMemoryItem extends JsonObject {
+  text: string;
+  sources?: WireContextSourceReference[];
+}
+
+interface WireContextMemory extends JsonObject {
+  objective?: string | null;
+  summary: string;
+  confirmed_facts?: WireContextMemoryItem[];
+  decisions?: WireContextMemoryItem[];
+  constraints?: WireContextMemoryItem[];
+  corrections?: WireContextMemoryItem[];
+  open_questions?: WireContextMemoryItem[];
+  evidence_ids?: string[];
+  artifact_ids?: string[];
+}
+
+interface WireContextSnapshot extends WireEntity {
+  owner_type: "chat_session" | "agent_run";
+  owner_id: string;
+  version: number;
+  status: "ready" | "failed";
+  compacted_through: number;
+  memory?: WireContextMemory | null;
+  source_references?: WireContextSourceReference[];
+  provider_profile_id: string;
+  model: string;
+  prompt_version: string;
+  usage?: WireChatCompletion["usage"];
+  cost_usd?: number;
+  error?: string | null;
+}
+
+interface WireContextStatus extends JsonObject {
+  owner_type: "chat_session" | "agent_run";
+  owner_id: string;
+  status: "not_needed" | "ready" | "stale" | "failed";
+  context_window: number;
+  max_output_tokens: number;
+  target_input_tokens: number;
+  estimated_input_tokens?: number;
+  compacted_through?: number;
+  source_references?: WireContextSourceReference[];
+  compaction_usage?: WireChatCompletion["usage"];
+  compaction_cost_usd?: number;
+  snapshot?: WireContextSnapshot | null;
 }
 
 interface WireChatStreamEvent extends Partial<WireChatCompletion> {
@@ -750,6 +813,8 @@ function mapChatCitation(value: WireChatCitation): ChatCitation {
 function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
   const inputTokens = numberField(value.usage?.input_tokens);
   const outputTokens = numberField(value.usage?.output_tokens);
+  const contextInputTokens = numberField(value.context_usage?.input_tokens);
+  const contextOutputTokens = numberField(value.context_usage?.output_tokens);
   return {
     sessionId: value.session_id ?? undefined,
     providerId: value.provider_id,
@@ -762,9 +827,95 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
         ? value.usage.total_tokens
         : inputTokens + outputTokens,
     },
+    contextUsage: value.context_usage ? {
+      inputTokens: contextInputTokens,
+      outputTokens: contextOutputTokens,
+      totalTokens: typeof value.context_usage.total_tokens === "number"
+        ? value.context_usage.total_tokens
+        : contextInputTokens + contextOutputTokens,
+    } : undefined,
     finishReason: value.finish_reason ?? undefined,
     providerRequestId: value.provider_request_id ?? undefined,
     citations: (value.citations ?? []).map(mapChatCitation),
+  };
+}
+
+function mapContextSource(value: WireContextSourceReference): ContextSourceReference {
+  return {
+    sourceKind: value.source_kind,
+    sourceId: value.source_id,
+    sequence: value.sequence ?? undefined,
+  };
+}
+
+function mapContextMemory(value: WireContextMemory): ContextMemory {
+  const items = (values?: WireContextMemoryItem[]) => (values ?? []).map((item) => ({
+    text: item.text,
+    sources: (item.sources ?? []).map(mapContextSource),
+  }));
+  return {
+    objective: value.objective ?? undefined,
+    summary: value.summary,
+    confirmedFacts: items(value.confirmed_facts),
+    decisions: items(value.decisions),
+    constraints: items(value.constraints),
+    corrections: items(value.corrections),
+    openQuestions: items(value.open_questions),
+    evidenceIds: value.evidence_ids ?? [],
+    artifactIds: value.artifact_ids ?? [],
+  };
+}
+
+function mapContextSnapshot(value: WireContextSnapshot): ContextSnapshot {
+  const inputTokens = numberField(value.usage?.input_tokens);
+  const outputTokens = numberField(value.usage?.output_tokens);
+  return {
+    id: value.id,
+    ownerType: value.owner_type,
+    ownerId: value.owner_id,
+    version: value.version,
+    status: value.status,
+    compactedThrough: value.compacted_through,
+    memory: value.memory ? mapContextMemory(value.memory) : undefined,
+    sourceReferences: (value.source_references ?? []).map(mapContextSource),
+    providerId: value.provider_profile_id,
+    model: value.model,
+    promptVersion: value.prompt_version,
+    usage: {
+      inputTokens,
+      outputTokens,
+      totalTokens: typeof value.usage?.total_tokens === "number"
+        ? value.usage.total_tokens
+        : inputTokens + outputTokens,
+    },
+    costUsd: numberField(value.cost_usd),
+    error: value.error ?? undefined,
+    createdAt: value.created_at,
+  };
+}
+
+function mapContextStatus(value: WireContextStatus): ContextStatus {
+  const compactionInputTokens = numberField(value.compaction_usage?.input_tokens);
+  const compactionOutputTokens = numberField(value.compaction_usage?.output_tokens);
+  return {
+    ownerType: value.owner_type,
+    ownerId: value.owner_id,
+    status: value.status,
+    contextWindow: value.context_window,
+    maxOutputTokens: value.max_output_tokens,
+    targetInputTokens: value.target_input_tokens,
+    estimatedInputTokens: numberField(value.estimated_input_tokens),
+    compactedThrough: numberField(value.compacted_through),
+    sourceReferences: (value.source_references ?? []).map(mapContextSource),
+    compactionUsage: {
+      inputTokens: compactionInputTokens,
+      outputTokens: compactionOutputTokens,
+      totalTokens: typeof value.compaction_usage?.total_tokens === "number"
+        ? value.compaction_usage.total_tokens
+        : compactionInputTokens + compactionOutputTokens,
+    },
+    compactionCostUsd: numberField(value.compaction_cost_usd),
+    snapshot: value.snapshot ? mapContextSnapshot(value.snapshot) : undefined,
   };
 }
 
@@ -1554,6 +1705,20 @@ export class ApiClient {
       `chat/sessions/${encodeURIComponent(sessionId)}/messages`,
       { signal },
     ).then((items) => items.map(mapPersistedChatMessage));
+  }
+
+  getChatContext(sessionId: string, signal?: AbortSignal): Promise<ContextStatus> {
+    return this.request<WireContextStatus>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/context`,
+      { signal },
+    ).then(mapContextStatus);
+  }
+
+  getRunContext(runId: string, signal?: AbortSignal): Promise<ContextStatus> {
+    return this.request<WireContextStatus>(
+      `runs/${encodeURIComponent(runId)}/context`,
+      { signal },
+    ).then(mapContextStatus);
   }
 
   async streamChat(

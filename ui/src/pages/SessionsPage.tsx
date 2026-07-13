@@ -15,6 +15,7 @@ import type {
   ChatMessage,
   ChatSessionSummary,
   ChatUsage,
+  ContextStatus,
   PersistedChatMessage,
 } from "../api/types";
 import { ApiTerminalTransport } from "../api/terminal";
@@ -34,6 +35,7 @@ interface ConversationMessage extends ChatMessage {
   state: MessageState;
   durable: boolean;
   detail?: string;
+  sequence?: number;
 }
 
 function makeId(prefix: string): string {
@@ -56,6 +58,7 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
     usage: message.usage,
     state: "complete",
     durable: true,
+    sequence: message.sequence,
   };
 }
 
@@ -90,6 +93,9 @@ export function SessionsPage() {
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [chatError, setChatError] = useState<string>();
+  const [contextStatus, setContextStatus] = useState<ContextStatus>();
+  const [contextLoading, setContextLoading] = useState(false);
+  const [contextError, setContextError] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
@@ -128,6 +134,9 @@ export function SessionsPage() {
     setMessages([]);
     setDraft("");
     setChatError(undefined);
+    setContextStatus(undefined);
+    setContextLoading(false);
+    setContextError(undefined);
     setTerminalSessionId(makeId("human"));
   }, [engagement?.id]);
 
@@ -167,6 +176,9 @@ export function SessionsPage() {
     setMessages([]);
     setDraft("");
     setChatError(undefined);
+    setContextStatus(undefined);
+    setContextLoading(false);
+    setContextError(undefined);
     setView("chat");
     setMobileListOpen(false);
   };
@@ -185,12 +197,19 @@ export function SessionsPage() {
     }
     if (!api) return;
     setLoadingHistory(true);
+    setContextLoading(true);
     setChatError(undefined);
+    setContextError(undefined);
     try {
       const summary = sessions.find((session) => session.id === id);
-      const history = await api.listChatMessages(id);
+      const [history, contextResult] = await Promise.all([
+        api.listChatMessages(id),
+        api.getChatContext(id).then((context) => ({ context })).catch(() => ({ context: undefined })),
+      ]);
       setSessionId(id);
       setMessages(history.map(persistedMessage));
+      setContextStatus(contextResult.context);
+      setContextError(contextResult.context ? undefined : "Working memory inspection is temporarily unavailable.");
       if (summary) {
         setProviderId(summary.providerId);
         setModel(summary.model ?? "");
@@ -201,6 +220,7 @@ export function SessionsPage() {
       setChatError(error instanceof Error ? error.message : "Could not load the selected conversation.");
     } finally {
       setLoadingHistory(false);
+      setContextLoading(false);
     }
   };
 
@@ -264,10 +284,12 @@ export function SessionsPage() {
         engagementId: engagement.id,
         sessionId: returnedSessionId,
         model: model.trim(),
-        messages: [
-          ...durableHistory.map(({ role, content: historyContent }) => ({ role, content: historyContent })),
-          { role: "user", content },
-        ],
+        messages: returnedSessionId
+          ? [{ role: "user", content }]
+          : [
+              ...durableHistory.map(({ role, content: historyContent }) => ({ role, content: historyContent })),
+              { role: "user", content },
+            ],
         includeKnowledge: wantsKnowledge,
         allowCloudKnowledge,
       }, (streamEvent) => {
@@ -298,7 +320,18 @@ export function SessionsPage() {
         if (streamEvent.type === "error") setChatError(streamEvent.detail);
       }, controller.signal);
       returnedSessionId = response.sessionId ?? returnedSessionId;
-      if (returnedSessionId) await refreshSessions(returnedSessionId);
+      if (returnedSessionId) {
+        await refreshSessions(returnedSessionId);
+        setContextLoading(true);
+        try {
+          setContextStatus(await api.getChatContext(returnedSessionId));
+          setContextError(undefined);
+        } catch {
+          setContextError("The answer completed, but working memory inspection is temporarily unavailable.");
+        } finally {
+          setContextLoading(false);
+        }
+      }
     } catch (error) {
       const cancelled = controller.signal.aborted;
       const detail = cancelled ? "Response stopped by the operator." : error instanceof Error ? error.message : "Chat completion failed.";
@@ -377,7 +410,7 @@ export function SessionsPage() {
                   <article className="chat-message assistant"><span className="chat-avatar">N</span><div><header><strong>Nebula assistant</strong><span>19:07</span></header><p>I found two prior observations relevant to the gateway. Both are cited below; no command was executed.</p><span className="citation-chip"><Braces size={13} /> Observation #184 · Nmap import</span><span className="citation-chip"><Braces size={13} /> Advisory · CVE record</span></div></article>
                   <article className="chat-message operator"><span className="chat-avatar">JD</span><div><header><strong>You</strong><span>19:08</span></header><p>Summarize the applicability evidence and list what still needs independent verification.</p></div></article>
                 </> : loadingHistory ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? messages.map((message) => (
-                  <article className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`} key={message.id}>
+                  <article className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`} data-sequence={message.sequence} key={message.id} tabIndex={-1}>
                     <span className="chat-avatar">{message.role === "user" ? "You" : "N"}</span>
                     <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && <p>{message.content}</p>}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.detail && <p className="chat-message-error" role="alert">{message.detail}</p>}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
                   </article>
@@ -396,7 +429,7 @@ export function SessionsPage() {
         <aside className="session-inspector" aria-label="Session inspector">
           <header><div><span>Context</span><strong>Session details</strong></div></header>
           <dl><div><dt>Active operator</dt><dd>{previewMode ? "Jordan Diaz" : activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>{view === "chat" ? "Conversation" : "Terminal"}</dt><dd>{view === "chat" ? sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat" : terminalSessionId}</dd></div><div><dt>Provider</dt><dd>{view === "chat" ? selectedProvider?.name ?? "Not selected" : "Not applicable"}</dd></div><div><dt>Human PTY</dt><dd><span className={`status-dot ${health?.humanPty === "ready" ? "healthy" : "unavailable"}`} /> {health?.humanPty ?? "Core unavailable"}</dd></div></dl>
-          {view === "chat" ? <><section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"}</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section><section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Citations identify ingested chunks and open the matching source record. Chat cannot execute tools.</p></div></section></> : <section><h3>Human terminal boundary</h3><div className="empty-state mini"><SquareTerminal size={19} /><p>The terminal is human-operated and does not use a model provider or knowledge retrieval. Output is not evidence until explicitly captured.</p></div></section>}
+          {view === "chat" ? <><section><h3>Working memory</h3>{contextLoading ? <p role="status">Loading working memory…</p> : contextError ? <p role="alert">{contextError}</p> : contextStatus?.status ? <><div className="scope-chip-list"><span>Memory: {contextStatus.status.replace("_", " ")}</span><span>{contextStatus.estimatedInputTokens} / {contextStatus.targetInputTokens} estimated tokens</span></div>{contextStatus.snapshot?.memory ? <div className="empty-state mini"><Braces size={19} /><p>{contextStatus.snapshot.memory.summary}</p><small>Derived through sequence {contextStatus.compactedThrough} · {contextStatus.snapshot.providerId}/{contextStatus.snapshot.model} · {contextStatus.snapshot.usage.totalTokens} compaction tokens · ${contextStatus.snapshot.costUsd.toFixed(4)}</small><div className="scope-chip-list">{contextStatus.snapshot.sourceReferences.filter((source) => source.sequence).slice(0, 8).map((source) => <button aria-label={`Go to transcript message ${source.sequence}`} type="button" key={`${source.sourceId}-${source.sequence}`} onClick={() => { const target = document.querySelector<HTMLElement>(`[data-sequence="${source.sequence}"]`); target?.scrollIntoView?.({ behavior: "smooth", block: "center" }); target?.focus(); }}>Message #{source.sequence}</button>)}</div></div> : contextStatus.status === "failed" ? <p role="alert">Context compaction failed. Retry with the configured provider before continuing this conversation.</p> : <p>{contextStatus.status === "stale" ? "Working memory is stale and will refresh before the next answer that requires compaction." : "Compaction has not been needed for this conversation."}</p>}</> : <p>Select a saved conversation to inspect its working memory.</p>}</section><section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"}</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section><section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Derived memory is not evidence. Citations still identify canonical ingested chunks and transcript messages.</p></div></section></> : <section><h3>Human terminal boundary</h3><div className="empty-state mini"><SquareTerminal size={19} /><p>The terminal is human-operated and does not use a model provider or knowledge retrieval. Output is not evidence until explicitly captured.</p></div></section>}
         </aside>
       </div>
     </div>

@@ -510,9 +510,66 @@ export interface ChatCompletionResponse {
   model: string;
   message: ChatMessage;
   usage: ChatUsage;
+  contextUsage?: ChatUsage;
   finishReason?: string;
   providerRequestId?: string;
   citations: ChatCitation[];
+}
+
+export interface ContextSourceReference {
+  sourceKind: string;
+  sourceId: Identifier;
+  sequence?: number;
+}
+
+export interface ContextMemoryItem {
+  text: string;
+  sources: ContextSourceReference[];
+}
+
+export interface ContextMemory {
+  objective?: string;
+  summary: string;
+  confirmedFacts: ContextMemoryItem[];
+  decisions: ContextMemoryItem[];
+  constraints: ContextMemoryItem[];
+  corrections: ContextMemoryItem[];
+  openQuestions: ContextMemoryItem[];
+  evidenceIds: Identifier[];
+  artifactIds: Identifier[];
+}
+
+export interface ContextSnapshot {
+  id: Identifier;
+  ownerType: "chat_session" | "agent_run";
+  ownerId: Identifier;
+  version: number;
+  status: "ready" | "failed";
+  compactedThrough: number;
+  memory?: ContextMemory;
+  sourceReferences: ContextSourceReference[];
+  providerId: Identifier;
+  model: string;
+  promptVersion: string;
+  usage: ChatUsage;
+  costUsd: number;
+  error?: string;
+  createdAt: string;
+}
+
+export interface ContextStatus {
+  ownerType: "chat_session" | "agent_run";
+  ownerId: Identifier;
+  status: "not_needed" | "ready" | "stale" | "failed";
+  contextWindow: number;
+  maxOutputTokens: number;
+  targetInputTokens: number;
+  estimatedInputTokens: number;
+  compactedThrough: number;
+  sourceReferences: ContextSourceReference[];
+  compactionUsage: ChatUsage;
+  compactionCostUsd: number;
+  snapshot?: ContextSnapshot;
 }
 
 export type ChatStreamEvent =
