@@ -1,0 +1,34 @@
+protocol: nebula.toolbox.interface-source/v2
+name: whois
+version_key: WHOIS_VERSION
+executable: /usr/bin/whois
+category: discovery
+risk_class: active_scan
+description: Query WHOIS registration services.
+homepage: https://github.com/rfc1036/whois
+synopsis: whois [options] object
+version_probe:
+- /usr/bin/whois
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /usr/bin/whois
+  - --help
+positionals:
+- id: object
+  name: OBJECT
+  type: string
+  required: true
+  repeatable: false
+  description: Domain, IP address, ASN, or registry object.
+examples:
+- purpose: Query registration data
+  arguments:
+  - '{target}'
+notes:
+- WHOIS servers are external endpoints and must be compatible with the engagement egress policy.
+option_overrides: {}
+package_version_key: WHOIS_APT_VERSION

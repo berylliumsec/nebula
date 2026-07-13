@@ -133,15 +133,14 @@ An external Chroma directory is skipped unless the operator supplies
 ## Tool safety model
 
 Operator setup, installation locations, CLI/API examples, extension authoring,
-and the truthful Safe Foundation release status are documented in the
-[tool-pack guide](TOOL_PACKS.md).
+and release status are documented in the [Toolbox guide](TOOLBOX.md).
 
 Executable tools are disabled unless all of these are present:
 
 1. A typed `ToolSpec` with closed JSON schemas and trusted target/path mappings.
 2. An engagement-owned workspace and in-scope, broker-resolved target.
 3. A current mission budget reservation.
-4. Any approval required by the risk class.
+4. Any approval required for invasive risk classes.
 5. An approved rootless Docker/Podman worker and preconfigured egress boundary.
 6. A digest-pinned tool image already present locally (`--pull=never`).
 7. An immutable evidence recorder.
@@ -149,8 +148,8 @@ Executable tools are disabled unless all of these are present:
 Missing isolation results in analysis-only mode. There is no host execution
 fallback.
 
-The Safe Foundation sources retain release digest placeholders intentionally.
-The protected `nebula-tools-v*` publisher resolves them from actual registry
+The Toolbox source retains release digest placeholders intentionally. The
+protected `nebula-toolbox-v*` publisher resolves them from actual registry
 outputs, creates SBOM/provenance evidence and OCI signatures, and publishes an
 Ed25519-signed catalog. Nebula embeds only the Beryllium public trust key; never
 substitute example digests or commit the private release key.
@@ -160,7 +159,7 @@ substitute example digests or commit the private release key.
 This developer preview is the Phase 0/1 foundation plus a connected Phase 2 UI
 shell. PostgreSQL team authorization, OIDC/RBAC, remote workers, full scanner
 normalization, production report rendering, generated-client drift enforcement,
-MCP/A2A, signed plugins, and advanced specialist packs remain release-gated.
+MCP/A2A, signed plugins, and advanced specialist environments remain release-gated.
 
 Nebula 2 remains a separately triggered legacy distribution. Its PyQt licensing
 review does not apply to Nebula 3 installers because the legacy dependency and

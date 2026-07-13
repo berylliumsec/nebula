@@ -660,14 +660,6 @@ def run_mission(
         raise typer.BadParameter("--tool requires a positive --max-tool-calls budget")
     if selected_tools and provider_id is None:
         raise typer.BadParameter("executable missions require --provider")
-    executable_qa_enabled = os.getenv(
-        "NEBULA_ENABLE_TOOL_EXECUTION_QA"
-    ) == "1" and build_metadata()["distribution_channel"] in {"development", "qa"}
-    if selected_tools and not executable_qa_enabled:
-        raise typer.BadParameter(
-            "executable missions remain release-gated; only the isolated "
-            "acceptance environment may set NEBULA_ENABLE_TOOL_EXECUTION_QA=1"
-        )
     root, store, artifacts = _services(data_dir)
     store.get(Engagement, engagement_id)
     selected_provider = None

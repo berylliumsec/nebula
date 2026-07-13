@@ -1,0 +1,34 @@
+protocol: nebula.toolbox.interface-source/v2
+name: nikto
+version_key: NIKTO_VERSION
+executable: /opt/nebula/nikto/program/nikto.pl
+category: web
+risk_class: active_scan
+description: Web server configuration and known-file scanner.
+homepage: https://github.com/sullo/nikto
+synopsis: nikto -h host [options]
+version_probe:
+- /opt/nebula/nikto/program/nikto.pl
+- -Version
+version_exit_codes:
+- 0
+- 1
+- 255
+documentation:
+- command_path: []
+  argv:
+  - /opt/nebula/nikto/program/nikto.pl
+  - -Help
+positionals: []
+examples:
+- purpose: Scan and save structured output
+  arguments:
+  - -h
+  - https://{target}
+  - -Format
+  - json
+  - -output
+  - /workspace/nikto.json
+notes:
+- Nikto can generate substantial traffic; keep tuning and timeouts bounded.
+option_overrides: {}

@@ -25,6 +25,7 @@ def test_sdk_initializes_valid_source_but_refuses_unresolved_release_pack(tmp_pa
 
     assert manifest.identity == "acme/sample@0.1.0"
     assert (root / "Containerfile").is_file()
+    assert "ENTRYPOINT" not in (root / "Containerfile").read_text(encoding="utf-8")
     assert (root / "tests/parser-fixtures/output.json").is_file()
     with pytest.raises(ToolPackSDKError, match="unresolved"):
         pack_tool_pack(root, tmp_path / "sample.ntp")
@@ -87,19 +88,14 @@ def test_sdk_rejects_mismatched_source_manifest_and_archive_limits(
         read_tool_pack(original)
 
 
-def test_safe_foundation_sources_are_structurally_valid_but_unresolved():
-    assets = (
-        Path(__file__).parents[2] / "src/nebula/v3/tool_pack_assets/safe_foundation"
-    )
+def test_toolbox_source_is_structurally_valid_but_unresolved():
+    assets = Path(__file__).parents[2] / "src/nebula/v3/tool_pack_assets/toolbox"
     identities = {
         validate_tool_pack_directory(path.parent).identity
         for path in assets.glob("*/nebula-tool-pack.yaml")
     }
     assert identities == {
-        "berylliumsec/safe-network@0.1.0",
-        "berylliumsec/safe-web@0.1.0",
-        "berylliumsec/safe-intelligence@0.1.0",
-        "berylliumsec/safe-code@0.1.0",
+        "berylliumsec/nebula-toolbox@0.1.0",
     }
     for path in assets.glob("*/nebula-tool-pack.yaml"):
         with pytest.raises(ToolPackSDKError, match="unresolved"):

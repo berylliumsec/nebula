@@ -5,8 +5,8 @@
 > and Tauri shell described in the modernization plan. See
 > [docs/NEBULA3.md](docs/NEBULA3.md) for commands, vLLM configuration, safety
 > invariants, and the remaining release gates. The separate
-> [tool-pack guide](docs/TOOL_PACKS.md) covers runners, installation locations,
-> mission grants, extension authoring, and current Safe Foundation status.
+> [Toolbox guide](docs/TOOLBOX.md) covers runners, installation locations,
+> the compatible-image contract, extension authoring, and publication.
 > Nebula 2.x is maintenance-only.
 
 Nebula is an advanced, AI-powered penetration testing open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking.

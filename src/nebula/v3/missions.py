@@ -228,6 +228,7 @@ class MissionService:
                 f"provider profile {clean_provider_id!r} is disabled"
             )
         pack_digests: list[str] = []
+        interface_catalog_digests: list[str] = []
         if selected_tools:
             if not (provider.capabilities.tools and provider.capabilities.strict_tools):
                 raise MissionConfigurationError(
@@ -275,6 +276,15 @@ class MissionService:
                 raise MissionConfigurationError(
                     f"mission tool packs are not verified and ready: {unavailable}"
                 )
+            interface_catalog_digests = sorted(
+                {
+                    item.interface_catalog_digest
+                    for item in installations
+                    if item.manifest_digest in pack_digests
+                    and item.status == ToolPackInstallationStatus.READY
+                    and item.interface_catalog_digest is not None
+                }
+            )
         try:
             validate_engagement_provider_privacy(self.store, engagement, provider)
         except ProviderPrivacyViolation as exc:
@@ -289,6 +299,7 @@ class MissionService:
             supervisor_model=clean_model,
             budget=budget,
             tool_pack_digests=pack_digests,
+            tool_interface_catalog_digests=interface_catalog_digests,
             metadata={
                 "analysis_only": not selected_tools,
                 "origin": "api",
@@ -334,6 +345,7 @@ class MissionService:
                         {
                             "tool_names": selected_tools,
                             "tool_pack_digests": pack_digests,
+                            "tool_interface_catalog_digests": interface_catalog_digests,
                         }
                         if selected_tools
                         else {}

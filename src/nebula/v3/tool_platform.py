@@ -64,21 +64,26 @@ from .toolpacks import (
     manifest_digest,
 )
 from .toolparsers import SandboxParserExecutor
+from .tool_interfaces import (
+    MAX_INTERFACE_CATALOG_BYTES,
+    ToolInterfaceCatalog,
+    load_interface_catalog,
+    load_interface_catalog_file,
+)
 from .tools import (
     StoreToolEvidenceRecorder,
     StoreToolLedger,
     ToolBroker,
     ToolRegistry,
 )
-from .version import build_metadata
 
 
-DEFAULT_CATALOG_URL = "https://berylliumsec.github.io/nebula/tool-packs/catalog-v1.json"
+DEFAULT_CATALOG_URL = "https://berylliumsec.github.io/nebula/toolbox/catalog-v1.json"
 DEFAULT_CATALOG_SIGNATURE_URL = (
-    "https://berylliumsec.github.io/nebula/tool-packs/catalog-v1.json.signature.json"
+    "https://berylliumsec.github.io/nebula/toolbox/catalog-v1.json.signature.json"
 )
 MAX_REMOTE_MANIFEST_BYTES = 2_000_000
-MAX_LOCAL_BUNDLE_BYTES = 18_000_000
+MAX_LOCAL_BUNDLE_BYTES = 100_000_000
 DEFAULT_EVENT_RETENTION = 256
 MAX_EVENT_RETENTION = 10_000
 
@@ -372,14 +377,7 @@ class ToolPlatform:
                         "description": spec.description,
                         "risk_class": spec.risk_class.value,
                         "network_access": spec.network_access,
-                        "requires_approval": spec.risk_class.value
-                        in {
-                            "active_scan",
-                            "credential_use",
-                            "exploitation",
-                            "persistence",
-                            "destructive",
-                        },
+                        "requires_approval": spec.requires_approval,
                         "available": reason is None,
                         "unavailable_reason": reason,
                     }
@@ -511,6 +509,13 @@ class ToolPlatform:
         manifest, signature = await self._fetch_manifest(entry)
         if manifest_digest(manifest) != entry.manifest_digest:
             raise ToolPlatformError("catalog manifest digest does not match its entry")
+        interface_catalog: ToolInterfaceCatalog | None = None
+        interface_path: Path | None = None
+        if entry.interface_catalog_url is not None:
+            interface_catalog, raw_interface = await self._fetch_interface_catalog(entry)
+            interface_path = self.manifests.put_interface_catalog(
+                raw_interface, interface_catalog.digest
+            )
         progress.bind_manifest(manifest)
         installation = await self._installer(
             runtime_profile_id, progress=progress
@@ -519,9 +524,43 @@ class ToolPlatform:
             source=f"catalog:{entry.publisher}/{entry.name}@{entry.version}",
             signature=signature,
         )
+        if interface_catalog is not None and interface_path is not None:
+            installation = self.store.update(
+                ToolPackInstallation,
+                installation.id,
+                {
+                    "interface_catalog_digest": interface_catalog.digest,
+                    "interface_catalog_path": str(interface_path),
+                },
+                expected_revision=installation.revision,
+            )
         progress.bind_installation(installation)
         progress.emit("ready", result_status=installation.status)
         return installation
+
+    async def _fetch_interface_catalog(
+        self, entry: ToolCatalogEntry
+    ) -> tuple[ToolInterfaceCatalog, bytes]:
+        assert entry.interface_catalog_url is not None
+        assert entry.interface_catalog_digest is not None
+        assert entry.interface_tool_count is not None
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0), follow_redirects=False
+            ) as client:
+                payload = await fetch_bounded_https(
+                    client,
+                    entry.interface_catalog_url,
+                    MAX_INTERFACE_CATALOG_BYTES,
+                )
+            catalog = load_interface_catalog(payload)
+        except Exception as exc:
+            raise ToolPlatformError("Toolbox interface catalog download failed") from exc
+        if catalog.digest != entry.interface_catalog_digest:
+            raise ToolPlatformError("Toolbox interface catalog digest mismatch")
+        if len(catalog.tools) != entry.interface_tool_count:
+            raise ToolPlatformError("Toolbox interface tool count mismatch")
+        return catalog, payload
 
     async def install_local(
         self,
@@ -557,6 +596,14 @@ class ToolPlatform:
                 temporary.unlink(missing_ok=True)
         try:
             progress.bind_manifest(archive.manifest)
+            local_interface = None
+            local_interface_path = None
+            archive_files = getattr(archive, "files", {})
+            if raw_interface := archive_files.get("source/interface-catalog.json"):
+                local_interface = load_interface_catalog(raw_interface)
+                local_interface_path = self.manifests.put_interface_catalog(
+                    raw_interface, local_interface.digest
+                )
             installation = await self._installer(
                 runtime_profile_id, progress=progress
             ).install(
@@ -566,6 +613,16 @@ class ToolPlatform:
                 local_file=True,
                 confirm_unsigned_permissions=confirm_permissions,
             )
+            if local_interface is not None and local_interface_path is not None:
+                installation = self.store.update(
+                    ToolPackInstallation,
+                    installation.id,
+                    {
+                        "interface_catalog_digest": local_interface.digest,
+                        "interface_catalog_path": str(local_interface_path),
+                    },
+                    expected_revision=installation.revision,
+                )
             progress.bind_installation(installation)
             progress.emit("ready", result_status=installation.status)
             return installation
@@ -584,6 +641,18 @@ class ToolPlatform:
             verified = await self._installer(
                 installation.runtime_profile_id, progress=progress
             ).verify(installation.id)
+            if verified.interface_catalog_digest or verified.interface_catalog_path:
+                if not (
+                    verified.interface_catalog_digest
+                    and verified.interface_catalog_path
+                ):
+                    raise ToolPlatformError(
+                        "installed interface catalog metadata is incomplete"
+                    )
+                load_interface_catalog_file(
+                    Path(verified.interface_catalog_path),
+                    verified.interface_catalog_digest,
+                )
             progress.bind_installation(verified)
             progress.emit("ready", result_status=verified.status)
             return verified
@@ -700,6 +769,23 @@ class ToolPlatform:
         ]
         if {item.manifest_digest for item in installations} != set(digests):
             raise MissionConfigurationError("a locked tool pack is no longer ready")
+        interface_catalogs = [
+            load_interface_catalog_file(
+                Path(item.interface_catalog_path), item.interface_catalog_digest
+            )
+            for item in installations
+            if item.interface_catalog_path and item.interface_catalog_digest
+        ]
+        interface_digests = {catalog.digest for catalog in interface_catalogs}
+        if sorted(interface_digests) != sorted(run.tool_interface_catalog_digests):
+            raise MissionConfigurationError(
+                "Toolbox interface-catalog lock changed before execution"
+            )
+        if len(interface_digests) > 1:
+            raise MissionConfigurationError(
+                "one mission cannot span different Toolbox interface catalogs"
+            )
+        interface_catalog = interface_catalogs[0] if interface_catalogs else None
         runtime_ids = {item.runtime_profile_id for item in installations}
         if len(runtime_ids) != 1:
             raise MissionConfigurationError("one mission cannot span local runners")
@@ -724,11 +810,23 @@ class ToolPlatform:
         network_tools = sorted(
             spec.name for spec in specs.values() if spec.network_access
         )
-        if network_tools and not profile.egress_helper_image:
+        embedded_helper = next(
+            (
+                spec.image
+                for spec in specs.values()
+                if spec.network_access
+                and spec.name.startswith("environment.")
+                and spec.image is not None
+            ),
+            None,
+        )
+        egress_helper_image = profile.egress_helper_image or embedded_helper
+        if network_tools and not egress_helper_image:
             raise MissionConfigurationError(
                 "selected network tools require a certified digest-pinned "
                 f"egress helper: {network_tools}"
             )
+        runner = self._runner(profile, egress_helper_image=egress_helper_image)
         workspace = self.workspace_for(engagement.id)
         broker = ToolBroker(
             registry=registry,
@@ -756,6 +854,7 @@ class ToolPlatform:
                 specs=role_specs,
                 model=run.supervisor_model,
                 max_output_tokens=min(2_048, run.budget.max_tokens or 2_048),
+                interface_catalog=interface_catalog,
             )
         return MissionComponents(
             supervisor=ToolMissionSupervisor(specs),
@@ -764,6 +863,9 @@ class ToolPlatform:
                 "tool_names": selected,
                 "scope_summary": self._scope_summary(scope),
                 "pack_digests": digests,
+                "interface_catalog_digest": (
+                    interface_catalog.digest if interface_catalog is not None else None
+                ),
             },
         )
 
@@ -771,7 +873,10 @@ class ToolPlatform:
         component = hashlib.sha256(engagement_id.encode("utf-8")).hexdigest()
         workspace = self.workspace_root / component
         workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
-        workspace.chmod(0o700)
+        # OCI workers run as an unmapped non-root UID. The engagement directory
+        # is writable to that UID while its 0700 parent keeps it invisible to
+        # every other host user.
+        workspace.chmod(0o777)
         return workspace
 
     def _begin_operation(self, operation: ToolPackOperation) -> _OperationProgress:
@@ -808,7 +913,12 @@ class ToolPlatform:
             developer_mode=self.developer_mode,
         )
 
-    def _runner(self, stored: StoredRunnerProfile) -> ContainerSandboxRunner:
+    def _runner(
+        self,
+        stored: StoredRunnerProfile,
+        *,
+        egress_helper_image: str | None = None,
+    ) -> ContainerSandboxRunner:
         if stored.isolation == RunnerIsolation.ROOTLESS:
             host = RunnerPlatform.LINUX
             isolation = RunnerIsolationMode.LINUX_ROOTLESS
@@ -832,9 +942,10 @@ class ToolPlatform:
                 Path(stored.seccomp_profile) if stored.seccomp_profile else None
             ),
         )
+        helper_image = egress_helper_image or stored.egress_helper_image
         egress = (
-            ContainerEgressController(helper_image=stored.egress_helper_image)
-            if stored.egress_helper_image
+            ContainerEgressController(helper_image=helper_image)
+            if helper_image is not None
             else NoEgressController()
         )
         return ContainerSandboxRunner(
@@ -861,7 +972,11 @@ class ToolPlatform:
             return "runner profile is unavailable"
         if not profile.healthy:
             return profile.last_health_detail or "runner profile is not healthy"
-        if spec.network_access and not profile.egress_helper_image:
+        if (
+            spec.network_access
+            and not profile.egress_helper_image
+            and not spec.name.startswith("environment.")
+        ):
             return "certified egress helper is not configured"
         return None
 
@@ -943,7 +1058,6 @@ def default_tool_platform(
     data_root: Path,
 ) -> ToolPlatform:
     key_path = os.getenv("NEBULA_TOOL_PACK_PUBLIC_KEYS")
-    channel = build_metadata()["distribution_channel"]
     return ToolPlatform(
         store=store,
         artifact_store=artifact_store,
@@ -955,10 +1069,7 @@ def default_tool_platform(
             DEFAULT_CATALOG_SIGNATURE_URL,
         ),
         developer_mode=os.getenv("NEBULA_TOOL_DEVELOPER_MODE") == "1",
-        execution_enabled=(
-            os.getenv("NEBULA_ENABLE_TOOL_EXECUTION_QA") == "1"
-            and channel in {"development", "qa"}
-        ),
+        execution_enabled=True,
     )
 
 

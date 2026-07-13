@@ -1,0 +1,41 @@
+protocol: nebula.toolbox.interface-source/v2
+name: ncat
+version_key: NMAP_VERSION
+executable: /opt/nebula/nmap/bin/ncat
+category: network
+risk_class: exploitation
+description: Nmap's network connector for controlled TCP and TLS sessions.
+homepage: https://nmap.org/ncat/guide/
+synopsis: ncat [options] [hostname] [port]
+version_probe:
+- /opt/nebula/nmap/bin/ncat
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /opt/nebula/nmap/bin/ncat
+  - --help
+positionals:
+- id: hostname
+  name: HOSTNAME
+  type: target
+  required: false
+  repeatable: false
+  description: Remote host.
+- id: port
+  name: PORT
+  type: port
+  required: false
+  repeatable: false
+  description: Remote port.
+examples:
+- purpose: Open a TLS connection
+  arguments:
+  - --ssl
+  - '{target}'
+  - '443'
+notes:
+- Listening, relaying, and command execution are invasive operations.
+option_overrides: {}

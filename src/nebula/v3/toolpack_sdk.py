@@ -131,7 +131,6 @@ def _containerfile_template() -> str:
 RUN addgroup -S nebula && adduser -S -G nebula -u 10001 nebula
 COPY --chown=nebula:nebula example-tool /usr/local/bin/example-tool
 USER 10001:10001
-ENTRYPOINT [\"/usr/local/bin/example-tool\"]
 """
 
 

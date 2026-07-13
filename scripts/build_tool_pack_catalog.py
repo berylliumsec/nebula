@@ -35,6 +35,7 @@ from nebula.v3.toolpacks import (
     manifest_digest,
 )
 from nebula.v3.toolpack_sdk import pack_tool_pack
+from nebula.v3.tool_interfaces import load_interface_catalog
 
 
 PLACEHOLDER = re.compile(r"\{\{sha256:([a-z0-9._-]+)\}\}")
@@ -156,6 +157,7 @@ def build_catalog(
     key_id: str,
     generated_at: datetime,
     base_url: str,
+    interface_catalog_file: Path | None = None,
 ) -> Path:
     if not KEY_ID.fullmatch(key_id):
         raise CatalogBuildError("invalid release key ID")
@@ -171,8 +173,26 @@ def build_catalog(
     configured = config.get("packs") if isinstance(config, dict) else None
     if not isinstance(configured, list) or not configured:
         raise CatalogBuildError("catalog-build.yaml has no configured packs")
+    collection = config.get("collection")
+    if (
+        not isinstance(collection, dict)
+        or set(collection) != {"id", "name"}
+        or not isinstance(collection["id"], str)
+        or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,99}", collection["id"])
+        or not isinstance(collection["name"], str)
+        or not collection["name"].strip()
+        or len(collection["name"]) > 100
+    ):
+        raise CatalogBuildError(
+            "catalog-build.yaml requires a valid collection id and name"
+        )
     digests = _digest_map(digest_file)
     key = _load_private_key(private_key_file)
+    interface_catalog = None
+    interface_payload = None
+    if interface_catalog_file is not None:
+        interface_payload = interface_catalog_file.expanduser().read_bytes()
+        interface_catalog = load_interface_catalog(interface_payload)
     entries: list[ToolCatalogEntry] = []
     output_root.mkdir(parents=True, exist_ok=True, mode=0o755)
 
@@ -206,6 +226,10 @@ def build_catalog(
             (resolved_pack / "nebula-tool-pack.yaml").write_text(
                 resolved_source, encoding="utf-8", newline="\n"
             )
+            if interface_payload is not None:
+                (resolved_pack / "interface-catalog.json").write_bytes(
+                    interface_payload
+                )
             for image in manifest.images:
                 for attachment in (image.sbom, image.provenance):
                     source_attachment = _safe_attachment(
@@ -231,6 +255,13 @@ def build_catalog(
             permissions.extend(
                 f"credential_{value}" for value in manifest.permissions.credentials
             )
+            interface_relative = (
+                Path("interfaces", f"{interface_catalog.digest}.json")
+                if interface_catalog is not None
+                else None
+            )
+            if interface_relative is not None and interface_payload is not None:
+                _write(output_root / interface_relative, interface_payload)
             entries.append(
                 ToolCatalogEntry(
                     publisher=manifest.metadata.publisher,
@@ -245,14 +276,34 @@ def build_catalog(
                         base_url,
                         f"{relative_root.as_posix()}/manifest.signature.json",
                     ),
-                    collection_id="safe-foundation",
-                    collection_name="Safe Foundation",
+                    collection_id=collection["id"],
+                    collection_name=collection["name"],
                     collection_order=order,
                     minimum_nebula_version=manifest.metadata.minimum_nebula_version,
                     licenses=sorted(manifest.metadata.licenses),
                     platforms=sorted({image.platform for image in manifest.images}),
                     tool_names=sorted(tool.name for tool in manifest.tools),
                     permissions=sorted(permissions),
+                    interface_catalog_url=(
+                        urljoin(base_url, interface_relative.as_posix())
+                        if interface_relative is not None
+                        else None
+                    ),
+                    interface_catalog_digest=(
+                        interface_catalog.digest
+                        if interface_catalog is not None
+                        else None
+                    ),
+                    interface_catalog_protocol=(
+                        "nebula.toolbox.catalog/v2"
+                        if interface_catalog is not None
+                        else None
+                    ),
+                    interface_tool_count=(
+                        len(interface_catalog.tools)
+                        if interface_catalog is not None
+                        else None
+                    ),
                 )
             )
 
@@ -314,6 +365,7 @@ def main() -> int:
     build.add_argument("--key-id", required=True)
     build.add_argument("--generated-at", required=True)
     build.add_argument("--base-url", required=True)
+    build.add_argument("--interface-catalog", type=Path)
     args = parser.parse_args()
     if args.command == "generate-key":
         generate_key(args.destination)
@@ -330,6 +382,7 @@ def main() -> int:
         key_id=args.key_id,
         generated_at=generated_at,
         base_url=args.base_url,
+        interface_catalog_file=args.interface_catalog,
     )
     return 0
 

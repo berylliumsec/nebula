@@ -1,0 +1,89 @@
+protocol: nebula.toolbox.interface-source/v2
+name: ip
+version_key: IPROUTE2_VERSION
+executable: /usr/sbin/ip
+category: utility
+risk_class: local_read
+description: Inspect the disposable container network namespace.
+homepage: https://wiki.linuxfoundation.org/networking/iproute2
+synopsis: ip [options] object command
+version_probe:
+- /usr/sbin/ip
+- -Version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /usr/sbin/ip
+  - help
+- command_path:
+  - address
+  argv:
+  - /usr/sbin/ip
+  - address
+  - help
+- command_path:
+  - link
+  argv:
+  - /usr/sbin/ip
+  - link
+  - help
+- command_path:
+  - route
+  argv:
+  - /usr/sbin/ip
+  - route
+  - help
+- command_path:
+  - neighbour
+  argv:
+  - /usr/sbin/ip
+  - neighbour
+  - help
+- command_path:
+  - rule
+  argv:
+  - /usr/sbin/ip
+  - rule
+  - help
+- command_path:
+  - netns
+  argv:
+  - /usr/sbin/ip
+  - netns
+  - help
+- command_path:
+  - monitor
+  argv:
+  - /usr/sbin/ip
+  - monitor
+  - help
+- command_path:
+  - tunnel
+  argv:
+  - /usr/sbin/ip
+  - tunnel
+  - help
+- command_path:
+  - vrf
+  argv:
+  - /usr/sbin/ip
+  - vrf
+  - help
+- command_path:
+  - xfrm
+  argv:
+  - /usr/sbin/ip
+  - xfrm
+  - help
+positionals: []
+examples:
+- purpose: List addresses
+  arguments:
+  - address
+  - show
+notes:
+- This reports the isolated tool namespace, never the host network.
+option_overrides: {}
+package_version_key: IPROUTE2_APT_VERSION

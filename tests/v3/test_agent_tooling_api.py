@@ -665,13 +665,13 @@ def test_approval_decision_resumes_the_same_executable_run(tmp_path):
         (
             "post",
             "/api/v1/tool-packs/install",
-            {"catalog_id": "safe-network", "runtime_profile_id": "runner-test"},
+            {"catalog_id": "nebula-toolbox", "runtime_profile_id": "runner-test"},
         ),
         (
             "post",
             "/api/v1/tool-collections/install",
             {
-                "collection_id": "safe-foundation",
+                "collection_id": "nebula-toolbox",
                 "runtime_profile_id": "runner-test",
             },
         ),

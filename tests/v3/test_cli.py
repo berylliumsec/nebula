@@ -119,7 +119,7 @@ def test_cli_run_rejects_tool_budget_without_selected_tools():
     assert "--tool" in result.output
 
 
-def test_cli_tool_missions_are_release_gated_outside_acceptance_environment():
+def test_cli_tool_missions_are_not_release_gated():
     result = CliRunner().invoke(
         app,
         [
@@ -136,7 +136,9 @@ def test_cli_tool_missions_are_release_gated_outside_acceptance_environment():
     )
 
     assert result.exit_code != 0
-    assert "release-gated" in result.output
+    assert "release-gated" not in result.output
+    assert result.exception is not None
+    assert "engagements entity not found" in str(result.exception)
 
 
 def test_tools_cli_accepts_stable_json_output_flag(tmp_path):

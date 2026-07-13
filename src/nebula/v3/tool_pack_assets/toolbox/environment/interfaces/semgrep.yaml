@@ -1,0 +1,46 @@
+protocol: nebula.toolbox.interface-source/v2
+name: semgrep
+version_key: SEMGREP_VERSION
+executable: /opt/nebula/venv/bin/semgrep
+category: code
+risk_class: local_read
+description: Static analysis scanner with SARIF output.
+homepage: https://semgrep.dev/docs/cli-reference
+synopsis: semgrep [command] [options] [targets]
+version_probe:
+- /opt/nebula/venv/bin/semgrep
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /opt/nebula/venv/bin/semgrep
+  - --help
+- command_path:
+  - scan
+  argv:
+  - /opt/nebula/venv/bin/semgrep
+  - scan
+  - --help
+positionals:
+- id: targets
+  name: TARGET
+  type: path
+  required: false
+  repeatable: true
+  description: Files or directories to scan.
+examples:
+- purpose: Scan with an engagement-supplied ruleset
+  arguments:
+  - scan
+  - --config
+  - /workspace/semgrep.yml
+  - --sarif
+  - --output
+  - /workspace/semgrep.sarif
+  - /workspace
+notes:
+- The default environment is offline; provide rules in the workspace instead of remote registry identifiers.
+option_overrides: {}
+command_discovery: help-subcommands

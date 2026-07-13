@@ -1,0 +1,40 @@
+protocol: nebula.toolbox.interface-source/v2
+name: bash
+version_key: BASH_VERSION
+executable: /bin/bash
+category: utility
+risk_class: workspace_write
+description: GNU command shell for pipelines and workspace automation inside the disposable Toolbox container.
+homepage: https://www.gnu.org/software/bash/
+synopsis: bash [options] [command_string | file]
+version_probe:
+- /bin/bash
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /bin/bash
+  - --help
+positionals:
+- id: command_or_file
+  name: COMMAND_OR_FILE
+  type: string
+  required: false
+  repeatable: true
+  description: Command string, script file, and script arguments as selected by Bash options.
+examples:
+- purpose: Run a strict local pipeline
+  arguments:
+  - --noprofile
+  - --norc
+  - -eu
+  - -o
+  - pipefail
+  - -c
+  - jq . /workspace/input.json
+notes:
+- Use environment.run_local unless scoped network access is required.
+option_overrides: {}
+package_version_key: BASH_APT_VERSION

@@ -68,6 +68,7 @@ class StubActiveTool(ToolPlugin):
                 "additionalProperties": False,
             },
             risk_class=RiskClass.ACTIVE_SCAN,
+            requires_approval=True,
             network_access=True,
             target_argument="target",
             port_argument="ports",
@@ -319,6 +320,38 @@ def test_active_tool_creates_durable_approval_and_resumes_after_decision(tmp_pat
         "tool.running",
         "tool.complete",
     ]
+
+
+def test_in_scope_active_tool_runs_when_its_contract_does_not_require_approval(
+    tmp_path,
+):
+    plugin = StubActiveTool()
+    plugin.spec = plugin.spec.model_copy(update={"requires_approval": False})
+    broker, store = _broker(tmp_path, plugin)
+    invocation = ToolInvocation(
+        engagement_id="eng-1",
+        run_id="run-active-default",
+        tool_name="scan.tcp",
+        arguments={"target": "10.50.1.8", "ports": [443]},
+        workspace=tmp_path,
+        target="10.50.1.8",
+        port=443,
+        idempotency_key="scan-default",
+    )
+    scope = ScopePolicy(
+        engagement_id="eng-1",
+        allowed_cidrs=["10.50.0.0/16"],
+        allowed_ports=[443],
+    )
+
+    result = asyncio.run(broker.execute(invocation, scope))
+
+    assert result.output == {"open": [443]}
+    assert plugin.calls == 1
+    assert store.count(Approval) == 0
+    assert [
+        event.event_type for event in store.replay_events("run-active-default")
+    ] == ["tool.proposed", "tool.running", "tool.complete"]
 
 
 def test_expiring_approval_persists_transition_and_event_atomically(tmp_path):

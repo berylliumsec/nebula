@@ -1,0 +1,75 @@
+protocol: nebula.toolbox.interface-source/v2
+name: gobuster
+version_key: GOBUSTER_VERSION
+executable: /usr/local/bin/gobuster
+category: web
+risk_class: active_scan
+description: Directory, DNS, virtual-host, and fuzzing discovery utility.
+homepage: https://github.com/OJ/gobuster
+synopsis: gobuster command [flags]
+version_probe:
+- /usr/local/bin/gobuster
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /usr/local/bin/gobuster
+  - help
+- command_path:
+  - dir
+  argv:
+  - /usr/local/bin/gobuster
+  - dir
+  - --help
+- command_path:
+  - dns
+  argv:
+  - /usr/local/bin/gobuster
+  - dns
+  - --help
+- command_path:
+  - vhost
+  argv:
+  - /usr/local/bin/gobuster
+  - vhost
+  - --help
+- command_path:
+  - fuzz
+  argv:
+  - /usr/local/bin/gobuster
+  - fuzz
+  - --help
+- command_path:
+  - tftp
+  argv:
+  - /usr/local/bin/gobuster
+  - tftp
+  - --help
+- command_path:
+  - s3
+  argv:
+  - /usr/local/bin/gobuster
+  - s3
+  - --help
+- command_path:
+  - gcs
+  argv:
+  - /usr/local/bin/gobuster
+  - gcs
+  - --help
+positionals: []
+examples:
+- purpose: Discover web paths
+  arguments:
+  - dir
+  - --url
+  - https://{target}/
+  - --wordlist
+  - /workspace/wordlist.txt
+  - --output
+  - /workspace/gobuster.txt
+notes:
+- Choose a command before its command-specific flags.
+option_overrides: {}

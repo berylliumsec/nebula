@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .domain import MissionGrant, RiskClass, ScopePolicy, utc_now
+from .domain import RiskClass, ScopePolicy, utc_now
 
 
 class PolicyEffect(str, Enum):
@@ -169,30 +169,6 @@ def _url_allowed(candidate: str | None, allowed_urls: list[str]) -> bool:
     return False
 
 
-def _grant_matches(
-    grant: MissionGrant,
-    request: PolicyRequest,
-    target: _Target | None,
-    now: datetime,
-) -> bool:
-    if not grant.granted_at <= now < grant.expires_at:
-        return False
-    if request.risk_class not in grant.risk_classes:
-        return False
-    if grant.tool_names and request.tool_name not in grant.tool_names:
-        return False
-    if grant.targets:
-        if target is None:
-            return False
-        normalized_grants = {value.rstrip(".").lower() for value in grant.targets}
-        if (
-            target.original.rstrip(".").lower() not in normalized_grants
-            and target.host not in normalized_grants
-        ):
-            return False
-    return True
-
-
 class PolicyEngine:
     """Evaluate a request against a frozen engagement scope policy."""
 
@@ -294,19 +270,10 @@ class PolicyEngine:
             )
 
         if request.risk_class == RiskClass.ACTIVE_SCAN:
-            for index, grant in enumerate(policy.grants):
-                if _grant_matches(grant, request, target, current):
-                    return PolicyDecision(
-                        effect=PolicyEffect.ALLOW,
-                        reason="request is covered by an active mission grant",
-                        rule="mission_grant",
-                        normalized_target=target.host if target else None,
-                        matched_grant_index=index,
-                    )
             return PolicyDecision(
-                effect=PolicyEffect.REQUIRE_APPROVAL,
-                reason="active scanning requires a current mission grant or approval",
-                rule="active_scan",
+                effect=PolicyEffect.ALLOW,
+                reason="active scan is inside the engagement scope and execution window",
+                rule="in_scope_active_scan",
                 normalized_target=target.host if target else None,
             )
 

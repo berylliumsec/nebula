@@ -587,21 +587,21 @@ describe("Nebula workspace", () => {
     renderApp("/settings");
 
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
-    expect(await screen.findByText("Tool packs are not available in this Core build")).toBeVisible();
+    expect(await screen.findByText("Execution environments are not available in this Core build")).toBeVisible();
     expect(screen.getByText("Runner profiles are not available in this Core build")).toBeVisible();
     expect(screen.getByText("Scope editing is unavailable")).toBeVisible();
-    expect(screen.getByText("Tool assignments are unavailable")).toBeVisible();
+    expect(screen.getByText("Environment assignments are unavailable")).toBeVisible();
   });
 
-  it("starts with zero tools, then submits only selected assigned tools and bounded budgets", async () => {
+  it("selects assigned Toolbox capabilities by default with bounded budgets", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable" }), { status: 200 });
       if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Tool review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
       if (path.endsWith("/providers")) return new Response(JSON.stringify([{ ...entity, id: "provider-1", name: "Structured provider", provider_type: "vllm", enabled: true, is_local: true, model_allowlist: ["model-1"], capabilities: { streaming: true, tool_calling: true, strict_structured_output: true }, privacy: { local_only: true, residency: [] }, metadata: { default_model: "model-1" } }]), { status: 200 });
-      if (path.endsWith("/tool-assignment")) return new Response(JSON.stringify([{ id: "assignment-1", engagement_id: "engagement-1", manifest_digest: "sha256:network", tool_names: ["nmap.connect_scan"], enabled: true, revision: 1 }]), { status: 200 });
-      if (path.endsWith("/tools")) return new Response(JSON.stringify([{ name: "nmap.connect_scan", pack_id: "pack-network", pack_manifest_digest: "sha256:network", description: "TCP connect scan", risk_class: "active_scan", requires_network: true, requires_approval: true, available: true }]), { status: 200 });
+      if (path.endsWith("/tool-assignment")) return new Response(JSON.stringify([{ id: "assignment-1", engagement_id: "engagement-1", manifest_digest: "sha256:toolbox", tool_names: ["environment.run_network"], enabled: true, revision: 1 }]), { status: 200 });
+      if (path.endsWith("/tools")) return new Response(JSON.stringify([{ name: "environment.run_network", pack_id: "toolbox", pack_manifest_digest: "sha256:toolbox", description: "Run an indexed network command", risk_class: "active_scan", requires_network: true, requires_approval: false, available: true }]), { status: 200 });
       if (path.endsWith("/missions") && init?.method === "POST") {
         const body = JSON.parse(String(init.body));
         return new Response(JSON.stringify({ ...entity, id: "run-1", engagement_id: "engagement-1", objective: body.objective, status: "queued", metadata: {} }), { status: 202 });
@@ -615,32 +615,30 @@ describe("Nebula workspace", () => {
     await screen.findByRole("heading", { name: "Tool review" });
     await user.click(screen.getByRole("button", { name: "New mission" }));
     let dialog = screen.getByRole("dialog", { name: "New mission" });
-    expect(within(dialog).getByText(/empty tool list and a zero tool-call budget/i)).toBeVisible();
+    expect(within(dialog).getByText(/ordinary in-scope commands run without per-command approval/i)).toBeVisible();
     await user.type(within(dialog).getByRole("textbox", { name: "Objective" }), "Scan the assigned target");
-    await user.click(await within(dialog).findByRole("checkbox", { name: /nmap\.connect_scan/i }));
-    expect(within(dialog).getByRole("spinbutton", { name: "Maximum tool calls" })).toHaveValue(20);
+    expect(await within(dialog).findByRole("checkbox", { name: /environment\.run_network/i })).toBeChecked();
+    expect(within(dialog).getByRole("spinbutton", { name: "Maximum tool calls" })).toHaveValue(50);
     expect(within(dialog).getByRole("spinbutton", { name: "Maximum concurrency" })).toHaveValue(2);
     await user.click(within(dialog).getByRole("button", { name: "Close mission dialog" }));
     await user.click(screen.getByRole("button", { name: "New mission" }));
     dialog = screen.getByRole("dialog", { name: "New mission" });
-    expect(within(dialog).getByRole("checkbox", { name: /nmap\.connect_scan/i })).not.toBeChecked();
-    expect(within(dialog).queryByRole("spinbutton", { name: "Maximum tool calls" })).not.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("checkbox", { name: /nmap\.connect_scan/i }));
+    expect(within(dialog).getByRole("checkbox", { name: /environment\.run_network/i })).toBeChecked();
     await user.click(within(dialog).getByRole("button", { name: "Start mission" }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/missions") && request?.method === "POST")).toBe(true));
     const call = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/missions") && request?.method === "POST");
-    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ tool_names: ["nmap.connect_scan"], max_tool_calls: 20, max_concurrency: 2 });
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ tool_names: ["environment.run_network"], max_tool_calls: 50, max_concurrency: 2 });
   });
 
-  it("installs the signed Safe Foundation collection with one action", async () => {
+  it("installs the signed Nebula Toolbox environment with one action", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
-    const catalog = ["safe-network", "safe-web", "safe-intelligence", "safe-code"].map((name, index) => ({
-      id: `berylliumsec/${name}@0.1.0`, publisher: "berylliumsec", name, version: "0.1.0", description: `${name} tools`,
-      manifest_digest: String(index + 1).repeat(64), licenses: [], platforms: ["linux/amd64", "linux/arm64"],
-      tool_names: [`${name}.run`], permissions: index < 2 ? ["network"] : [], signed: true,
-      collection_id: "safe-foundation", collection_name: "Safe Foundation", collection_order: index,
-    }));
+    const catalog = [{
+      id: "berylliumsec/nebula-toolbox@0.1.0", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", description: "Nebula Toolbox",
+      manifest_digest: "1".repeat(64), licenses: [], platforms: ["linux/amd64", "linux/arm64"],
+      tool_names: ["environment.search", "environment.help", "environment.run_local", "environment.run_network", "environment.run_invasive", "environment.shell_local", "environment.shell_network"], permissions: ["network", "workspace_workspace_write"], signed: true,
+      collection_id: "nebula-toolbox", collection_name: "Nebula Toolbox", collection_order: 0,
+    }];
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable" }), { status: 200 });
@@ -655,11 +653,11 @@ describe("Nebula workspace", () => {
     const user = userEvent.setup();
     renderApp("/settings");
 
-    const button = await screen.findByRole("button", { name: "Install Safe Foundation" });
+    const button = await screen.findByRole("button", { name: "Install Nebula Toolbox" });
     await user.click(button);
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-collections/install") && request?.method === "POST")).toBe(true));
     const call = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-collections/install") && request?.method === "POST");
-    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ collection_id: "safe-foundation", runtime_profile_id: "runner-1" });
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ collection_id: "nebula-toolbox", runtime_profile_id: "runner-1" });
   });
 
   it("shows replayed tool-pack progress in Settings", async () => {

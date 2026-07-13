@@ -1,0 +1,41 @@
+protocol: nebula.toolbox.interface-source/v2
+name: jq
+version_key: JQ_VERSION
+executable: /usr/bin/jq
+category: utility
+risk_class: local_read
+description: Filter and transform JSON evidence.
+homepage: https://jqlang.github.io/jq/manual/
+synopsis: jq [options] filter [files]
+version_probe:
+- /usr/bin/jq
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /usr/bin/jq
+  - --help
+positionals:
+- id: filter
+  name: FILTER
+  type: string
+  required: true
+  repeatable: false
+  description: jq filter expression.
+- id: files
+  name: FILE
+  type: path
+  required: false
+  repeatable: true
+  description: Input JSON files.
+examples:
+- purpose: Pretty-print a JSON artifact
+  arguments:
+  - .
+  - /workspace/input.json
+notes:
+- Write derivatives under /workspace so Nebula can preserve them as artifacts.
+option_overrides: {}
+package_version_key: JQ_APT_VERSION

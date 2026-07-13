@@ -1,4 +1,4 @@
-"""Validate Safe Foundation source or a resolved offline-signing candidate."""
+"""Validate Toolbox source or a resolved offline-signing candidate."""
 
 from __future__ import annotations
 
@@ -15,12 +15,18 @@ from yaml.tokens import AliasToken
 from nebula.v3.toolpack_sdk import ToolPackSDKError, validate_tool_pack_directory
 
 
-DEFAULT_ROOT = Path("src/nebula/v3/tool_pack_assets/safe_foundation")
+DEFAULT_ROOT = Path("src/nebula/v3/tool_pack_assets/toolbox")
 PLACEHOLDER = re.compile(rb"\{\{sha256:[a-z0-9._-]+\}\}")
 REGISTRY = re.compile(
     r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$"
 )
 CONTAINER_FROM = re.compile(rb"(?im)^FROM\s+(?:--platform=[^\s]+\s+)?([^\s]+)")
+FIRST_CLASS_TOOLBOX = {
+    "bash", "curl", "dig", "dnsx", "ffuf", "git", "gobuster", "httpx",
+    "impacket-smbclient", "ip", "jq", "katana", "ncat", "nikto", "nmap",
+    "nuclei", "openssl", "ps", "python", "semgrep", "socat", "sqlmap",
+    "subfinder", "testssl", "whatweb", "wget", "whois",
+}
 
 
 class ReleaseSourceError(RuntimeError):
@@ -64,6 +70,7 @@ def _load_config(path: Path) -> dict[str, Any]:
         "catalog_url",
         "catalog_signature_url",
         "image_registry",
+        "collection",
         "packs",
     }
     if set(payload) != expected:
@@ -145,6 +152,61 @@ def _attachment_error(path: Path, *, kind: str) -> str | None:
         return f"{kind} is not valid UTF-8 JSON: {exc.__class__.__name__}"
 
 
+def _validate_toolbox_interfaces(release_root: Path) -> dict[str, Any]:
+    environment = release_root / "environment"
+    interfaces = environment / "interfaces"
+    versions_path = environment / "tool-versions.env"
+    schema_path = environment / "tool-catalog.schema.json"
+    if not interfaces.is_dir() or not versions_path.is_file() or not schema_path.is_file():
+        raise ReleaseSourceError("Toolbox interface sources, versions, or schema are missing")
+    version_keys = {
+        line.split("=", 1)[0]
+        for line in versions_path.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    }
+    names: set[str] = set()
+    for path in sorted(interfaces.glob("*.yaml")):
+        try:
+            source = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+            raise ReleaseSourceError(f"invalid interface source: {path.name}") from exc
+        if not isinstance(source, dict):
+            raise ReleaseSourceError(f"interface source is not an object: {path.name}")
+        name = source.get("name")
+        if (
+            source.get("protocol") != "nebula.toolbox.interface-source/v2"
+            or not isinstance(name, str)
+            or name != path.stem
+            or name in names
+            or source.get("version_key") not in version_keys
+            or not isinstance(source.get("documentation"), list)
+            or not source["documentation"]
+            or not isinstance(source.get("option_overrides"), dict)
+            or "option_lines" in source
+        ):
+            raise ReleaseSourceError(f"incomplete interface source: {path.name}")
+        names.add(name)
+    if names != FIRST_CLASS_TOOLBOX:
+        missing = sorted(FIRST_CLASS_TOOLBOX - names)
+        extra = sorted(names - FIRST_CLASS_TOOLBOX)
+        raise ReleaseSourceError(
+            f"Toolbox interface set differs from the 27 first-class commands; "
+            f"missing={missing}, extra={extra}"
+        )
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ReleaseSourceError("Toolbox interface schema is invalid JSON") from exc
+    if schema.get("$id") != "https://nebula.security/schemas/toolbox-catalog-v2.json":
+        raise ReleaseSourceError("Toolbox interface schema has an unexpected identity")
+    return {
+        "protocol": "nebula.toolbox.interface/v2",
+        "source_protocol": "nebula.toolbox.interface-source/v2",
+        "tool_count": len(names),
+        "tools": sorted(names),
+    }
+
+
 def validate_release_source(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
     """Return a report; candidate readiness never implies signature readiness."""
 
@@ -157,6 +219,7 @@ def validate_release_source(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
     if config_path.is_symlink():
         raise ReleaseSourceError("catalog-build.yaml cannot be a symlink")
     config = _load_config(config_path)
+    interface_report = _validate_toolbox_interfaces(release_root)
     catalog_url = _https_url(config["catalog_url"], field="catalog_url")
     signature_url = _https_url(
         config["catalog_signature_url"], field="catalog_signature_url"
@@ -166,6 +229,17 @@ def validate_release_source(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
         raise ReleaseSourceError(
             "image_registry must be a lowercase registry/repository without tag or digest"
         )
+    collection = config["collection"]
+    if (
+        not isinstance(collection, dict)
+        or set(collection) != {"id", "name"}
+        or not isinstance(collection.get("id"), str)
+        or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,99}", collection["id"])
+        or not isinstance(collection.get("name"), str)
+        or not collection["name"].strip()
+        or len(collection["name"]) > 100
+    ):
+        raise ReleaseSourceError("collection requires a valid id and name")
     configured_packs = config["packs"]
     if (
         not isinstance(configured_packs, list)
@@ -181,7 +255,7 @@ def validate_release_source(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
     )
     if sorted(configured_packs) != discovered_packs:
         raise ReleaseSourceError(
-            "catalog-build.yaml must list every Safe Foundation manifest exactly once"
+            "catalog-build.yaml must list every curated manifest exactly once"
         )
 
     reports: list[dict[str, Any]] = []
@@ -207,7 +281,10 @@ def validate_release_source(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
             raise ReleaseSourceError(f"duplicate pack identity: {manifest.identity}")
         identities.add(manifest.identity)
         for image in manifest.images:
-            if not image.image.startswith(f"{registry}/"):
+            if not (
+                image.image.startswith(f"{registry}/")
+                or image.image.startswith(f"{registry}@")
+            ):
                 raise ReleaseSourceError(
                     f"{manifest.identity} image is outside image_registry: {image.image}"
                 )
@@ -292,6 +369,7 @@ def validate_release_source(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
         "catalog_url": catalog_url,
         "catalog_signature_url": signature_url,
         "image_registry": registry,
+        "interface_catalog": interface_report,
         "packs": reports,
         "blockers": blockers,
     }

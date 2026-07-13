@@ -1,0 +1,41 @@
+protocol: nebula.toolbox.interface-source/v2
+name: nmap
+version_key: NMAP_VERSION
+executable: /opt/nebula/nmap/bin/nmap
+category: network
+risk_class: active_scan
+description: Network discovery, port scanning, and service identification.
+homepage: https://nmap.org/book/man.html
+synopsis: nmap [scan-type] [options] target-specification
+version_probe:
+- /opt/nebula/nmap/bin/nmap
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /opt/nebula/nmap/bin/nmap
+  - --help
+positionals:
+- id: targets
+  name: TARGET_SPECIFICATION
+  type: target
+  required: true
+  repeatable: true
+  description: Hosts, networks, or input target specifications.
+examples:
+- purpose: Run an unprivileged service scan
+  arguments:
+  - -sT
+  - -n
+  - -Pn
+  - -sV
+  - -p
+  - 80,443
+  - '{target}'
+  - -oX
+  - /workspace/nmap.xml
+notes:
+- The non-root Toolbox supports TCP connect scans; raw SYN scans are not available.
+option_overrides: {}

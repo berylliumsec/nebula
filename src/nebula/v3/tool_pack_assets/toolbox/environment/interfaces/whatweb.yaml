@@ -1,0 +1,35 @@
+protocol: nebula.toolbox.interface-source/v2
+name: whatweb
+version_key: WHATWEB_VERSION
+executable: /opt/nebula/whatweb/whatweb
+category: web
+risk_class: active_scan
+description: Web technology and platform fingerprinting utility.
+homepage: https://github.com/urbanadventurer/WhatWeb
+synopsis: whatweb [options] URL
+version_probe:
+- /opt/nebula/whatweb/whatweb
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /opt/nebula/whatweb/whatweb
+  - --help
+positionals:
+- id: targets
+  name: URL
+  type: url
+  required: true
+  repeatable: true
+  description: One or more target URLs.
+examples:
+- purpose: Fingerprint a target as JSON
+  arguments:
+  - --log-json
+  - /workspace/whatweb.json
+  - https://{target}/
+notes:
+- Increase aggression only when the engagement permits active probing.
+option_overrides: {}

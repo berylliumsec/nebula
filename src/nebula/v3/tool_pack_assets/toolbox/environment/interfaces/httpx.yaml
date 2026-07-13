@@ -1,0 +1,36 @@
+protocol: nebula.toolbox.interface-source/v2
+name: httpx
+version_key: HTTPX_VERSION
+executable: /usr/local/bin/httpx
+category: web
+risk_class: active_scan
+description: Probe HTTP services and collect structured response metadata.
+homepage: https://github.com/projectdiscovery/httpx
+synopsis: httpx [flags]
+version_probe:
+- /usr/local/bin/httpx
+- -version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /usr/local/bin/httpx
+  - -h
+positionals:
+- id: target
+  name: TARGET
+  type: target
+  required: false
+  repeatable: true
+  description: URL, hostname, or input target.
+examples:
+- purpose: Probe one URL as JSONL
+  arguments:
+  - -u
+  - https://{target}
+  - -json
+  - -silent
+notes:
+- Use ProjectDiscovery httpx flags, not the unrelated Python package interface.
+option_overrides: {}

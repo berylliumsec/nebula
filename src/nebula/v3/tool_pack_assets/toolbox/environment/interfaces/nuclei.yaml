@@ -1,0 +1,33 @@
+protocol: nebula.toolbox.interface-source/v2
+name: nuclei
+version_key: NUCLEI_VERSION
+executable: /usr/local/bin/nuclei
+category: web
+risk_class: active_scan
+description: Template-driven vulnerability scanner with an immutable bundled template set.
+homepage: https://github.com/projectdiscovery/nuclei
+synopsis: nuclei [flags]
+version_probe:
+- /usr/local/bin/nuclei
+- -version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /usr/local/bin/nuclei
+  - -h
+positionals: []
+examples:
+- purpose: Scan with bundled templates and JSONL evidence
+  arguments:
+  - -u
+  - https://{target}
+  - -t
+  - /opt/nebula/nuclei-templates
+  - -no-interactsh
+  - -jsonl-export
+  - /workspace/nuclei.jsonl
+notes:
+- Code, headless, unsafe, and OAST templates are not enabled by default.
+option_overrides: {}

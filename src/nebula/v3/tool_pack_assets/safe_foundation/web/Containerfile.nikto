@@ -1,6 +1,0 @@
-FROM ghcr.io/sullo/nikto@sha256:0bb37022ebfadc38d6a9a2755c03bfd1f9e079e01e8946fe548153d9ba0c2012
-USER 0:0
-RUN ln -s /opt/nikto/nikto.pl /usr/local/bin/nikto
-ENV HOME=/tmp
-USER 10001:10001
-ENTRYPOINT ["/usr/local/bin/nikto"]

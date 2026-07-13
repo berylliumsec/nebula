@@ -18,16 +18,28 @@ from .orchestration import (
     SpecialistRole,
 )
 from .providers import ModelMessage, ModelProvider, ModelRequest, ToolDefinition
+from .tool_interfaces import ToolInterfaceCatalog, ToolInterfaceError
 from .tools import PolicyDenied, ToolBroker, ToolInvocation, ToolSpec
 
 
 _ROLE_BY_PREFIX: tuple[tuple[str, SpecialistRole], ...] = (
+    ("environment.", SpecialistRole.NETWORK_SERVICE),
     ("nmap.", SpecialistRole.NETWORK_SERVICE),
     ("nuclei.", SpecialistRole.WEB_API),
     ("nikto.", SpecialistRole.WEB_API),
     ("searchsploit.", SpecialistRole.VULNERABILITY_INTELLIGENCE),
     ("semgrep.", SpecialistRole.CODE_ANALYSIS),
 )
+_RISK_PRIORITY = {
+    RiskClass.LOCAL_READ: 0,
+    RiskClass.WORKSPACE_WRITE: 1,
+    RiskClass.PASSIVE: 2,
+    RiskClass.ACTIVE_SCAN: 3,
+    RiskClass.CREDENTIAL_USE: 4,
+    RiskClass.EXPLOITATION: 5,
+    RiskClass.PERSISTENCE: 6,
+    RiskClass.DESTRUCTIVE: 7,
+}
 
 
 def role_for_tool(tool_name: str) -> SpecialistRole:
@@ -53,39 +65,54 @@ class ToolMissionSupervisor:
         if unknown:
             raise MissionError(f"mission selected unavailable tools: {unknown}")
 
-        by_role: dict[SpecialistRole, list[str]] = {}
-        for name in selected:
-            by_role.setdefault(role_for_tool(name), []).append(name)
-        if len(by_role) > budget.max_concurrency * 8:
+        stages = [
+            [name for name in selected if name == "environment.search"],
+            [name for name in selected if name == "environment.help"],
+            [
+                name
+                for name in selected
+                if name.startswith(("environment.run_", "environment.shell_"))
+            ],
+        ]
+        staged = {name for names in stages for name in names}
+        stages.extend([[name] for name in selected if name not in staged])
+        stages = [names for names in stages if names]
+        if len(stages) > budget.max_concurrency * 8:
             raise MissionError("selected tool set produces an excessive task graph")
 
         scope_summary = context.get(
             "scope_summary", "operator-approved engagement scope"
         )
-        tasks = []
-        for role, names in by_role.items():
+        tasks: list[PlannedTask] = []
+        previous_stage: list[str] = []
+        for names in stages:
+            role = role_for_tool(names[0])
             risks = [self.specs[name].risk_class for name in names]
-            risk = RiskClass.ACTIVE_SCAN if RiskClass.ACTIVE_SCAN in risks else risks[0]
-            tasks.append(
-                PlannedTask(
-                    role=role,
-                    title=f"Run bounded {role.value.replace('_', ' ')} analysis",
-                    instructions=(
-                        f"Objective: {objective}\n"
-                        f"Available tools: {', '.join(names)}\n"
-                        f"Hard scope: {scope_summary}\n"
-                        "Use at most one tool call. Do not invent targets, flags, or "
-                        "capabilities outside the supplied schemas."
-                    ),
-                    delegation_depth=1,
-                    risk_class=risk,
-                )
+            risk = max(risks, key=_RISK_PRIORITY.__getitem__)
+            task = PlannedTask(
+                role=role,
+                title=f"Use Toolbox capability {', '.join(names)}",
+                instructions=(
+                    f"Objective: {objective}\n"
+                    f"Capability for this stage: {', '.join(names)}\n"
+                    f"Hard scope: {scope_summary}\n"
+                    "Use exactly one capability named for this stage when it helps. "
+                    "For network execution, use {target} in the command argument list "
+                    "so the broker-pinned target is the one the program receives. "
+                    "Never invent targets or capabilities outside the supplied schemas."
+                ),
+                depends_on=previous_stage,
+                delegation_depth=1,
+                risk_class=risk,
+                allowed_tools=frozenset(names),
             )
+            tasks.append(task)
+            previous_stage = [task.id]
         return MissionPlan(
-            summary="Execute the operator-selected Safe Foundation specialists",
+            summary="Discover and execute tools in the selected Toolbox environment",
             rationale=(
                 "The Core generated this graph deterministically from the exact "
-                "tool lock; models cannot add roles or tools."
+                "environment lock; models cannot add roles or container images."
             ),
             tasks=tasks,
         )
@@ -104,7 +131,7 @@ class ToolMissionSupervisor:
 
 
 class BrokeredToolSpecialist:
-    """Expose strict tool schemas and execute one durable brokered call per task."""
+    """Expose strict environment schemas and execute one brokered call per task."""
 
     def __init__(
         self,
@@ -117,6 +144,7 @@ class BrokeredToolSpecialist:
         specs: Mapping[str, ToolSpec],
         model: str | None = None,
         max_output_tokens: int = 2048,
+        interface_catalog: ToolInterfaceCatalog | None = None,
     ) -> None:
         if not provider.config.enabled:
             raise MissionError(f"provider {provider.config.id!r} is disabled")
@@ -134,9 +162,12 @@ class BrokeredToolSpecialist:
         self.allowed_tools = frozenset(role_specs)
         self.model = model
         self.max_output_tokens = max_output_tokens
+        self.interface_catalog = interface_catalog
 
     async def run(self, context: SpecialistContext) -> SpecialistResult:
         allowed = self.allowed_tools & context.allowed_tools
+        if context.task.allowed_tools is not None:
+            allowed &= context.task.allowed_tools
         if not allowed:
             raise MissionError(
                 f"{self.role.value} has no tools within the mission lock"
@@ -146,14 +177,58 @@ class BrokeredToolSpecialist:
         if context.approval_response:
             invocation, model_call_id = await self._approved_invocation(context)
         else:
+            interface_context = ""
+            selected_interface: dict[str, Any] | None = None
+            if self.interface_catalog is not None and any(
+                name.startswith(("environment.run_", "environment.shell_"))
+                for name in allowed
+            ):
+                selection, selection_usage = await self._select_interface(context)
+                first_usage = selection_usage
+                mode = selection["mode"]
+                if mode == "structured":
+                    try:
+                        selected_interface = self.interface_catalog.command(
+                            selection["tool"], selection["command_path"]
+                        )
+                    except ToolInterfaceError as exc:
+                        raise MissionError(str(exc)) from exc
+                    allowed = frozenset(
+                        name for name in allowed if name.startswith("environment.run_")
+                    )
+                    interface_context = (
+                        "The Core selected and injected this exact interface. Use the "
+                        "same tool and command_path in the structured invocation; do not "
+                        "invent option IDs or positional IDs:\n"
+                        f"{json.dumps(selected_interface, sort_keys=True)}"
+                    )
+                else:
+                    allowed = frozenset(
+                        name for name in allowed if name.startswith("environment.shell_")
+                    )
+                    interface_context = (
+                        "Use the full command-line fallback inside the Toolbox container. "
+                        "The requested command is not constrained by the catalog. Inspect "
+                        "availability and exact syntax with command -v, --version, and "
+                        f"--help when useful. Intended command: {selection['tool']}"
+                    )
+                if not allowed:
+                    raise MissionError(
+                        f"the mission did not grant a capability for {mode} execution"
+                    )
             response = await self.provider.complete(
                 ModelRequest(
                     model=self.model,
                     instructions=(
-                        "You are a bounded Nebula security specialist. You may request "
-                        "exactly one supplied tool. Use only explicit in-scope targets "
-                        "present in the task. Never construct shell commands or add "
-                        "undeclared arguments. If no tool is necessary, explain why."
+                        "You are a Nebula security specialist working inside a disposable "
+                        "Toolbox container. Request at most one supplied capability for "
+                        "this stage. Search the environment before selecting unfamiliar "
+                        "commands. Use only explicit in-scope targets present in the task. "
+                        "Full Bash is allowed only through environment.shell_local or "
+                        "environment.shell_network; it still runs inside the disposable "
+                        "container and never on the host. If no "
+                        "execution is necessary, explain why.\n"
+                        f"{interface_context}"
                     ),
                     messages=[
                         ModelMessage(
@@ -175,8 +250,8 @@ class BrokeredToolSpecialist:
                 )
             )
             first_usage = (
-                response.usage.input_tokens,
-                response.usage.output_tokens,
+                first_usage[0] + response.usage.input_tokens,
+                first_usage[1] + response.usage.output_tokens,
             )
             if not response.tool_calls:
                 summary = response.text.strip()
@@ -198,6 +273,21 @@ class BrokeredToolSpecialist:
             call = response.tool_calls[0]
             if call.name not in allowed:
                 raise MissionError(f"model requested unavailable tool {call.name!r}")
+            if selected_interface is not None:
+                requested_tool = call.arguments.get("tool")
+                invocation_payload = call.arguments.get("invocation")
+                if requested_tool != selected_interface["tool"]["name"]:
+                    raise MissionError(
+                        "model changed the catalogued tool after interface selection"
+                    )
+                if (
+                    not isinstance(invocation_payload, dict)
+                    or invocation_payload.get("command_path")
+                    != selected_interface["command"]["path"]
+                ):
+                    raise MissionError(
+                        "model changed the command path after interface selection"
+                    )
             invocation_id = str(
                 uuid5(
                     NAMESPACE_URL,
@@ -287,6 +377,81 @@ class BrokeredToolSpecialist:
             output_tokens=total_output,
             cost_usd=self._cost(total_input, total_output),
             tool_calls=1,
+        )
+
+    async def _select_interface(
+        self, context: SpecialistContext
+    ) -> tuple[dict[str, Any], tuple[int, int]]:
+        assert self.interface_catalog is not None
+        selection_tool = ToolDefinition(
+            name="nebula.select_environment_command",
+            description=(
+                "Select whether to use one exact catalogued command interface or the "
+                "full container command-line fallback. This is planning only and does "
+                "not execute a tool."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "mode": {"type": "string", "enum": ["structured", "shell"]},
+                    "tool": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "command_path": {
+                        "type": "array",
+                        "maxItems": 16,
+                        "items": {"type": "string"},
+                    },
+                    "rationale": {"type": "string", "minLength": 1, "maxLength": 1000},
+                },
+                "required": ["mode", "tool", "command_path", "rationale"],
+                "additionalProperties": False,
+            },
+            strict=True,
+        )
+        response = await self.provider.complete(
+            ModelRequest(
+                model=self.model,
+                instructions=(
+                    "Choose one command interface for the task. Prefer a catalogued "
+                    "structured interface. Choose shell only for an uncatalogued command "
+                    "or a pipeline/workflow that needs shell syntax. Make exactly one "
+                    "selection tool call; it does not execute anything."
+                ),
+                messages=[
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            f"Objective: {context.objective}\n"
+                            f"Task: {context.task.instructions}\n"
+                            "Exact-version Toolbox index: "
+                            f"{json.dumps(self.interface_catalog.compact_index(), sort_keys=True)}"
+                        ),
+                    )
+                ],
+                tools=[selection_tool],
+                parallel_tool_calls=False,
+                max_output_tokens=min(self.max_output_tokens, 1024),
+                metadata=self._metadata(context),
+            )
+        )
+        if len(response.tool_calls) != 1:
+            raise MissionError("specialist did not make exactly one interface selection")
+        call = response.tool_calls[0]
+        if call.name != selection_tool.name:
+            raise MissionError("specialist requested an invalid interface selector")
+        selection = call.arguments
+        if set(selection) != {"mode", "tool", "command_path", "rationale"}:
+            raise MissionError("interface selection has invalid fields")
+        if selection["mode"] not in {"structured", "shell"}:
+            raise MissionError("interface selection has an invalid mode")
+        if not isinstance(selection["tool"], str) or not selection["tool"]:
+            raise MissionError("interface selection is missing a tool name")
+        if not isinstance(selection["command_path"], list) or any(
+            not isinstance(item, str) for item in selection["command_path"]
+        ):
+            raise MissionError("interface selection has an invalid command path")
+        return selection, (
+            response.usage.input_tokens,
+            response.usage.output_tokens,
         )
 
     async def _approved_invocation(

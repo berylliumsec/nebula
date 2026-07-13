@@ -333,6 +333,10 @@ class ToolPackInstallation(Entity):
     publisher_key_id: str | None = Field(default=None, max_length=200)
     runtime_profile_id: str
     image_locks: dict[str, str] = Field(default_factory=dict)
+    interface_catalog_digest: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+    interface_catalog_path: str | None = None
     status: ToolPackInstallationStatus = ToolPackInstallationStatus.PENDING
     manifest_path: str
     installed_at: datetime | None = None
@@ -668,9 +672,10 @@ class AgentRun(Entity):
     completed_at: datetime | None = None
     last_event_sequence: int = Field(default=0, ge=0)
     tool_pack_digests: list[str] = Field(default_factory=list)
+    tool_interface_catalog_digests: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("tool_pack_digests")
+    @field_validator("tool_pack_digests", "tool_interface_catalog_digests")
     @classmethod
     def valid_pack_digests(cls, values: list[str]) -> list[str]:
         if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in values):

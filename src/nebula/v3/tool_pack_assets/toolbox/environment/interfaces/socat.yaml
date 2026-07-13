@@ -1,0 +1,41 @@
+protocol: nebula.toolbox.interface-source/v2
+name: socat
+version_key: SOCAT_VERSION
+executable: /usr/bin/socat
+category: network
+risk_class: exploitation
+description: Bidirectional data relay for controlled network diagnostics.
+homepage: http://www.dest-unreach.org/socat/doc/socat.html
+synopsis: socat [options] address address
+version_probe:
+- /usr/bin/socat
+- -V
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /usr/bin/socat
+  - -h
+positionals:
+- id: address1
+  name: ADDRESS
+  type: string
+  required: true
+  repeatable: false
+  description: First socat address expression.
+- id: address2
+  name: ADDRESS
+  type: string
+  required: true
+  repeatable: false
+  description: Second socat address expression.
+examples:
+- purpose: Connect standard I/O to a TCP service
+  arguments:
+  - '-'
+  - TCP:{target}:443,connect-timeout=10
+notes:
+- Listeners, relays, and process execution require invasive approval.
+option_overrides: {}
+package_version_key: SOCAT_APT_VERSION

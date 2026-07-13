@@ -79,6 +79,9 @@ export interface ToolPackCatalogEntry {
   collectionId?: string;
   collectionName?: string;
   collectionOrder: number;
+  interfaceCatalogDigest?: string;
+  interfaceCatalogProtocol?: string;
+  interfaceToolCount?: number;
 }
 
 export interface ToolPackInstallation {
@@ -92,6 +95,7 @@ export interface ToolPackInstallation {
   trustState: "trusted" | "developer" | "untrusted" | "invalid";
   runtimeProfileId?: Identifier;
   imageLocks: Record<string, string>;
+  interfaceCatalogDigest?: string;
   status: ToolPackStatus;
   toolNames: string[];
   permissions: string[];

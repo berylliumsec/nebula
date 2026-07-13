@@ -1,0 +1,37 @@
+protocol: nebula.toolbox.interface-source/v2
+name: wget
+version_key: WGET_VERSION
+executable: /usr/bin/wget
+category: web
+risk_class: active_scan
+description: Retrieve authorized web resources into the engagement workspace.
+homepage: https://www.gnu.org/software/wget/manual/wget.html
+synopsis: wget [options] URL
+version_probe:
+- /usr/bin/wget
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /usr/bin/wget
+  - --help
+positionals:
+- id: urls
+  name: URL
+  type: url
+  required: true
+  repeatable: true
+  description: One or more URLs to retrieve.
+examples:
+- purpose: Download one artifact
+  arguments:
+  - --https-only
+  - --output-document
+  - /workspace/download.bin
+  - https://{target}/artifact
+notes:
+- Do not recursively mirror content unless scope and budgets explicitly allow it.
+option_overrides: {}
+package_version_key: WGET_APT_VERSION

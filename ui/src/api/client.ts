@@ -275,6 +275,9 @@ interface WireToolPackCatalogEntry extends JsonObject {
   collection_id?: string | null;
   collection_name?: string | null;
   collection_order?: number;
+  interface_catalog_digest?: string | null;
+  interface_catalog_protocol?: string | null;
+  interface_tool_count?: number | null;
 }
 
 interface WireToolPackInstallation extends JsonObject {
@@ -283,6 +286,7 @@ interface WireToolPackInstallation extends JsonObject {
   publisher: string;
   name: string;
   version: string;
+  interface_catalog_digest?: string | null;
   manifest_digest: string;
   source?: string;
   trust?: "curated" | "trusted_publisher" | "local_unsigned";
@@ -839,6 +843,9 @@ function mapToolCatalogEntry(value: WireToolPackCatalogEntry): ToolPackCatalogEn
     collectionId: value.collection_id ?? undefined,
     collectionName: value.collection_name ?? undefined,
     collectionOrder: numberField(value.collection_order),
+    interfaceCatalogDigest: value.interface_catalog_digest ?? undefined,
+    interfaceCatalogProtocol: value.interface_catalog_protocol ?? undefined,
+    interfaceToolCount: value.interface_tool_count ?? undefined,
   };
 }
 
@@ -856,6 +863,7 @@ function mapToolPackInstallation(value: WireToolPackInstallation): ToolPackInsta
     trustState,
     runtimeProfileId: value.runtime_profile_id ?? undefined,
     imageLocks: value.image_locks ?? {},
+    interfaceCatalogDigest: value.interface_catalog_digest ?? undefined,
     status: value.status,
     toolNames: value.tool_names ?? [],
     permissions: value.permissions ?? [],

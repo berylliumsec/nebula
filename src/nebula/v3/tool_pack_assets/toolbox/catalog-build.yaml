@@ -1,0 +1,10 @@
+# Release input for the signed Nebula Toolbox catalog. The publication job
+# substitutes the platform digests and creates the SBOM/provenance attachments.
+catalog_url: https://berylliumsec.github.io/nebula/toolbox/catalog-v1.json
+catalog_signature_url: https://berylliumsec.github.io/nebula/toolbox/catalog-v1.json.signature.json
+image_registry: ghcr.io/berylliumsec/nebula-toolbox
+collection:
+  id: nebula-toolbox
+  name: Nebula Toolbox
+packs:
+  - environment/nebula-tool-pack.yaml

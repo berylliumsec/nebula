@@ -69,6 +69,7 @@ class PlannedTask(BaseModel):
     delegation_depth: int = Field(default=0, ge=0)
     target: str | None = None
     risk_class: RiskClass = RiskClass.LOCAL_READ
+    allowed_tools: frozenset[str] | None = None
 
 
 class MissionPlan(BaseModel):

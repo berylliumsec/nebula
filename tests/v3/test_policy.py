@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from nebula.v3.domain import MissionGrant, RiskClass, ScopePolicy
+from nebula.v3.domain import RiskClass, ScopePolicy
 from nebula.v3.policy import (
     PolicyEffect,
     PolicyEngine,
@@ -44,8 +44,8 @@ def test_active_hostname_requires_pinned_dns_and_rejects_mixed_answers():
         resolved_ips=["10.40.2.3"],
     )
     approved_target = engine.evaluate(_scope(), request, now=NOW)
-    assert approved_target.effect == PolicyEffect.REQUIRE_APPROVAL
-    assert approved_target.rule == "active_scan"
+    assert approved_target.effect == PolicyEffect.ALLOW
+    assert approved_target.rule == "in_scope_active_scan"
     assert approved_target.normalized_target == "app.example.test"
 
     missing_dns = engine.evaluate(
@@ -100,16 +100,8 @@ def test_scope_enforces_ports_domains_and_wildcard_apex_boundaries():
     assert passive("attacker.example").effect == PolicyEffect.DENY
 
 
-def test_active_scan_mission_grants_are_time_tool_and_target_bounded():
-    grant = MissionGrant(
-        risk_classes=[RiskClass.ACTIVE_SCAN],
-        tool_names=["scan.tcp"],
-        targets=["10.40.2.3"],
-        granted_at=NOW - timedelta(minutes=5),
-        expires_at=NOW + timedelta(minutes=5),
-        granted_by="operator-1",
-    )
-    policy = _scope(grants=[grant])
+def test_active_scans_run_without_grants_but_cannot_expand_scope():
+    policy = _scope()
     matching = PolicyRequest(
         tool_name="scan.tcp",
         risk_class=RiskClass.ACTIVE_SCAN,
@@ -119,15 +111,18 @@ def test_active_scan_mission_grants_are_time_tool_and_target_bounded():
 
     decision = PolicyEngine().evaluate(policy, matching, now=NOW)
     assert decision.effect == PolicyEffect.ALLOW
-    assert decision.rule == "mission_grant"
-    assert decision.matched_grant_index == 0
+    assert decision.rule == "in_scope_active_scan"
+    assert decision.matched_grant_index is None
 
     other_tool = PolicyEngine().evaluate(
         policy, matching.model_copy(update={"tool_name": "scan.udp"}), now=NOW
     )
-    assert other_tool.effect == PolicyEffect.REQUIRE_APPROVAL
-    expired = PolicyEngine().evaluate(policy, matching, now=NOW + timedelta(minutes=6))
-    assert expired.effect == PolicyEffect.REQUIRE_APPROVAL
+    assert other_tool.effect == PolicyEffect.ALLOW
+    outside = PolicyEngine().evaluate(
+        policy, matching.model_copy(update={"target": "203.0.113.7"}), now=NOW
+    )
+    assert outside.effect == PolicyEffect.DENY
+    assert outside.rule == "target_scope"
 
 
 @pytest.mark.parametrize(

@@ -42,7 +42,7 @@ jobs:
       - name: Type-check Nebula 3
         if: matrix.python-version == '3.12'
         run: poetry run mypy src/nebula/v3
-      - name: Validate Safe Foundation release source
+      - name: Validate Nebula Toolbox release source
         if: matrix.python-version == '3.12'
         run: poetry run python -m scripts.validate_tool_pack_release --json
       - name: Build distributions

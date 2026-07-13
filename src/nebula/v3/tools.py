@@ -86,7 +86,9 @@ class ToolArgumentBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     argument: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
-    kind: Literal["value", "repeat", "csv", "boolean_flag", "positional"] = "value"
+    kind: Literal["value", "repeat", "csv", "json", "boolean_flag", "positional"] = (
+        "value"
+    )
     flag: str | None = None
 
     @model_validator(mode="after")
@@ -124,6 +126,7 @@ class ToolSpec(BaseModel):
     path_arguments: list[str] = Field(default_factory=list)
     action: str | None = None
     cloud_transfer: bool = False
+    requires_approval: bool = False
     pack_id: str | None = Field(default=None, max_length=400)
     manifest_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     image: str | None = None
@@ -274,6 +277,24 @@ def build_declared_command(spec: ToolSpec, arguments: dict[str, Any]) -> list[st
                     ",".join(_argv_scalar(binding.argument, item) for item in value),
                 ]
             )
+            continue
+        if binding.kind == "json":
+            assert binding.flag is not None
+            try:
+                rendered_json = json.dumps(
+                    value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                )
+            except (TypeError, ValueError) as exc:
+                raise InvalidToolArguments(
+                    f"{binding.argument} must be JSON serializable"
+                ) from exc
+            if "\x00" in rendered_json:
+                raise InvalidToolArguments(f"{binding.argument} contains a NUL byte")
+            command.extend([binding.flag, rendered_json])
             continue
         rendered = _argv_scalar(binding.argument, value)
         if binding.kind == "positional":
@@ -761,6 +782,19 @@ class StoreToolEvidenceRecorder:
         spec: ToolSpec,
         result: ToolExecutionResult,
     ) -> list[str]:
+        toolbox_metadata = result.output.get("metadata")
+        if not isinstance(toolbox_metadata, dict):
+            toolbox_metadata = {}
+        interface_catalog_digest = toolbox_metadata.get("catalog_digest")
+        script_sha256 = toolbox_metadata.get("script_sha256")
+        if not isinstance(interface_catalog_digest, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", interface_catalog_digest
+        ):
+            interface_catalog_digest = None
+        if not isinstance(script_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", script_sha256
+        ):
+            script_sha256 = None
         envelope = {
             "schema": "nebula.tool-evidence.v1",
             "tool_call_id": call.id,
@@ -772,6 +806,7 @@ class StoreToolEvidenceRecorder:
                 "manifest_digest": spec.manifest_digest,
                 "image": spec.image,
                 "parser": spec.parser_contract,
+                "interface_catalog_digest": interface_catalog_digest,
             },
             "risk_class": spec.risk_class.value,
             "arguments": invocation.arguments,
@@ -784,6 +819,7 @@ class StoreToolEvidenceRecorder:
             "output_truncated": result.output_truncated,
             "parser_error": result.parser_error,
             "execution": result.execution,
+            "script_sha256": script_sha256,
         }
         payload = json.dumps(
             envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -801,6 +837,8 @@ class StoreToolEvidenceRecorder:
                 "tool_pack": spec.pack_id,
                 "manifest_digest": spec.manifest_digest,
                 "image": spec.image,
+                "interface_catalog_digest": interface_catalog_digest,
+                "script_sha256": script_sha256,
             },
         )
         evidence = Evidence(
@@ -821,6 +859,8 @@ class StoreToolEvidenceRecorder:
                 "image": result.execution.get("image"),
                 "manifest_digest": spec.manifest_digest,
                 "tool_pack": spec.pack_id,
+                "interface_catalog_digest": interface_catalog_digest,
+                "script_sha256": script_sha256,
                 "exit_code": result.exit_code,
             },
         )
@@ -922,6 +962,14 @@ class ToolBroker:
                 cloud_transfer=plugin.spec.cloud_transfer,
             ),
         )
+        if decision.effect == PolicyEffect.ALLOW and plugin.spec.requires_approval:
+            decision = PolicyDecision(
+                effect=PolicyEffect.REQUIRE_APPROVAL,
+                reason="the installed capability explicitly requires operator approval",
+                rule="tool_contract_approval",
+                normalized_target=decision.normalized_target,
+                matched_grant_index=decision.matched_grant_index,
+            )
         if decision.effect == PolicyEffect.DENY:
             await self.ledger.transition(
                 call, ToolCallStatus.DENIED, error=decision.reason

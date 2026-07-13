@@ -179,7 +179,7 @@ def test_manifest_compilation_is_canonical_and_builds_declarative_specs():
 def test_catalog_collection_metadata_must_be_complete():
     common = {
         "publisher": "berylliumsec",
-        "name": "safe-network",
+        "name": "nebula-toolbox",
         "version": "0.1.0",
         "description": "Network tools",
         "manifest_digest": DIGEST_A,
@@ -187,12 +187,12 @@ def test_catalog_collection_metadata_must_be_complete():
         "signature_url": "https://catalog.example/network.signature.json",
     }
     with pytest.raises(ValidationError, match="collection ID and name"):
-        ToolCatalogEntry(**common, collection_id="safe-foundation")
+        ToolCatalogEntry(**common, collection_id="nebula-toolbox")
     entry = ToolCatalogEntry(
         **common,
-        collection_id="safe-foundation",
-        collection_name="Safe Foundation",
-        tool_names=["nmap.connect_scan"],
+        collection_id="nebula-toolbox",
+        collection_name="Nebula Toolbox",
+        tool_names=["environment.run_network"],
         platforms=["linux/amd64", "linux/arm64"],
     )
     assert entry.collection_order == 0
@@ -609,8 +609,10 @@ def test_persisted_tool_entities_and_scope_urls_are_strict():
         engagement_id="eng-1",
         objective="test",
         tool_pack_digests=[DIGEST_A, DIGEST_A],
+        tool_interface_catalog_digests=[DIGEST_B, DIGEST_B],
     )
     assert run.tool_pack_digests == [DIGEST_A]
+    assert run.tool_interface_catalog_digests == [DIGEST_B]
     scope = ScopePolicy(
         engagement_id="eng-1",
         allowed_urls=["HTTPS://Example.COM"],
@@ -737,34 +739,15 @@ def test_tool_platform_uses_fixed_pack_root_with_test_override(tmp_path, monkeyp
     )
 
 
-def test_public_distribution_channels_cannot_enable_qa_tool_execution(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setenv("NEBULA_ENABLE_TOOL_EXECUTION_QA", "1")
+def test_default_tool_platform_enables_brokered_execution(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "nebula.v3.tool_platform.default_tool_pack_root",
         lambda: tmp_path / "packs",
     )
-    metadata = {
-        "version": "3.0.0-alpha.1",
-        "commit": "test",
-        "target": "test",
-        "build_timestamp": "test",
-        "distribution_channel": "direct",
-    }
-    monkeypatch.setattr("nebula.v3.tool_platform.build_metadata", lambda: metadata)
     platform = default_tool_platform(
         store=NebulaStore(tmp_path / "public.db"),
         artifact_store=ArtifactStore(tmp_path / "public-artifacts"),
         data_root=tmp_path / "public-core",
     )
-    assert platform.execution_enabled is False
+    assert platform.execution_enabled is True
     assert platform.has_trusted_keys is True
-
-    metadata["distribution_channel"] = "qa"
-    qa_platform = default_tool_platform(
-        store=NebulaStore(tmp_path / "qa.db"),
-        artifact_store=ArtifactStore(tmp_path / "qa-artifacts"),
-        data_root=tmp_path / "qa-core",
-    )
-    assert qa_platform.execution_enabled is True

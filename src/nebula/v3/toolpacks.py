@@ -139,11 +139,10 @@ class ToolPolicyContract(StrictModel):
     idempotency: IdempotencyBehavior = IdempotencyBehavior.SAFE
 
     @model_validator(mode="after")
-    def active_tools_require_approval(self) -> "ToolPolicyContract":
+    def invasive_tools_require_approval(self) -> "ToolPolicyContract":
         if (
             self.risk_class
             in {
-                RiskClass.ACTIVE_SCAN,
                 RiskClass.CREDENTIAL_USE,
                 RiskClass.EXPLOITATION,
                 RiskClass.PERSISTENCE,
@@ -151,7 +150,7 @@ class ToolPolicyContract(StrictModel):
             }
             and not self.requires_approval
         ):
-            raise ValueError("active or invasive tools must require approval")
+            raise ValueError("invasive tools must require approval")
         return self
 
 
@@ -334,6 +333,7 @@ class ToolPackManifestV1(StrictModel):
                     input_schema=tool.input_schema,
                     output_schema=tool.output_schema,
                     risk_class=tool.policy.risk_class,
+                    requires_approval=tool.policy.requires_approval,
                     network_access=tool.policy.network_access,
                     filesystem_access=tool.policy.filesystem_access,
                     timeout_seconds=tool.timeout_seconds,
@@ -460,6 +460,12 @@ class ToolCatalogEntry(StrictModel):
     manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     manifest_url: str
     signature_url: str
+    interface_catalog_url: str | None = None
+    interface_catalog_digest: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+    interface_catalog_protocol: Literal["nebula.toolbox.catalog/v2"] | None = None
+    interface_tool_count: int | None = Field(default=None, ge=1, le=500)
     collection_id: str | None = Field(
         default=None, pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$"
     )
@@ -505,10 +511,24 @@ class ToolCatalogEntry(StrictModel):
             raise ValueError("catalog permissions must be unique")
         return self
 
-    @field_validator("manifest_url", "signature_url")
+    @field_validator("manifest_url", "signature_url", "interface_catalog_url")
     @classmethod
-    def catalog_url_is_https(cls, value: str) -> str:
-        return _validated_https_url(value)
+    def catalog_url_is_https(cls, value: str | None) -> str | None:
+        return _validated_https_url(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def interface_attachment_is_complete(self) -> "ToolCatalogEntry":
+        attachment = (
+            self.interface_catalog_url,
+            self.interface_catalog_digest,
+            self.interface_catalog_protocol,
+            self.interface_tool_count,
+        )
+        if any(value is not None for value in attachment) and not all(
+            value is not None for value in attachment
+        ):
+            raise ValueError("interface catalog attachment metadata must be complete")
+        return self
 
 
 class ToolCatalogV1(StrictModel):
@@ -838,6 +858,19 @@ class ImmutableManifestStore:
 
     def signature_path(self, digest: str) -> Path:
         return self.manifest_path(digest).with_suffix(".signature.json")
+
+    def interface_catalog_path(self, digest: str) -> Path:
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("interface catalog digest must be lowercase SHA-256")
+        return self.root / "interfaces" / "sha256" / f"{digest}.json"
+
+    def put_interface_catalog(self, payload: bytes, digest: str) -> Path:
+        if hashlib.sha256(payload).hexdigest() != digest:
+            raise ToolPackInstallError("interface catalog digest mismatch")
+        path = self.interface_catalog_path(digest)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._put_immutable(path, payload)
+        return path
 
     def put(
         self,

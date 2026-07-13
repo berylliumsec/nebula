@@ -1,6 +1,0 @@
-FROM projectdiscovery/nuclei@sha256:e677842fb1f50f29747565ba274a1d35dcf8c684132a42b0cb406e71fccae9fc
-USER 0:0
-COPY --chown=10001:10001 curated-templates /opt/nebula/nuclei-templates
-ENV HOME=/tmp
-USER 10001:10001
-ENTRYPOINT ["/usr/local/bin/nuclei"]

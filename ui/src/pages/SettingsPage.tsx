@@ -26,7 +26,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 const settingsSections = [
   ["general-settings", "General"],
   ["provider-settings", "AI Providers"],
-  ["tool-pack-settings", "Tool Packs"],
+  ["tool-pack-settings", "Toolbox"],
   ["runtime-settings", "Runners"],
   ["engagement-policy-settings", "Engagement Policy"],
   ["operator-settings", "Operators"],
@@ -349,7 +349,7 @@ export function SettingsPage() {
   const dialogAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
   return (
     <div className="page settings-page">
-      <PageHeader eyebrow="Workspace configuration" title="Settings" description="Provider, sandbox runner, tool-pack, engagement policy, attribution, and privacy controls." />
+      <PageHeader eyebrow="Workspace configuration" title="Settings" description="Provider, sandbox runner, Toolbox environment, engagement policy, attribution, and privacy controls." />
       <div className="settings-workspace">
       <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label]) => <a className={settingsSection === id ? "active" : undefined} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={() => setSettingsSection(id)}>{label}</a>)}</nav>
       <div className="settings-detail" data-section={settingsSection}>

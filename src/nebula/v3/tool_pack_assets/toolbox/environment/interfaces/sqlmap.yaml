@@ -1,0 +1,31 @@
+protocol: nebula.toolbox.interface-source/v2
+name: sqlmap
+version_key: SQLMAP_VERSION
+executable: /opt/nebula/venv/bin/sqlmap
+category: web
+risk_class: exploitation
+description: Automated SQL injection detection and controlled exploitation utility.
+homepage: https://github.com/sqlmapproject/sqlmap/wiki/Usage
+synopsis: sqlmap [options]
+version_probe:
+- /opt/nebula/venv/bin/sqlmap
+- --version
+version_exit_codes:
+- 0
+documentation:
+- command_path: []
+  argv:
+  - /opt/nebula/venv/bin/sqlmap
+  - -hh
+positionals: []
+examples:
+- purpose: Test one authorized URL in batch mode
+  arguments:
+  - -u
+  - https://{target}/item?id=1
+  - --batch
+  - --output-dir
+  - /workspace/sqlmap
+notes:
+- Data extraction, filesystem access, OS commands, and destructive switches require explicit authorization.
+option_overrides: {}

@@ -1,0 +1,1152 @@
+api_version: tools.nebula.security/v1
+kind: ToolPack
+metadata:
+  publisher: berylliumsec
+  name: nebula-toolbox
+  version: 0.1.0
+  minimum_nebula_version: 3.0.0a1
+  description: A lean, extensible security environment with exact-version interfaces and a container-only command-line fallback.
+  licenses:
+  - Apache-2.0
+  - BSD-3-Clause
+  - GPL-2.0-only
+  - GPL-3.0-only
+  - LGPL-2.1-or-later
+  - MIT
+  - Nmap
+  homepage: https://github.com/berylliumsec/nebula
+images:
+- name: toolbox
+  platform: linux/amd64
+  image: ghcr.io/berylliumsec/nebula-toolbox@{{sha256:toolbox-amd64}}
+  sbom: sbom/toolbox-amd64.cdx.json
+  provenance: provenance/toolbox-amd64.intoto.jsonl
+- name: toolbox
+  platform: linux/arm64
+  image: ghcr.io/berylliumsec/nebula-toolbox@{{sha256:toolbox-arm64}}
+  sbom: sbom/toolbox-arm64.cdx.json
+  provenance: provenance/toolbox-arm64.intoto.jsonl
+permissions:
+  network: true
+  workspace: workspace_write
+  credentials: []
+tools:
+- name: environment.search
+  description: Search exact-version interfaces and the runtime executable inventory.
+  image: toolbox
+  executable: /opt/nebula/bin/nebula-toolbox
+  fixed_arguments:
+  - search
+  argument_bindings:
+  - argument: query
+    kind: value
+    flag: --query
+  input_schema:
+    type: object
+    properties:
+      query:
+        type: string
+        minLength: 1
+        maxLength: 200
+    required:
+    - query
+    additionalProperties: false
+  output_schema:
+    type: object
+    properties:
+      protocol:
+        type: string
+        const: nebula.toolbox/v1
+      operation:
+        type: string
+      tool:
+        type:
+        - string
+        - 'null'
+      command:
+        type: array
+        items:
+          type: string
+      exit_code:
+        type: integer
+      stdout:
+        type: string
+      stderr:
+        type: string
+      timed_out:
+        type: boolean
+      matches:
+        type: array
+        items: {}
+      metadata:
+        type: object
+        properties:
+          catalog_digest:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+          catalogued_guidance:
+            type: boolean
+          script_sha256:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+        required:
+        - catalog_digest
+        - catalogued_guidance
+        - script_sha256
+        additionalProperties: false
+    required:
+    - protocol
+    - operation
+    - tool
+    - command
+    - exit_code
+    - stdout
+    - stderr
+    - timed_out
+    - matches
+    - metadata
+    additionalProperties: false
+  policy:
+    risk_class: local_read
+    network_access: false
+    filesystem_access: none
+    requires_approval: false
+    idempotency: safe
+  parser:
+    built_in: json/v1
+  smoke_tests:
+  - arguments:
+      query: nmap
+    expected_exit_code: 0
+    timeout_seconds: 30
+- name: environment.help
+  description: Return one exact-version command interface and its captured help evidence.
+  image: toolbox
+  executable: /opt/nebula/bin/nebula-toolbox
+  fixed_arguments:
+  - help
+  argument_bindings:
+  - argument: tool
+    kind: value
+    flag: --tool
+  - argument: command_path
+    kind: json
+    flag: --command-path-json
+  input_schema:
+    type: object
+    properties:
+      tool:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[a-z0-9._-]+$
+      command_path:
+        type: array
+        maxItems: 16
+        items:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9._-]{0,127}$
+    required:
+    - tool
+    - command_path
+    additionalProperties: false
+  output_schema:
+    type: object
+    properties:
+      protocol:
+        type: string
+        const: nebula.toolbox/v1
+      operation:
+        type: string
+      tool:
+        type:
+        - string
+        - 'null'
+      command:
+        type: array
+        items:
+          type: string
+      exit_code:
+        type: integer
+      stdout:
+        type: string
+      stderr:
+        type: string
+      timed_out:
+        type: boolean
+      matches:
+        type: array
+        items: {}
+      metadata:
+        type: object
+        properties:
+          catalog_digest:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+          catalogued_guidance:
+            type: boolean
+          script_sha256:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+        required:
+        - catalog_digest
+        - catalogued_guidance
+        - script_sha256
+        additionalProperties: false
+    required:
+    - protocol
+    - operation
+    - tool
+    - command
+    - exit_code
+    - stdout
+    - stderr
+    - timed_out
+    - matches
+    - metadata
+    additionalProperties: false
+  policy:
+    risk_class: local_read
+    network_access: false
+    filesystem_access: none
+    requires_approval: false
+    idempotency: safe
+  parser:
+    built_in: json/v1
+  smoke_tests:
+  - arguments:
+      tool: jq
+      command_path: []
+    expected_exit_code: 0
+    timeout_seconds: 30
+- name: environment.run_local
+  description: Compile and run a catalogued structured invocation with no network.
+  image: toolbox
+  executable: /opt/nebula/bin/nebula-toolbox
+  fixed_arguments:
+  - exec
+  - --max-risk
+  - workspace_write
+  argument_bindings:
+  - argument: tool
+    kind: value
+    flag: --tool
+  - argument: invocation
+    kind: json
+    flag: --invocation-json
+  - argument: cwd
+    kind: value
+    flag: --cwd
+  - argument: timeout
+    kind: value
+    flag: --timeout
+  input_schema:
+    type: object
+    properties:
+      tool:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[a-z0-9._-]+$
+      invocation:
+        type: object
+        properties:
+          command_path:
+            type: array
+            maxItems: 16
+            items:
+              type: string
+              pattern: ^[a-z0-9][a-z0-9._-]{0,127}$
+          options:
+            type: array
+            maxItems: 256
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                value:
+                  oneOf:
+                  - type: string
+                    maxLength: 4096
+                  - type: integer
+                  - type: number
+                  - type: boolean
+                  - type: 'null'
+                  - type: array
+                    maxItems: 256
+                    items:
+                      oneOf:
+                      - type: string
+                        maxLength: 4096
+                      - type: integer
+                      - type: number
+                      - type: boolean
+              required:
+              - id
+              - value
+              additionalProperties: false
+          positionals:
+            type: array
+            maxItems: 64
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                value:
+                  oneOf:
+                  - type: string
+                    maxLength: 4096
+                  - type: integer
+                  - type: number
+                  - type: boolean
+                  - type: 'null'
+                  - type: array
+                    maxItems: 256
+                    items:
+                      oneOf:
+                      - type: string
+                        maxLength: 4096
+                      - type: integer
+                      - type: number
+                      - type: boolean
+              required:
+              - id
+              - value
+              additionalProperties: false
+        required:
+        - command_path
+        - options
+        - positionals
+        additionalProperties: false
+      cwd:
+        type: string
+        minLength: 1
+        maxLength: 2048
+      timeout:
+        type: integer
+        minimum: 1
+        maximum: 3600
+    required:
+    - tool
+    - invocation
+    - cwd
+    - timeout
+    additionalProperties: false
+  output_schema:
+    type: object
+    properties:
+      protocol:
+        type: string
+        const: nebula.toolbox/v1
+      operation:
+        type: string
+      tool:
+        type:
+        - string
+        - 'null'
+      command:
+        type: array
+        items:
+          type: string
+      exit_code:
+        type: integer
+      stdout:
+        type: string
+      stderr:
+        type: string
+      timed_out:
+        type: boolean
+      matches:
+        type: array
+        items: {}
+      metadata:
+        type: object
+        properties:
+          catalog_digest:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+          catalogued_guidance:
+            type: boolean
+          script_sha256:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+        required:
+        - catalog_digest
+        - catalogued_guidance
+        - script_sha256
+        additionalProperties: false
+    required:
+    - protocol
+    - operation
+    - tool
+    - command
+    - exit_code
+    - stdout
+    - stderr
+    - timed_out
+    - matches
+    - metadata
+    additionalProperties: false
+  policy:
+    risk_class: workspace_write
+    path_arguments:
+    - cwd
+    network_access: false
+    filesystem_access: workspace_write
+    requires_approval: false
+    idempotency: key_required
+  parser:
+    built_in: json/v1
+  smoke_tests:
+  - arguments:
+      tool: jq
+      invocation:
+        command_path: []
+        options: []
+        positionals:
+        - id: filter
+          value: .
+      cwd: /workspace
+      timeout: 30
+    expected_exit_code: 0
+    timeout_seconds: 30
+- name: environment.run_network
+  description: Compile and run a catalogued invocation through target-scoped egress.
+  image: toolbox
+  executable: /opt/nebula/bin/nebula-toolbox
+  fixed_arguments:
+  - exec
+  - --max-risk
+  - active_scan
+  argument_bindings:
+  - argument: tool
+    kind: value
+    flag: --tool
+  - argument: invocation
+    kind: json
+    flag: --invocation-json
+  - argument: cwd
+    kind: value
+    flag: --cwd
+  - argument: timeout
+    kind: value
+    flag: --timeout
+  - argument: target
+    kind: value
+    flag: --target
+  - argument: ports
+    kind: json
+    flag: --ports-json
+  input_schema:
+    type: object
+    properties:
+      tool:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[a-z0-9._-]+$
+      invocation:
+        type: object
+        properties:
+          command_path:
+            type: array
+            maxItems: 16
+            items:
+              type: string
+              pattern: ^[a-z0-9][a-z0-9._-]{0,127}$
+          options:
+            type: array
+            maxItems: 256
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                value:
+                  oneOf:
+                  - type: string
+                    maxLength: 4096
+                  - type: integer
+                  - type: number
+                  - type: boolean
+                  - type: 'null'
+                  - type: array
+                    maxItems: 256
+                    items:
+                      oneOf:
+                      - type: string
+                        maxLength: 4096
+                      - type: integer
+                      - type: number
+                      - type: boolean
+              required:
+              - id
+              - value
+              additionalProperties: false
+          positionals:
+            type: array
+            maxItems: 64
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                value:
+                  oneOf:
+                  - type: string
+                    maxLength: 4096
+                  - type: integer
+                  - type: number
+                  - type: boolean
+                  - type: 'null'
+                  - type: array
+                    maxItems: 256
+                    items:
+                      oneOf:
+                      - type: string
+                        maxLength: 4096
+                      - type: integer
+                      - type: number
+                      - type: boolean
+              required:
+              - id
+              - value
+              additionalProperties: false
+        required:
+        - command_path
+        - options
+        - positionals
+        additionalProperties: false
+      cwd:
+        type: string
+        minLength: 1
+        maxLength: 2048
+      timeout:
+        type: integer
+        minimum: 1
+        maximum: 3600
+      target:
+        type: string
+        minLength: 1
+        maxLength: 2048
+      ports:
+        type: array
+        minItems: 1
+        maxItems: 1024
+        uniqueItems: true
+        items:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    required:
+    - tool
+    - invocation
+    - cwd
+    - timeout
+    - target
+    - ports
+    additionalProperties: false
+  output_schema:
+    type: object
+    properties:
+      protocol:
+        type: string
+        const: nebula.toolbox/v1
+      operation:
+        type: string
+      tool:
+        type:
+        - string
+        - 'null'
+      command:
+        type: array
+        items:
+          type: string
+      exit_code:
+        type: integer
+      stdout:
+        type: string
+      stderr:
+        type: string
+      timed_out:
+        type: boolean
+      matches:
+        type: array
+        items: {}
+      metadata:
+        type: object
+        properties:
+          catalog_digest:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+          catalogued_guidance:
+            type: boolean
+          script_sha256:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+        required:
+        - catalog_digest
+        - catalogued_guidance
+        - script_sha256
+        additionalProperties: false
+    required:
+    - protocol
+    - operation
+    - tool
+    - command
+    - exit_code
+    - stdout
+    - stderr
+    - timed_out
+    - matches
+    - metadata
+    additionalProperties: false
+  policy:
+    risk_class: active_scan
+    target_argument: target
+    port_argument: ports
+    path_arguments:
+    - cwd
+    network_access: true
+    filesystem_access: workspace_write
+    requires_approval: false
+    idempotency: key_required
+  parser:
+    built_in: json/v1
+  smoke_tests:
+  - arguments:
+      tool: nmap
+      invocation:
+        command_path: []
+        options:
+        - id: st
+          value: null
+        - id: n
+          value: null
+        - id: pn
+          value: null
+        - id: p
+          value: '1'
+        positionals:
+        - id: targets
+          value:
+          - '{target}'
+      cwd: /workspace
+      timeout: 30
+      target: 127.0.0.1
+      ports:
+      - 1
+    expected_exit_code: 0
+    timeout_seconds: 30
+- name: environment.run_invasive
+  description: Compile and run a catalogued invasive invocation after durable approval.
+  image: toolbox
+  executable: /opt/nebula/bin/nebula-toolbox
+  fixed_arguments:
+  - exec
+  - --max-risk
+  - exploitation
+  argument_bindings:
+  - argument: tool
+    kind: value
+    flag: --tool
+  - argument: invocation
+    kind: json
+    flag: --invocation-json
+  - argument: cwd
+    kind: value
+    flag: --cwd
+  - argument: timeout
+    kind: value
+    flag: --timeout
+  - argument: target
+    kind: value
+    flag: --target
+  - argument: ports
+    kind: json
+    flag: --ports-json
+  input_schema:
+    type: object
+    properties:
+      tool:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[a-z0-9._-]+$
+      invocation:
+        type: object
+        properties:
+          command_path:
+            type: array
+            maxItems: 16
+            items:
+              type: string
+              pattern: ^[a-z0-9][a-z0-9._-]{0,127}$
+          options:
+            type: array
+            maxItems: 256
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                value:
+                  oneOf:
+                  - type: string
+                    maxLength: 4096
+                  - type: integer
+                  - type: number
+                  - type: boolean
+                  - type: 'null'
+                  - type: array
+                    maxItems: 256
+                    items:
+                      oneOf:
+                      - type: string
+                        maxLength: 4096
+                      - type: integer
+                      - type: number
+                      - type: boolean
+              required:
+              - id
+              - value
+              additionalProperties: false
+          positionals:
+            type: array
+            maxItems: 64
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                value:
+                  oneOf:
+                  - type: string
+                    maxLength: 4096
+                  - type: integer
+                  - type: number
+                  - type: boolean
+                  - type: 'null'
+                  - type: array
+                    maxItems: 256
+                    items:
+                      oneOf:
+                      - type: string
+                        maxLength: 4096
+                      - type: integer
+                      - type: number
+                      - type: boolean
+              required:
+              - id
+              - value
+              additionalProperties: false
+        required:
+        - command_path
+        - options
+        - positionals
+        additionalProperties: false
+      cwd:
+        type: string
+        minLength: 1
+        maxLength: 2048
+      timeout:
+        type: integer
+        minimum: 1
+        maximum: 3600
+      target:
+        type: string
+        minLength: 1
+        maxLength: 2048
+      ports:
+        type: array
+        minItems: 1
+        maxItems: 1024
+        uniqueItems: true
+        items:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    required:
+    - tool
+    - invocation
+    - cwd
+    - timeout
+    - target
+    - ports
+    additionalProperties: false
+  output_schema:
+    type: object
+    properties:
+      protocol:
+        type: string
+        const: nebula.toolbox/v1
+      operation:
+        type: string
+      tool:
+        type:
+        - string
+        - 'null'
+      command:
+        type: array
+        items:
+          type: string
+      exit_code:
+        type: integer
+      stdout:
+        type: string
+      stderr:
+        type: string
+      timed_out:
+        type: boolean
+      matches:
+        type: array
+        items: {}
+      metadata:
+        type: object
+        properties:
+          catalog_digest:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+          catalogued_guidance:
+            type: boolean
+          script_sha256:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+        required:
+        - catalog_digest
+        - catalogued_guidance
+        - script_sha256
+        additionalProperties: false
+    required:
+    - protocol
+    - operation
+    - tool
+    - command
+    - exit_code
+    - stdout
+    - stderr
+    - timed_out
+    - matches
+    - metadata
+    additionalProperties: false
+  policy:
+    risk_class: exploitation
+    target_argument: target
+    port_argument: ports
+    path_arguments:
+    - cwd
+    network_access: true
+    filesystem_access: workspace_write
+    requires_approval: true
+    idempotency: non_idempotent
+  parser:
+    built_in: json/v1
+  smoke_tests:
+  - arguments:
+      tool: nmap
+      invocation:
+        command_path: []
+        options:
+        - id: st
+          value: null
+        - id: n
+          value: null
+        - id: pn
+          value: null
+        - id: p
+          value: '1'
+        positionals:
+        - id: targets
+          value:
+          - '{target}'
+      cwd: /workspace
+      timeout: 30
+      target: 127.0.0.1
+      ports:
+      - 1
+    expected_exit_code: 0
+    timeout_seconds: 30
+- name: environment.shell_local
+  description: Run a full Bash command line in the disposable Toolbox with no network.
+  image: toolbox
+  executable: /opt/nebula/bin/nebula-toolbox
+  fixed_arguments:
+  - shell
+  argument_bindings:
+  - argument: script
+    kind: value
+    flag: --script
+  - argument: cwd
+    kind: value
+    flag: --cwd
+  - argument: timeout
+    kind: value
+    flag: --timeout
+  input_schema:
+    type: object
+    properties:
+      script:
+        type: string
+        minLength: 1
+        maxLength: 200000
+      cwd:
+        type: string
+        minLength: 1
+        maxLength: 2048
+      timeout:
+        type: integer
+        minimum: 1
+        maximum: 3600
+    required:
+    - script
+    - cwd
+    - timeout
+    additionalProperties: false
+  output_schema:
+    type: object
+    properties:
+      protocol:
+        type: string
+        const: nebula.toolbox/v1
+      operation:
+        type: string
+      tool:
+        type:
+        - string
+        - 'null'
+      command:
+        type: array
+        items:
+          type: string
+      exit_code:
+        type: integer
+      stdout:
+        type: string
+      stderr:
+        type: string
+      timed_out:
+        type: boolean
+      matches:
+        type: array
+        items: {}
+      metadata:
+        type: object
+        properties:
+          catalog_digest:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+          catalogued_guidance:
+            type: boolean
+          script_sha256:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+        required:
+        - catalog_digest
+        - catalogued_guidance
+        - script_sha256
+        additionalProperties: false
+    required:
+    - protocol
+    - operation
+    - tool
+    - command
+    - exit_code
+    - stdout
+    - stderr
+    - timed_out
+    - matches
+    - metadata
+    additionalProperties: false
+  policy:
+    risk_class: workspace_write
+    path_arguments:
+    - cwd
+    network_access: false
+    filesystem_access: workspace_write
+    requires_approval: false
+    idempotency: key_required
+  parser:
+    built_in: json/v1
+  smoke_tests:
+  - arguments:
+      script: printf shell-ok
+      cwd: /workspace
+      timeout: 30
+    expected_exit_code: 0
+    timeout_seconds: 30
+- name: environment.shell_network
+  description: Run a full Bash command line through target-scoped egress; use $NEBULA_TARGET and $NEBULA_PORTS.
+  image: toolbox
+  executable: /opt/nebula/bin/nebula-toolbox
+  fixed_arguments:
+  - shell
+  argument_bindings:
+  - argument: script
+    kind: value
+    flag: --script
+  - argument: cwd
+    kind: value
+    flag: --cwd
+  - argument: timeout
+    kind: value
+    flag: --timeout
+  - argument: target
+    kind: value
+    flag: --target
+  - argument: ports
+    kind: json
+    flag: --ports-json
+  input_schema:
+    type: object
+    properties:
+      script:
+        type: string
+        minLength: 1
+        maxLength: 200000
+      cwd:
+        type: string
+        minLength: 1
+        maxLength: 2048
+      timeout:
+        type: integer
+        minimum: 1
+        maximum: 3600
+      target:
+        type: string
+        minLength: 1
+        maxLength: 2048
+      ports:
+        type: array
+        minItems: 1
+        maxItems: 1024
+        uniqueItems: true
+        items:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    required:
+    - script
+    - cwd
+    - timeout
+    - target
+    - ports
+    additionalProperties: false
+  output_schema:
+    type: object
+    properties:
+      protocol:
+        type: string
+        const: nebula.toolbox/v1
+      operation:
+        type: string
+      tool:
+        type:
+        - string
+        - 'null'
+      command:
+        type: array
+        items:
+          type: string
+      exit_code:
+        type: integer
+      stdout:
+        type: string
+      stderr:
+        type: string
+      timed_out:
+        type: boolean
+      matches:
+        type: array
+        items: {}
+      metadata:
+        type: object
+        properties:
+          catalog_digest:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+          catalogued_guidance:
+            type: boolean
+          script_sha256:
+            type:
+            - string
+            - 'null'
+            pattern: ^[0-9a-f]{64}$
+        required:
+        - catalog_digest
+        - catalogued_guidance
+        - script_sha256
+        additionalProperties: false
+    required:
+    - protocol
+    - operation
+    - tool
+    - command
+    - exit_code
+    - stdout
+    - stderr
+    - timed_out
+    - matches
+    - metadata
+    additionalProperties: false
+  policy:
+    risk_class: active_scan
+    target_argument: target
+    port_argument: ports
+    path_arguments:
+    - cwd
+    network_access: true
+    filesystem_access: workspace_write
+    requires_approval: false
+    idempotency: key_required
+  parser:
+    built_in: json/v1
+  smoke_tests:
+  - arguments:
+      script: test "$NEBULA_TARGET" = 127.0.0.1
+      cwd: /workspace
+      timeout: 30
+      target: 127.0.0.1
+      ports:
+      - 1
+    expected_exit_code: 0
+    timeout_seconds: 30
