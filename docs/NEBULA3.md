@@ -130,6 +130,32 @@ Import records before/after checksums and does not write to the source folder.
 An external Chroma directory is skipped unless the operator supplies
 `--allow-external-knowledge` explicitly.
 
+## Context compaction
+
+Analyst chats and model-facing mission dependency context are compacted
+automatically when the estimated input approaches 75 percent of the configured
+model capacity. Provider profiles may declare `context_window` and
+`max_output_tokens` in their options; Core conservatively assumes an 8,192-token
+window and a 2,048-token output allowance when no limits are configured.
+
+Compaction uses the conversation or mission's selected provider and model, so it
+can add model latency, token usage, and cost. The Sessions and Missions
+workspaces show the latest compaction status and usage. Compaction fails closed:
+Nebula returns a retryable error instead of silently dropping older context when
+a required summary cannot be validated.
+
+Authenticated operators can inspect the same read-only status through
+`GET /api/v1/chat/sessions/{session_id}/context` and
+`GET /api/v1/runs/{run_id}/context`. These responses expose resolved limits,
+active-context estimates, compaction usage and cost, coverage, and canonical
+source references; they do not provide snapshot mutation routes.
+
+Every original chat message, mission result, event, evidence record, and
+LangGraph checkpoint remains unchanged. Derived working-memory snapshots cite
+their canonical message sequences or task/result identifiers, are included in
+engagement exports, and are never treated as evidence. Memory is isolated to a
+single chat session or mission run; it is not shared across an engagement.
+
 ## Tool safety model
 
 Operator setup, installation locations, CLI/API examples, extension authoring,

@@ -42,6 +42,7 @@ from .api_validation import ApiEntityValidator
 from .chat import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    ChatCompactionError,
     ChatConfigurationError,
     ChatError,
     ChatHistoryConflict,
@@ -49,13 +50,25 @@ from .chat import (
     ChatService,
 )
 from .database import Database
+from .context import (
+    DEFAULT_CONTEXT_WINDOW,
+    ContextCompactor,
+    ContextStatus,
+    estimate_tokens,
+    memory_text,
+    resolve_context_limits,
+)
 from .domain import (
     ENTITY_MODEL_BY_KIND,
+    AgentAttempt,
     AgentRun,
     Approval,
     ApprovalStatus,
     Artifact,
     ChatMessage,
+    ChatTokenUsage,
+    ContextOwnerType,
+    ContextSnapshotStatus,
     Engagement,
     EngagementToolAssignment,
     Entity,
@@ -65,6 +78,7 @@ from .domain import (
     NebulaModel,
     OperatorProfile,
     ProviderProfile,
+    Task,
     RunnerIsolation,
     RunnerProfile,
     RunnerRuntime,
@@ -129,7 +143,11 @@ READ_ONLY_RESOURCES = {
     "tool_calls",
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
-CUSTOM_RESOURCES = {"operator_profiles", "runner_profiles"}
+CUSTOM_RESOURCES = {
+    "context_snapshots",
+    "operator_profiles",
+    "runner_profiles",
+}
 
 API_PREFIX = "/api/v1"
 TOOL_PACK_EVENT_POLL_SECONDS = 0.25
@@ -459,6 +477,16 @@ def create_app(
         _: Request, exc: ChatConfigurationError
     ) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(ChatCompactionError)
+    async def chat_compaction_handler(
+        _: Request, exc: ChatCompactionError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": str(exc), "retryable": True},
+            headers={"Retry-After": "1"},
+        )
 
     @app.exception_handler(ChatError)
     @app.exception_handler(ProviderError)
@@ -1349,7 +1377,7 @@ def create_app(
     )
     async def create_chat_completion(request: ChatCompletionRequest) -> Any:
         service = ChatService(store)
-        prepared = service.prepare(request)
+        prepared = await service.prepare_async(request)
         if not request.stream:
             return await service.complete(prepared)
 
@@ -1384,6 +1412,140 @@ def create_app(
     )
     async def list_chat_session_messages(session_id: str) -> list[ChatMessage]:
         return ChatService(store).session_messages(session_id)
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/context",
+        response_model=ContextStatus,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_chat_session_context(session_id: str) -> ContextStatus:
+        return ChatService(store).context_status(session_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/context",
+        response_model=ContextStatus,
+        tags=["runs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_run_context(run_id: str) -> ContextStatus:
+        run = store.get(AgentRun, run_id)
+        latest = ContextCompactor(store).latest(
+            ContextOwnerType.AGENT_RUN, run.id, run.engagement_id
+        )
+        provider_id = (
+            latest.provider_profile_id
+            if latest is not None
+            else run.supervisor_provider_id
+        )
+        if provider_id:
+            profile = store.get(ProviderProfile, provider_id)
+            limits = resolve_context_limits(profile)
+            context_window = limits.context_window
+            max_output_tokens = limits.max_output_tokens
+            target_input_tokens = limits.target_input_tokens
+        else:
+            context_window = DEFAULT_CONTEXT_WINDOW
+            max_output_tokens = min(2_048, context_window // 4)
+            target_input_tokens = int((context_window - max_output_tokens) * 0.75)
+        task_ids: set[str] = set()
+        usage_by_task: dict[str, int] = {}
+        estimated_input_tokens = 0
+        offset = 0
+        while True:
+            page = store.list_entities(
+                Task,
+                engagement_id=run.engagement_id,
+                offset=offset,
+                limit=1_000,
+            )
+            for task in page:
+                if task.run_id != run.id:
+                    continue
+                task_ids.add(task.id)
+                task_tokens = estimate_tokens(
+                    json.dumps(
+                        {
+                            "title": task.title,
+                            "instructions": task.instructions,
+                            "status": task.status.value,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    message_count=1,
+                )
+                usage_by_task[task.id] = usage_by_task.get(task.id, 0) + task_tokens
+                estimated_input_tokens += task_tokens
+            if len(page) < 1_000:
+                break
+            offset += len(page)
+        offset = 0
+        while True:
+            attempt_page = store.list_entities(
+                AgentAttempt,
+                engagement_id=run.engagement_id,
+                offset=offset,
+                limit=1_000,
+            )
+            for attempt in attempt_page:
+                if attempt.run_id != run.id:
+                    continue
+                attempt_tokens = estimate_tokens(
+                    json.dumps(
+                        {
+                            "input": attempt.input,
+                            "output": attempt.output,
+                            "error": attempt.error,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    message_count=1,
+                )
+                usage_by_task[attempt.task_id] = (
+                    usage_by_task.get(attempt.task_id, 0) + attempt_tokens
+                )
+                estimated_input_tokens += attempt_tokens
+            if len(attempt_page) < 1_000:
+                break
+            offset += len(attempt_page)
+        status = (
+            "not_needed" if estimated_input_tokens <= target_input_tokens else "stale"
+        )
+        through = 0
+        if latest is not None:
+            cited_task_ids = {
+                reference.source_id
+                for reference in latest.source_references
+                if reference.source_kind in {"task", "task_result"}
+            }
+            if latest.status == ContextSnapshotStatus.FAILED:
+                status = "failed"
+            elif task_ids - cited_task_ids:
+                status = "stale"
+            else:
+                status = "ready"
+            through = latest.compacted_through
+            if latest.status == ContextSnapshotStatus.READY and latest.memory:
+                estimated_input_tokens = estimate_tokens(
+                    memory_text(latest.memory)
+                ) + sum(
+                    usage_by_task.get(task_id, 0)
+                    for task_id in task_ids - cited_task_ids
+                )
+        return ContextStatus(
+            owner_type=ContextOwnerType.AGENT_RUN,
+            owner_id=run.id,
+            status=status,
+            context_window=context_window,
+            max_output_tokens=max_output_tokens,
+            target_input_tokens=target_input_tokens,
+            estimated_input_tokens=estimated_input_tokens,
+            compacted_through=through,
+            source_references=latest.source_references if latest else [],
+            compaction_usage=latest.usage if latest else ChatTokenUsage(),
+            compaction_cost_usd=latest.cost_usd if latest else 0.0,
+            snapshot=latest,
+        )
 
     if allow_internal_event_append:
 

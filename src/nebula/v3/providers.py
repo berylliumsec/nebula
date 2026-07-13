@@ -1472,6 +1472,10 @@ def provider_from_profile(profile: ProviderProfile) -> ModelProvider:
         if not profile.secret_ref.startswith("env:"):
             raise ValueError("provider secret_ref must use an env:NAME reference")
         secret_env = profile.secret_ref.removeprefix("env:")
+    raw_options = profile.metadata.get("options", {})
+    options = raw_options if isinstance(raw_options, dict) else {}
+    context_window = options.get("context_window")
+    max_output_tokens = options.get("max_output_tokens")
     capabilities = ModelCapabilities(
         streaming=profile.capabilities.streaming,
         tools=profile.capabilities.tool_calling,
@@ -1483,6 +1487,17 @@ def provider_from_profile(profile: ProviderProfile) -> ModelProvider:
         audio=profile.capabilities.audio,
         embeddings=profile.capabilities.embeddings,
         reasoning_controls=profile.capabilities.reasoning_controls,
+        context_window=(
+            context_window
+            if isinstance(context_window, int) and not isinstance(context_window, bool)
+            else None
+        ),
+        max_output_tokens=(
+            max_output_tokens
+            if isinstance(max_output_tokens, int)
+            and not isinstance(max_output_tokens, bool)
+            else None
+        ),
     )
     default_model = profile.metadata.get("default_model") or next(
         iter(profile.model_allowlist), None
@@ -1501,7 +1516,7 @@ def provider_from_profile(profile: ProviderProfile) -> ModelProvider:
             profile.privacy.residency[0] if profile.privacy.residency else None
         ),
         data_retention=profile.privacy.retention,
-        options=profile.metadata.get("options", {}),
+        options=options,
     )
     if profile.privacy.local_only and not config.local:
         raise ValueError("a local-only privacy profile cannot use a cloud provider")

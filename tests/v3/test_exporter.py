@@ -8,7 +8,15 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     Advisory,
     AgentRun,
+    ChatMessage,
+    ChatRole,
+    ChatSession,
     Correlation,
+    ContextMemory,
+    ContextOwnerType,
+    ContextSnapshot,
+    ContextSnapshotStatus,
+    ContextSourceReference,
     Engagement,
     Evidence,
     OperatorProfile,
@@ -113,6 +121,90 @@ def test_export_is_atomic_on_integrity_failure_and_refuses_overwrite(tmp_path):
             artifact_store=artifacts,
         )
     assert destination.read_bytes() == b"existing export"
+
+
+def test_export_includes_successful_and_failed_context_snapshots(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Context export"))
+    provider = store.create(
+        ProviderProfile(name="Context provider", provider_type="openai")
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Exported chat",
+            provider_profile_id=provider.id,
+            model="model-a",
+        )
+    )
+    message = store.create(
+        ChatMessage(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="Remember CVE-2026-4242.",
+        )
+    )
+    snapshot = store.create(
+        ContextSnapshot(
+            engagement_id=engagement.id,
+            owner_type=ContextOwnerType.CHAT_SESSION,
+            owner_id=session.id,
+            status=ContextSnapshotStatus.READY,
+            compacted_through=1,
+            memory=ContextMemory(summary="CVE context retained."),
+            source_references=[
+                ContextSourceReference(
+                    source_kind="chat_message",
+                    source_id=message.id,
+                    sequence=message.sequence,
+                )
+            ],
+            provider_profile_id=provider.id,
+            model="model-a",
+            prompt_version="nebula-context-v1",
+            source_sha256="a" * 64,
+        )
+    )
+    failed = store.create(
+        ContextSnapshot(
+            engagement_id=engagement.id,
+            owner_type=ContextOwnerType.CHAT_SESSION,
+            owner_id=session.id,
+            version=2,
+            status=ContextSnapshotStatus.FAILED,
+            compacted_through=1,
+            source_references=[
+                ContextSourceReference(
+                    source_kind="chat_message",
+                    source_id=message.id,
+                    sequence=message.sequence,
+                )
+            ],
+            provider_profile_id=provider.id,
+            model="model-a",
+            prompt_version="nebula-context-v1",
+            source_sha256="b" * 64,
+            error="context compaction failed",
+        )
+    )
+    destination = tmp_path / "context.nebula.zip"
+
+    manifest = export_engagement(
+        engagement_id=engagement.id,
+        destination=destination,
+        store=store,
+        artifact_store=artifacts,
+    )
+
+    assert manifest.entity_counts["context_snapshots"] == 2
+    with zipfile.ZipFile(destination) as archive:
+        archived = json.loads(archive.read("entities/context_snapshots.json"))
+    assert {item["id"] for item in archived} == {snapshot.id, failed.id}
+    ready = next(item for item in archived if item["status"] == "ready")
+    assert ready["memory"]["summary"] == "CVE context retained."
 
 
 def test_export_includes_only_referenced_global_entities_and_system_blobs(tmp_path):

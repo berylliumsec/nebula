@@ -685,6 +685,82 @@ describe("ApiClient", () => {
     );
   });
 
+  it("maps provenance-backed chat and mission context status", async () => {
+    const status = {
+      owner_type: "chat_session",
+      owner_id: "session-1",
+      status: "ready",
+      context_window: 8192,
+      max_output_tokens: 2048,
+      target_input_tokens: 4608,
+      estimated_input_tokens: 5000,
+      compacted_through: 42,
+      source_references: [{ source_kind: "chat_message", source_id: "message-1", sequence: 1 }],
+      compaction_usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      compaction_cost_usd: 0.01,
+      snapshot: {
+        id: "snapshot-1",
+        created_at: "2026-07-12T11:00:00Z",
+        updated_at: "2026-07-12T11:00:00Z",
+        revision: 1,
+        owner_type: "chat_session",
+        owner_id: "session-1",
+        version: 1,
+        status: "ready",
+        compacted_through: 42,
+        memory: {
+          summary: "Earlier context retained.",
+          confirmed_facts: [{
+            text: "Port 8443 was selected.",
+            sources: [{ source_kind: "chat_message", source_id: "message-1", sequence: 1 }],
+          }],
+        },
+        source_references: [{ source_kind: "chat_message", source_id: "message-1", sequence: 1 }],
+        provider_profile_id: "provider-1",
+        model: "model-1",
+        prompt_version: "v1",
+        source_sha256: "a".repeat(64),
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+        cost_usd: 0.01,
+      },
+    };
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(status), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ...status,
+        owner_type: "agent_run",
+        owner_id: "run-1",
+        snapshot: { ...status.snapshot, owner_type: "agent_run", owner_id: "run-1" },
+      }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const chat = await client.getChatContext("session-1");
+    const mission = await client.getRunContext("run-1");
+
+    expect(chat).toMatchObject({
+      status: "ready",
+      contextWindow: 8192,
+      compactedThrough: 42,
+      compactionUsage: { totalTokens: 15 },
+      compactionCostUsd: 0.01,
+      snapshot: {
+        providerId: "provider-1",
+        memory: { summary: "Earlier context retained." },
+        usage: { totalTokens: 15 },
+      },
+    });
+    expect(chat.snapshot?.memory?.confirmedFacts[0].sources[0]).toEqual({
+      sourceKind: "chat_message",
+      sourceId: "message-1",
+      sequence: 1,
+    });
+    expect(mission.ownerType).toBe("agent_run");
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "http://127.0.0.1:8765/api/v1/chat/sessions/session-1/context",
+      "http://127.0.0.1:8765/api/v1/runs/run-1/context",
+    ]);
+  });
+
   it("maps generic engagement, asset, report, evidence, and mission mutations", async () => {
     const entity = { created_at: "2026-07-12T11:00:00Z", updated_at: "2026-07-12T12:00:00Z", revision: 1 };
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {

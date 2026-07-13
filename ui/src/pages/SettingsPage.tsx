@@ -46,6 +46,11 @@ function providerOption(provider: ProviderHealth, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+function providerNumberOption(provider: ProviderHealth, key: string): string {
+  const value = provider.options[key];
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? String(value) : "";
+}
+
 export function SettingsPage() {
   const confirm = useConfirmation();
   const { preference, setPreference } = useTheme();
@@ -75,6 +80,8 @@ export function SettingsPage() {
   const [vertexProject, setVertexProject] = useState("");
   const [vertexLocation, setVertexLocation] = useState("");
   const [awsRegion, setAwsRegion] = useState("");
+  const [contextWindow, setContextWindow] = useState("");
+  const [maxOutputTokens, setMaxOutputTokens] = useState("");
   const [permitsSensitiveData, setPermitsSensitiveData] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string>();
@@ -152,6 +159,8 @@ export function SettingsPage() {
     setVertexProject("");
     setVertexLocation("");
     setAwsRegion("");
+    setContextWindow("");
+    setMaxOutputTokens("");
     setPermitsSensitiveData(false);
     setProviderActionError(undefined);
     setFormError(undefined);
@@ -170,6 +179,8 @@ export function SettingsPage() {
     setVertexProject(providerOption(provider, "project"));
     setVertexLocation(providerOption(provider, "location"));
     setAwsRegion(providerOption(provider, "region"));
+    setContextWindow(providerNumberOption(provider, "context_window"));
+    setMaxOutputTokens(providerNumberOption(provider, "max_output_tokens"));
     setPermitsSensitiveData(provider.permitsSensitiveData);
     setProviderActionError(undefined);
     setFormError(undefined);
@@ -188,6 +199,8 @@ export function SettingsPage() {
     setVertexProject("");
     setVertexLocation("");
     setAwsRegion("");
+    setContextWindow("");
+    setMaxOutputTokens("");
     setPermitsSensitiveData(false);
   };
 
@@ -209,6 +222,21 @@ export function SettingsPage() {
     }
     const modelAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
     const options = { ...(editingProvider?.options ?? {}) };
+    const parsedContextWindow = contextWindow ? Number(contextWindow) : undefined;
+    const parsedMaxOutputTokens = maxOutputTokens ? Number(maxOutputTokens) : undefined;
+    if ((parsedContextWindow !== undefined && (!Number.isInteger(parsedContextWindow) || parsedContextWindow < 1))
+      || (parsedMaxOutputTokens !== undefined && (!Number.isInteger(parsedMaxOutputTokens) || parsedMaxOutputTokens < 1))) {
+      setFormError("Context window and maximum output tokens must be positive integers.");
+      return;
+    }
+    if (parsedContextWindow !== undefined && parsedMaxOutputTokens !== undefined && parsedMaxOutputTokens >= parsedContextWindow) {
+      setFormError("Maximum output tokens must be smaller than the context window.");
+      return;
+    }
+    if (parsedContextWindow !== undefined) options.context_window = parsedContextWindow;
+    else delete options.context_window;
+    if (parsedMaxOutputTokens !== undefined) options.max_output_tokens = parsedMaxOutputTokens;
+    else delete options.max_output_tokens;
     if (providerType === "vertex") {
       options.project = vertexProject.trim();
       options.location = vertexLocation.trim();
@@ -428,6 +456,8 @@ export function SettingsPage() {
             <p className="provider-dialog-note" id="provider-model-help">{requiresDefaultModel ? `${dialogProviderType === "bedrock" ? "AWS Bedrock" : "Anthropic"} needs an explicit model ID so a fresh profile can be used immediately for chat and missions.` : !model.trim() && dialogAllowlist.length ? `No explicit default is set. Core will use ${dialogAllowlist[0]}, the first allowed model, as its fallback.` : "When blank with no allowed models, Nebula uses a model discovered by the provider health check."}</p>
             <label>Allowed model IDs<textarea rows={3} value={modelAllowlistText} placeholder="One provider model ID per line" onChange={(event) => setModelAllowlistText(event.target.value)} /></label>
             <p className="provider-dialog-note">The explicit default is added to this allowlist automatically. Remove an old ID here when changing it if that model should no longer be selectable.</p>
+            <div className="resource-form-grid"><label>Context window (tokens)<input type="number" min="1" inputMode="numeric" value={contextWindow} placeholder="8192 safe fallback" onChange={(event) => setContextWindow(event.target.value)} /></label><label>Maximum output tokens<input type="number" min="1" inputMode="numeric" value={maxOutputTokens} placeholder="2048 default" onChange={(event) => setMaxOutputTokens(event.target.value)} /></label></div>
+            <p className="provider-dialog-note">Nebula compacts at 75% of the available input capacity. When the context window is blank, Core conservatively assumes 8,192 tokens.</p>
             {dialogProviderType === "vertex" && <div className="resource-form-grid"><label>Google Cloud project<input required value={vertexProject} placeholder="my-security-project" onChange={(event) => setVertexProject(event.target.value)} /></label><label>Vertex location<input required value={vertexLocation} placeholder="us-central1" onChange={(event) => setVertexLocation(event.target.value)} /></label></div>}
             {dialogProviderType === "bedrock" && <label>AWS region<input value={awsRegion} placeholder="Uses the ambient AWS region when blank" onChange={(event) => setAwsRegion(event.target.value)} /></label>}
             <label>Credential environment variable<input value={credentialEnv} pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder={dialogLocal ? "Optional for authenticated local gateways" : "For example, OPENAI_API_KEY"} autoCapitalize="none" spellCheck={false} onChange={(event) => setCredentialEnv(event.target.value)} /></label>

@@ -499,8 +499,10 @@ class BrokeredToolSpecialist:
         )
 
     @staticmethod
-    def _prior(context: SpecialistContext) -> dict[str, str]:
-        return {key: result.summary for key, result in context.prior_results.items()}
+    def _prior(context: SpecialistContext) -> str | dict[str, str]:
+        return context.prior_context or {
+            key: result.summary for key, result in context.prior_results.items()
+        }
 
     def _metadata(self, context: SpecialistContext) -> dict[str, str]:
         return {

@@ -8,9 +8,11 @@ evidence references enter persisted state.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -28,12 +30,28 @@ from .domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    ChatTokenUsage,
+    ContextOwnerType,
+    ContextSnapshotStatus,
+    ContextSourceReference,
+    ProviderProfile,
     RiskClass,
     RunBudget,
     RunStatus,
     Task,
     TaskStatus,
     utc_now,
+)
+from .context import (
+    ContextCallBudget,
+    ContextCapacityError,
+    ContextCompactionError,
+    ContextCompactor,
+    ContextSource,
+    estimate_tokens,
+    lexical_score,
+    memory_text,
+    resolve_context_limits,
 )
 from .providers import ModelMessage, ModelProvider, ModelRequest
 from .storage import ConflictError, NebulaStore
@@ -42,6 +60,12 @@ from .tools import ApprovalRequired
 
 class MissionError(RuntimeError):
     pass
+
+
+@dataclass
+class _ContextBatchSpend:
+    usage: ChatTokenUsage = field(default_factory=ChatTokenUsage)
+    cost_usd: float = 0.0
 
 
 class BudgetExceeded(MissionError):
@@ -158,6 +182,7 @@ class SpecialistContext(BaseModel):
     task: PlannedTask
     objective: str
     prior_results: dict[str, SpecialistResult]
+    prior_context: str | None = None
     allowed_tools: frozenset[str]
     approval_response: dict[str, Any] | None = None
 
@@ -251,7 +276,7 @@ class ModelSpecialist:
         self.max_output_tokens = max_output_tokens
 
     async def run(self, context: SpecialistContext) -> SpecialistResult:
-        prior = {
+        prior: str | dict[str, str] = context.prior_context or {
             task_id: result.summary for task_id, result in context.prior_results.items()
         }
         request = ModelRequest(
@@ -357,6 +382,7 @@ class MissionRuntime:
         self.supervisor = supervisor
         self.specialists = dict(specialists)
         self.verifier = verifier or EvidenceVerifier()
+        self._context_lock = asyncio.Lock()
         self.graph = self._build_graph().compile(checkpointer=checkpointer)
 
     def _build_graph(self) -> StateGraph[MissionState]:
@@ -572,6 +598,7 @@ class MissionRuntime:
         waiting = dict(state.get("waiting_approvals", {}))
         errors = dict(state.get("errors", {}))
         budget = RunBudget.model_validate(state["budget"])
+        context_batch_spend = _ContextBatchSpend()
 
         ready = [
             task
@@ -606,10 +633,26 @@ class MissionRuntime:
 
         async def execute_one(
             task: PlannedTask,
-        ) -> tuple[PlannedTask, SpecialistResult | None, Approval | None, str | None]:
+        ) -> tuple[
+            PlannedTask,
+            SpecialistResult | None,
+            Approval | None,
+            str | None,
+            ChatTokenUsage,
+            float,
+        ]:
+            context_usage = ChatTokenUsage()
+            context_cost = 0.0
             attempt = attempts.get(task.id, 0) + 1
             if attempt > budget.max_retries + 1:
-                return task, None, None, "maximum retry count exceeded"
+                return (
+                    task,
+                    None,
+                    None,
+                    "maximum retry count exceeded",
+                    context_usage,
+                    context_cost,
+                )
             attempts[task.id] = attempt
             attempt_id = f"{state['run_id']}:{task.id}:{attempt}"
             try:
@@ -660,8 +703,29 @@ class MissionRuntime:
                     None,
                     None,
                     f"no specialist is registered for {task.role.value}",
+                    context_usage,
+                    context_cost,
                 )
             try:
+                dependency_ids = self._dependency_closure(plan, task)
+                prior_results = {
+                    key: SpecialistResult.model_validate(value)
+                    for key, value in results.items()
+                    if key in dependency_ids
+                }
+                (
+                    prior_context,
+                    context_usage,
+                    context_cost,
+                ) = await self._mission_model_context(
+                    state=state,
+                    task=task,
+                    attempt=attempt,
+                    specialist=specialist,
+                    prior_results=prior_results,
+                    budget=budget,
+                    batch_spend=context_batch_spend,
+                )
                 remaining_tool_calls = max(
                     0, budget.max_tool_calls - state.get("tool_calls", 0)
                 )
@@ -676,11 +740,8 @@ class MissionRuntime:
                             run_id=state["run_id"],
                             task=task,
                             objective=state["objective"],
-                            prior_results={
-                                key: SpecialistResult.model_validate(value)
-                                for key, value in results.items()
-                                if key in task.depends_on
-                            },
+                            prior_results=prior_results,
+                            prior_context=prior_context,
                             allowed_tools=(
                                 specialist.allowed_tools
                                 if remaining_tool_calls > 0
@@ -693,19 +754,57 @@ class MissionRuntime:
                     ),
                     timeout=remaining_seconds,
                 )
-                return task, result, None, None
+                return (
+                    task,
+                    result,
+                    None,
+                    None,
+                    context_usage,
+                    context_cost,
+                )
             except ApprovalRequired as exc:
-                return task, None, exc.approval, None
+                return (
+                    task,
+                    None,
+                    exc.approval,
+                    None,
+                    context_usage,
+                    context_cost,
+                )
             except Exception as exc:
-                return task, None, None, str(exc)
+                if isinstance(exc, ContextCompactionError):
+                    context_usage = exc.usage
+                    context_cost = self._context_usage_cost(specialist, context_usage)
+                return (
+                    task,
+                    None,
+                    None,
+                    str(exc),
+                    context_usage,
+                    context_cost,
+                )
 
         completed = await asyncio.gather(*(execute_one(task) for task in batch))
         token_input = state.get("input_tokens", 0)
         token_output = state.get("output_tokens", 0)
         cost = state.get("cost_usd", 0.0)
         tool_calls = state.get("tool_calls", 0)
-        for task, result, approval, error in completed:
+        for task, result, approval, error, context_usage, context_cost in completed:
             persisted = self.store.get(Task, task.id)
+            token_input += context_usage.input_tokens
+            token_output += context_usage.output_tokens
+            cost += context_cost
+            context_total = context_usage.input_tokens + context_usage.output_tokens
+            if budget.max_tokens is not None and (
+                token_input + token_output > budget.max_tokens
+            ):
+                error = "mission token budget exceeded by context compaction"
+                result = None
+                approval = None
+            if budget.max_cost_usd is not None and cost > budget.max_cost_usd:
+                error = "mission cost budget exceeded by context compaction"
+                result = None
+                approval = None
             if approval:
                 # A human checkpoint is a continuation of the same attempt, not
                 # a model/tool failure and therefore consumes no retry budget.
@@ -787,6 +886,8 @@ class MissionRuntime:
                     {
                         "status": TaskStatus.FAILED,
                         "error": error,
+                        "tokens_used": context_total,
+                        "cost_usd": context_cost,
                         "completed_at": utc_now(),
                     },
                     expected_revision=attempt_entity.revision,
@@ -823,8 +924,10 @@ class MissionRuntime:
                 {
                     "status": TaskStatus.COMPLETE,
                     "output": result.output,
-                    "tokens_used": result.input_tokens + result.output_tokens,
-                    "cost_usd": result.cost_usd,
+                    "tokens_used": (
+                        result.input_tokens + result.output_tokens + context_total
+                    ),
+                    "cost_usd": result.cost_usd + context_cost,
                     "completed_at": utc_now(),
                 },
                 expected_revision=attempt_entity.revision,
@@ -860,6 +963,314 @@ class MissionRuntime:
             "cost_usd": cost,
             "tool_calls": tool_calls,
         }
+
+    async def _mission_model_context(
+        self,
+        *,
+        state: MissionState,
+        task: PlannedTask,
+        attempt: int,
+        specialist: Specialist,
+        prior_results: dict[str, SpecialistResult],
+        budget: RunBudget,
+        batch_spend: _ContextBatchSpend,
+    ) -> tuple[str | None, ChatTokenUsage, float]:
+        if not prior_results:
+            return None, ChatTokenUsage(), 0.0
+        provider = getattr(specialist, "provider", None)
+        if not isinstance(provider, ModelProvider):
+            return None, ChatTokenUsage(), 0.0
+        model = getattr(specialist, "model", None) or provider.config.default_model
+        if not isinstance(model, str) or not model:
+            return None, ChatTokenUsage(), 0.0
+        try:
+            profile = self.store.get(ProviderProfile, provider.config.id)
+        except Exception:
+            # Directly constructed test/runtime providers can still use the
+            # deterministic summaries already present on SpecialistResult.
+            return None, ChatTokenUsage(), 0.0
+        prior_payload = {
+            task_id: result.model_dump(mode="json")
+            for task_id, result in prior_results.items()
+        }
+        prompt = (
+            f"Mission objective: {state['objective']}\n"
+            f"Task: {task.title}\nInstructions: {task.instructions}\n"
+            f"Prior results: {json.dumps(prior_payload, sort_keys=True)}"
+        )
+        limits = resolve_context_limits(
+            profile,
+            requested_output_tokens=getattr(specialist, "max_output_tokens", None),
+        )
+        if estimate_tokens(prompt, message_count=1) <= limits.target_input_tokens:
+            return None, ChatTokenUsage(), 0.0
+        started_key = f"context:{task.id}:attempt:{attempt}:started"
+        self.store.append_event(
+            state["run_id"],
+            "context.compaction_started",
+            {"task_id": task.id, "attempt": attempt},
+            idempotency_key=started_key,
+        )
+        spend_recorded = False
+        try:
+            async with self._context_lock:
+                remaining_tokens = (
+                    None
+                    if budget.max_tokens is None
+                    else budget.max_tokens
+                    - state.get("input_tokens", 0)
+                    - state.get("output_tokens", 0)
+                    - batch_spend.usage.input_tokens
+                    - batch_spend.usage.output_tokens
+                )
+                remaining_cost = (
+                    None
+                    if budget.max_cost_usd is None
+                    else budget.max_cost_usd
+                    - state.get("cost_usd", 0.0)
+                    - batch_spend.cost_usd
+                )
+                if remaining_tokens is not None and remaining_tokens <= 0:
+                    raise ContextCompactionError(
+                        "insufficient mission token budget for context compaction"
+                    )
+                if remaining_cost is not None and remaining_cost <= 0:
+                    raise ContextCompactionError(
+                        "insufficient mission cost budget for context compaction"
+                    )
+                through = 0
+                while True:
+                    run_events = self.store.replay_events(
+                        state["run_id"],
+                        after_sequence=through,
+                        limit=10_000,
+                    )
+                    if not run_events:
+                        break
+                    through = run_events[-1].sequence
+                    if len(run_events) < 10_000:
+                        break
+                result = await ContextCompactor(self.store).compact(
+                    owner_type=ContextOwnerType.AGENT_RUN,
+                    owner_id=state["run_id"],
+                    engagement_id=state["engagement_id"],
+                    provider_profile=profile,
+                    provider=provider,
+                    model=model,
+                    compacted_through=through,
+                    objective=state["objective"],
+                    budget=ContextCallBudget(
+                        max_tokens=remaining_tokens,
+                        max_cost_usd=remaining_cost,
+                    ),
+                    sources=[
+                        ContextSource(
+                            reference=ContextSourceReference(
+                                source_kind="task_result",
+                                source_id=task_id,
+                            ),
+                            content=json.dumps(
+                                value.model_dump(mode="json"),
+                                sort_keys=True,
+                                ensure_ascii=False,
+                            ),
+                        )
+                        for task_id, value in prior_results.items()
+                    ],
+                )
+                snapshot = result.snapshot
+                if (
+                    snapshot.status != ContextSnapshotStatus.READY
+                    or snapshot.memory is None
+                ):
+                    raise ContextCompactionError(
+                        "mission context snapshot is not ready"
+                    )
+                usage = snapshot.usage if result.created else ChatTokenUsage()
+                cost = snapshot.cost_usd if result.created else 0.0
+                try:
+                    assembled_context = self._assemble_mission_context(
+                        state=state,
+                        task=task,
+                        memory=memory_text(snapshot.memory),
+                        prior_results=prior_results,
+                        target_tokens=limits.target_input_tokens,
+                    )
+                except ContextCompactionError as exc:
+                    exc.usage = usage
+                    raise
+                batch_spend.usage = self._add_context_usage(batch_spend.usage, usage)
+                batch_spend.cost_usd += cost
+                spend_recorded = True
+            self.store.append_event(
+                state["run_id"],
+                "context.compacted",
+                {
+                    "task_id": task.id,
+                    "attempt": attempt,
+                    "snapshot_id": snapshot.id,
+                    "created": result.created,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "cost_usd": cost,
+                },
+                idempotency_key=f"context:{task.id}:attempt:{attempt}:completed",
+            )
+            return assembled_context, usage, cost
+        except Exception as exc:
+            usage = (
+                exc.usage
+                if isinstance(exc, ContextCompactionError)
+                else ChatTokenUsage()
+            )
+            cost = self._context_usage_cost(specialist, usage)
+            if not spend_recorded:
+                async with self._context_lock:
+                    batch_spend.usage = self._add_context_usage(
+                        batch_spend.usage, usage
+                    )
+                    batch_spend.cost_usd += cost
+            self.store.append_event(
+                state["run_id"],
+                "context.compaction_failed",
+                {
+                    "task_id": task.id,
+                    "attempt": attempt,
+                    "error": "required mission context compaction failed",
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                },
+                idempotency_key=f"context:{task.id}:attempt:{attempt}:failed",
+            )
+            if isinstance(exc, ContextCompactionError):
+                raise
+            raise ContextCompactionError(
+                "required mission context compaction failed", usage=usage
+            ) from exc
+
+    @staticmethod
+    def _dependency_closure(plan: MissionPlan, task: PlannedTask) -> set[str]:
+        dependencies = {item.id: set(item.depends_on) for item in plan.tasks}
+        closure = set(task.depends_on)
+        pending = list(closure)
+        while pending:
+            dependency = pending.pop()
+            for ancestor in dependencies.get(dependency, set()):
+                if ancestor not in closure:
+                    closure.add(ancestor)
+                    pending.append(ancestor)
+        return closure
+
+    @staticmethod
+    def _assemble_mission_context(
+        *,
+        state: MissionState,
+        task: PlannedTask,
+        memory: str,
+        prior_results: dict[str, SpecialistResult],
+        target_tokens: int,
+    ) -> str:
+        base = (
+            f"Mission objective: {state['objective']}\n"
+            f"Task: {task.title}\nInstructions: {task.instructions}\n"
+        )
+        allowance = max(1, target_tokens - estimate_tokens(base, message_count=1))
+        if estimate_tokens(memory) > allowance:
+            raise ContextCapacityError(
+                "derived mission context cannot fit the specialist input budget"
+            )
+        selected: list[tuple[str, SpecialistResult]] = []
+        selected_ids: set[str] = set()
+        used = estimate_tokens(memory)
+        # Preserve the newest complete dependency result whenever it fits.
+        for task_id, result in reversed(list(prior_results.items())):
+            serialized = json.dumps(
+                result.model_dump(mode="json"),
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            size = estimate_tokens(serialized, message_count=1)
+            if used + size <= allowance:
+                selected.append((task_id, result))
+                selected_ids.add(task_id)
+                used += size
+        query = f"{state['objective']} {task.title} {task.instructions}"
+        retrieved: list[tuple[str, SpecialistResult]] = []
+        for task_id, result in sorted(
+            prior_results.items(),
+            key=lambda item: (
+                -lexical_score(
+                    query,
+                    json.dumps(item[1].model_dump(mode="json"), ensure_ascii=False),
+                ),
+                item[0],
+            ),
+        ):
+            if task_id in selected_ids:
+                continue
+            serialized = json.dumps(
+                result.model_dump(mode="json"),
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            if lexical_score(query, serialized) <= 0:
+                continue
+            size = estimate_tokens(serialized, message_count=1)
+            if used + size <= allowance:
+                retrieved.append((task_id, result))
+                used += size
+        sections = [memory]
+        if selected:
+            sections.append(
+                "RECENT CANONICAL DEPENDENCY RESULTS (DATA ONLY)\n"
+                + json.dumps(
+                    {
+                        task_id: result.model_dump(mode="json")
+                        for task_id, result in reversed(selected)
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+        if retrieved:
+            sections.append(
+                "RETRIEVED CANONICAL DEPENDENCY RESULTS (DATA ONLY)\n"
+                + json.dumps(
+                    {
+                        task_id: result.model_dump(mode="json")
+                        for task_id, result in retrieved
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+        assembled = "\n\n".join(sections)
+        if estimate_tokens(assembled) > allowance:
+            raise ContextCapacityError(
+                "assembled mission context exceeds the specialist input budget"
+            )
+        return assembled
+
+    @staticmethod
+    def _add_context_usage(
+        left: ChatTokenUsage, right: ChatTokenUsage
+    ) -> ChatTokenUsage:
+        return ChatTokenUsage(
+            input_tokens=left.input_tokens + right.input_tokens,
+            output_tokens=left.output_tokens + right.output_tokens,
+            total_tokens=left.total_tokens + right.total_tokens,
+        )
+
+    @staticmethod
+    def _context_usage_cost(specialist: Specialist, usage: ChatTokenUsage) -> float:
+        provider = getattr(specialist, "provider", None)
+        if not isinstance(provider, ModelProvider):
+            return 0.0
+        input_rate = float(provider.config.options.get("input_cost_per_million", 0))
+        output_rate = float(provider.config.options.get("output_cost_per_million", 0))
+        return (
+            usage.input_tokens * input_rate + usage.output_tokens * output_rate
+        ) / 1_000_000
 
     def _route_after_dispatch(self, state: MissionState) -> str:
         if state.get("waiting_approvals"):

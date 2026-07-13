@@ -22,6 +22,7 @@ from .domain import (
     Artifact,
     ChatMessage,
     ChatSession,
+    ContextSnapshot,
     Correlation,
     Engagement,
     Entity,
@@ -147,6 +148,8 @@ def _include_referenced_globals(
             elif isinstance(entity, AgentAttempt) and entity.provider_profile_id:
                 provider_ids.add(entity.provider_profile_id)
             elif isinstance(entity, ChatSession):
+                provider_ids.add(entity.provider_profile_id)
+            elif isinstance(entity, ContextSnapshot):
                 provider_ids.add(entity.provider_profile_id)
             elif isinstance(entity, ChatMessage):
                 if entity.provider_profile_id:

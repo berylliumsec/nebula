@@ -6,6 +6,7 @@ from pydantic import ValidationError
 import nebula.v3.chat as chat_module
 from nebula.v3.chat import (
     ChatCompletionRequest,
+    ChatConfigurationError,
     ChatHistoryConflict,
     ChatPrivacyError,
     ChatService,
@@ -54,6 +55,15 @@ class FakeProvider(ModelProvider):
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
+        if request.metadata.get("operation") == "context_compaction":
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                text='{"summary":"Earlier conversation retained with provenance."}',
+                usage=ModelUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+                finish_reason="stop",
+                provider_request_id="request-context",
+            )
         return ModelResponse(
             provider_id=self.config.id,
             model=request.model or "model-a",
@@ -269,6 +279,32 @@ def test_request_rejects_system_role_and_disallowed_model():
         )
 
 
+def test_chat_rejects_current_input_that_cannot_fit_by_itself(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "oversized-current.db")
+    profile = _profile(local=True).model_copy(
+        update={
+            "metadata": {
+                "default_model": "model-a",
+                "options": {"context_window": 300, "max_output_tokens": 100},
+            }
+        }
+    )
+    store.create(profile)
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+
+    with pytest.raises(ChatConfigurationError, match="current message"):
+        ChatService(store).prepare(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                include_knowledge=False,
+                messages=[{"role": "user", "content": "界" * 1_000}],
+            )
+        )
+
+    assert provider.requests == []
+
+
 def test_session_history_paginates_beyond_storage_page_limit(tmp_path):
     store = NebulaStore(tmp_path / "long-history.db")
     engagement = store.create(Engagement(id="eng-a", name="Long history"))
@@ -321,9 +357,13 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
                 session_id=session.id,
                 sequence=sequence,
                 role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
-                content=f"message {sequence}",
+                content=(
+                    "CVE-2025-12345 applies to port 8443"
+                    if sequence == 1
+                    else f"message {sequence}"
+                ),
             )
-            for sequence in range(1, 203)
+            for sequence in range(1, 1_003)
         ]
     )
     provider = FakeProvider(profile.id, local=True)
@@ -334,16 +374,73 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
             session_id=session.id,
             provider_id=profile.id,
             include_knowledge=False,
-            messages=[{"role": "user", "content": "new question"}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What was decided about CVE-2025-12345?",
+                }
+            ],
         )
     )
 
     assert len(prepared.model_request.messages) <= 200
     assert prepared.model_request.messages[0].role == "user"
-    assert prepared.model_request.messages[-1].content == "new question"
-    assert "Earlier messages were omitted" in (
+    assert prepared.model_request.messages[-1].content == (
+        "What was decided about CVE-2025-12345?"
+    )
+    roles = [message.role for message in prepared.model_request.messages]
+    assert all(
+        role != "assistant" or roles[index - 1] == "user"
+        for index, role in enumerate(roles)
+    )
+    limits = chat_module.resolve_context_limits(profile)
+    assert (
+        chat_module.estimate_messages(
+            prepared.model_request.messages,
+            prepared.model_request.instructions or "",
+        )
+        <= limits.target_input_tokens
+    )
+    assert "DERIVED WORKING MEMORY" in (prepared.model_request.instructions or "")
+    assert "RETRIEVED CANONICAL TRANSCRIPT EXCERPTS" in (
         prepared.model_request.instructions or ""
     )
+    assert "CVE-2025-12345 applies to port 8443" in (
+        prepared.model_request.instructions or ""
+    )
+    assert prepared.context_snapshot is not None
+    compaction_requests = [
+        request
+        for request in provider.requests
+        if request.metadata.get("operation") == "context_compaction"
+    ]
+    assert prepared.context_usage.total_tokens == 15 * len(compaction_requests)
+
+    completion = asyncio.run(ChatService(store).complete(prepared))
+    persisted = ChatService(store).session_messages(session.id)
+    assert completion.context_usage
+    assert completion.context_usage.total_tokens == 15 * len(compaction_requests)
+    assert len(persisted) == 1_004
+    assert persisted[0].content == "CVE-2025-12345 applies to port 8443"
+
+    streamed = ChatService(store).prepare(
+        ChatCompletionRequest(
+            session_id=session.id,
+            provider_id=profile.id,
+            include_knowledge=False,
+            stream=True,
+            messages=[{"role": "user", "content": "Confirm the same CVE again"}],
+        )
+    )
+
+    async def collect_stream():
+        return [item async for item in ChatService(store).stream(streamed)]
+
+    stream_events = asyncio.run(collect_stream())
+    done = next(payload for name, payload in stream_events if name == "done")
+    assert streamed.context_usage.total_tokens > 0
+    assert done["context_usage"]["total_tokens"] == streamed.context_usage.total_tokens
+    assert len(ChatService(store).session_messages(session.id)) == 1_006
 
 
 def test_knowledge_retrieval_paginates_beyond_storage_page_limit(tmp_path, monkeypatch):
