@@ -115,8 +115,9 @@ def test_cli_run_rejects_tool_budget_without_selected_tools():
     )
 
     assert result.exit_code != 0
-    assert "positive --max-tool-calls budget requires at least one" in result.output
-    assert "--tool" in result.output
+    normalized_output = " ".join(result.output.split())
+    assert "positive --max-tool-calls budget requires at least one" in normalized_output
+    assert "--tool" in normalized_output
 
 
 def test_cli_tool_missions_are_not_release_gated():

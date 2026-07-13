@@ -512,7 +512,9 @@ class ToolPlatform:
         interface_catalog: ToolInterfaceCatalog | None = None
         interface_path: Path | None = None
         if entry.interface_catalog_url is not None:
-            interface_catalog, raw_interface = await self._fetch_interface_catalog(entry)
+            interface_catalog, raw_interface = await self._fetch_interface_catalog(
+                entry
+            )
             interface_path = self.manifests.put_interface_catalog(
                 raw_interface, interface_catalog.digest
             )
@@ -555,7 +557,9 @@ class ToolPlatform:
                 )
             catalog = load_interface_catalog(payload)
         except Exception as exc:
-            raise ToolPlatformError("Toolbox interface catalog download failed") from exc
+            raise ToolPlatformError(
+                "Toolbox interface catalog download failed"
+            ) from exc
         if catalog.digest != entry.interface_catalog_digest:
             raise ToolPlatformError("Toolbox interface catalog digest mismatch")
         if len(catalog.tools) != entry.interface_tool_count:

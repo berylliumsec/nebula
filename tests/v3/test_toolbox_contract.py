@@ -163,11 +163,15 @@ def test_toolbox_sources_are_one_reviewed_v2_interface_per_first_class_tool():
     names = [tool["name"] for tool in tools]
     assert len(names) == 27
     assert len(names) == len(set(names))
-    assert all(tool["protocol"] == "nebula.toolbox.interface-source/v2" for tool in tools)
+    assert all(
+        tool["protocol"] == "nebula.toolbox.interface-source/v2" for tool in tools
+    )
     assert all(tool["version_key"] in versions for tool in tools)
     assert all(tool["version_probe"][0] == tool["executable"] for tool in tools)
     assert all(tool["documentation"] for tool in tools)
-    assert all(tool["synopsis"] and tool["examples"] and tool["notes"] for tool in tools)
+    assert all(
+        tool["synopsis"] and tool["examples"] and tool["notes"] for tool in tools
+    )
 
 
 def test_catalog_builder_canonicalizes_repeated_help_enum_values():
@@ -314,8 +318,16 @@ def test_toolbox_mission_groups_structured_and_shell_capabilities():
         name: ToolSpec(
             name=name,
             description=name,
-            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
-            output_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            input_schema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
             risk_class=(
                 RiskClass.EXPLOITATION
                 if name.endswith("invasive")
@@ -444,7 +456,9 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
                         "rationale": "Use the exact jq interface.",
                     },
                 )
-                return ModelResponse(provider_id="queue", model="test", tool_calls=[call])
+                return ModelResponse(
+                    provider_id="queue", model="test", tool_calls=[call]
+                )
             if len(self.requests) == 2:
                 call = ToolCall(
                     id="execute",
@@ -458,7 +472,9 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
                         },
                     },
                 )
-                return ModelResponse(provider_id="queue", model="test", tool_calls=[call])
+                return ModelResponse(
+                    provider_id="queue", model="test", tool_calls=[call]
+                )
             return ModelResponse(provider_id="queue", model="test", text="jq completed")
 
         async def health(self) -> ProviderHealth:

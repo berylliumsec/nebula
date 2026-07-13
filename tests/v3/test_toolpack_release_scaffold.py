@@ -163,9 +163,7 @@ def test_production_catalog_builder_signs_collection_and_bundles(tmp_path):
                         "description": "Publication fixture.",
                         "homepage": "https://example.com/fixture",
                         "synopsis": "fixture [options]",
-                        "examples": [
-                            {"purpose": "Show help", "arguments": ["--help"]}
-                        ],
+                        "examples": [{"purpose": "Show help", "arguments": ["--help"]}],
                         "notes": ["Test-only exact interface."],
                         "commands": [
                             {
@@ -223,8 +221,6 @@ def test_production_catalog_builder_signs_collection_and_bundles(tmp_path):
     assert catalog.entries[0].interface_catalog_protocol == "nebula.toolbox.catalog/v2"
     assert catalog.entries[0].interface_tool_count == 1
     assert (
-        site
-        / "interfaces"
-        / f"{catalog.entries[0].interface_catalog_digest}.json"
+        site / "interfaces" / f"{catalog.entries[0].interface_catalog_digest}.json"
     ).is_file()
     assert len(list((site / "bundles").glob("*.nebula-toolpack"))) == 1

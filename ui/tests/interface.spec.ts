@@ -10,12 +10,15 @@ const workspaces = [
 ] as const;
 
 async function openPreview(page: Page, route: string, heading: string) {
-  await page.route("**/api/v1/**", (request) => request.abort("failed"));
   await page.goto(route);
   await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   await expect(page.getByText("Interface preview")).toBeAttached();
   await page.waitForTimeout(120);
 }
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/v1/**", (request) => request.abort("failed"));
+});
 
 test("critical workspaces remain visually stable", async ({ page }, testInfo) => {
   for (const [name, route, heading] of workspaces) {
@@ -24,8 +27,8 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
   }
 });
 
-test("critical workspaces meet automated accessibility checks", async ({ page }) => {
-  for (const theme of ["light", "dark", "high-contrast"] as const) {
+for (const theme of ["light", "dark", "high-contrast"] as const) {
+  test(`critical workspaces meet automated accessibility checks in ${theme} mode`, async ({ page }) => {
     await openPreview(page, "/", "Good afternoon, Jordan");
     await page.evaluate((value) => localStorage.setItem("nebula.theme", value), theme);
     for (const [, route, heading] of workspaces) {
@@ -40,8 +43,8 @@ test("critical workspaces meet automated accessibility checks", async ({ page })
         .map((element) => `${element.tagName.toLowerCase()}.${element.className}:\"${element.textContent?.trim().slice(0, 60)}\":${getComputedStyle(element).fontSize}`));
       expect(undersizedText, `${theme} ${route} renders text below 11px`).toEqual([]);
     }
-  }
-});
+  });
+}
 
 test("appearance variants preserve each critical workspace hierarchy", async ({ page }) => {
   for (const theme of ["light", "high-contrast"] as const) {

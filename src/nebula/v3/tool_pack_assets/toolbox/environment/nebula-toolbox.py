@@ -121,7 +121,11 @@ def _help_text(item: dict[str, Any], command: dict[str, Any]) -> str:
 
 
 def _cwd(value: str) -> Path:
-    candidate = (WORKSPACE / value).resolve() if not value.startswith("/") else Path(value).resolve()
+    candidate = (
+        (WORKSPACE / value).resolve()
+        if not value.startswith("/")
+        else Path(value).resolve()
+    )
     if candidate != WORKSPACE and WORKSPACE not in candidate.parents:
         raise ValueError("working directory must remain inside /workspace")
     if not candidate.is_dir():
@@ -220,7 +224,9 @@ def _structured_arguments(
             "invocation-json must contain exactly command_path, options, and positionals"
         )
     command_path = invocation["command_path"]
-    if not isinstance(command_path, list) or any(not isinstance(value, str) for value in command_path):
+    if not isinstance(command_path, list) or any(
+        not isinstance(value, str) for value in command_path
+    ):
         raise ValueError("command_path must be an array of strings")
     command = _command(item, command_path)
     options = invocation["options"]
@@ -281,7 +287,9 @@ def _metadata(*, guidance: bool, script: str | None = None) -> dict[str, Any]:
     return {
         "catalog_digest": _catalog_digest(),
         "catalogued_guidance": guidance,
-        "script_sha256": hashlib.sha256(script.encode()).hexdigest() if script is not None else None,
+        "script_sha256": hashlib.sha256(script.encode()).hexdigest()
+        if script is not None
+        else None,
     }
 
 
@@ -411,9 +419,16 @@ def main(argv: list[str] | None = None) -> int:
                 matches = [
                     {**item, "catalogued": False}
                     for item in _catalog_payload()["inventory"]
-                    if query in f"{item.get('name', '')} {item.get('path', '')}".casefold()
+                    if query
+                    in f"{item.get('name', '')} {item.get('path', '')}".casefold()
                 ]
-            output = _envelope("search", matches=matches, metadata=_metadata(guidance=bool(matches and matches[0].get("catalogued"))))
+            output = _envelope(
+                "search",
+                matches=matches,
+                metadata=_metadata(
+                    guidance=bool(matches and matches[0].get("catalogued"))
+                ),
+            )
         elif options.operation == "help":
             item = index.get(options.tool)
             if item is None:
@@ -437,14 +452,18 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError(f"unknown catalogued Toolbox tool: {options.tool}")
                 declared_risk = item.get("risk_class")
                 if declared_risk not in RISK_LEVEL:
-                    raise ValueError(f"Toolbox tool has an invalid risk class: {options.tool}")
+                    raise ValueError(
+                        f"Toolbox tool has an invalid risk class: {options.tool}"
+                    )
                 if RISK_LEVEL[declared_risk] > RISK_LEVEL[options.max_risk]:
                     raise ValueError(
                         f"{options.tool} requires {declared_risk}, above this capability's {options.max_risk} limit"
                     )
                 argv = [
                     item["executable"],
-                    *_structured_arguments(item, options.invocation_json, options.target),
+                    *_structured_arguments(
+                        item, options.invocation_json, options.target
+                    ),
                 ]
                 tool = options.tool
                 guidance = True
@@ -480,7 +499,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             metadata = _metadata(guidance=False)
         except Exception:
-            metadata = {"catalog_digest": None, "catalogued_guidance": False, "script_sha256": None}
+            metadata = {
+                "catalog_digest": None,
+                "catalogued_guidance": False,
+                "script_sha256": None,
+            }
         output = _envelope(
             "error",
             exit_code=2,

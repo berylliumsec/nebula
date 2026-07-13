@@ -195,7 +195,9 @@ def _command(value: Any, *, tool_name: str, index: int) -> tuple[str, ...]:
     for item_index, positional in enumerate(positionals):
         optional_seen = optional_seen or not positional["required"]
         if optional_seen and positional["required"]:
-            raise ToolInterfaceError(f"{field} requires a positional after an optional one")
+            raise ToolInterfaceError(
+                f"{field} requires a positional after an optional one"
+            )
         if positional["repeatable"] and item_index != len(positionals) - 1:
             raise ToolInterfaceError(f"{field} repeats a non-final positional")
     options = [
@@ -316,7 +318,9 @@ def load_interface_catalog(payload: bytes) -> ToolInterfaceCatalog:
         "tools",
         "inventory",
     }:
-        raise ToolInterfaceError("Toolbox interface catalog has invalid top-level fields")
+        raise ToolInterfaceError(
+            "Toolbox interface catalog has invalid top-level fields"
+        )
     if (
         decoded["protocol"] != CATALOG_PROTOCOL
         or decoded["interface_protocol"] != INTERFACE_PROTOCOL
@@ -399,8 +403,7 @@ def load_interface_catalog(payload: bytes) -> ToolInterfaceCatalog:
             or not isinstance(coverage, dict)
             or coverage.get("complete") is not True
             or coverage.get("unmapped_options") != []
-            or coverage.get("documented_options")
-            != coverage.get("structured_options")
+            or coverage.get("documented_options") != coverage.get("structured_options")
         ):
             raise ToolInterfaceError(f"incomplete Toolbox interface entry: {name}")
         _version(tool.get("version"), field=f"tools[{tool_index}].version")
@@ -450,11 +453,12 @@ def load_interface_catalog(payload: bytes) -> ToolInterfaceCatalog:
                 flag for option in command["options"] for flag in option["flags"]
             )
             command_paths.add(command_path)
-        if (
-            coverage["help_documents"] != help_documents
-            or coverage["structured_options"] != len(structured_flags)
-        ):
-            raise ToolInterfaceError(f"{name} coverage counts do not match its commands")
+        if coverage["help_documents"] != help_documents or coverage[
+            "structured_options"
+        ] != len(structured_flags):
+            raise ToolInterfaceError(
+                f"{name} coverage counts do not match its commands"
+            )
         names.add(name)
         claimed_names.update({name, *aliases})
     inventory_keys: set[tuple[str, str]] = set()
@@ -493,7 +497,9 @@ def load_interface_catalog(payload: bytes) -> ToolInterfaceCatalog:
     )
 
 
-def load_interface_catalog_file(path: Path, expected_digest: str) -> ToolInterfaceCatalog:
+def load_interface_catalog_file(
+    path: Path, expected_digest: str
+) -> ToolInterfaceCatalog:
     if not path.is_file() or path.is_symlink():
         raise ToolInterfaceError("stored Toolbox interface catalog is unavailable")
     catalog = load_interface_catalog(path.read_bytes())

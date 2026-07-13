@@ -204,7 +204,9 @@ class BrokeredToolSpecialist:
                     )
                 else:
                     allowed = frozenset(
-                        name for name in allowed if name.startswith("environment.shell_")
+                        name
+                        for name in allowed
+                        if name.startswith("environment.shell_")
                     )
                     interface_context = (
                         "Use the full command-line fallback inside the Toolbox container. "
@@ -434,7 +436,9 @@ class BrokeredToolSpecialist:
             )
         )
         if len(response.tool_calls) != 1:
-            raise MissionError("specialist did not make exactly one interface selection")
+            raise MissionError(
+                "specialist did not make exactly one interface selection"
+            )
         call = response.tool_calls[0]
         if call.name != selection_tool.name:
             raise MissionError("specialist requested an invalid interface selector")

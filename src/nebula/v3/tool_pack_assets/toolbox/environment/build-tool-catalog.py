@@ -23,7 +23,9 @@ CATALOG_PROTOCOL = "nebula.toolbox.catalog/v2"
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 VERSION_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-FLAG = re.compile(r"(?<![A-Za-z0-9_])(--?[A-Za-z0-9?][A-Za-z0-9_.?+-]*|\+[A-Za-z0-9][A-Za-z0-9_-]*)")
+FLAG = re.compile(
+    r"(?<![A-Za-z0-9_])(--?[A-Za-z0-9?][A-Za-z0-9_.?+-]*|\+[A-Za-z0-9][A-Za-z0-9_-]*)"
+)
 SECTION = re.compile(r"^[A-Z][A-Z0-9 /_-]{2,}:$")
 RISK_CLASSES = {
     "local_read",
@@ -80,8 +82,10 @@ def _load_versions(path: Path) -> dict[str, str]:
         if "=" not in line:
             raise CatalogBuildError(f"invalid version line {line_number}")
         key, value = line.split("=", 1)
-        if not VERSION_KEY.fullmatch(key) or not value or any(
-            character.isspace() for character in value
+        if (
+            not VERSION_KEY.fullmatch(key)
+            or not value
+            or any(character.isspace() for character in value)
         ):
             raise CatalogBuildError(f"unsafe version line {line_number}")
         if key in versions:
@@ -233,9 +237,13 @@ def _positionals(value: Any, *, field: str) -> list[dict[str, Any]]:
     for item in result:
         seen_optional = seen_optional or not item["required"]
         if seen_optional and item["required"]:
-            raise CatalogBuildError(f"{field} cannot require a value after an optional one")
+            raise CatalogBuildError(
+                f"{field} cannot require a value after an optional one"
+            )
         if item["repeatable"] and item is not result[-1]:
-            raise CatalogBuildError(f"{field} permits repetition only on the final positional")
+            raise CatalogBuildError(
+                f"{field} permits repetition only on the final positional"
+            )
     return result
 
 
@@ -263,14 +271,18 @@ def _expanded_flags(signature: str) -> list[str]:
 def _flags_are_distinct_choices(signature: str, flags: list[str]) -> bool:
     """Return true when slash notation denotes mutually exclusive switches."""
 
-    return "/" in signature and len(flags) > 1 and all(
-        flag.startswith("-") and not flag.startswith("--") for flag in flags
+    return (
+        "/" in signature
+        and len(flags) > 1
+        and all(flag.startswith("-") and not flag.startswith("--") for flag in flags)
     )
 
 
 def _option_id(flags: list[str], command_path: list[str]) -> str:
     preferred = next((flag for flag in flags if flag.startswith("--")), flags[0])
-    identifier = re.sub(r"[^a-z0-9]+", "_", preferred.lstrip("-+").casefold()).strip("_")
+    identifier = re.sub(r"[^a-z0-9]+", "_", preferred.lstrip("-+").casefold()).strip(
+        "_"
+    )
     if not identifier:
         identifier = hashlib.sha256("\0".join(flags).encode()).hexdigest()[:12]
     prefix = ".".join(command_path)
@@ -304,7 +316,9 @@ def _value_type(name: str, description: str) -> str:
     return "string"
 
 
-def _option_value(signature: str, flags: list[str], description: str) -> dict[str, Any] | None:
+def _option_value(
+    signature: str, flags: list[str], description: str
+) -> dict[str, Any] | None:
     remainder = signature
     for flag in flags:
         remainder = remainder.replace(flag, " ")
@@ -351,9 +365,11 @@ def _option_blocks(text: str, command_path: list[str]) -> list[dict[str, Any]]:
             flags = _expanded_flags(signature)
             if not flags:
                 continue
-            choices = [[flag] for flag in flags] if _flags_are_distinct_choices(
-                signature, flags
-            ) else [flags]
+            choices = (
+                [[flag] for flag in flags]
+                if _flags_are_distinct_choices(signature, flags)
+                else [flags]
+            )
             for choice in choices:
                 current = {
                     "id": _option_id(choice, command_path),
@@ -374,7 +390,11 @@ def _option_blocks(text: str, command_path: list[str]) -> list[dict[str, Any]]:
                     "implies": [],
                 }
                 options.append(current)
-        elif current is not None and stripped and not stripped.startswith(("usage:", "example:")):
+        elif (
+            current is not None
+            and stripped
+            and not stripped.startswith(("usage:", "example:"))
+        ):
             current["description"] = f"{current['description']} {stripped}"[:4096]
     merged: list[dict[str, Any]] = []
     for option in options:
@@ -391,7 +411,9 @@ def _option_blocks(text: str, command_path: list[str]) -> list[dict[str, Any]]:
             continue
         existing["flags"] = list(dict.fromkeys([*existing["flags"], *option["flags"]]))
         if option["description"] not in existing["description"]:
-            existing["description"] = f"{existing['description']} {option['description']}"[:4096]
+            existing["description"] = (
+                f"{existing['description']} {option['description']}"[:4096]
+            )
         existing["repeatable"] = existing["repeatable"] or option["repeatable"]
         if existing["value"] is None:
             existing["value"] = option["value"]
@@ -429,7 +451,11 @@ def _inferred_positionals(synopsis: str) -> list[dict[str, Any]]:
         if raw_name.casefold() in {"option", "options", "command", "args"}:
             continue
         identifier = re.sub(r"[^a-z0-9]+", "_", raw_name.casefold()).strip("_")
-        if not identifier or identifier in identifiers or not NAME.fullmatch(identifier):
+        if (
+            not identifier
+            or identifier in identifiers
+            or not NAME.fullmatch(identifier)
+        ):
             continue
         prefix = synopsis[max(0, match.start() - 1) : match.start()]
         suffix = synopsis[match.end() : match.end() + 1]
@@ -486,17 +512,15 @@ def _typed_literal(value: str, value_type: str) -> str | int | float | bool:
 
 
 def _enrich_option_semantics(options: list[dict[str, Any]]) -> None:
-    by_flag = {
-        flag: option["id"]
-        for option in options
-        for flag in option["flags"]
-    }
+    by_flag = {flag: option["id"] for option in options for flag in option["flags"]}
     for option in options:
         descriptor = option.get("value")
         signature = option["usage"]
         description = option["description"]
         if descriptor is not None:
-            enum_match = re.search(r"(?:<|\{)([^<>\{\}]+[|,][^<>\{\}]+)(?:>|\})", signature)
+            enum_match = re.search(
+                r"(?:<|\{)([^<>\{\}]+[|,][^<>\{\}]+)(?:>|\})", signature
+            )
             if enum_match:
                 values = list(
                     dict.fromkeys(
@@ -547,7 +571,8 @@ def _enrich_option_semantics(options: list[dict[str, Any]]) -> None:
         ):
             option["requires"] = sorted(set(option["requires"]).union(mentioned))
         if mentioned and any(
-            phrase in lowered for phrase in ("implies", "also enables", "automatically enables")
+            phrase in lowered
+            for phrase in ("implies", "also enables", "automatically enables")
         ):
             option["implies"] = sorted(set(option["implies"]).union(mentioned))
 
@@ -555,11 +580,7 @@ def _enrich_option_semantics(options: list[dict[str, Any]]) -> None:
 def _rebind_choice_conflicts(options: list[dict[str, Any]]) -> None:
     """Bind slash-choice conflicts after case-sensitive IDs are finalized."""
 
-    by_flag = {
-        flag: option["id"]
-        for option in options
-        for flag in option["flags"]
-    }
+    by_flag = {flag: option["id"] for option in options for flag in option["flags"]}
     for option in options:
         option["conflicts_with"] = []
         flags = _expanded_flags(option["usage"])
@@ -597,7 +618,9 @@ def _documented_flags(text: str) -> set[str]:
     return documented
 
 
-def _help_document(argv: list[str], command_path: list[str], *, field: str) -> dict[str, Any]:
+def _help_document(
+    argv: list[str], command_path: list[str], *, field: str
+) -> dict[str, Any]:
     exit_code, text = _run(argv, field=field)
     if exit_code not in (0, 1, 2, 64, 128, 129, 255) or not text:
         raise CatalogBuildError(f"{field} returned unusable help ({exit_code})")
@@ -627,7 +650,9 @@ def _discover_commands(kind: str, executable: str) -> list[tuple[list[str], list
             for name in command_names[:MAX_DISCOVERED_COMMANDS]
         ]
     if kind == "openssl":
-        code, text = _run([executable, "list", "-commands"], field="openssl.command_discovery")
+        code, text = _run(
+            [executable, "list", "-commands"], field="openssl.command_discovery"
+        )
         if code != 0:
             raise CatalogBuildError("OpenSSL command discovery failed")
         command_names = sorted(set(text.split()))
@@ -656,19 +681,17 @@ def _discover_commands(kind: str, executable: str) -> list[tuple[list[str], list
     raise CatalogBuildError(f"unknown command discovery mode: {kind}")
 
 
-def _apply_overrides(
-    commands: list[dict[str, Any]], raw: Any, *, name: str
-) -> None:
+def _apply_overrides(commands: list[dict[str, Any]], raw: Any, *, name: str) -> None:
     if not isinstance(raw, dict):
         raise CatalogBuildError(f"{name}.option_overrides must be an object")
     index = {
-        option["id"]: option
-        for command in commands
-        for option in command["options"]
+        option["id"]: option for command in commands for option in command["options"]
     }
     for identifier, changes in raw.items():
         if identifier not in index or not isinstance(changes, dict):
-            raise CatalogBuildError(f"{name} override references unknown option {identifier}")
+            raise CatalogBuildError(
+                f"{name} override references unknown option {identifier}"
+            )
         allowed = {
             "description",
             "repeatable",
@@ -678,16 +701,31 @@ def _apply_overrides(
             "value",
         }
         if set(changes) - allowed:
-            raise CatalogBuildError(f"{name} override {identifier} has unsupported fields")
+            raise CatalogBuildError(
+                f"{name} override {identifier} has unsupported fields"
+            )
         index[identifier].update(changes)
 
 
 def _build_tool(path: Path, versions: dict[str, str]) -> dict[str, Any]:
     raw = _load_yaml(path)
     required = {
-        "protocol", "name", "version_key", "executable", "category", "risk_class",
-        "description", "homepage", "synopsis", "version_probe", "version_exit_codes",
-        "documentation", "positionals", "examples", "notes", "option_overrides",
+        "protocol",
+        "name",
+        "version_key",
+        "executable",
+        "category",
+        "risk_class",
+        "description",
+        "homepage",
+        "synopsis",
+        "version_probe",
+        "version_exit_codes",
+        "documentation",
+        "positionals",
+        "examples",
+        "notes",
+        "option_overrides",
     }
     optional = {"package_version_key", "command_discovery"}
     if set(raw) - required - optional or required - set(raw):
@@ -711,8 +749,13 @@ def _build_tool(path: Path, versions: dict[str, str]) -> dict[str, Any]:
         raise CatalogBuildError(f"{name} has invalid risk class {risk_class}")
     version_probe = _argv(raw["version_probe"], field=f"{name}.version_probe")
     allowed_codes = raw["version_exit_codes"]
-    if not isinstance(allowed_codes, list) or not allowed_codes or any(
-        not isinstance(code, int) or code < 0 or code > 255 for code in allowed_codes
+    if (
+        not isinstance(allowed_codes, list)
+        or not allowed_codes
+        or any(
+            not isinstance(code, int) or code < 0 or code > 255
+            for code in allowed_codes
+        )
     ):
         raise CatalogBuildError(f"{name}.version_exit_codes is invalid")
     version_code, version_output = _run(version_probe, field=f"{name}.version_probe")
@@ -731,16 +774,21 @@ def _build_tool(path: Path, versions: dict[str, str]) -> dict[str, Any]:
             raise CatalogBuildError(f"{name}.documentation[{index}] is invalid")
         command_path = item["command_path"]
         if not isinstance(command_path, list) or any(
-            not isinstance(part, str) or not NAME.fullmatch(part) for part in command_path
+            not isinstance(part, str) or not NAME.fullmatch(part)
+            for part in command_path
         ):
-            raise CatalogBuildError(f"{name}.documentation[{index}].command_path is invalid")
+            raise CatalogBuildError(
+                f"{name}.documentation[{index}].command_path is invalid"
+            )
         argv = _argv(item["argv"], field=f"{name}.documentation[{index}].argv")
         documents.append(
             _help_document(argv, command_path, field=f"{name}.documentation[{index}]")
         )
         seen_paths.add(tuple(command_path))
     if discovery := raw.get("command_discovery"):
-        for command_path, argv in _discover_commands(str(discovery), executable.as_posix()):
+        for command_path, argv in _discover_commands(
+            str(discovery), executable.as_posix()
+        ):
             if tuple(command_path) in seen_paths:
                 continue
             documents.append(
@@ -754,7 +802,9 @@ def _build_tool(path: Path, versions: dict[str, str]) -> dict[str, Any]:
     commands: list[dict[str, Any]] = []
     root_positionals = _positionals(raw["positionals"], field=f"{name}.positionals")
     for command_path in sorted(seen_paths):
-        command_docs = [doc for doc in documents if tuple(doc["command_path"]) == command_path]
+        command_docs = [
+            doc for doc in documents if tuple(doc["command_path"]) == command_path
+        ]
         options: list[dict[str, Any]] = []
         for document in command_docs:
             options.extend(_option_blocks(document["text"], list(command_path)))
@@ -827,9 +877,7 @@ def _build_tool(path: Path, versions: dict[str, str]) -> dict[str, Any]:
         )
     _apply_overrides(commands, raw["option_overrides"], name=name)
     documented_flags = {
-        flag
-        for document in documents
-        for flag in _documented_flags(document["text"])
+        flag for document in documents for flag in _documented_flags(document["text"])
     }
     structured_flags = {
         flag
@@ -879,7 +927,9 @@ def _inventory(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         directory = Path(directory_name)
         if not directory.is_dir():
             continue
-        for candidate in sorted(directory.iterdir(), key=lambda item: item.name.casefold()):
+        for candidate in sorted(
+            directory.iterdir(), key=lambda item: item.name.casefold()
+        ):
             try:
                 resolved = candidate.resolve(strict=True)
             except OSError:
@@ -926,7 +976,10 @@ def build(interfaces: Path, versions_path: Path, schema_path: Path) -> dict[str,
         "tools": sorted(tools, key=lambda tool: tool["name"]),
         "inventory": _inventory(tools),
     }
-    errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda error: list(error.path))
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(payload),
+        key=lambda error: list(error.path),
+    )
     if errors:
         error = errors[0]
         location = ".".join(str(component) for component in error.absolute_path)

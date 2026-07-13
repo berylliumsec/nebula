@@ -23,7 +23,7 @@ nebula = "nebula.nebula:main"
 nebula3 = "nebula.v3.cli:main"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<=3.13.9"
+python = ">=3.10,<3.14"
 boto3 = "*"
 websockets = "*"
 fastapi = ">=0.135.3,<1"
