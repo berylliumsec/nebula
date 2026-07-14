@@ -3054,6 +3054,10 @@ async def _verify_provider_capability(
         profile.id,
         {
             "capability_verifications": verifications,
+            # A health-discovered model may be verified before the operator has
+            # configured an allowlist. Persist that explicit verification target
+            # so subsequent profile reads and mission selectors do not forget it.
+            "model_allowlist": profile.model_allowlist or [model],
             "capabilities": profile.capabilities.model_copy(
                 update={
                     "tool_calling": has_verified_model,

@@ -558,6 +558,63 @@ describe("Nebula workspace", () => {
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ provider_type: "vertex", metadata: { options: { project: "security-project", location: "us-central1", context_window: 16000, max_output_tokens: 1000 } } });
   });
 
+  it("verifies a vLLM model discovered after a blank-model profile was created", async () => {
+    const model = "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ";
+    const verified = { model, status: "verified" as const, checked_at: "2026-07-12T12:00:00Z", contract_version: "required-tool-v1" };
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z" };
+    let provider = {
+      ...entity,
+      id: "provider-vllm",
+      revision: 1,
+      name: "Local vLLM",
+      provider_type: "vllm",
+      endpoint: "http://127.0.0.1:8001/v1",
+      enabled: true,
+      is_local: true,
+      model_allowlist: [] as string[],
+      capabilities: { streaming: true, tool_calling: false },
+      capability_verifications: {} as Record<string, typeof verified>,
+      privacy: { local_only: true, residency: [] },
+      metadata: {},
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/providers/provider-vllm/health")) {
+        return new Response(JSON.stringify({ provider_id: "provider-vllm", healthy: true, models: [model] }), { status: 200 });
+      }
+      if (url.pathname.endsWith("/providers/provider-vllm/capabilities/verify") && init?.method === "POST") {
+        provider = {
+          ...provider,
+          revision: 2,
+          model_allowlist: [model],
+          capabilities: { streaming: true, tool_calling: true },
+          capability_verifications: {
+            [model]: verified,
+          },
+        };
+        return new Response(JSON.stringify({ provider_id: "provider-vllm", provider_revision: 2, verification: verified }), { status: 200 });
+      }
+      if (url.pathname.endsWith("/providers/provider-vllm")) return new Response(JSON.stringify(provider), { status: 200 });
+      if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (url.pathname.endsWith("/provider-catalog")) return new Response(JSON.stringify([{ flavor: "vllm", adapter: "openai_compatible", display_name: "vLLM", local: true, default_base_url: "http://127.0.0.1:8000/v1", suggested_key_env: null, support_tier: "compatible" }]), { status: 200 });
+      if (url.pathname.endsWith("/providers")) return new Response(JSON.stringify([provider]), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    await screen.findByRole("heading", { name: "Settings" });
+    expect(await screen.findByText("Configure a model to verify tool calling.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh Local vLLM health" }));
+    expect(await screen.findByText(`Tool calling is unverified for ${model}.`)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Reverify Local vLLM tool calling" }));
+    expect(await screen.findByText(new RegExp(`Tool calling verified for ${model.replaceAll("/", "\\/")}`))).toBeVisible();
+
+    const verifyCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/providers/provider-vllm/capabilities/verify") && request?.method === "POST");
+    expect(JSON.parse(String(verifyCall?.[1]?.body))).toEqual({ model, expected_revision: 1 });
+  });
+
   it("records a manual finding as an asset-linked, unverified candidate", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const asset = { ...entity, id: "asset-1", engagement_id: "engagement-1", asset_type: "domain", name: "portal.example.test", address: null, hostname: "portal.example.test", criticality: "high", exposed: true, tags: [], metadata: {} };

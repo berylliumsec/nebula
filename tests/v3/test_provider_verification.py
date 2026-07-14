@@ -72,6 +72,36 @@ def test_exact_model_probe_is_persisted_and_isolated(tmp_path, monkeypatch):
     assert stored.capabilities.tool_calling is True
 
 
+def test_health_discovered_model_is_persisted_when_verified(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "discovered-verification.db")
+    profile = store.create(
+        ProviderProfile(
+            id="provider-a",
+            name="Discovered local model",
+            provider_type="vllm",
+            endpoint="http://127.0.0.1:8001/v1",
+            is_local=True,
+        )
+    )
+    monkeypatch.setattr(
+        api_module, "provider_from_profile", lambda _: ProbeProvider(valid=True)
+    )
+    app = create_app(store, auth_token="test-token")
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/v1/providers/{profile.id}/capabilities/verify",
+            headers=AUTH,
+            json={"model": "discovered-model", "expected_revision": profile.revision},
+        )
+
+    assert response.status_code == 200
+    stored = store.get(ProviderProfile, profile.id)
+    assert stored.model_allowlist == ["discovered-model"]
+    assert stored.tools_verified_for("discovered-model") is True
+    assert stored.capabilities.tool_calling is True
+
+
 def test_probe_fails_closed_and_revision_conflicts(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "verification-failure.db")
     profile = _profile(store)
