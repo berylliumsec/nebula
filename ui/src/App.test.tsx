@@ -269,7 +269,10 @@ describe("Nebula workspace", () => {
       if (path.endsWith("/providers")) return new Response(JSON.stringify([providerPayload()]), { status: 200 });
       if (path.endsWith("/capabilities/verify") && init?.method === "POST") { verified = true; return new Response(JSON.stringify({ status: "verified" }), { status: 200 }); }
       if (path.endsWith("/providers/provider-1")) return new Response(JSON.stringify(providerPayload()), { status: 200 });
-      if (path.endsWith("/tool-assignment")) return new Response(JSON.stringify([{ id: "assignment-1", engagement_id: "engagement-1", manifest_digest: "sha256:toolbox", tool_names: ["environment.run_network"], enabled: true, revision: 1 }]), { status: 200 });
+      if (path.endsWith("/tool-assignment")) return new Response(JSON.stringify([
+        { id: "assignment-stale", engagement_id: "engagement-1", manifest_digest: "sha256:replaced", tool_names: ["environment.run_network"], enabled: true, revision: 1 },
+        { id: "assignment-1", engagement_id: "engagement-1", manifest_digest: "sha256:toolbox", tool_names: ["environment.run_network"], enabled: true, revision: 1 },
+      ]), { status: 200 });
       if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{ id: "toolbox", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", manifest_digest: "sha256:toolbox", source: "catalog", trust_state: "trusted", runtime_profile_id: "runner-1", image_locks: {}, status: "ready", tool_names: ["environment.run_network"], permissions: ["network"] }]), { status: 200 });
       if (path.endsWith("/tools")) return new Response(JSON.stringify([{ name: "environment.run_network", pack_id: "toolbox", pack_manifest_digest: "sha256:toolbox", description: "Run a network command", risk_class: "active_scan", requires_network: true, requires_approval: false, available: true }]), { status: 200 });
       if (path.endsWith("/chat/completions") && init?.method === "POST") {

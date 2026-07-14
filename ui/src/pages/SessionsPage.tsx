@@ -176,12 +176,13 @@ export function SessionsPage() {
         setToolRuntimeReason(undefined);
         return;
       }
-      if (enabledAssignments.some((item) => !item.manifestDigest || !readyDigests.has(item.manifestDigest))) {
+      const readyAssignments = enabledAssignments.filter((item) => item.manifestDigest && readyDigests.has(item.manifestDigest));
+      if (!readyAssignments.length) {
         setAssignedToolCount(0);
-        setToolRuntimeReason("An assigned Toolbox pack is unavailable.");
+        setToolRuntimeReason("This engagement is assigned to a removed or replaced Toolbox pack. Save the ready environment in Engagement Policy.");
         return;
       }
-      const assigned = tools.filter((tool) => enabledAssignments.some((assignment) => assignment.manifestDigest === tool.packManifestDigest && assignment.toolNames.includes(tool.name)));
+      const assigned = tools.filter((tool) => readyAssignments.some((assignment) => assignment.manifestDigest === tool.packManifestDigest && assignment.toolNames.includes(tool.name)));
       const available = assigned.filter((tool) => tool.available);
       setAssignedToolCount(available.length);
       setToolRuntimeReason(available.length ? undefined : assigned[0]?.unavailableReason ?? "The assigned Toolbox runner is unavailable.");
