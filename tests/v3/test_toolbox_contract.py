@@ -453,6 +453,29 @@ def test_toolbox_wrapper_compiles_structured_invocation(tmp_path, capsys):
     assert output["metadata"]["catalogued_guidance"] is True
 
 
+def test_toolbox_wrapper_keeps_large_pathological_output_valid_json():
+    toolbox = load_script("nebula_toolbox_bounded_json", "nebula-toolbox.py")
+    output = toolbox._envelope(
+        "exec",
+        tool="nmap",
+        stdout="\x00" * toolbox.MAX_OUTPUT_BYTES,
+        stderr="warning\n" * 100_000,
+        metadata={
+            "catalog_digest": "a" * 64,
+            "catalogued_guidance": True,
+            "script_sha256": None,
+        },
+    )
+
+    serialized = toolbox._serialized_output(output)
+    decoded = json.loads(serialized)
+
+    assert len(serialized.encode("utf-8")) <= toolbox.MAX_ENVELOPE_BYTES
+    assert decoded["protocol"] == "nebula.toolbox/v1"
+    assert decoded["tool"] == "nmap"
+    assert "output truncated to preserve JSON envelope" in decoded["stderr"]
+
+
 def test_toolbox_wrapper_rejects_invented_structured_option(tmp_path, capsys):
     toolbox = load_script("nebula_toolbox_unknown_option", "nebula-toolbox.py")
     catalog_path = tmp_path / "tool-catalog.json"

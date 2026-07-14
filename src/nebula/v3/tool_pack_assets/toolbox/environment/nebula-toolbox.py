@@ -21,6 +21,10 @@ INTERFACE_PROTOCOL = "nebula.toolbox.interface/v2"
 CATALOG_PATH = Path("/opt/nebula/tool-catalog.json")
 WORKSPACE = Path("/workspace")
 MAX_OUTPUT_BYTES = 2_000_000
+# Core captures at most 2,000,000 bytes from each sandbox stream.  Keep the
+# complete JSON wire envelope below that boundary even when quoting arbitrary
+# tool output expands it (for example, control characters become ``\u0000``).
+MAX_ENVELOPE_BYTES = 1_900_000
 RISK_LEVEL = {
     "local_read": 0,
     "workspace_write": 1,
@@ -322,6 +326,64 @@ def _envelope(
     }
 
 
+def _serialized_output(output: dict[str, Any]) -> str:
+    """Return one complete JSON envelope within Core's stdout capture limit."""
+
+    def encode(value: dict[str, Any]) -> str:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+    serialized = encode(output)
+    if len(serialized.encode("utf-8")) <= MAX_ENVELOPE_BYTES:
+        return serialized
+
+    # Execution output is observation data, so bounded prefixes are preferable
+    # to a transport-truncated document that cannot be parsed at all. Search and
+    # help matches can also be large; their human-readable content is already in
+    # stdout and they are discarded only on this exceptional path.
+    reduced = {**output, "matches": []}
+    stdout = str(output.get("stdout", ""))
+    stderr = str(output.get("stderr", ""))
+    marker = "\n[nebula-toolbox: output truncated to preserve JSON envelope]"
+
+    def with_prefix(limit: int) -> dict[str, Any]:
+        return {
+            **reduced,
+            "stdout": stdout[:limit],
+            "stderr": stderr[:limit] + marker,
+        }
+
+    low = 0
+    high = max(len(stdout), len(stderr))
+    best = with_prefix(0)
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = with_prefix(middle)
+        if len(encode(candidate).encode("utf-8")) <= MAX_ENVELOPE_BYTES:
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    serialized = encode(best)
+    if len(serialized.encode("utf-8")) <= MAX_ENVELOPE_BYTES:
+        return serialized
+
+    # A future schema change could make non-output fields unexpectedly huge.
+    # Still honor the wire contract with a small, schema-compatible envelope.
+    return encode(
+        _envelope(
+            "error",
+            exit_code=2,
+            stderr="Toolbox result exceeded the JSON envelope limit",
+            metadata=output.get("metadata"),
+        )
+    )
+
+
 def _execute(
     operation: str,
     command: list[str],
@@ -586,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
             stderr=f"{exc.__class__.__name__}: {exc}",
             metadata=metadata,
         )
-    print(json.dumps(output, sort_keys=True, separators=(",", ":")))
+    sys.stdout.write(_serialized_output(output) + "\n")
     return int(output["exit_code"]) if 0 <= int(output["exit_code"]) <= 255 else 1
 
 
