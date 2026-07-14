@@ -70,7 +70,7 @@ class ContextLimits(BaseModel):
 class ContextStatus(BaseModel):
     owner_type: ContextOwnerType
     owner_id: str
-    status: str = Field(pattern=r"^(not_needed|ready|stale|failed)$")
+    status: str = Field(pattern=r"^(not_needed|ready|stale|failed|runtime_managed)$")
     context_window: int
     max_output_tokens: int
     target_input_tokens: int

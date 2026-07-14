@@ -3,12 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { AgentsPage } from "./AgentsPage";
 
+const steerRun = vi.fn().mockResolvedValue(undefined);
+
 vi.mock("../state/ChromeContext", () => ({
   useChrome: () => ({ setActivityOpen: vi.fn() }),
 }));
 
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => ({
+    api: { steerRun, discussRun: vi.fn() },
     approvals: [],
     events: [{
       id: "event-command",
@@ -22,6 +25,8 @@ vi.mock("../state/WorkspaceContext", () => ({
     previewMode: false,
     run: {
       id: "run-1",
+      backend: "harness",
+      harnessSessionId: "session-1",
       title: "Network review",
       status: "running",
       completedTasks: 1,
@@ -46,5 +51,16 @@ describe("mission activity", () => {
     await user.click(within(activity!).getByRole("button", { name: "Copy exact code" }));
     expect(writeText).toHaveBeenCalledWith("nmap -sV 192.168.1.1\n");
     expect(within(activity!).queryByRole("button", { name: /Review and run/ })).toBeNull();
+  });
+
+  it("steers the active harness turn", async () => {
+    const user = userEvent.setup();
+    steerRun.mockClear();
+    render(<AgentsPage embedded />);
+
+    await user.type(screen.getByLabelText("Steer active harness turn"), "Prioritize the login flow");
+    await user.click(screen.getByRole("button", { name: "Steer" }));
+
+    expect(steerRun).toHaveBeenCalledWith("run-1", "Prioritize the login flow");
   });
 });

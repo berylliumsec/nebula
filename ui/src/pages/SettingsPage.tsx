@@ -13,6 +13,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
 import { EngagementPolicySettings } from "../components/EngagementPolicySettings";
 import { RunnerSettings, ToolPackSettings } from "../components/ToolingSettings";
+import { HarnessSettings } from "../components/HarnessSettings";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 
@@ -518,6 +519,7 @@ export function SettingsPage() {
           <div className="empty-state compact"><Server size={23} /><strong>No provider profiles</strong><p>Add a provider profile in Core before assigning a model to a mission.</p></div>
         )}
       </section>
+      <HarnessSettings />
       <ToolPackSettings />
       <RunnerSettings />
       <EngagementPolicySettings />

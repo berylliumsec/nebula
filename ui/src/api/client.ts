@@ -41,9 +41,12 @@ import type {
   GeneratedDraft,
   GeneratedDraftContent,
   HealthResponse,
+  HarnessProfile,
+  HarnessSessionSummary,
   KnowledgeIngestRequest,
   KnowledgeSource,
   MissionCreateRequest,
+  McpServerProfile,
   OperatorExecution,
   ObservationSummary,
   ObservationCreateRequest,
@@ -153,6 +156,9 @@ interface WireAgentRun extends WireEntity {
   started_at?: string | null;
   completed_at?: string | null;
   metadata?: JsonObject;
+  backend?: "native" | "harness";
+  harness_profile_id?: string | null;
+  harness_session_id?: string | null;
 }
 
 interface WireApproval extends WireEntity {
@@ -377,7 +383,11 @@ interface WireChatCitation extends JsonObject {
 interface WireChatCompletion extends JsonObject {
   turn_id?: string | null;
   session_id?: string | null;
-  provider_id: string;
+  backend?: "provider" | "harness";
+  provider_id?: string | null;
+  harness_profile_id?: string | null;
+  harness_session_id?: string | null;
+  harness_turn_id?: string | null;
   model: string;
   message: { id?: string | null; role: "assistant"; content: string };
   usage?: {
@@ -437,7 +447,7 @@ interface WireContextSnapshot extends WireEntity {
 interface WireContextStatus extends JsonObject {
   owner_type: "chat_session" | "agent_run";
   owner_id: string;
-  status: "not_needed" | "ready" | "stale" | "failed";
+  status: "not_needed" | "ready" | "stale" | "failed" | "runtime_managed";
   context_window: number;
   max_output_tokens: number;
   target_input_tokens: number;
@@ -450,7 +460,7 @@ interface WireContextStatus extends JsonObject {
 }
 
 interface WireChatStreamEvent extends Partial<WireChatCompletion> {
-  type: "started" | "delta" | "tool_started" | "tool_completed" | "approval_required" | "done" | "error";
+  type: "started" | "delta" | "message_delta" | "item_started" | "item_completed" | "usage" | "interrupted" | "completed" | "tool_started" | "tool_completed" | "approval_required" | "done" | "error";
   turn_id?: string;
   tool_call_id?: string;
   capability?: string;
@@ -460,18 +470,76 @@ interface WireChatStreamEvent extends Partial<WireChatCompletion> {
   evidence_ids?: string[];
   step?: number;
   approval?: JsonObject;
+  approval_id?: string;
+  tool_name?: string;
   provider_id?: string;
   model?: string;
   delta?: string;
   detail?: string;
+  payload?: JsonObject;
+  harness_session_id?: string;
+  harness_turn_id?: string;
 }
 
 interface WireChatSession extends WireEntity {
   engagement_id: string;
   title: string;
-  provider_profile_id: string;
+  backend?: "provider" | "harness";
+  provider_profile_id?: string | null;
+  harness_profile_id?: string | null;
+  harness_session_id?: string | null;
   model?: string | null;
   metadata?: JsonObject;
+}
+
+interface WireHarnessProfile extends WireEntity {
+  name: string;
+  kind: HarnessProfile["kind"];
+  connection_mode: HarnessProfile["connectionMode"];
+  transport: HarnessProfile["transport"];
+  executable?: string | null;
+  endpoint?: string | null;
+  auth_mode: HarnessProfile["authMode"];
+  secret_ref?: string | null;
+  default_model?: string | null;
+  enabled: boolean;
+  privacy?: { local_only?: boolean; permits_sensitive_data?: boolean };
+  capabilities?: { checked_at?: string | null; harness_version?: string | null; protocol_version?: string | null; detail?: string | null };
+}
+
+interface WireMcpServerProfile extends WireEntity {
+  name: string;
+  transport: McpServerProfile["transport"];
+  command?: string | null;
+  arguments?: string[];
+  url?: string | null;
+  auth_mode: McpServerProfile["authMode"];
+  enabled: boolean;
+  required: boolean;
+  trusted_stdio: boolean;
+  default_approval: McpServerProfile["defaultApproval"];
+  tool_overrides?: Record<string, McpServerProfile["defaultApproval"]>;
+  capabilities?: {
+    checked_at?: string | null;
+    detail?: string | null;
+    tools?: Array<{
+      name: string;
+      description?: string;
+      read_only?: boolean;
+      destructive?: boolean;
+      open_world?: boolean;
+      credentialed?: boolean | null;
+    }>;
+  };
+}
+
+interface WireHarnessSession extends WireEntity {
+  engagement_id: string;
+  harness_profile_id: string;
+  model: string;
+  status: HarnessSessionSummary["status"];
+  mcp_server_ids?: string[];
+  last_activity_at: string;
 }
 
 interface WireChatTurn extends WireEntity {
@@ -919,6 +987,9 @@ function mapRun(value: WireAgentRun): AgentRunSummary {
     completedTasks: numberField(value.metadata?.completed_tasks),
     totalTasks: numberField(value.metadata?.total_tasks),
     spentUsd: typeof value.metadata?.spent_usd === "number" ? value.metadata.spent_usd : undefined,
+    backend: value.backend ?? "native",
+    harnessProfileId: value.harness_profile_id ?? undefined,
+    harnessSessionId: value.harness_session_id ?? undefined,
   };
 }
 
@@ -957,6 +1028,7 @@ function mapApproval(value: WireApproval): ApprovalSummary {
     credentialClass: value.credential_class ?? undefined,
     expiresAt: value.expires_at ?? undefined,
     createdAt: value.requested_at ?? value.created_at,
+    argumentEditing: request.argument_editing !== false,
   };
 }
 
@@ -1310,7 +1382,11 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
   return {
     turnId: value.turn_id ?? undefined,
     sessionId: value.session_id ?? undefined,
-    providerId: value.provider_id,
+    backend: value.backend ?? "provider",
+    providerId: value.provider_id ?? undefined,
+    harnessProfileId: value.harness_profile_id ?? undefined,
+    harnessSessionId: value.harness_session_id ?? undefined,
+    harnessTurnId: value.harness_turn_id ?? undefined,
     model: value.model,
     message: {
       id: value.message.id ?? undefined,
@@ -1662,7 +1738,11 @@ function mapWorkspacePreview(value: WireWorkspacePreview): WorkspacePreview {
 
 function chatRequestBody(body: ChatCompletionRequest, stream: boolean): JsonObject {
   return {
+    backend: body.backend ?? "provider",
     provider_id: body.providerId,
+    harness_profile_id: body.harnessProfileId,
+    harness_session_id: body.harnessSessionId,
+    mcp_server_ids: body.mcpServerIds ?? [],
     engagement_id: body.engagementId,
     session_id: body.sessionId,
     model: body.model || undefined,
@@ -1690,12 +1770,78 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     id: value.id,
     engagementId: value.engagement_id,
     title: value.title,
-    providerId: value.provider_profile_id,
+    backend: value.backend ?? "provider",
+    providerId: value.provider_profile_id ?? undefined,
+    harnessProfileId: value.harness_profile_id ?? undefined,
+    harnessSessionId: value.harness_session_id ?? undefined,
     model: value.model ?? undefined,
     toolsEnabled: value.metadata?.tools_enabled === true,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     revision: value.revision,
+  };
+}
+
+function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
+  return {
+    id: value.id,
+    name: value.name,
+    kind: value.kind,
+    connectionMode: value.connection_mode,
+    transport: value.transport,
+    executable: value.executable ?? undefined,
+    endpoint: value.endpoint ?? undefined,
+    authMode: value.auth_mode,
+    secretRef: value.secret_ref ?? undefined,
+    defaultModel: value.default_model ?? undefined,
+    enabled: value.enabled,
+    localOnly: value.privacy?.local_only === true,
+    permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
+    healthy: Boolean(value.capabilities?.checked_at && !value.capabilities?.detail),
+    version: value.capabilities?.harness_version ?? value.capabilities?.protocol_version ?? undefined,
+    detail: value.capabilities?.detail ?? undefined,
+    revision: value.revision,
+  };
+}
+
+function mapMcpServer(value: WireMcpServerProfile): McpServerProfile {
+  return {
+    id: value.id,
+    name: value.name,
+    transport: value.transport,
+    command: value.command ?? undefined,
+    arguments: value.arguments ?? [],
+    url: value.url ?? undefined,
+    authMode: value.auth_mode,
+    enabled: value.enabled,
+    required: value.required,
+    trustedStdio: value.trusted_stdio,
+    defaultApproval: value.default_approval,
+    toolOverrides: value.tool_overrides ?? {},
+    tools: (value.capabilities?.tools ?? []).map((tool) => ({
+      name: tool.name,
+      description: tool.description ?? "",
+      readOnly: tool.read_only === true,
+      destructive: tool.destructive !== false,
+      openWorld: tool.open_world !== false,
+      credentialed: tool.credentialed ?? undefined,
+      approval: value.tool_overrides?.[tool.name] ?? value.default_approval,
+    })),
+    checkedAt: value.capabilities?.checked_at ?? undefined,
+    detail: value.capabilities?.detail ?? undefined,
+    revision: value.revision,
+  };
+}
+
+function mapHarnessSession(value: WireHarnessSession): HarnessSessionSummary {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    harnessProfileId: value.harness_profile_id,
+    model: value.model,
+    status: value.status,
+    mcpServerIds: value.mcp_server_ids ?? [],
+    lastActivityAt: value.last_activity_at,
   };
 }
 
@@ -2169,7 +2315,11 @@ export class ApiClient {
       body: JSON.stringify({
         engagement_id: body.engagementId,
         objective: body.objective,
+        backend: body.backend ?? "native",
         provider_id: body.providerId,
+        harness_profile_id: body.harnessProfileId,
+        harness_session_id: body.harnessSessionId,
+        mcp_server_ids: body.mcpServerIds ?? [],
         model: body.model,
         max_duration_seconds: body.maxDurationSeconds,
         max_tokens: body.maxTokens,
@@ -2178,8 +2328,120 @@ export class ApiClient {
         tool_names: body.toolNames ?? [],
         max_tool_calls: body.maxToolCalls ?? 0,
         max_concurrency: body.maxConcurrency ?? 1,
+        allow_cloud_tool_results: body.allowCloudToolResults === true,
       }),
     }).then(mapRun);
+  }
+
+  steerRun(id: string, text: string): Promise<void> {
+    return this.request<void>(`runs/${encodeURIComponent(id)}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  discussRun(id: string): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(`runs/${encodeURIComponent(id)}/discuss`, {
+      method: "POST",
+    }).then(mapChatSession);
+  }
+
+  continueChatAsMission(
+    sessionId: string,
+    body: { objective?: string; maxDurationSeconds?: number; maxTokens?: number; maxCostUsd?: number; maxToolCalls?: number; allowCloudToolResults?: boolean } = {},
+  ): Promise<AgentRunSummary> {
+    return this.request<WireAgentRun>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/continue-as-mission`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          objective: body.objective,
+          max_duration_seconds: body.maxDurationSeconds,
+          max_tokens: body.maxTokens,
+          max_cost_usd: body.maxCostUsd,
+          max_tool_calls: body.maxToolCalls,
+          allow_cloud_tool_results: body.allowCloudToolResults === true,
+        }),
+      },
+    ).then(mapRun);
+  }
+
+  listHarnesses(signal?: AbortSignal): Promise<HarnessProfile[]> {
+    return this.listAll<WireHarnessProfile>("harnesses", signal)
+      .then((items) => items.map(mapHarnessProfile));
+  }
+
+  createHarness(body: Record<string, unknown>): Promise<HarnessProfile> {
+    return this.request<WireHarnessProfile>("harnesses", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }).then(mapHarnessProfile);
+  }
+
+  updateHarness(id: string, changes: Record<string, unknown>, expectedRevision: number): Promise<HarnessProfile> {
+    return this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ changes, expected_revision: expectedRevision }),
+    }).then(mapHarnessProfile);
+  }
+
+  checkHarness(id: string): Promise<HarnessProfile> {
+    return this.request<Record<string, unknown>>(`harnesses/${encodeURIComponent(id)}/health`, {
+      method: "POST",
+    }).then(() => this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`))
+      .then(mapHarnessProfile);
+  }
+
+  async deleteHarness(id: string, expectedRevision: number): Promise<void> {
+    await this.request<void>(`harnesses/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "If-Match": String(expectedRevision) },
+    });
+  }
+
+  listHarnessSessions(engagementId?: string, signal?: AbortSignal): Promise<HarnessSessionSummary[]> {
+    return this.listAll<WireHarnessSession>("harness-sessions", signal, engagementId)
+      .then((items) => items.map(mapHarnessSession));
+  }
+
+  closeHarnessSession(id: string): Promise<HarnessSessionSummary> {
+    return this.request<WireHarnessSession>(`harness-sessions/${encodeURIComponent(id)}/close`, {
+      method: "POST",
+    }).then(mapHarnessSession);
+  }
+
+  listMcpServers(signal?: AbortSignal): Promise<McpServerProfile[]> {
+    return this.listAll<WireMcpServerProfile>("mcp-servers", signal)
+      .then((items) => items.map(mapMcpServer));
+  }
+
+  createMcpServer(body: Record<string, unknown>): Promise<McpServerProfile> {
+    return this.request<WireMcpServerProfile>("mcp-servers", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }).then(mapMcpServer);
+  }
+
+  updateMcpServer(id: string, changes: Record<string, unknown>, expectedRevision: number): Promise<McpServerProfile> {
+    return this.request<WireMcpServerProfile>(`mcp-servers/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ changes, expected_revision: expectedRevision }),
+    }).then(mapMcpServer);
+  }
+
+  probeMcpServer(id: string, engagementId?: string): Promise<McpServerProfile> {
+    return this.request<Record<string, unknown>>(`mcp-servers/${encodeURIComponent(id)}/probe`, {
+      method: "POST",
+      body: JSON.stringify({ engagement_id: engagementId }),
+    }).then(() => this.request<WireMcpServerProfile>(`mcp-servers/${encodeURIComponent(id)}`))
+      .then(mapMcpServer);
+  }
+
+  async deleteMcpServer(id: string, expectedRevision: number): Promise<void> {
+    await this.request<void>(`mcp-servers/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "If-Match": String(expectedRevision) },
+    });
   }
 
   listToolCatalog(signal?: AbortSignal): Promise<ToolPackCatalogEntry[]> {
@@ -3336,16 +3598,20 @@ export class ApiClient {
         onEvent({
           type: "started",
           providerId: wire.provider_id ?? body.providerId,
+          harnessProfileId: wire.harness_profile_id ?? body.harnessProfileId,
+          harnessSessionId: wire.harness_session_id ?? body.harnessSessionId,
+          harnessTurnId: wire.harness_turn_id ?? undefined,
           model: wire.model ?? body.model ?? "unknown",
           sessionId: wire.session_id ?? undefined,
           turnId: wire.turn_id ?? undefined,
         });
         return;
       }
-      if (wire.type === "delta") {
+      if (wire.type === "delta" || wire.type === "message_delta") {
         onEvent({
-          type: "delta",
+          type: wire.type,
           providerId: wire.provider_id ?? body.providerId,
+          harnessSessionId: wire.harness_session_id ?? body.harnessSessionId,
           model: wire.model ?? body.model ?? "unknown",
           delta: wire.delta ?? "",
           turnId: wire.turn_id ?? undefined,
@@ -3353,24 +3619,28 @@ export class ApiClient {
         return;
       }
       if (wire.type === "tool_started") {
-        if (!wire.turn_id || !wire.tool_call_id || !wire.capability) return;
+        const turnId = wire.turn_id ?? wire.harness_turn_id;
+        const capability = wire.capability ?? wire.tool_name;
+        if (!turnId || !wire.tool_call_id || !capability) return;
         onEvent({
           type: "tool_started",
-          turnId: wire.turn_id,
+          turnId,
           toolCallId: wire.tool_call_id,
-          capability: wire.capability,
-          arguments: wire.arguments ?? {},
+          capability,
+          arguments: wire.arguments ?? wire.payload ?? {},
           step: wire.step ?? 0,
         });
         return;
       }
       if (wire.type === "tool_completed") {
-        if (!wire.turn_id || !wire.tool_call_id || !wire.capability) return;
+        const turnId = wire.turn_id ?? wire.harness_turn_id;
+        const capability = wire.capability ?? wire.tool_name;
+        if (!turnId || !wire.tool_call_id || !capability) return;
         onEvent({
           type: "tool_completed",
-          turnId: wire.turn_id,
+          turnId,
           toolCallId: wire.tool_call_id,
-          capability: wire.capability,
+          capability,
           status: wire.status ?? "complete",
           summary: wire.summary ?? "Capability completed",
           evidenceIds: wire.evidence_ids ?? [],
@@ -3379,18 +3649,28 @@ export class ApiClient {
         return;
       }
       if (wire.type === "approval_required") {
-        if (!wire.turn_id || !wire.tool_call_id) return;
+        const turnId = wire.turn_id ?? wire.harness_turn_id;
+        if (!turnId || !wire.tool_call_id) return;
         pausedForApproval = true;
         onEvent({
           type: "approval_required",
-          turnId: wire.turn_id,
+          turnId,
           toolCallId: wire.tool_call_id,
-          approval: wire.approval ?? {},
+          approval: wire.approval ?? { id: wire.approval_id, exact_request: wire.payload ?? {} },
+        });
+        return;
+      }
+      if (["item_started", "item_completed", "usage", "interrupted", "completed"].includes(wire.type)) {
+        onEvent({
+          type: wire.type as "item_started" | "item_completed" | "usage" | "interrupted" | "completed",
+          harnessSessionId: wire.harness_session_id ?? body.harnessSessionId,
+          harnessTurnId: wire.harness_turn_id ?? undefined,
+          payload: wire.payload,
         });
         return;
       }
       if (wire.type === "done") {
-        if (!wire.provider_id || !wire.model || !wire.message) {
+        if (!wire.model || !wire.message || (!wire.provider_id && !wire.harness_profile_id)) {
           throw new ApiError("Nebula Core returned an incomplete chat completion.", 502, undefined, wire);
         }
         completed = mapChatCompletion(wire as WireChatCompletion);

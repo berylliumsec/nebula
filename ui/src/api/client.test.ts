@@ -1105,6 +1105,90 @@ describe("ApiClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({ tool_names: ["nmap.connect_scan"], max_tool_calls: 20, max_concurrency: 2 });
   });
 
+  it("maps harness registries and sends explicit harness mission privacy consent", async () => {
+    const entity = { created_at: "2026-07-14T10:00:00Z", updated_at: "2026-07-14T10:00:00Z", revision: 1 };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/harnesses")) return new Response(JSON.stringify([{
+        ...entity,
+        id: "harness-1",
+        name: "Codex",
+        kind: "codex_app_server",
+        connection_mode: "spawn",
+        transport: "stdio",
+        executable: "/opt/codex",
+        auth_mode: "existing_session",
+        default_model: "gpt-test",
+        enabled: true,
+        privacy: { local_only: false, permits_sensitive_data: true },
+        capabilities: { checked_at: entity.updated_at, harness_version: "0.144.0" },
+      }]), { status: 200 });
+      if (path.endsWith("/mcp-servers")) return new Response(JSON.stringify([{
+        ...entity,
+        id: "mcp-1",
+        name: "workspace",
+        transport: "streamable_http",
+        url: "https://mcp.example.test/mcp",
+        auth_mode: "none",
+        enabled: true,
+        required: true,
+        trusted_stdio: false,
+        default_approval: "risk_based",
+        capabilities: { tools: [{ name: "read_file", description: "Read", read_only: true, destructive: false, open_world: false, credentialed: false }] },
+      }]), { status: 200 });
+      if (path.endsWith("/harness-sessions")) return new Response(JSON.stringify([{
+        ...entity,
+        id: "session-1",
+        engagement_id: "engagement-1",
+        harness_profile_id: "harness-1",
+        model: "gpt-test",
+        status: "idle",
+        mcp_server_ids: ["mcp-1"],
+        last_activity_at: entity.updated_at,
+      }]), { status: 200 });
+      if (path.endsWith("/missions")) return new Response(JSON.stringify({
+        ...entity,
+        id: "run-harness",
+        engagement_id: "engagement-1",
+        objective: "Inspect",
+        status: "queued",
+        backend: "harness",
+        harness_profile_id: "harness-1",
+        harness_session_id: "session-1",
+        metadata: {},
+      }), { status: 202 });
+      return new Response(JSON.stringify({ detail: "not mocked" }), { status: 500 });
+    });
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const [harness] = await client.listHarnesses();
+    const [server] = await client.listMcpServers();
+    const [session] = await client.listHarnessSessions("engagement-1");
+    const run = await client.createMission({
+      engagementId: "engagement-1",
+      objective: "Inspect",
+      backend: "harness",
+      harnessProfileId: harness.id,
+      harnessSessionId: session.id,
+      model: "gpt-test",
+      maxToolCalls: 20,
+      allowCloudToolResults: true,
+    });
+
+    expect(harness).toMatchObject({ version: "0.144.0", localOnly: false, permitsSensitiveData: true });
+    expect(server).toMatchObject({ required: true, tools: [{ name: "read_file", readOnly: true }] });
+    expect(session).toMatchObject({ harnessProfileId: "harness-1", mcpServerIds: ["mcp-1"] });
+    expect(run).toMatchObject({ backend: "harness", harnessSessionId: "session-1" });
+    const missionBody = JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/missions"))?.[1]?.body));
+    expect(missionBody).toMatchObject({
+      backend: "harness",
+      harness_profile_id: "harness-1",
+      harness_session_id: "session-1",
+      allow_cloud_tool_results: true,
+    });
+    expect(missionBody).not.toHaveProperty("provider_id");
+  });
+
   it("assembles every paginated terminal result byte and acknowledges raw access", async () => {
     const pages = [new Uint8Array([0, 1, 2]), new Uint8Array([3, 4])];
     const fetchMock = vi.fn<typeof fetch>()

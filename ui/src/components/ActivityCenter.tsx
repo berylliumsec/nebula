@@ -226,7 +226,7 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
         </div>
         {editingId !== selectedApproval.id && <footer className="approval-review-actions">
           <button className="button danger-quiet" type="button" disabled={previewMode || busyId === selectedApproval.id} onClick={() => void decide(selectedApproval.id, { decision: "reject" })}><X size={15} /> Reject</button>
-          <button className="button quiet" type="button" disabled={previewMode || busyId === selectedApproval.id} onClick={() => { setDecisionError(undefined); setEditingId(selectedApproval.id); setEditedArguments(JSON.stringify(selectedApproval.arguments, null, 2)); }}>Edit request</button>
+          <button className="button quiet" type="button" title={selectedApproval.argumentEditing === false ? "Harness approvals apply to the exact request" : undefined} disabled={previewMode || busyId === selectedApproval.id || selectedApproval.argumentEditing === false} onClick={() => { setDecisionError(undefined); setEditingId(selectedApproval.id); setEditedArguments(JSON.stringify(selectedApproval.arguments, null, 2)); }}>Edit request</button>
           <span />
           <button className="button danger-quiet" type="button" disabled={previewMode || busyId === selectedApproval.id} onClick={() => void decide(selectedApproval.id, { decision: "stop" })}>{selectedApproval.origin === "chat" ? "Stop response" : "Stop mission"}</button>
           <button className="button primary" type="button" disabled={previewMode || busyId === selectedApproval.id} onClick={() => void decide(selectedApproval.id, { decision: "approve" })}><Check size={15} /> Approve once</button>

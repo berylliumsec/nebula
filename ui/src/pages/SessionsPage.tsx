@@ -31,6 +31,9 @@ import type {
   ChatUsage,
   ExecutionCapabilities,
   ExecutionLanguage,
+  HarnessProfile,
+  HarnessSessionSummary,
+  McpServerProfile,
   PersistedChatMessage,
 } from "../api/types";
 import { AssistantMarkdown, type FencedRunCandidate } from "../components/AssistantMarkdown";
@@ -118,6 +121,7 @@ export function SessionsPage() {
   } = useWorkbenchDrafts();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedView = searchParams.get("view");
+  const requestedSessionId = searchParams.get("session") ?? "";
   const initialView = requestedView === "chat" || requestedView === "terminal" || requestedView === "missions" || requestedView === "activity" || requestedView === "workspace" || requestedView === "notes"
     ? requestedView
     : requestedView === "executions" ? "activity"
@@ -149,6 +153,7 @@ export function SessionsPage() {
     reverifyProvider,
     resolveApproval,
     setupStatus,
+    startMission,
     uploadEvidence,
   } = useWorkspace();
   const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
@@ -161,6 +166,13 @@ export function SessionsPage() {
   const [renameError, setRenameError] = useState<string>();
   const [sessionId, setSessionId] = useState("");
   const [providerId, setProviderId] = useState("");
+  const [runtimeKind, setRuntimeKind] = useState<"provider" | "harness">("provider");
+  const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
+  const [harnessSessions, setHarnessSessions] = useState<HarnessSessionSummary[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServerProfile[]>([]);
+  const [harnessId, setHarnessId] = useState("");
+  const [harnessSessionId, setHarnessSessionId] = useState("");
+  const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
   const [model, setModel] = useState("");
   const [includeKnowledge, setIncludeKnowledge] = useState(true);
   const [assignedToolCount, setAssignedToolCount] = useState(0);
@@ -180,9 +192,13 @@ export function SessionsPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const selectedProvider = enabledProviders.find((provider) => provider.id === providerId);
+  const selectedHarness = harnesses.find((harness) => harness.id === harnessId);
   const providerIsLocal = selectedProvider?.kind === "local" || selectedProvider?.privacy === "local_only";
-  const cloudKnowledgeAllowed = providerIsLocal || selectedProvider?.permitsSensitiveData === true;
-  const canUseKnowledge = knowledgeSources.length > 0 && cloudKnowledgeAllowed;
+  const harnessIsLocal = selectedHarness?.localOnly === true;
+  const runtimePermitsKnowledge = runtimeKind === "harness"
+    ? harnessIsLocal || selectedHarness?.permitsSensitiveData === true
+    : providerIsLocal || selectedProvider?.permitsSensitiveData === true;
+  const canUseKnowledge = knowledgeSources.length > 0 && runtimePermitsKnowledge;
   const modelVerification = providerModelVerification(selectedProvider, model);
   const modelVerified = modelVerification?.status === "verified";
   const toolboxAvailable = Boolean(modelVerified && assignedToolCount > 0 && !toolRuntimeReason);
@@ -193,12 +209,12 @@ export function SessionsPage() {
   const toolboxUnavailableReason = toolboxReason;
 
   useEffect(() => {
-    if (coreState !== "online" || view !== "chat" || !selectedProvider || !model.trim() || modelVerification) return;
+    if (runtimeKind !== "provider" || coreState !== "online" || view !== "chat" || !selectedProvider || !model.trim() || modelVerification) return;
     const key = `${selectedProvider.id}:${model.trim()}`;
     if (attemptedToolVerificationRef.current.has(key)) return;
     attemptedToolVerificationRef.current.add(key);
     void reverifyProvider(selectedProvider.id, model).catch(() => undefined);
-  }, [coreState, model, modelVerification, reverifyProvider, selectedProvider, view]);
+  }, [coreState, model, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
 
   useEffect(() => {
     const next = requestedView === "executions" ? "activity" : requestedView === "files" ? "workspace" : requestedView;
@@ -254,7 +270,41 @@ export function SessionsPage() {
     });
     return () => { active = false; };
   }, [api, coreState, engagement]);
+
   useEffect(() => {
+    let active = true;
+    if (!api || coreState !== "online" || !engagement) {
+      setHarnesses([]);
+      setHarnessSessions([]);
+      setMcpServers([]);
+      return () => { active = false; };
+    }
+    void Promise.all([
+      api.listHarnesses(),
+      api.listHarnessSessions(engagement.id),
+      api.listMcpServers(),
+    ]).then(([nextHarnesses, nextSessions, nextServers]) => {
+      if (!active) return;
+      const enabled = nextHarnesses.filter((item) => item.enabled);
+      setHarnesses(enabled);
+      setHarnessSessions(nextSessions.filter((item) => item.status !== "closed"));
+      setMcpServers(nextServers.filter((item) => item.enabled));
+      setHarnessId((current) => enabled.some((item) => item.id === current) ? current : enabled[0]?.id ?? "");
+    }).catch(() => {
+      if (active) { setHarnesses([]); setHarnessSessions([]); setMcpServers([]); }
+    });
+    return () => { active = false; };
+  }, [api, coreState, engagement]);
+
+  useEffect(() => {
+    if (runtimeKind !== "harness" || sessionId) return;
+    const attached = harnessSessions.find((item) => item.id === harnessSessionId);
+    const profile = harnesses.find((item) => item.id === (attached?.harnessProfileId ?? harnessId));
+    if (attached) setHarnessId(attached.harnessProfileId);
+    setModel(attached?.model ?? profile?.defaultModel ?? "");
+  }, [harnessId, harnessSessionId, harnessSessions, harnesses, runtimeKind, sessionId]);
+  useEffect(() => {
+    if (runtimeKind !== "provider") return;
     if (!enabledProviders.length) {
       setProviderId("");
       setModel("");
@@ -264,10 +314,10 @@ export function SessionsPage() {
     const provider = enabledProviders[0];
     setProviderId(provider.id);
     setModel(provider.defaultModel ?? provider.models[0] ?? "");
-  }, [enabledProviders, providerId]);
+  }, [enabledProviders, providerId, runtimeKind]);
 
   useEffect(() => {
-    if (!selectedProvider || sessionId) return;
+    if (runtimeKind !== "provider" || !selectedProvider || sessionId) return;
     const models = selectedProvider.models;
     if (!models.length) {
       if (!discoveringProviderId && model) setModel("");
@@ -278,10 +328,10 @@ export function SessionsPage() {
       ? selectedProvider.defaultModel
       : models[0];
     setModel(preferredModel ?? "");
-  }, [discoveringProviderId, model, selectedProvider, sessionId]);
+  }, [discoveringProviderId, model, runtimeKind, selectedProvider, sessionId]);
 
   useEffect(() => {
-    if (!providerId) {
+    if (runtimeKind !== "provider" || !providerId) {
       lastModelDiscoveryProviderIdRef.current = undefined;
       return;
     }
@@ -292,18 +342,19 @@ export function SessionsPage() {
     void refreshProvider(providerId).finally(() => {
       setDiscoveringProviderId((current) => current === providerId ? undefined : current);
     });
-  }, [coreState, providerId, refreshProvider, sessionId]);
+  }, [coreState, providerId, refreshProvider, runtimeKind, sessionId]);
 
   useEffect(() => {
-    if (coreState !== "online" || !selectedProvider) return;
+    if (coreState !== "online" || (runtimeKind === "provider" ? !selectedProvider : !selectedHarness)) return;
     setIncludeKnowledge(canUseKnowledge);
-  }, [canUseKnowledge, coreState, selectedProvider]);
+  }, [canUseKnowledge, coreState, runtimeKind, selectedHarness, selectedProvider]);
 
   useEffect(() => {
     abortRef.current?.abort();
     setSending(false);
     setSessions([]);
     setSessionId("");
+    setHarnessSessionId("");
     setMessages([]);
     setDraft(assistantDraft ? "" : "");
     setChatError(undefined);
@@ -357,6 +408,7 @@ export function SessionsPage() {
     abortRef.current?.abort();
     setSending(false);
     setSessionId("");
+    setHarnessSessionId("");
     setMessages([]);
     setDraft("");
     setChatError(undefined);
@@ -465,13 +517,17 @@ export function SessionsPage() {
       setSessionId(id);
       setMessages(history.map(persistedMessage));
       if (summary) {
-        setProviderId(summary.providerId);
+        setRuntimeKind(summary.backend);
+        setProviderId(summary.providerId ?? "");
+        setHarnessId(summary.harnessProfileId ?? "");
+        setHarnessSessionId(summary.harnessSessionId ?? "");
         setModel(summary.model ?? "");
       }
-      if (pendingTurn && summary) {
+      if (pendingTurn && summary?.backend === "provider") {
         const assistantId = makeId("assistant-pending");
         const approval = approvals.find((item) => item.id === pendingTurn.approvalId);
         const resumeRequest: ChatCompletionRequest = {
+          backend: "provider",
           providerId: summary.providerId,
           engagementId: engagement?.id,
           sessionId: id,
@@ -531,6 +587,11 @@ export function SessionsPage() {
     }
   };
 
+  useEffect(() => {
+    if (!requestedSessionId || requestedSessionId === sessionId || !api) return;
+    void selectSession(requestedSessionId);
+  }, [api, requestedSessionId, sessionId]);
+
   const openAttachedChat = async (id: string) => {
     if (!api || !engagement) return;
     setLoadingHistory(true);
@@ -546,7 +607,10 @@ export function SessionsPage() {
       setSessionId(id);
       setMessages(history.map(persistedMessage));
       if (summary) {
-        setProviderId(summary.providerId);
+        setRuntimeKind(summary.backend);
+        setProviderId(summary.providerId ?? "");
+        setHarnessId(summary.harnessProfileId ?? "");
+        setHarnessSessionId(summary.harnessSessionId ?? "");
         setModel(summary.model ?? "");
       }
       setView("chat");
@@ -567,7 +631,7 @@ export function SessionsPage() {
     if (streamEvent.type === "started" && streamEvent.sessionId) {
       setSessionId(streamEvent.sessionId);
     }
-    if (streamEvent.type === "delta" && streamEvent.delta) {
+    if ((streamEvent.type === "delta" || streamEvent.type === "message_delta") && streamEvent.delta) {
       setMessages((current) => current.map((message) => message.id === assistantId
         ? { ...message, content: message.content + streamEvent.delta }
         : message));
@@ -624,18 +688,23 @@ export function SessionsPage() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const content = draft.trim();
-    if (!content || sending || !api || coreState !== "online" || !engagement || !selectedProvider || !model.trim()) return;
+    const providerRuntime = runtimeKind === "provider" ? selectedProvider : undefined;
+    const harnessRuntime = runtimeKind === "harness" ? selectedHarness : undefined;
+    if (!content || sending || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
 
     const wantsKnowledge = includeKnowledge && knowledgeSources.length > 0;
     let allowCloudKnowledge = false;
-    if (wantsKnowledge && !providerIsLocal) {
-      if (!selectedProvider.permitsSensitiveData) {
-        setChatError("This provider profile is text-only. Enable project/document data in Settings or turn off knowledge retrieval.");
+    const knowledgeRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
+    const knowledgeRuntimeName = runtimeKind === "harness" ? harnessRuntime?.name : providerRuntime?.name;
+    const knowledgeRuntimePermitsSensitive = runtimeKind === "harness" ? harnessRuntime?.permitsSensitiveData : providerRuntime?.permitsSensitiveData;
+    if (wantsKnowledge && !knowledgeRuntimeIsLocal && knowledgeRuntimeName) {
+      if (!knowledgeRuntimePermitsSensitive) {
+        setChatError("This runtime profile is text-only. Enable project/document data in Settings or turn off knowledge retrieval.");
         return;
       }
       allowCloudKnowledge = await confirm({
         title: "Share cited excerpts?",
-        message: `Allow this request to send redacted excerpts from ${knowledgeSources.length} knowledge source${knowledgeSources.length === 1 ? "" : "s"} to ${selectedProvider.name}? Local-only sources will remain blocked.`,
+        message: `Allow this request to send bounded excerpts from ${knowledgeSources.length} knowledge source${knowledgeSources.length === 1 ? "" : "s"} to ${knowledgeRuntimeName}? Local-only sources will remain blocked.`,
         confirmLabel: "Allow this request",
       });
       if (!allowCloudKnowledge) {
@@ -644,16 +713,23 @@ export function SessionsPage() {
       }
     }
 
-    const wantsTools = canUseTools;
+    const wantsTools = runtimeKind === "harness"
+      ? Boolean(harnessSessionId
+        ? harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length
+        : selectedMcpIds.length)
+      : canUseTools;
     let allowCloudToolResults = false;
-    if (wantsTools && !providerIsLocal) {
-      if (!selectedProvider.permitsSensitiveData) {
-        setChatError("This provider profile does not permit Toolbox results to leave the device.");
+    const toolRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
+    const toolRuntimeName = runtimeKind === "harness" ? harnessRuntime?.name : providerRuntime?.name;
+    const toolRuntimePermitsSensitive = runtimeKind === "harness" ? harnessRuntime?.permitsSensitiveData : providerRuntime?.permitsSensitiveData;
+    if (wantsTools && !toolRuntimeIsLocal && toolRuntimeName) {
+      if (!toolRuntimePermitsSensitive) {
+        setChatError("This runtime profile does not permit tool results to leave the device.");
         return;
       }
       allowCloudToolResults = await confirm({
         title: "Share redacted tool results?",
-        message: `Allow this turn to send redacted, truncated Toolbox results to ${selectedProvider.name}? Canonical output remains local.`,
+        message: `Allow this turn to send bounded tool inputs and results to ${toolRuntimeName}? Canonical output remains local and risky calls still require approval.`,
         confirmLabel: "Allow this turn",
       });
       if (!allowCloudToolResults) return;
@@ -701,7 +777,11 @@ export function SessionsPage() {
     const initialSessionId = sessionId || undefined;
     let returnedSessionId = initialSessionId;
     const chatRequest: ChatCompletionRequest = {
-      providerId: selectedProvider.id,
+      backend: runtimeKind,
+      providerId: providerRuntime?.id,
+      harnessProfileId: harnessRuntime?.id,
+      harnessSessionId: !initialSessionId && harnessSessionId ? harnessSessionId : undefined,
+      mcpServerIds: !initialSessionId && !harnessSessionId ? selectedMcpIds : [],
       engagementId: engagement.id,
       sessionId: returnedSessionId,
       model: model.trim(),
@@ -784,6 +864,19 @@ export function SessionsPage() {
         decision: decision === "edit" ? "approve" : decision,
         editedArguments,
       });
+      if (pendingResponse.request.backend === "harness") {
+        if (decision === "stop") {
+          setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
+            ? { ...message, state: "cancelled", detail: "Response stopped by the operator." }
+            : message));
+        } else {
+          setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
+            ? { ...message, state: "streaming" }
+            : message));
+        }
+        setPendingResponse(undefined);
+        return;
+      }
       if (decision === "stop") {
         setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
         ? { ...message, state: "cancelled", detail: "Response stopped by the operator." }
@@ -822,7 +915,46 @@ export function SessionsPage() {
     }
   };
 
-  const canSend = Boolean(api && coreState === "online" && engagement && selectedProvider && model.trim() && draft.trim() && !sending);
+  const continueAsMission = async () => {
+    const chat = sessions.find((item) => item.id === sessionId);
+    const objective = [...messages].reverse().find((item) => item.role === "user")?.content;
+    if (!engagement || !chat?.harnessProfileId || !chat.harnessSessionId || !objective) return;
+    try {
+      const harness = harnesses.find((item) => item.id === chat.harnessProfileId);
+      const attached = harnessSessions.find((item) => item.id === chat.harnessSessionId);
+      let allowCloudToolResults = false;
+      if (attached?.mcpServerIds.length && harness && !harness.localOnly) {
+        if (!harness.permitsSensitiveData) {
+          setChatError("This harness profile is text-only. Permit project/document data in Settings before continuing with MCP.");
+          return;
+        }
+        allowCloudToolResults = await confirm({
+          title: "Allow MCP results in this mission?",
+          message: `Allow bounded MCP tool inputs and results to reach ${harness.name} for the continued mission?`,
+          confirmLabel: "Continue as mission",
+        });
+        if (!allowCloudToolResults) return;
+      }
+      await startMission({
+        engagementId: engagement.id,
+        objective,
+        backend: "harness",
+        harnessProfileId: chat.harnessProfileId,
+        harnessSessionId: chat.harnessSessionId,
+        model: chat.model,
+        maxDurationSeconds: 900,
+        maxTokens: 32_000,
+        maxToolCalls: 100,
+        allowCloudToolResults,
+      });
+      setView("missions");
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "Could not continue this chat as a mission.");
+    }
+  };
+
+  const runtimeReady = runtimeKind === "provider" ? Boolean(selectedProvider) : Boolean(selectedHarness);
+  const canSend = Boolean(api && coreState === "online" && engagement && runtimeReady && model.trim() && draft.trim() && !sending);
   const runnableLanguages = useMemo(() => new Set<ExecutionLanguage>(
     executionCapabilities?.runtimes
       .filter((runtime) => runtime.offline && runtime.scopedNetwork)
@@ -854,7 +986,7 @@ export function SessionsPage() {
         {view === "chat" && <aside className="session-list" aria-label="Conversations">
           <header><div><span>Conversations</span><strong>{sessions.length} saved</strong></div><div className="session-list-header-actions"><button className="icon-button subtle" type="button" aria-label={conversationPanelExpanded ? "Collapse conversations panel" : "Expand conversations panel"} aria-pressed={conversationPanelExpanded} onClick={toggleConversationPanel}>{conversationPanelExpanded ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</button><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={!engagement} onClick={newConversation}><Plus size={16} /></button></div></header>
           <nav>
-            <button className={!sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{selectedProvider?.name ?? "Choose a provider"}</small></span></button>
+            <button className={!sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
             {sessions.map((session) => <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" type="button" onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><button className="icon-button subtle" type="button" aria-label={`Rename conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Rename ${session.title}`} onClick={() => startRenamingConversation(session)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Delete ${session.title}`} onClick={() => void deleteConversation(session)}>{deletingSessionId === session.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></>}</div>)}
             {renameError && <p className="session-list-error" role="alert">{renameError}</p>}
           </nav>
@@ -888,13 +1020,13 @@ export function SessionsPage() {
             <div className="empty-state"><FolderOpen size={24} /><strong>Select a project</strong><p>Terminal, execution history, and workspace files are project-scoped.</p></div>
           ) : (
             <div className="chat-panel">
-              <details className="chat-settings" open={!selectedProvider}>
+              <details className="chat-settings" open={!runtimeReady}>
                 <summary>Assistant settings</summary>
                 <div className="chat-context-bar">
-                <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label>
-                <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={sending || Boolean(sessionId) || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{selectedProvider?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-                <label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? cloudKnowledgeAllowed ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label>
-                <div className="chat-knowledge-toggle" role="status" title={toolboxUnavailableReason}><ShieldCheck size={15} /><span>Toolbox automatic<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"} enabled` : toolboxUnavailableReason}</small></span></div>
+                <label><span>Runtime</span><select aria-label="Chat runtime" value={runtimeKind} disabled={sending || Boolean(sessionId)} onChange={(event) => { const next = event.target.value as "provider" | "harness"; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "provider") selectProvider(providerId || enabledProviders[0]?.id || ""); else { setModel(selectedHarness?.defaultModel ?? ""); } }}><option value="provider">Provider</option><option value="harness">Agent harness</option></select></label>
+                {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={sending || Boolean(sessionId) || Boolean(harnessSessionId)} onChange={(event) => setHarnessId(event.target.value)}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label><label><span>Session</span><select aria-label="Chat harness session" value={harnessSessionId} disabled={sending || Boolean(sessionId)} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">New session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.model} · {item.status}</option>)}</select></label></>}
+                {runtimeKind === "provider" ? <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={sending || Boolean(sessionId) || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{selectedProvider?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label> : <label><span>Model</span><input aria-label="Chat harness model" value={model} disabled={sending || Boolean(sessionId) || Boolean(harnessSessionId)} placeholder="Exact harness model" onChange={(event) => setModel(event.target.value)} /></label>}
+                {runtimeKind === "provider" ? <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label><div className="chat-knowledge-toggle" role="status" title={toolboxUnavailableReason}><ShieldCheck size={15} /><span>Toolbox automatic<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"} enabled` : toolboxUnavailableReason}</small></span></div></> : <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} bounded source${knowledgeSources.length === 1 ? "" : "s"}` : "Harness is text-only" : "No sources loaded"}</small></span></label><div className="chat-harness-mcp"><span>MCP servers</span>{harnessSessionId ? <small>Frozen in selected session</small> : mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending || Boolean(sessionId)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div></>}
                 </div>
               </details>
               <div className="chat-scroll" ref={scrollRef} aria-live="polite">
@@ -913,7 +1045,7 @@ export function SessionsPage() {
                   </article>
                 )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use project-assigned Toolbox capabilities when the exact model is verified.</p></div>}
               </div>
-              {pendingResponse && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
+              {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <p className="chat-error" role="alert">{chatError}</p>}
               <form className="chat-composer" onSubmit={(event) => void submit(event)}>
                 {assistantDraft && <div className="chat-context-attachment" role="group" aria-label="Selected context attachment">
@@ -922,8 +1054,8 @@ export function SessionsPage() {
                   <button className="icon-button subtle" type="button" aria-label="Remove selected context" onClick={clearAssistantDraft}><X size={14} /></button>
                 </div>}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
-                <textarea ref={composerRef} id="analyst-message" value={draft} disabled={!engagement || !selectedProvider || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : selectedProvider ? "Ask about this project…" : "Add a model in Settings when you want the assistant…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
-                <footer><span>{canUseTools ? `Toolbox automatic · ${assignedToolCount} assigned` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse) void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <textarea ref={composerRef} id="analyst-message" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
+                <footer><span>{runtimeKind === "harness" ? `${harnessSessionId ? "Resumed" : "New"} harness session · ${selectedMcpIds.length || harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length || 0} MCP` : canUseTools ? `Toolbox automatic · ${assignedToolCount} assigned` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse && pendingResponse.request.backend !== "harness") void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
             </div>
           )}
@@ -931,7 +1063,8 @@ export function SessionsPage() {
 
         {view === "chat" && <aside className="session-inspector" aria-label="Session inspector">
           <header><div><span>Context</span><strong>Session details</strong></div></header>
-          <dl><div><dt>Active operator</dt><dd>{activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat"}</dd></div><div><dt>Provider</dt><dd>{selectedProvider?.name ?? "Not selected"}</dd></div><div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl>
+          <dl><div><dt>Active operator</dt><dd>{activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat"}</dd></div><div><dt>Runtime</dt><dd>{runtimeKind === "harness" ? selectedHarness?.name ?? "Harness" : selectedProvider?.name ?? "Not selected"}</dd></div><div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl>
+          {sessionId && sessions.find((session) => session.id === sessionId)?.backend === "harness" && <button className="button primary full" type="button" disabled={sending} onClick={() => void continueAsMission()}><Bot size={15} /> Continue as mission</button>}
           <section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"}</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section>
           <section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>{canUseTools ? `${assignedToolCount} assigned capabilities run sequentially through the scoped broker; approvals pause this response.` : toolboxUnavailableReason ?? "Toolbox is unavailable for this session."}</p></div></section>
           <section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Citations identify canonical ingested chunks and transcript messages.</p></div></section>

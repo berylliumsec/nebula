@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { createPortal } from "react-dom";
 import { Play, ShieldCheck, Square, Wrench, X } from "lucide-react";
 import { providerModelVerification } from "../api/providerCapabilities";
-import type { ToolSummary } from "../api/types";
+import type { HarnessProfile, HarnessSessionSummary, McpServerProfile, ToolSummary } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { notifyToolPacksChanged, useToolPackRevision } from "../state/toolPackChanges";
 import { useConfirmation } from "./DialogSystem";
@@ -13,8 +13,16 @@ interface NewMissionButtonProps {
 }
 
 export function NewMissionButton({ className = "button primary", children }: NewMissionButtonProps) {
+  const confirm = useConfirmation();
   const { api, coreState, engagement, previewMode, providers, reverifyProvider, startMission } = useWorkspace();
   const availableProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
+  const [runtimeKind, setRuntimeKind] = useState<"native" | "harness">("native");
+  const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
+  const [harnessSessions, setHarnessSessions] = useState<HarnessSessionSummary[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServerProfile[]>([]);
+  const [harnessId, setHarnessId] = useState("");
+  const [harnessSessionId, setHarnessSessionId] = useState("");
+  const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   const [objective, setObjective] = useState("");
   const [providerId, setProviderId] = useState("");
@@ -43,6 +51,30 @@ export function NewMissionButton({ className = "button primary", children }: New
     setProviderId(next?.id ?? "");
     setModel(next?.defaultModel ?? next?.models[0] ?? "");
   }, [availableProviders, providerId]);
+
+  useEffect(() => {
+    let active = true;
+    if (!api || coreState !== "online") return () => { active = false; };
+    void Promise.all([api.listHarnesses(), api.listMcpServers(), api.listHarnessSessions(engagement?.id)])
+      .then(([nextHarnesses, nextServers, nextSessions]) => {
+        if (!active) return;
+        const enabled = nextHarnesses.filter((item) => item.enabled);
+        setHarnesses(enabled);
+        setMcpServers(nextServers.filter((item) => item.enabled));
+        setHarnessSessions(nextSessions.filter((item) => item.status !== "closed"));
+        setHarnessId((current) => enabled.some((item) => item.id === current) ? current : enabled[0]?.id ?? "");
+      })
+      .catch(() => { if (active) { setHarnesses([]); setMcpServers([]); setHarnessSessions([]); } });
+    return () => { active = false; };
+  }, [api, coreState, engagement?.id]);
+
+  useEffect(() => {
+    if (runtimeKind !== "harness") return;
+    const attached = harnessSessions.find((item) => item.id === harnessSessionId);
+    const harness = harnesses.find((item) => item.id === (attached?.harnessProfileId ?? harnessId));
+    if (attached) setHarnessId(attached.harnessProfileId);
+    setModel(attached?.model ?? harness?.defaultModel ?? "");
+  }, [harnessId, harnessSessionId, harnessSessions, harnesses, runtimeKind]);
 
   useEffect(() => {
     let active = true;
@@ -211,7 +243,7 @@ export function NewMissionButton({ className = "button primary", children }: New
 
   const openMission = () => {
     setError(undefined);
-    setMaxToolCalls(automaticTools.length ? 50 : 0);
+    setMaxToolCalls(runtimeKind === "harness" ? 50 : automaticTools.length ? 50 : 0);
     setMaxConcurrency(automaticTools.length ? 2 : 1);
     setOpen(true);
     ensureOfficialToolbox();
@@ -219,9 +251,9 @@ export function NewMissionButton({ className = "button primary", children }: New
 
   useEffect(() => {
     if (!open) return;
-    setMaxToolCalls(automaticTools.length ? 50 : 0);
-    setMaxConcurrency(automaticTools.length ? 2 : 1);
-  }, [automaticTools, open]);
+    setMaxToolCalls(runtimeKind === "harness" ? 50 : automaticTools.length ? 50 : 0);
+    setMaxConcurrency(runtimeKind === "native" && automaticTools.length ? 2 : 1);
+  }, [automaticTools, open, runtimeKind]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -231,8 +263,13 @@ export function NewMissionButton({ className = "button primary", children }: New
       setError("Select an engagement before starting a mission.");
       return;
     }
-    if (!provider) {
+    const selectedHarness = harnesses.find((item) => item.id === harnessId);
+    if (runtimeKind === "native" && !provider) {
       setError("Select an enabled provider before starting a mission.");
+      return;
+    }
+    if (runtimeKind === "harness" && !selectedHarness) {
+      setError("Select an enabled agent harness before starting a mission.");
       return;
     }
     if (!cleanObjective) {
@@ -259,7 +296,7 @@ export function NewMissionButton({ className = "button primary", children }: New
       setError("Retries must be a whole number from 0 to 2.");
       return;
     }
-    if (automaticTools.length && (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 100)) {
+    if ((runtimeKind === "harness" || automaticTools.length) && (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 100)) {
       setError("Maximum tool calls must be a whole number from 1 to 100.");
       return;
     }
@@ -267,10 +304,42 @@ export function NewMissionButton({ className = "button primary", children }: New
       setError("Maximum concurrency must be 1 or 2.");
       return;
     }
+    const selectedHarnessSession = harnessSessions.find((item) => item.id === harnessSessionId);
+    const harnessUsesMcp = runtimeKind === "harness" && Boolean(
+      harnessSessionId ? selectedHarnessSession?.mcpServerIds.length : selectedMcpIds.length,
+    );
+    let allowCloudToolResults = false;
+    if (harnessUsesMcp && selectedHarness && !selectedHarness.localOnly) {
+      if (!selectedHarness.permitsSensitiveData) {
+        setError("This harness profile is text-only. Permit project/document data in Settings or remove MCP servers.");
+        return;
+      }
+      allowCloudToolResults = await confirm({
+        title: "Allow MCP results in this mission?",
+        message: `Allow bounded MCP tool inputs and results to reach ${selectedHarness.name} for this mission? Every risky call still follows its exact approval policy.`,
+        confirmLabel: "Allow this mission",
+      });
+      if (!allowCloudToolResults) return;
+    }
     setSaving(true);
     setError(undefined);
     try {
-      await startMission({ engagementId: engagement.id, objective: cleanObjective, providerId: provider.id, model: cleanModel, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, toolNames: automaticTools, maxToolCalls: automaticTools.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length ? maxConcurrency : 1 });
+      await startMission(runtimeKind === "harness" ? {
+        engagementId: engagement.id,
+        objective: cleanObjective,
+        backend: "harness",
+        harnessProfileId: selectedHarness?.id,
+        harnessSessionId: harnessSessionId || undefined,
+        mcpServerIds: harnessSessionId ? [] : selectedMcpIds,
+        model: cleanModel,
+        maxDurationSeconds: durationMinutes * 60,
+        maxTokens,
+        maxCostUsd: maxCost,
+        maxRetries: 0,
+        maxToolCalls,
+        maxConcurrency: 1,
+        allowCloudToolResults,
+      } : { engagementId: engagement.id, objective: cleanObjective, backend: "native", providerId: provider?.id, model: cleanModel, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, toolNames: automaticTools, maxToolCalls: automaticTools.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length ? maxConcurrency : 1 });
       setOpen(false);
       setObjective("");
       setMaxToolCalls(0);
@@ -283,7 +352,7 @@ export function NewMissionButton({ className = "button primary", children }: New
   };
 
   return <>
-    <button className={className} type="button" disabled={previewMode || !engagement || availableProviders.length === 0} title={availableProviders.length ? undefined : "Add an enabled provider before automating a task"} onClick={openMission}>{children ?? <><Play size={16} /> Automate task</>}</button>
+    <button className={className} type="button" disabled={previewMode || !engagement || (availableProviders.length === 0 && harnesses.length === 0)} title={availableProviders.length || harnesses.length ? undefined : "Add an enabled provider or agent harness before automating a task"} onClick={openMission}>{children ?? <><Play size={16} /> Automate task</>}</button>
     {open && createPortal(
       <div className="dialog-backdrop">
         <form noValidate className="provider-dialog resource-dialog mission-dialog" role="dialog" aria-modal="true" aria-labelledby="mission-dialog-title" onSubmit={(event) => void submit(event)}>
@@ -294,8 +363,10 @@ export function NewMissionButton({ className = "button primary", children }: New
           <label>Objective<textarea required autoFocus rows={5} value={objective} placeholder="Describe the outcome you want Nebula to produce…" onChange={(event) => { setObjective(event.target.value); setError(undefined); }} /></label>
           <details className="provider-advanced mission-advanced">
             <summary>Advanced</summary>
-            <label>Provider<select value={providerId} onChange={(event) => { selectProvider(event.target.value); setError(undefined); }}>{availableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
-            <label>Model<input required value={model} list="mission-models" placeholder="Exact model ID" onChange={(event) => { setModel(event.target.value); setError(undefined); }} /><datalist id="mission-models">{provider?.models.map((item) => <option value={item} key={item} />)}</datalist></label>
+            <label>Runtime<select aria-label="Mission runtime" value={runtimeKind} onChange={(event) => { const next = event.target.value as "native" | "harness"; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "native") selectProvider(providerId || availableProviders[0]?.id || ""); }}><option value="native">Native mission</option><option value="harness">Agent harness</option></select></label>
+            {runtimeKind === "native" ? <label>Provider<select value={providerId} onChange={(event) => { selectProvider(event.target.value); setError(undefined); }}>{availableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label> : <><label>Harness<select aria-label="Mission harness" value={harnessId} disabled={Boolean(harnessSessionId)} onChange={(event) => { setHarnessId(event.target.value); setError(undefined); }}>{harnesses.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Session<select aria-label="Harness session" value={harnessSessionId} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">Start a new session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.model} · {item.status}</option>)}</select></label></>}
+            <label>Model<input required value={model} list="mission-models" disabled={Boolean(harnessSessionId)} placeholder="Exact model ID" onChange={(event) => { setModel(event.target.value); setError(undefined); }} /><datalist id="mission-models">{runtimeKind === "native" && provider?.models.map((item) => <option value={item} key={item} />)}</datalist></label>
+            {runtimeKind === "harness" && !harnessSessionId && <fieldset className="mission-tools"><legend>MCP servers</legend>{mcpServers.length ? mcpServers.map((server) => <label className="provider-consent" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span><strong>{server.name}</strong><small>{server.transport} · {server.tools.length} discovered tools</small></span></label>) : <p>No enabled MCP profiles. Add one in Settings if this mission needs external tools.</p>}</fieldset>}
             <div className="resource-form-grid">
               <label>Duration (minutes)<input type="number" min={1} max={60} value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))} /></label>
               <label>Token limit<input type="number" min={1} max={200000} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} /></label>

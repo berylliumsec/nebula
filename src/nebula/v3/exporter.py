@@ -29,7 +29,10 @@ from .domain import (
     Evidence,
     Finding,
     GeneratedDraft,
+    HarnessProfile,
+    HarnessSession,
     KnowledgeSource,
+    McpServerProfile,
     OperatorExecution,
     OperatorProfile,
     ProviderProfile,
@@ -70,6 +73,32 @@ def _json_bytes(value: Any) -> bytes:
         ).encode("utf-8")
         + b"\n"
     )
+
+
+def _credential_free(value: Any) -> Any:
+    """Remove machine-local auth bindings while retaining portable snapshots."""
+
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            lowered = key.lower()
+            if "secret_ref" in lowered or lowered in {
+                "authorization",
+                "headers",
+                "environment_secret_refs",
+                "header_secret_refs",
+            }:
+                cleaned[key] = {} if isinstance(item, dict) else None
+                continue
+            cleaned[key] = _credential_free(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_credential_free(item) for item in value]
+    return value
+
+
+def _export_entity(entity: Entity) -> dict[str, Any]:
+    return _credential_free(entity.model_dump(mode="json"))
 
 
 def _all_entities(
@@ -122,6 +151,8 @@ def _include_referenced_globals(
     """Close explicit cross-engagement references needed to interpret a bundle."""
 
     provider_ids: set[str] = set()
+    harness_profile_ids: set[str] = set()
+    mcp_profile_ids: set[str] = set()
     required_operator_ids: set[str] = set()
     possible_operator_ids: set[str] = set()
     advisory_ids: set[str] = set()
@@ -152,6 +183,8 @@ def _include_referenced_globals(
                     possible_operator_ids.add(entity.decided_by)
             elif isinstance(entity, AgentRun) and entity.supervisor_provider_id:
                 provider_ids.add(entity.supervisor_provider_id)
+            elif isinstance(entity, AgentRun) and entity.harness_profile_id:
+                harness_profile_ids.add(entity.harness_profile_id)
             elif isinstance(entity, AgentAttempt) and entity.provider_profile_id:
                 provider_ids.add(entity.provider_profile_id)
             elif isinstance(entity, OperatorExecution):
@@ -180,7 +213,13 @@ def _include_referenced_globals(
                     if artifact_id
                 )
             elif isinstance(entity, ChatSession):
-                provider_ids.add(entity.provider_profile_id)
+                if entity.provider_profile_id:
+                    provider_ids.add(entity.provider_profile_id)
+                if entity.harness_profile_id:
+                    harness_profile_ids.add(entity.harness_profile_id)
+            elif isinstance(entity, HarnessSession):
+                harness_profile_ids.add(entity.harness_profile_id)
+                mcp_profile_ids.update(entity.mcp_server_ids)
             elif isinstance(entity, ContextSnapshot):
                 provider_ids.add(entity.provider_profile_id)
             elif isinstance(entity, ChatMessage):
@@ -207,6 +246,26 @@ def _include_referenced_globals(
                 ProviderProfile,
                 provider_id,
                 source="engagement data",
+            ),
+        )
+    for harness_profile_id in sorted(harness_profile_ids):
+        _add_entity(
+            entities,
+            _get_reference(
+                store,
+                HarnessProfile,
+                harness_profile_id,
+                source="engagement harness data",
+            ),
+        )
+    for mcp_profile_id in sorted(mcp_profile_ids):
+        _add_entity(
+            entities,
+            _get_reference(
+                store,
+                McpServerProfile,
+                mcp_profile_id,
+                source="engagement MCP data",
             ),
         )
     for operator_id in sorted(required_operator_ids):
@@ -343,7 +402,7 @@ def export_engagement(
         )
         counts[model.entity_kind] = len(entities)
         payloads[f"entities/{model.entity_kind}.json"] = _json_bytes(
-            [entity.model_dump(mode="json") for entity in entities]
+            [_export_entity(entity) for entity in entities]
         )
     artifacts = [
         artifact

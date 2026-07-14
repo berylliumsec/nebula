@@ -23,6 +23,7 @@ from .domain import (
     Approval,
     ApprovalStatus,
     ChatCitation,
+    ChatBackend,
     ChatMessage,
     ChatRole,
     ChatSession,
@@ -120,7 +121,11 @@ class ChatContextAttachment(NebulaModel):
 
 
 class ChatCompletionRequest(NebulaModel):
-    provider_id: str = Field(min_length=1, max_length=200)
+    backend: ChatBackend = ChatBackend.PROVIDER
+    provider_id: str | None = Field(default=None, min_length=1, max_length=200)
+    harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
+    harness_session_id: str | None = Field(default=None, min_length=1, max_length=200)
+    mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
     model: str | None = Field(default=None, max_length=500)
     engagement_id: str | None = Field(default=None, max_length=200)
     session_id: str | None = Field(default=None, max_length=200)
@@ -146,6 +151,16 @@ class ChatCompletionRequest(NebulaModel):
             raise ValueError("the final chat message must have role=user")
         if sum(len(item.text) for item in self.context_attachments) > 20_000:
             raise ValueError("selected context exceeds the 20000 character limit")
+        if self.backend == ChatBackend.PROVIDER:
+            if not self.provider_id:
+                raise ValueError("provider chat requires provider_id")
+            if self.harness_profile_id or self.harness_session_id or self.mcp_server_ids:
+                raise ValueError("provider chat cannot include harness runtime fields")
+        else:
+            if not self.harness_profile_id or self.provider_id:
+                raise ValueError(
+                    "harness chat requires harness_profile_id and no provider_id"
+                )
         return self
 
 
@@ -158,7 +173,11 @@ class ChatResponseMessage(NebulaModel):
 class ChatCompletionResponse(NebulaModel):
     turn_id: str | None = None
     session_id: str | None = None
-    provider_id: str
+    backend: ChatBackend = ChatBackend.PROVIDER
+    provider_id: str | None = None
+    harness_profile_id: str | None = None
+    harness_session_id: str | None = None
+    harness_turn_id: str | None = None
     model: str
     message: ChatResponseMessage
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
@@ -166,6 +185,15 @@ class ChatCompletionResponse(NebulaModel):
     finish_reason: str | None = None
     provider_request_id: str | None = None
     citations: list[ChatCitation] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class HarnessKnowledgeContext:
+    """Bounded retrieval context suitable for a runtime-managed harness turn."""
+
+    text: str
+    citations: list[ChatCitation]
+    contains_local_only: bool
 
 
 @dataclass(frozen=True)
@@ -381,7 +409,30 @@ class ChatService:
 
         return asyncio.run(self.prepare_async(request))
 
+    def harness_knowledge_context(
+        self, engagement_id: str, query: str, *, token_budget: int = 4_096
+    ) -> HarnessKnowledgeContext:
+        """Reuse engagement retrieval without provider planning or history replay."""
+
+        if not self._has_ready_knowledge(engagement_id):
+            return HarnessKnowledgeContext("", [], False)
+        chunks = self._retrieve(
+            engagement_id,
+            [query],
+            redact=False,
+            token_budget=max(1, min(token_budget, 8_192)),
+        )
+        return HarnessKnowledgeContext(
+            text=_reference_instructions(chunks, trusted_operator_help=False),
+            citations=[chunk.citation for chunk in chunks],
+            contains_local_only=any(chunk.local_only for chunk in chunks),
+        )
+
     async def prepare_async(self, request: ChatCompletionRequest) -> PreparedChat:
+        if request.backend != ChatBackend.PROVIDER or request.provider_id is None:
+            raise ChatConfigurationError(
+                "harness chat requests must be dispatched through HarnessRuntimeService"
+            )
         profile = self.store.get(ProviderProfile, request.provider_id)
         if not profile.enabled:
             raise ChatConfigurationError(

@@ -37,6 +37,7 @@ export interface AgentRunSummary {
     | "waiting_approval"
     | "paused"
     | "failed"
+    | "interrupted"
     | "complete"
     | "cancelled"
     | "cancelling";
@@ -45,13 +46,20 @@ export interface AgentRunSummary {
   completedTasks: number;
   totalTasks: number;
   spentUsd?: number;
+  backend?: "native" | "harness";
+  harnessProfileId?: Identifier;
+  harnessSessionId?: Identifier;
 }
 
 export interface MissionCreateRequest {
   engagementId: Identifier;
   objective: string;
-  providerId: Identifier;
-  model: string;
+  backend?: "native" | "harness";
+  providerId?: Identifier;
+  harnessProfileId?: Identifier;
+  harnessSessionId?: Identifier;
+  mcpServerIds?: Identifier[];
+  model?: string;
   maxDurationSeconds?: number;
   maxTokens?: number;
   maxCostUsd?: number;
@@ -59,6 +67,7 @@ export interface MissionCreateRequest {
   toolNames?: string[];
   maxToolCalls?: number;
   maxConcurrency?: number;
+  allowCloudToolResults?: boolean;
 }
 
 export type ToolPackStatus = "pending" | "pulling" | "verifying" | "ready" | "failed" | "disabled";
@@ -221,6 +230,7 @@ export interface ApprovalSummary {
   credentialClass?: string;
   expiresAt?: string;
   createdAt: string;
+  argumentEditing?: boolean;
 }
 
 export interface ApprovalDecisionRequest {
@@ -631,7 +641,11 @@ export interface ChatUsage {
 }
 
 export interface ChatCompletionRequest {
-  providerId: Identifier;
+  backend?: "provider" | "harness";
+  providerId?: Identifier;
+  harnessProfileId?: Identifier;
+  harnessSessionId?: Identifier;
+  mcpServerIds?: Identifier[];
   engagementId?: Identifier;
   sessionId?: Identifier;
   model?: string;
@@ -648,7 +662,11 @@ export interface ChatCompletionRequest {
 export interface ChatCompletionResponse {
   turnId?: Identifier;
   sessionId?: Identifier;
-  providerId: Identifier;
+  backend?: "provider" | "harness";
+  providerId?: Identifier;
+  harnessProfileId?: Identifier;
+  harnessSessionId?: Identifier;
+  harnessTurnId?: Identifier;
   model: string;
   message: ChatMessage;
   usage: ChatUsage;
@@ -702,7 +720,7 @@ export interface ContextSnapshot {
 export interface ContextStatus {
   ownerType: "chat_session" | "agent_run";
   ownerId: Identifier;
-  status: "not_needed" | "ready" | "stale" | "failed";
+  status: "not_needed" | "ready" | "stale" | "failed" | "runtime_managed";
   contextWindow: number;
   maxOutputTokens: number;
   targetInputTokens: number;
@@ -715,18 +733,19 @@ export interface ContextStatus {
 }
 
 export type ChatStreamEvent =
-  | { type: "started"; providerId: Identifier; model: string; sessionId?: Identifier; turnId?: Identifier }
-  | { type: "delta"; providerId: Identifier; model: string; delta: string; turnId?: Identifier }
+  | { type: "started"; providerId?: Identifier; harnessProfileId?: Identifier; harnessSessionId?: Identifier; harnessTurnId?: Identifier; model: string; sessionId?: Identifier; turnId?: Identifier }
+  | { type: "delta" | "message_delta"; providerId?: Identifier; harnessSessionId?: Identifier; model: string; delta: string; turnId?: Identifier }
   | { type: "tool_started"; turnId: Identifier; toolCallId: Identifier; capability: string; arguments: Record<string, unknown>; step: number }
   | { type: "tool_completed"; turnId: Identifier; toolCallId: Identifier; capability: string; status: string; summary: string; evidenceIds: Identifier[]; step: number }
   | { type: "approval_required"; turnId: Identifier; toolCallId: Identifier; approval: Record<string, unknown> }
+  | { type: "item_started" | "item_completed" | "usage" | "interrupted" | "completed"; harnessSessionId?: Identifier; harnessTurnId?: Identifier; payload?: Record<string, unknown> }
   | ({ type: "done" } & ChatCompletionResponse)
   | { type: "error"; detail: string };
 
 export interface ChatTurn {
   id: Identifier;
   sessionId: Identifier;
-  status: "routing" | "waiting_approval" | "finalizing" | "complete" | "failed" | "cancelled";
+  status: "routing" | "waiting_approval" | "finalizing" | "complete" | "failed" | "cancelled" | "interrupted";
   approvalId?: Identifier;
   toolCallIds: Identifier[];
 }
@@ -735,12 +754,74 @@ export interface ChatSessionSummary {
   id: Identifier;
   engagementId: Identifier;
   title: string;
-  providerId: Identifier;
+  backend: "provider" | "harness";
+  providerId?: Identifier;
+  harnessProfileId?: Identifier;
+  harnessSessionId?: Identifier;
   model?: string;
   toolsEnabled: boolean;
   createdAt: string;
   updatedAt: string;
   revision: number;
+}
+
+export interface HarnessProfile {
+  id: Identifier;
+  name: string;
+  kind: "codex_app_server" | "claude_agent_sdk";
+  connectionMode: "spawn" | "endpoint";
+  transport: "stdio" | "unix" | "websocket";
+  executable?: string;
+  endpoint?: string;
+  authMode: "existing_session" | "secret_ref" | "endpoint_bearer";
+  secretRef?: string;
+  defaultModel?: string;
+  enabled: boolean;
+  localOnly: boolean;
+  permitsSensitiveData: boolean;
+  healthy?: boolean;
+  version?: string;
+  detail?: string;
+  revision: number;
+}
+
+export interface McpToolProfile {
+  name: string;
+  description: string;
+  readOnly: boolean;
+  destructive: boolean;
+  openWorld: boolean;
+  credentialed?: boolean;
+  approval: "risk_based" | "allow" | "ask" | "deny";
+}
+
+export interface McpServerProfile {
+  id: Identifier;
+  name: string;
+  transport: "stdio" | "streamable_http";
+  command?: string;
+  arguments: string[];
+  url?: string;
+  authMode: "none" | "bearer" | "headers";
+  enabled: boolean;
+  required: boolean;
+  trustedStdio: boolean;
+  defaultApproval: "risk_based" | "allow" | "ask" | "deny";
+  toolOverrides: Record<string, "risk_based" | "allow" | "ask" | "deny">;
+  tools: McpToolProfile[];
+  checkedAt?: string;
+  detail?: string;
+  revision: number;
+}
+
+export interface HarnessSessionSummary {
+  id: Identifier;
+  engagementId: Identifier;
+  harnessProfileId: Identifier;
+  model: string;
+  status: "starting" | "idle" | "running" | "waiting_approval" | "closed" | "failed" | "interrupted";
+  mcpServerIds: Identifier[];
+  lastActivityAt: string;
 }
 
 export interface ChatSessionRenameRequest {

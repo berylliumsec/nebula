@@ -10,7 +10,9 @@ import {
   ScanSearch,
   ShieldCheck,
   Sparkles,
+  MessageSquare,
 } from "lucide-react";
+import { useState, type FormEvent } from "react";
 import { AssistantMarkdown } from "../components/AssistantMarkdown";
 import { PageHeader } from "../components/PageHeader";
 import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
@@ -28,7 +30,34 @@ const agents = [
 
 export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const { setActivityOpen } = useChrome();
-  const { approvals, events, previewMode, run } = useWorkspace();
+  const { api, approvals, events, previewMode, run } = useWorkspace();
+  const [steeringText, setSteeringText] = useState("");
+  const [steering, setSteering] = useState(false);
+  const [steeringError, setSteeringError] = useState<string>();
+  const discuss = async () => {
+    if (!api || !run || run.backend !== "harness") return;
+    const chat = await api.discussRun(run.id);
+    const params = new URLSearchParams(window.location.search);
+    params.set("view", "chat");
+    params.set("session", chat.id);
+    window.history.pushState({}, "", `${window.location.pathname}?${params}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
+  const steer = async (event: FormEvent) => {
+    event.preventDefault();
+    const text = steeringText.trim();
+    if (!api || !run || run.backend !== "harness" || !text) return;
+    setSteering(true);
+    setSteeringError(undefined);
+    try {
+      await api.steerRun(run.id, text);
+      setSteeringText("");
+    } catch (error) {
+      setSteeringError(error instanceof Error ? error.message : "Could not steer the harness turn.");
+    } finally {
+      setSteering(false);
+    }
+  };
   const resultEvent = events.find((event) => event.kind === "run.completed" || event.kind === "run.failed");
   if (!previewMode) {
     return (
@@ -36,13 +65,14 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
         {!embedded && <PageHeader
           title="Missions"
           description="Supervise specialists, approvals, and mission limits."
-          actions={<><StopMissionButton /><NewMissionButton /></>}
+          actions={<>{run?.backend === "harness" && <button className="button secondary" type="button" onClick={() => void discuss()}><MessageSquare size={15} /> Discuss in chat</button>}<StopMissionButton /><NewMissionButton /></>}
         />}
         {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission paused for review</strong><p>{approvals.length} request{approvals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
         <section className="mission-hero panel">
-          <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replace("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{approvals.length} pending approval request{approvals.length === 1 ? "" : "s"}.</p></div>
+          <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replace("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{approvals.length} pending approval request{approvals.length === 1 ? "" : "s"}.</p>{run?.backend === "harness" && <button className="button quiet" type="button" onClick={() => void discuss()}><MessageSquare size={15} /> Discuss in chat</button>}</div>
           <div className="mission-hero-progress"><span><strong>{run?.completedTasks ?? 0}</strong><small>complete</small></span><span><strong>{run?.totalTasks ?? 0}</strong><small>recorded tasks</small></span><span><strong>{events.length}</strong><small>events loaded</small></span></div>
         </section>
+        {run?.backend === "harness" && ["running", "waiting_approval"].includes(run.status) && <form className="panel mission-steer" onSubmit={(event) => void steer(event)}><label htmlFor="harness-steering">Steer active harness turn</label><div><input id="harness-steering" value={steeringText} maxLength={20_000} placeholder="Add direction without starting another turn" onChange={(event) => setSteeringText(event.target.value)} /><button className="button secondary" type="submit" disabled={steering || !steeringText.trim()}>{steering ? "Sending…" : "Steer"}</button></div>{steeringError && <p className="form-error" role="alert">{steeringError}</p>}</form>}
         {resultEvent && <section className={`panel mission-result ${resultEvent.kind === "run.failed" ? "failed" : "complete"}`} aria-labelledby="mission-result-title">
           <header><span className="mission-result-icon"><FileCheck2 size={19} /></span><div><small>{resultEvent.kind === "run.failed" ? "Mission ended with errors" : "Completed mission"}</small><h2 id="mission-result-title">Mission result</h2></div><span className="mission-result-sequence">#{resultEvent.sequence}</span></header>
           <div className="mission-result-body"><AssistantMarkdown content={resultEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /></div>

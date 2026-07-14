@@ -75,7 +75,88 @@ class RunStatus(StringEnum):
     CANCELLING = "cancelling"
     CANCELLED = "cancelled"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
     COMPLETE = "complete"
+
+
+class RunBackend(StringEnum):
+    NATIVE = "native"
+    HARNESS = "harness"
+
+
+class ChatBackend(StringEnum):
+    PROVIDER = "provider"
+    HARNESS = "harness"
+
+
+class HarnessKind(StringEnum):
+    CODEX_APP_SERVER = "codex_app_server"
+    CLAUDE_AGENT_SDK = "claude_agent_sdk"
+
+
+class HarnessConnectionMode(StringEnum):
+    SPAWN = "spawn"
+    ENDPOINT = "endpoint"
+
+
+class HarnessTransport(StringEnum):
+    STDIO = "stdio"
+    UNIX = "unix"
+    WEBSOCKET = "websocket"
+
+
+class HarnessAuthMode(StringEnum):
+    EXISTING_SESSION = "existing_session"
+    SECRET_REF = "secret_ref"
+    ENDPOINT_BEARER = "endpoint_bearer"
+
+
+class HarnessSessionStatus(StringEnum):
+    STARTING = "starting"
+    IDLE = "idle"
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    CLOSED = "closed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class HarnessTurnOrigin(StringEnum):
+    CHAT = "chat"
+    MISSION = "mission"
+
+
+class HarnessTurnStatus(StringEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+
+class McpTransport(StringEnum):
+    STDIO = "stdio"
+    STREAMABLE_HTTP = "streamable_http"
+
+
+class McpAuthMode(StringEnum):
+    NONE = "none"
+    BEARER = "bearer"
+    HEADERS = "headers"
+
+
+class McpApprovalMode(StringEnum):
+    RISK_BASED = "risk_based"
+    ALLOW = "allow"
+    ASK = "ask"
+    DENY = "deny"
+
+
+class McpCwdPolicy(StringEnum):
+    WORKSPACE = "workspace"
+    FIXED = "fixed"
 
 
 class TaskStatus(StringEnum):
@@ -716,8 +797,12 @@ class AgentRun(Entity):
     engagement_id: str
     objective: str
     status: RunStatus = RunStatus.QUEUED
+    backend: RunBackend = RunBackend.NATIVE
     supervisor_provider_id: str | None = None
     supervisor_model: str | None = None
+    harness_profile_id: str | None = None
+    harness_session_id: str | None = None
+    runtime_snapshot: dict[str, Any] = Field(default_factory=dict)
     budget: RunBudget = Field(default_factory=RunBudget)
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -732,6 +817,17 @@ class AgentRun(Entity):
         if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in values):
             raise ValueError("tool-pack digests must be lowercase SHA-256 values")
         return list(dict.fromkeys(values))
+
+    @model_validator(mode="after")
+    def runtime_binding_is_coherent(self) -> "AgentRun":
+        if self.backend == RunBackend.HARNESS and not self.harness_profile_id:
+            raise ValueError("harness runs require harness_profile_id")
+        if self.backend == RunBackend.NATIVE and any(
+            value is not None
+            for value in (self.harness_profile_id, self.harness_session_id)
+        ):
+            raise ValueError("native runs cannot reference a harness")
+        return self
 
 
 class Task(Entity):
@@ -780,15 +876,21 @@ class ToolCall(Entity):
     chat_turn_id: str | None = None
     task_id: str | None = None
     tool_name: str
+    mcp_server_id: str | None = None
+    mcp_tool_name: str | None = None
+    vendor_tool_name: str | None = None
     status: ToolCallStatus = ToolCallStatus.PROPOSED
     risk_class: RiskClass
     arguments: dict[str, Any] = Field(default_factory=dict)
-    result: dict[str, Any] | None = None
+    result: dict[str, Any] | list[Any] | str | None = None
     approval_id: str | None = None
     idempotency_key: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error: str | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+    result_artifact_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Approval(Entity):
@@ -987,6 +1089,279 @@ class ProviderProfile(Entity):
         )
 
 
+class HarnessCapabilities(NebulaModel):
+    sessions: bool = True
+    resume: bool = True
+    steering: bool = False
+    interruption: bool = True
+    approvals: bool = True
+    streaming: bool = True
+    mcp: bool = True
+    enforceable_cost_limit: bool = False
+    enforceable_token_limit: bool = False
+    harness_version: str | None = Field(default=None, max_length=200)
+    adapter_version: str | None = Field(default=None, max_length=200)
+    protocol_version: str | None = Field(default=None, max_length=200)
+    checked_at: datetime | None = None
+    detail: str | None = Field(default=None, max_length=1_000)
+
+
+class HarnessProfile(Entity):
+    entity_kind: ClassVar[str] = "harnesses"
+    name: str = Field(min_length=1, max_length=200)
+    kind: HarnessKind
+    connection_mode: HarnessConnectionMode = HarnessConnectionMode.SPAWN
+    transport: HarnessTransport = HarnessTransport.STDIO
+    executable: str | None = Field(default=None, max_length=4096)
+    endpoint: str | None = Field(default=None, max_length=4096)
+    auth_mode: HarnessAuthMode = HarnessAuthMode.EXISTING_SESSION
+    secret_ref: str | None = None
+    default_model: str | None = Field(default=None, max_length=500)
+    enabled: bool = True
+    privacy: ProviderPrivacy = Field(default_factory=ProviderPrivacy)
+    capabilities: HarnessCapabilities = Field(default_factory=HarnessCapabilities)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("executable")
+    @classmethod
+    def executable_is_absolute(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("/"):
+            raise ValueError("harness executable must be an absolute path")
+        return value
+
+    @field_validator("secret_ref")
+    @classmethod
+    def secret_is_opaque(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(
+            r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
+            value,
+        ):
+            raise ValueError("secret_ref must use env:NAME, vault:ID, or session:ID")
+        return value
+
+    @model_validator(mode="after")
+    def connection_is_supported(self) -> "HarnessProfile":
+        if self.auth_mode != HarnessAuthMode.EXISTING_SESSION and not self.secret_ref:
+            raise ValueError("selected harness authentication requires secret_ref")
+        if self.auth_mode == HarnessAuthMode.EXISTING_SESSION and self.secret_ref:
+            raise ValueError("existing-session authentication cannot store a secret_ref")
+        if self.connection_mode == HarnessConnectionMode.SPAWN:
+            if self.endpoint is not None:
+                raise ValueError("spawned harnesses cannot define endpoint")
+            if self.transport != HarnessTransport.STDIO:
+                raise ValueError("spawned harnesses must use stdio")
+            if self.kind == HarnessKind.CODEX_APP_SERVER and not self.executable:
+                raise ValueError("spawned Codex harnesses require executable")
+            if self.auth_mode == HarnessAuthMode.ENDPOINT_BEARER:
+                raise ValueError("spawned harnesses cannot use endpoint bearer auth")
+        else:
+            if self.kind != HarnessKind.CODEX_APP_SERVER:
+                raise ValueError("endpoint mode is currently supported only for Codex")
+            if self.executable is not None or not self.endpoint:
+                raise ValueError("endpoint harnesses require endpoint and no executable")
+            if self.transport not in {HarnessTransport.UNIX, HarnessTransport.WEBSOCKET}:
+                raise ValueError("Codex endpoints must use unix or websocket")
+            if self.transport == HarnessTransport.UNIX:
+                if not self.endpoint.startswith("unix://"):
+                    raise ValueError("unix harness endpoints must use unix://")
+                parsed = urlsplit(self.endpoint)
+                if not parsed.path.startswith("/") or parsed.query or parsed.fragment:
+                    raise ValueError(
+                        "unix harness endpoints require an absolute socket path"
+                    )
+            else:
+                parsed = urlsplit(self.endpoint)
+                if parsed.scheme != "ws" or parsed.hostname not in {
+                    "127.0.0.1",
+                    "::1",
+                    "localhost",
+                }:
+                    raise ValueError("websocket harness endpoints must be loopback ws://")
+                if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                    raise ValueError(
+                        "websocket harness endpoints cannot embed credentials or query data"
+                    )
+            if self.auth_mode == HarnessAuthMode.SECRET_REF:
+                raise ValueError("endpoint harnesses use endpoint_bearer authentication")
+        return self
+
+
+class McpToolSnapshot(NebulaModel):
+    name: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=10_000)
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    read_only: bool = False
+    destructive: bool = False
+    idempotent: bool = False
+    open_world: bool = True
+    credentialed: bool | None = None
+    annotations_complete: bool = False
+
+
+class McpCapabilitySnapshot(NebulaModel):
+    protocol_version: str | None = Field(default=None, max_length=100)
+    tools: list[McpToolSnapshot] = Field(default_factory=list, max_length=2_000)
+    resources: bool = False
+    prompts: bool = False
+    instructions: str | None = Field(default=None, max_length=10_000)
+    checked_at: datetime | None = None
+    detail: str | None = Field(default=None, max_length=1_000)
+
+
+class McpServerProfile(Entity):
+    entity_kind: ClassVar[str] = "mcp_servers"
+    name: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._-]+$")
+    transport: McpTransport
+    command: str | None = Field(default=None, max_length=4096)
+    arguments: list[str] = Field(default_factory=list, max_length=128)
+    url: str | None = Field(default=None, max_length=4096)
+    auth_mode: McpAuthMode = McpAuthMode.NONE
+    bearer_secret_ref: str | None = None
+    header_secret_refs: dict[str, str] = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    environment_secret_refs: dict[str, str] = Field(default_factory=dict)
+    cwd_policy: McpCwdPolicy = McpCwdPolicy.WORKSPACE
+    cwd: str | None = Field(default=None, max_length=4096)
+    enabled: bool = False
+    required: bool = False
+    trusted_stdio: bool = False
+    startup_timeout_seconds: float = Field(default=10, gt=0, le=120)
+    tool_timeout_seconds: float = Field(default=60, gt=0, le=900)
+    enabled_tools: list[str] = Field(default_factory=list, max_length=2_000)
+    disabled_tools: list[str] = Field(default_factory=list, max_length=2_000)
+    default_approval: McpApprovalMode = McpApprovalMode.RISK_BASED
+    tool_overrides: dict[str, McpApprovalMode] = Field(default_factory=dict)
+    capabilities: McpCapabilitySnapshot = Field(default_factory=McpCapabilitySnapshot)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("command", "cwd")
+    @classmethod
+    def local_paths_are_absolute(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("/"):
+            raise ValueError("MCP local paths must be absolute")
+        return value
+
+    @field_validator(
+        "bearer_secret_ref",
+        "header_secret_refs",
+        "environment_secret_refs",
+    )
+    @classmethod
+    def secrets_are_references(cls, value: Any) -> Any:
+        values = value.values() if isinstance(value, dict) else [value]
+        for item in values:
+            if item is not None and not re.fullmatch(
+                r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
+                item,
+            ):
+                raise ValueError("MCP secrets must use env:, vault:, or session: references")
+        return value
+
+    @field_validator("arguments")
+    @classmethod
+    def literal_arguments_are_bounded(cls, value: list[str]) -> list[str]:
+        if any(len(item) > 8_192 for item in value):
+            raise ValueError("MCP arguments must be at most 8192 characters each")
+        return value
+
+    @field_validator("header_secret_refs")
+    @classmethod
+    def header_names_are_valid(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(
+            not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name)
+            for name in value
+        ):
+            raise ValueError("MCP secret header names must be valid HTTP field names")
+        return value
+
+    @field_validator("environment_secret_refs")
+    @classmethod
+    def secret_environment_names_are_valid(
+        cls, value: dict[str, str]
+    ) -> dict[str, str]:
+        if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in value):
+            raise ValueError("MCP secret environment names must be portable identifiers")
+        return value
+
+    @field_validator("environment")
+    @classmethod
+    def literal_environment_is_nonsecret(
+        cls, value: dict[str, str]
+    ) -> dict[str, str]:
+        for name, item in value.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError("MCP environment names must be portable identifiers")
+            if any(
+                token in name.lower()
+                for token in ("secret", "token", "password", "credential", "api_key")
+            ):
+                raise ValueError(
+                    "credential-like MCP environment values require environment_secret_refs"
+                )
+            if len(item) > 8_192:
+                raise ValueError("MCP environment values must be at most 8192 characters")
+        return value
+
+    @model_validator(mode="after")
+    def transport_is_coherent(self) -> "McpServerProfile":
+        if self.transport == McpTransport.STDIO:
+            if not self.command or self.url is not None:
+                raise ValueError("stdio MCP servers require command and no URL")
+            if self.auth_mode != McpAuthMode.NONE:
+                raise ValueError("stdio MCP authentication uses environment references")
+            if self.enabled and not self.trusted_stdio:
+                raise ValueError("enabled stdio MCP servers require trusted_stdio")
+            if self.cwd_policy == McpCwdPolicy.FIXED and not self.cwd:
+                raise ValueError("fixed MCP cwd policy requires cwd")
+            if self.cwd_policy == McpCwdPolicy.WORKSPACE and self.cwd is not None:
+                raise ValueError("workspace MCP cwd policy cannot define cwd")
+        else:
+            if self.command is not None or self.arguments or not self.url:
+                raise ValueError("HTTP MCP servers require URL and no command arguments")
+            parsed = urlsplit(self.url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("MCP URL must use http or https")
+            if (
+                parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "MCP URLs cannot embed credentials, query data, or fragments"
+                )
+            if parsed.scheme == "http" and parsed.hostname not in {
+                "127.0.0.1",
+                "::1",
+                "localhost",
+            }:
+                raise ValueError("non-loopback MCP HTTP servers require HTTPS")
+            if self.cwd is not None or self.environment or self.environment_secret_refs:
+                raise ValueError("HTTP MCP servers cannot define process settings")
+        if self.auth_mode == McpAuthMode.BEARER and not self.bearer_secret_ref:
+            raise ValueError("bearer MCP authentication requires bearer_secret_ref")
+        if self.auth_mode == McpAuthMode.HEADERS and not self.header_secret_refs:
+            raise ValueError("header MCP authentication requires header_secret_refs")
+        if set(self.enabled_tools).intersection(self.disabled_tools):
+            raise ValueError("an MCP tool cannot be both enabled and disabled")
+        return self
+
+
+class HarnessSession(Entity):
+    entity_kind: ClassVar[str] = "harness_sessions"
+    engagement_id: str
+    harness_profile_id: str
+    external_session_id: str | None = Field(default=None, max_length=500)
+    model: str = Field(min_length=1, max_length=500)
+    status: HarnessSessionStatus = HarnessSessionStatus.STARTING
+    mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    mcp_snapshot: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
+    adapter_version: str | None = Field(default=None, max_length=200)
+    last_turn_id: str | None = Field(default=None, max_length=200)
+    last_activity_at: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class SourceSnapshot(Entity):
     entity_kind: ClassVar[str] = "source_snapshots"
     source: str
@@ -1102,15 +1477,63 @@ class ContextSnapshot(Entity):
         return self
 
 
+class HarnessTurn(Entity):
+    entity_kind: ClassVar[str] = "harness_turns"
+    engagement_id: str
+    harness_session_id: str
+    origin: HarnessTurnOrigin
+    chat_session_id: str | None = None
+    chat_turn_id: str | None = None
+    run_id: str | None = None
+    external_turn_id: str | None = Field(default=None, max_length=500)
+    status: HarnessTurnStatus = HarnessTurnStatus.QUEUED
+    prompt: str = Field(min_length=1, max_length=250_000)
+    response: str | None = Field(default=None, max_length=500_000)
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    tool_call_ids: list[str] = Field(default_factory=list)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = Field(default=None, max_length=1_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def origin_binding_is_coherent(self) -> "HarnessTurn":
+        if self.origin == HarnessTurnOrigin.CHAT:
+            if not self.chat_session_id or not self.chat_turn_id or self.run_id:
+                raise ValueError("chat harness turns require chat bindings only")
+        elif not self.run_id or self.chat_turn_id:
+            raise ValueError("mission harness turns require run_id and no chat_turn_id")
+        return self
+
+
 class ChatSession(Entity):
     """A durable engagement-scoped analyst conversation."""
 
     entity_kind: ClassVar[str] = "chat_sessions"
     engagement_id: str
     title: str = Field(min_length=1, max_length=300)
-    provider_profile_id: str
+    backend: ChatBackend = ChatBackend.PROVIDER
+    provider_profile_id: str | None = None
+    harness_profile_id: str | None = None
+    harness_session_id: str | None = None
     model: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def backend_binding_is_coherent(self) -> "ChatSession":
+        if self.backend == ChatBackend.PROVIDER:
+            if not self.provider_profile_id or any(
+                value is not None
+                for value in (self.harness_profile_id, self.harness_session_id)
+            ):
+                raise ValueError("provider chat sessions require only provider_profile_id")
+        elif (
+            not self.harness_profile_id
+            or not self.harness_session_id
+            or self.provider_profile_id is not None
+        ):
+            raise ValueError("harness chat sessions require harness profile and session")
+        return self
 
 
 class ChatTurnStatus(StringEnum):
@@ -1120,6 +1543,7 @@ class ChatTurnStatus(StringEnum):
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
 
 
 class ChatTurn(Entity):
@@ -1128,7 +1552,9 @@ class ChatTurn(Entity):
     entity_kind: ClassVar[str] = "chat_turns"
     engagement_id: str
     session_id: str
-    provider_profile_id: str
+    backend: ChatBackend = ChatBackend.PROVIDER
+    provider_profile_id: str | None = None
+    harness_turn_id: str | None = None
     model: str
     status: ChatTurnStatus = ChatTurnStatus.ROUTING
     tools_enabled: bool = False
@@ -1145,6 +1571,14 @@ class ChatTurn(Entity):
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
     final_message_id: str | None = None
     error: str | None = Field(default=None, max_length=1_000)
+
+    @model_validator(mode="after")
+    def backend_binding_is_coherent(self) -> "ChatTurn":
+        if self.backend == ChatBackend.PROVIDER and not self.provider_profile_id:
+            raise ValueError("provider chat turns require provider_profile_id")
+        if self.backend == ChatBackend.HARNESS and self.provider_profile_id is not None:
+            raise ValueError("harness chat turns cannot reference a provider")
+        return self
 
 
 class ChatMessage(Entity):
@@ -1505,11 +1939,15 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     Approval,
     OperatorProfile,
     ProviderProfile,
+    HarnessProfile,
+    McpServerProfile,
+    HarnessSession,
     SourceSnapshot,
     KnowledgeSource,
     ChatSession,
     ChatTurn,
     ChatMessage,
+    HarnessTurn,
     ContextSnapshot,
     OperatorExecution,
     GeneratedDraft,
