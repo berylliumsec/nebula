@@ -903,17 +903,35 @@ class ChatService:
 
     @staticmethod
     def _provider_tool_history(turn: ChatTurn) -> list[ModelToolResult]:
-        return [
-            ModelToolResult(
-                call_id=str(entry["model_call_id"]),
-                name=str(entry["name"]),
-                arguments=dict(entry.get("arguments") or {}),
-                output=str(entry["provider_result"]),
-                is_error=entry.get("status") != "complete",
+        history: list[ModelToolResult] = []
+        for entry in turn.tool_history:
+            persisted = entry.get("provider_result")
+            if persisted is None:
+                continue
+            output: dict[str, Any] | str
+            if isinstance(persisted, dict):
+                output = persisted
+            elif isinstance(persisted, str):
+                output = persisted
+                try:
+                    decoded = json.loads(persisted)
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    if isinstance(decoded, dict):
+                        output = decoded
+            else:
+                output = str(persisted)
+            history.append(
+                ModelToolResult(
+                    call_id=str(entry["model_call_id"]),
+                    name=str(entry["name"]),
+                    arguments=dict(entry.get("arguments") or {}),
+                    output=output,
+                    is_error=entry.get("status") != "complete",
+                )
             )
-            for entry in turn.tool_history
-            if entry.get("provider_result") is not None
-        ]
+        return history
 
     def _refresh_turn(self, turn: ChatTurn) -> ChatTurn:
         return self.store.get(ChatTurn, turn.id)
@@ -954,12 +972,41 @@ class ChatService:
 
     @staticmethod
     def _bounded_tool_result(output: dict[str, Any]) -> str:
-        rendered = redact_text(
-            json.dumps(output, ensure_ascii=False, sort_keys=True, default=str)
+        limit = 8_000
+
+        # Redact string values before serialization so redaction can never damage
+        # JSON quoting or delimiters. The round trip also normalizes values handled
+        # by ``default=str`` into the same JSON-compatible form persisted below.
+        normalized = json.loads(json.dumps(output, ensure_ascii=False, default=str))
+
+        def redact_value(value: Any) -> Any:
+            if isinstance(value, str):
+                return redact_text(value)
+            if isinstance(value, list):
+                return [redact_value(item) for item in value]
+            if isinstance(value, dict):
+                return {key: redact_value(item) for key, item in value.items()}
+            return value
+
+        rendered = json.dumps(
+            redact_value(normalized), ensure_ascii=False, sort_keys=True
         )
-        if len(rendered) > 8_000:
-            return rendered[:8_000] + "…[truncated]"
-        return rendered
+        if len(rendered) <= limit:
+            return rendered
+
+        envelope: dict[str, Any] = {
+            "status": "complete",
+            "truncated": True,
+            "original_characters": len(rendered),
+            "preview": "",
+        }
+        empty = json.dumps(envelope, ensure_ascii=False, sort_keys=True)
+        envelope["preview"] = rendered[: max(0, limit - len(empty))]
+        bounded = json.dumps(envelope, ensure_ascii=False, sort_keys=True)
+        while len(bounded) > limit and envelope["preview"]:
+            envelope["preview"] = envelope["preview"][: -(len(bounded) - limit)]
+            bounded = json.dumps(envelope, ensure_ascii=False, sort_keys=True)
+        return bounded
 
     @staticmethod
     def _bounded_tool_error(status: str, detail: str) -> str:

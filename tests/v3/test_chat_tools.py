@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 import nebula.v3.chat as chat_module
@@ -204,4 +205,46 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
         "description": "Engagement workspace root; supplied by Nebula Core.",
     }
     assert observed_arguments[0]["cwd"] == "/workspace"
+    assert provider.requests[1].tool_results[0].output == {"count": 2}
+    assert provider.requests[-1].tool_results[0].output == {"count": 2}
     assert provider.requests[-1].tools == []
+
+
+def test_oversized_tool_results_remain_bounded_valid_json():
+    rendered = ChatService._bounded_tool_result({"data": "x" * 10_000})
+
+    decoded = json.loads(rendered)
+
+    assert len(rendered) <= 8_000
+    assert decoded["status"] == "complete"
+    assert decoded["truncated"] is True
+    assert decoded["original_characters"] > 8_000
+    assert decoded["preview"].startswith('{"data": "')
+
+
+def test_provider_tool_history_rehydrates_json_objects_and_preserves_legacy_text():
+    turn = SimpleNamespace(
+        tool_history=[
+            {
+                "model_call_id": "call-1",
+                "name": "parse.scan",
+                "arguments": {},
+                "provider_result": '{"count": 2}',
+                "status": "complete",
+            },
+            {
+                "model_call_id": "call-2",
+                "name": "legacy.tool",
+                "arguments": {},
+                "provider_result": "legacy non-JSON output",
+                "status": "failed",
+            },
+        ]
+    )
+
+    history = ChatService._provider_tool_history(turn)
+
+    assert history[0].output == {"count": 2}
+    assert history[0].is_error is False
+    assert history[1].output == "legacy non-JSON output"
+    assert history[1].is_error is True
