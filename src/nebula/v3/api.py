@@ -306,6 +306,11 @@ class PatchRequest(NebulaModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class ChatSessionRenameRequest(NebulaModel):
+    title: str = Field(min_length=1, max_length=300)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
 class ProviderCapabilityVerifyRequest(NebulaModel):
     model: str = Field(min_length=1, max_length=500)
     expected_revision: int = Field(ge=1)
@@ -2380,6 +2385,7 @@ def create_app(
             bundle,
             runtime_profile_id=request.runtime_profile_id,
             confirm_permissions=request.developer_mode_confirmed,
+            assigned_by=active_operator_id(),
         )
 
     @app.post(
@@ -2934,6 +2940,27 @@ def create_app(
             session_id
         )
 
+    @app.patch(
+        f"{API_PREFIX}/chat-sessions/{{session_id}}",
+        response_model=ChatSession,
+        tags=["chat-sessions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def rename_chat_session(
+        session_id: str, request: ChatSessionRenameRequest
+    ) -> ChatSession:
+        current = store.get(ChatSession, session_id)
+        if chat_service().pending_turn(session_id) is not None:
+            raise ConflictError(
+                "conversation cannot be renamed while a response is active"
+            )
+        return store.update(
+            ChatSession,
+            session_id,
+            {"title": request.title},
+            expected_revision=request.expected_revision or current.revision,
+        )
+
     @app.delete(
         f"{API_PREFIX}/chat-sessions/{{session_id}}",
         status_code=204,
@@ -3237,6 +3264,16 @@ def create_app(
             model,
             read_only=resource in READ_ONLY_RESOURCES,
             append_only=resource in APPEND_ONLY_RESOURCES,
+            after_create=(
+                (
+                    lambda entity: tool_platform.enable_default_local_packs(
+                        entity.id,
+                        assigned_by=active_operator_id(),
+                    )
+                )
+                if model is Engagement and tool_platform is not None
+                else None
+            ),
         )
     _assert_unique_api_operations(app)
 
@@ -3556,6 +3593,7 @@ def _register_crud_routes(
     *,
     read_only: bool = False,
     append_only: bool = False,
+    after_create: Callable[[Entity], Any] | None = None,
 ) -> None:
     """Register typed routes while preserving concrete OpenAPI schemas."""
 
@@ -3582,7 +3620,10 @@ def _register_crud_routes(
                     }
                 )
             entity_validator.validate_create(entity)
-            return store.create(entity)
+            created = store.create(entity)
+            if after_create is not None:
+                after_create(created)
+            return created
 
         create_entity.__name__ = f"create_{resource.replace('-', '_')}"
         create_entity.__annotations__ = {"entity": model, "return": model}

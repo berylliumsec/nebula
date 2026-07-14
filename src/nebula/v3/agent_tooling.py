@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -130,11 +131,32 @@ class ToolMissionSupervisor:
         plan: MissionPlan,
         results: Mapping[str, SpecialistResult],
     ) -> str:
-        del plan
-        summaries = [result.summary for result in results.values() if result.summary]
-        if not summaries:
-            return f"{objective}: no specialist produced a result"
-        return f"{objective}: " + "; ".join(summaries)
+        sections = ["## Summary", objective]
+        task_by_id = {task.id: task for task in plan.tasks}
+        rendered_results = 0
+        for task_id, result in results.items():
+            if not result.summary and not result.reproducible_steps:
+                continue
+            rendered_results += 1
+            task = task_by_id.get(task_id)
+            sections.extend(
+                [
+                    f"### {task.title if task else 'Specialist result'}",
+                    result.summary.strip(),
+                ]
+            )
+            if result.reproducible_steps:
+                sections.extend(
+                    [
+                        "**Commands used**",
+                        "```bash\n" + "\n".join(result.reproducible_steps) + "\n```",
+                    ]
+                )
+            if result.evidence_ids:
+                sections.append("**Evidence:** " + ", ".join(result.evidence_ids))
+        if not rendered_results:
+            sections.append("No specialist produced a result.")
+        return "\n\n".join(section for section in sections if section)
 
 
 class BrokeredToolSpecialist:
@@ -378,7 +400,11 @@ class BrokeredToolSpecialist:
         total_input = first_usage[0] + summary_response.usage.input_tokens
         total_output = first_usage[1] + summary_response.usage.output_tokens
         command = result.execution.get("command")
-        reproducible = [" ".join(command)] if isinstance(command, list) else []
+        reproducible = (
+            [shlex.join(str(part) for part in command)]
+            if isinstance(command, list)
+            else []
+        )
         return SpecialistResult(
             summary=summary,
             rationale=(

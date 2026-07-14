@@ -9,7 +9,13 @@ import yaml
 
 from nebula.v3.agent_tooling import BrokeredToolSpecialist, ToolMissionSupervisor
 from nebula.v3.domain import RiskClass, RunBudget, ScopePolicy
-from nebula.v3.orchestration import PlannedTask, SpecialistContext, SpecialistRole
+from nebula.v3.orchestration import (
+    MissionPlan,
+    PlannedTask,
+    SpecialistContext,
+    SpecialistResult,
+    SpecialistRole,
+)
 from nebula.v3.providers import (
     ModelCapabilities,
     ModelProvider,
@@ -416,6 +422,32 @@ def test_toolbox_mission_groups_structured_and_shell_capabilities():
             }
         ),
     ]
+
+
+def test_toolbox_mission_summary_is_structured_markdown_with_commands():
+    task = PlannedTask(
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Inspect the service",
+        instructions="Inspect one in-scope endpoint.",
+    )
+    result = SpecialistResult(
+        summary="The endpoint exposed one HTTP service.",
+        reproducible_steps=["nmap -sV 'example target'"],
+        evidence_ids=["evidence-1"],
+    )
+
+    summary = asyncio.run(
+        ToolMissionSupervisor({}).synthesize(
+            "Review the lab",
+            MissionPlan(summary="Review", rationale="Bounded", tasks=[task]),
+            {task.id: result},
+        )
+    )
+
+    assert summary.startswith("## Summary\n\nReview the lab")
+    assert "### Inspect the service" in summary
+    assert "```bash\nnmap -sV 'example target'\n```" in summary
+    assert "**Evidence:** evidence-1" in summary
 
 
 def test_toolbox_wrapper_compiles_structured_invocation(tmp_path, capsys):

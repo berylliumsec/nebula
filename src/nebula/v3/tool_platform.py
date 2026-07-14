@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from threading import RLock
 from typing import Any, Literal, cast
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
 from packaging.version import Version
@@ -653,6 +653,7 @@ class ToolPlatform:
         *,
         runtime_profile_id: str,
         confirm_permissions: bool,
+        assigned_by: str = "local-toolpack-install",
     ) -> ToolPackInstallation:
         progress = self._begin_operation("install_local")
         try:
@@ -708,6 +709,10 @@ class ToolPlatform:
                     },
                     expected_revision=installation.revision,
                 )
+            self.enable_local_pack_for_engagements(
+                installation,
+                assigned_by=assigned_by,
+            )
             progress.bind_installation(installation)
             progress.emit("ready", result_status=installation.status)
             return installation
@@ -716,6 +721,88 @@ class ToolPlatform:
             if isinstance(exc, ToolPlatformError):
                 raise
             raise ToolPlatformError(str(exc)) from exc
+
+    def enable_local_pack_for_engagements(
+        self,
+        installation: ToolPackInstallation,
+        *,
+        assigned_by: str = "local-toolpack-install",
+    ) -> list[EngagementToolAssignment]:
+        """Grant a newly loaded local pack to existing engagements by default."""
+
+        if (
+            installation.trust != ToolPackTrust.LOCAL_TRUSTED
+            or installation.status != ToolPackInstallationStatus.READY
+        ):
+            return []
+        created: list[EngagementToolAssignment] = []
+        for engagement in self.store.list_entities(Engagement, limit=1_000):
+            created.extend(
+                self.enable_default_local_packs(
+                    engagement.id,
+                    assigned_by=assigned_by,
+                    installations=[installation],
+                )
+            )
+        return created
+
+    def enable_default_local_packs(
+        self,
+        engagement_id: str,
+        *,
+        assigned_by: str = "local-toolpack-install",
+        installations: list[ToolPackInstallation] | None = None,
+    ) -> list[EngagementToolAssignment]:
+        """Create missing assignments for ready, locally trusted packs.
+
+        Existing assignments stay untouched so explicit disablement or a narrower
+        capability selection remains authoritative.
+        """
+
+        self.store.get(Engagement, engagement_id)
+        candidates = installations or self.store.list_entities(
+            ToolPackInstallation, limit=1_000
+        )
+        existing_digests = {
+            assignment.manifest_digest
+            for assignment in self.store.list_entities(
+                EngagementToolAssignment,
+                engagement_id=engagement_id,
+                limit=1_000,
+            )
+        }
+        created: list[EngagementToolAssignment] = []
+        for installation in candidates:
+            if (
+                installation.trust != ToolPackTrust.LOCAL_TRUSTED
+                or installation.status != ToolPackInstallationStatus.READY
+                or installation.manifest_digest in existing_digests
+            ):
+                continue
+            manifest = self.manifests.get(installation.manifest_digest)
+            tool_names = self.normalize_assignment(
+                installation.manifest_digest,
+                [tool.name for tool in manifest.tools],
+            )
+            assignment = self.store.create(
+                EngagementToolAssignment(
+                    id=str(
+                        uuid5(
+                            NAMESPACE_URL,
+                            "nebula:tool-assignment:"
+                            f"{engagement_id}:{installation.manifest_digest}",
+                        )
+                    ),
+                    engagement_id=engagement_id,
+                    manifest_digest=installation.manifest_digest,
+                    allowed_tool_names=tool_names,
+                    enabled=True,
+                    assigned_by=assigned_by,
+                )
+            )
+            created.append(assignment)
+            existing_digests.add(installation.manifest_digest)
+        return created
 
     async def verify(self, installation_id: str) -> ToolPackInstallation:
         progress = self._begin_operation("verify")

@@ -388,6 +388,7 @@ def test_unsigned_local_install_is_atomic_verified_and_registry_ready(tmp_path):
     )
 
     assert installed.status == ToolPackInstallationStatus.READY
+    assert installed.trust == ToolPackTrust.LOCAL_TRUSTED
     assert installed.verified_at is not None
     assert runtime.pulled == [manifest.images[0].image]
     assert runtime.commands[0][1] == [
@@ -458,6 +459,16 @@ def test_installer_rejects_unsigned_remote_curated_and_failed_smoke(tmp_path):
                 signature=None,
             )
         )
+
+    locally_trusted = asyncio.run(
+        service.install(
+            manifest,
+            source="local.ntp",
+            signature=None,
+            local_file=True,
+        )
+    )
+    assert locally_trusted.trust == ToolPackTrust.LOCAL_TRUSTED
 
     failed = installer(
         tmp_path / "failed",

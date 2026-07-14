@@ -479,13 +479,13 @@ def tools_install_local(
     data_dir: Annotated[Path | None, typer.Option()] = None,
     yes: Annotated[
         bool,
-        typer.Option("--yes", help="Confirm execution of this unsigned local pack."),
+        typer.Option("--yes", help="Trust and load this local pack."),
     ] = False,
 ) -> None:
-    """Install an unsigned local pack only when device developer mode is enabled."""
+    """Load a local pack as trusted and enable it for engagements."""
 
     if not yes:
-        raise typer.BadParameter("unsigned local packs require explicit --yes")
+        raise typer.BadParameter("pass --yes to trust and load this local pack")
     payload = bundle.read_bytes()
     platform, _ = _tool_services(data_dir)
     installed = asyncio.run(

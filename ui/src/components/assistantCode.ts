@@ -2,8 +2,14 @@ import type { ExecutionLanguage } from "../api/types";
 
 export const EXECUTION_LANGUAGE_ALIASES: Record<string, ExecutionLanguage> = {
   bash: "bash",
+  command: "bash",
+  console: "bash",
   shell: "bash",
+  "shell-session": "bash",
+  shellsession: "bash",
   sh: "sh",
+  terminal: "bash",
+  zsh: "bash",
   python: "python",
   python3: "python",
   py: "python",

@@ -740,6 +740,12 @@ export interface ChatSessionSummary {
   toolsEnabled: boolean;
   createdAt: string;
   updatedAt: string;
+  revision: number;
+}
+
+export interface ChatSessionRenameRequest {
+  title: string;
+  expectedRevision?: number;
 }
 
 export interface PersistedChatMessage extends ChatMessage {

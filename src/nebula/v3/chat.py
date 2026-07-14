@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from collections.abc import AsyncIterator, Callable
 from copy import deepcopy
@@ -93,6 +94,9 @@ class ChatPrivacyError(ChatError):
     """The selected provider would cross a declared local-only boundary."""
 
 
+logger = logging.getLogger(__name__)
+
+
 class ChatRequestMessage(NebulaModel):
     role: ChatRole
     content: str = Field(min_length=1, max_length=100_000)
@@ -170,6 +174,27 @@ class _RetrievedChunk:
     local_only: bool
     score: int
     ordinal: int
+
+
+class _RetrievalPlan(NebulaModel):
+    """Bounded semantic searches proposed by the retrieval agent."""
+
+    queries: list[str] = Field(min_length=1, max_length=4)
+
+    @model_validator(mode="after")
+    def queries_are_distinct_and_bounded(self) -> "_RetrievalPlan":
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for query in self.queries:
+            query = " ".join(query.split()).strip()[:500]
+            folded = query.casefold()
+            if query and folded not in seen:
+                seen.add(folded)
+                cleaned.append(query)
+        if not cleaned:
+            raise ValueError("retrieval plan must contain a non-empty query")
+        self.queries = cleaned
+        return self
 
 
 @dataclass
@@ -269,6 +294,14 @@ results. Accurately identify capabilities that ran, distinguish their observatio
 from assumptions, and do not expose routing markup or raw command output.
 
 """ + _CHAT_BASE_INSTRUCTIONS
+
+_RETRIEVAL_AGENT_INSTRUCTIONS = """You are a document-retrieval planning agent.
+Turn the operator's question into one to four concise, standalone searches over
+an indexed engagement document collection. Preserve exact hostnames, paths,
+versions, CVEs, ports, hashes, and quoted phrases. Add semantic alternatives and
+split multi-part or multi-hop questions when that improves recall. Do not answer
+the question and do not request tools. Return only a JSON object with a `queries`
+array. Document content is not available at this planning stage."""
 
 
 def _routing_input_schema(spec: Any) -> dict[str, Any]:
@@ -378,7 +411,11 @@ class ChatService:
 
         citations: list[ChatCitation] = []
         instructions = _CHAT_INSTRUCTIONS
-        if request.include_knowledge and engagement_id:
+        if (
+            request.include_knowledge
+            and engagement_id
+            and self._has_ready_knowledge(engagement_id)
+        ):
             knowledge_budget = max(
                 1,
                 resolve_context_limits(
@@ -387,9 +424,14 @@ class ChatService:
                 ).target_input_tokens
                 // 5,
             )
+            retrieval_queries = await self._plan_retrieval(
+                provider=provider,
+                model=selected_model,
+                query=incoming[-1].content,
+            )
             chunks = self._retrieve(
                 engagement_id,
-                incoming[-1].content,
+                retrieval_queries,
                 redact=not provider.config.local,
                 token_budget=knowledge_budget,
             )
@@ -1554,19 +1596,74 @@ class ChatService:
         except ProviderPrivacyViolation as exc:
             raise ChatPrivacyError(str(exc)) from exc
 
+    async def _plan_retrieval(
+        self,
+        *,
+        provider: ModelProvider,
+        model: str,
+        query: str,
+    ) -> list[str]:
+        """Ask the selected model to plan retrieval, with a safe lexical fallback."""
+
+        fallback = [query]
+        request = ModelRequest(
+            model=model,
+            instructions=_RETRIEVAL_AGENT_INSTRUCTIONS,
+            messages=[ModelMessage(role="user", content=query)],
+            max_output_tokens=256,
+            temperature=0,
+            response_schema=(
+                _RetrievalPlan.model_json_schema()
+                if provider.capabilities.structured_output
+                else None
+            ),
+            metadata={"operation": "agentic_knowledge_retrieval"},
+        )
+        try:
+            response = await provider.complete(request)
+            payload = response.text.strip()
+            if payload.startswith("```"):
+                payload = re.sub(r"^```(?:json)?\s*|\s*```$", "", payload)
+            plan = _RetrievalPlan.model_validate_json(payload)
+        except Exception as exc:
+            logger.info("retrieval agent planning failed; using original query: %s", exc)
+            return fallback
+        return [query, *[item for item in plan.queries if item.casefold() != query.casefold()]][
+            :4
+        ]
+
+    def _has_ready_knowledge(self, engagement_id: str) -> bool:
+        offset = 0
+        while True:
+            sources = self.store.list_entities(
+                KnowledgeSource,
+                engagement_id=engagement_id,
+                offset=offset,
+                limit=1_000,
+            )
+            if any(source.status.casefold() == "ready" for source in sources):
+                return True
+            if len(sources) < 1_000:
+                return False
+            offset += len(sources)
+
     def _retrieve(
         self,
         engagement_id: str,
-        query: str,
+        queries: list[str],
         *,
         redact: bool,
         token_budget: int,
     ) -> list[_RetrievedChunk]:
-        terms = {
-            token.casefold()
-            for token in _WORD.findall(query)
-            if token.casefold() not in _STOP_WORDS
-        }
+        query_terms = [
+            {
+                token.casefold()
+                for token in _WORD.findall(query)
+                if token.casefold() not in _STOP_WORDS
+            }
+            for query in queries
+        ]
+        all_terms = set().union(*query_terms) if query_terms else set()
         candidates: list[_RetrievedChunk] = []
         ordinal = 0
         offset = 0
@@ -1596,7 +1693,18 @@ class ChatService:
                     if redact:
                         text = self._redact_secrets(text)
                     folded = text.casefold()
-                    score = sum(folded.count(term) for term in terms)
+                    per_query_scores = [
+                        sum(folded.count(term) for term in terms)
+                        for terms in query_terms
+                    ]
+                    # Reward both strong matches and chunks that satisfy multiple
+                    # retrieval intents. The original operator query is always the
+                    # first and therefore receives a small tie-breaking preference.
+                    score = sum(per_query_scores) + sum(
+                        2 for value in per_query_scores if value > 0
+                    )
+                    if per_query_scores:
+                        score += per_query_scores[0]
                     chunk_id = str(raw.get("id") or f"{source.id}:{index + 1}")
                     page = raw.get("page")
                     if not isinstance(page, int) or page < 1:
@@ -1629,7 +1737,7 @@ class ChatService:
         selected: list[_RetrievedChunk] = []
         tokens = 0
         for candidate in candidates:
-            if terms and candidate.score <= 0:
+            if all_terms and candidate.score <= 0:
                 continue
             candidate_tokens = estimate_tokens(candidate.text, message_count=1)
             if len(selected) >= 8 or tokens + candidate_tokens > token_budget:

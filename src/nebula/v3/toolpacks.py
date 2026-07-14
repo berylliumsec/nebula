@@ -1202,14 +1202,13 @@ class ToolPackInstaller:
                 else ToolPackTrust.TRUSTED_PUBLISHER
             )
         else:
-            if not (
-                self.developer_mode and local_file and confirm_unsigned_permissions
-            ):
+            if not local_file:
                 raise SignatureVerificationError(
-                    "unsigned packs require developer mode, a local file, and "
-                    "explicit permission confirmation"
+                    "unsigned packs must be installed from an explicit local file"
                 )
-            trust = ToolPackTrust.LOCAL_UNSIGNED
+            # Loading the bundle is the operator's trust decision. Its manifest,
+            # image digests, and smoke tests are still verified before use.
+            trust = ToolPackTrust.LOCAL_TRUSTED
 
         if trust == ToolPackTrust.CURATED:
             manifest.ensure_curated_multiarch()
@@ -1399,7 +1398,10 @@ class ToolPackInstaller:
             )
         if installation.image_locks != self._manifest_image_locks(manifest):
             raise ToolPackInstallError("installed image locks do not match manifest")
-        if installation.trust == ToolPackTrust.LOCAL_UNSIGNED:
+        if installation.trust in {
+            ToolPackTrust.LOCAL_TRUSTED,
+            ToolPackTrust.LOCAL_UNSIGNED,
+        }:
             if installation.publisher_key_id is not None:
                 raise SignatureVerificationError(
                     "unsigned pack cannot contain publisher-key attribution"

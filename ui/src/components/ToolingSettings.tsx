@@ -74,7 +74,6 @@ export function ToolPackSettings() {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const [localBundle, setLocalBundle] = useState<File>();
-  const [developerConfirmed, setDeveloperConfirmed] = useState(false);
   const [progressEvents, setProgressEvents] = useState<ToolPackProgressEvent[]>([]);
   const [progressStreamState, setProgressStreamState] = useState<StreamState>("closed");
   const progressCursor = useRef(0);
@@ -173,14 +172,13 @@ export function ToolPackSettings() {
   };
 
   const installLocal = async () => {
-    if (!api || !readyRunner || !localBundle || !developerConfirmed) return;
+    if (!api || !readyRunner || !localBundle) return;
     const installed = await action("local", async () => {
       const bundle = await fileBase64(localBundle);
-      return api.installLocalToolPack(bundle, readyRunner.id, true);
+      return api.installLocalToolPack(bundle, readyRunner.id);
     });
     if (installed) {
       setLocalBundle(undefined);
-      setDeveloperConfirmed(false);
     }
   };
 
@@ -200,7 +198,7 @@ export function ToolPackSettings() {
 
   return (
     <section className="settings-section" id="tool-pack-settings">
-      <div className="section-heading"><div><h2>Execution environment</h2><p>One signed, digest-pinned Toolbox image containing the commands agents discover and run.</p></div><button className="button secondary" type="button" disabled={loading || previewMode} onClick={() => void load()}><RefreshCw size={14} /> Refresh</button></div>
+      <div className="section-heading"><div><h2>Execution environment</h2><p>Digest-pinned Toolbox images containing the commands agents discover and run.</p></div><button className="button secondary" type="button" disabled={loading || previewMode} onClick={() => void load()}><RefreshCw size={14} /> Refresh</button></div>
       {error && <div className="knowledge-status error" role="alert">{error}</div>}
       {!readyRunner && <div className="knowledge-status warning" role="status"><AlertTriangle size={15} /> Configure a runner before installing an environment. Commands remain unavailable to missions.</div>}
       <section className="tool-progress" aria-label="Tool-pack installation progress" aria-live="polite">
@@ -228,7 +226,7 @@ export function ToolPackSettings() {
           {catalog.length ? <div className="tool-pack-list">{catalog.map((entry) => <article className="tool-pack-card catalog" key={entry.id}><header><div><strong>{entry.publisher}/{entry.name}</strong><small>Version {entry.version}</small></div>{entry.signed && <span className="signed-badge"><ShieldCheck size={12} /> Signed</span>}</header><p>{entry.description || entry.toolNames.join(", ")}</p><div className="scope-chip-list">{entry.permissions.map((permission) => <span key={permission}>{permission.replaceAll("_", " ")}</span>)}</div><footer><span>{entry.platforms.join(" · ") || "Platform manifest"}</span><button className="button primary" type="button" disabled={!readyRunner || installedDigests.has(entry.manifestDigest) || busy === entry.id || previewMode} onClick={() => install(entry)}>{installedDigests.has(entry.manifestDigest) ? "Installed" : busy === entry.id ? "Installing…" : "Install"}</button></footer></article>)}</div> : <div className="empty-state compact"><Package size={22} /><strong>{loading ? "Loading catalog…" : "Catalog unavailable"}</strong><p>An installed environment can still run by digest when the signed catalog cannot be reached.</p></div>}
         </div>
       </div>
-      <details className="developer-pack"><summary>Use a custom compatible environment</summary><div><p>Build or derive an OCI image that implements <code>nebula.toolbox/v1</code> and includes a complete <code>nebula.toolbox.catalog/v2</code> interface catalog. Commands without a complete interface remain available to agents through the container-only shell fallback.</p><label>Environment bundle<input type="file" accept=".nebula-toolpack,.zip,application/zip" onChange={(event: ChangeEvent<HTMLInputElement>) => setLocalBundle(event.target.files?.[0])} /></label><label className="provider-consent"><input type="checkbox" checked={developerConfirmed} onChange={(event) => setDeveloperConfirmed(event.target.checked)} /><span><strong>Enable this untrusted local environment</strong><small>Its requested permissions remain visibly marked. Local environments are never fetched from a remote URL.</small></span></label><button className="button secondary" type="button" disabled={!localBundle || !developerConfirmed || !readyRunner || busy === "local"} onClick={() => void installLocal()}><Upload size={14} /> {busy === "local" ? "Installing…" : "Install custom environment"}</button></div></details>
+      <details className="developer-pack"><summary>Use a custom compatible environment</summary><div><p>Build or derive an OCI image that implements <code>nebula.toolbox/v1</code> and includes a complete <code>nebula.toolbox.catalog/v2</code> interface catalog. A local bundle is trusted when you load it, verified against its pinned image digests, and enabled for engagements automatically. Disable or narrow it in engagement settings when needed.</p><label>Environment bundle<input type="file" accept=".nebula-toolpack,.zip,application/zip" onChange={(event: ChangeEvent<HTMLInputElement>) => setLocalBundle(event.target.files?.[0])} /></label><button className="button secondary" type="button" disabled={!localBundle || !readyRunner || busy === "local"} onClick={() => void installLocal()}><Upload size={14} /> {busy === "local" ? "Installing…" : "Load local environment"}</button></div></details>
     </section>
   );
 }

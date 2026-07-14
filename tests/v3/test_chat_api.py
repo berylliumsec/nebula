@@ -149,6 +149,21 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
     )
     assert [item["id"] for item in sessions.json()] == [session_id]
+    renamed = client.patch(
+        f"/api/v1/chat-sessions/{session_id}",
+        headers=_auth(),
+        json={"title": "Renamed API conversation", "expected_revision": 1},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "Renamed API conversation"
+    assert renamed.json()["revision"] == 2
+    assert store.get(ChatSession, session_id).title == "Renamed API conversation"
+    stale_rename = client.patch(
+        f"/api/v1/chat-sessions/{session_id}",
+        headers=_auth(),
+        json={"title": "Stale title", "expected_revision": 1},
+    )
+    assert stale_rename.status_code == 409
     assert (
         client.post("/api/v1/chat-sessions", headers=_auth(), json={}).status_code
         == 405
@@ -252,8 +267,15 @@ def test_chat_delete_rejects_an_active_response(tmp_path):
     response = client.delete(
         f"/api/v1/chat-sessions/{session.id}", headers=_auth()
     )
+    rename_response = client.patch(
+        f"/api/v1/chat-sessions/{session.id}",
+        headers=_auth(),
+        json={"title": "Still active"},
+    )
 
     assert response.status_code == 409
+    assert rename_response.status_code == 409
+    assert "response is active" in rename_response.json()["detail"]
     assert "response is active" in response.json()["detail"]
     assert store.get(ChatSession, session.id).id == session.id
 

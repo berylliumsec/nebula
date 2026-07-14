@@ -2,11 +2,15 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, t
 import {
   Bot,
   Braces,
+  Check,
   FileClock,
   FolderOpen,
   LoaderCircle,
   MessageSquare,
   NotebookPen,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
   Plus,
   Send,
   ShieldCheck,
@@ -128,6 +132,9 @@ export function SessionsPage() {
     setSearchParams(params, { replace: true });
   };
   const [mobileListOpen, setMobileListOpen] = useState(false);
+  const [conversationPanelExpanded, setConversationPanelExpanded] = useState(
+    () => localStorage.getItem("nebula.conversations.expanded") === "true",
+  );
   const {
     api,
     activeOperator,
@@ -149,6 +156,9 @@ export function SessionsPage() {
   const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [deletingSessionId, setDeletingSessionId] = useState<string>();
+  const [renamingSessionId, setRenamingSessionId] = useState<string>();
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameError, setRenameError] = useState<string>();
   const [sessionId, setSessionId] = useState("");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
@@ -375,6 +385,49 @@ export function SessionsPage() {
       setChatError(error instanceof Error ? error.message : "Could not delete the conversation.");
     } finally {
       setDeletingSessionId(undefined);
+    }
+  };
+
+  const toggleConversationPanel = () => {
+    setConversationPanelExpanded((current) => {
+      const next = !current;
+      localStorage.setItem("nebula.conversations.expanded", String(next));
+      return next;
+    });
+  };
+
+  const startRenamingConversation = (session: ChatSessionSummary) => {
+    setRenamingSessionId(session.id);
+    setRenameDraft(session.title);
+    setRenameError(undefined);
+  };
+
+  const cancelRenamingConversation = () => {
+    setRenamingSessionId(undefined);
+    setRenameDraft("");
+    setRenameError(undefined);
+  };
+
+  const renameConversation = async (event: FormEvent, session: ChatSessionSummary) => {
+    event.preventDefault();
+    if (!api || renamingSessionId !== session.id) return;
+    const title = renameDraft.trim();
+    if (!title) return;
+    if (title === session.title) {
+      cancelRenamingConversation();
+      return;
+    }
+    setRenameError(undefined);
+    try {
+      const updated = await api.renameChatSession(session.id, {
+        title,
+        expectedRevision: session.revision,
+      });
+      setSessions((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setRenamingSessionId(undefined);
+      setRenameDraft("");
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : "Could not rename the conversation.");
     }
   };
 
@@ -797,12 +850,13 @@ export function SessionsPage() {
         <div className="session-scope"><ShieldCheck size={15} /> Human controlled · {engagement?.name ?? "no project"}</div>
       </div>
 
-      <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}`}>
+      <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelExpanded ? " conversation-panel-expanded" : ""}`}>
         {view === "chat" && <aside className="session-list" aria-label="Conversations">
-          <header><div><span>Conversations</span><strong>{sessions.length} saved</strong></div><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={!engagement} onClick={newConversation}><Plus size={16} /></button></header>
+          <header><div><span>Conversations</span><strong>{sessions.length} saved</strong></div><div className="session-list-header-actions"><button className="icon-button subtle" type="button" aria-label={conversationPanelExpanded ? "Collapse conversations panel" : "Expand conversations panel"} aria-pressed={conversationPanelExpanded} onClick={toggleConversationPanel}>{conversationPanelExpanded ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</button><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={!engagement} onClick={newConversation}><Plus size={16} /></button></div></header>
           <nav>
             <button className={!sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{selectedProvider?.name ?? "Choose a provider"}</small></span></button>
-            {sessions.map((session) => <div className={`session-list-item${session.id === sessionId ? " active" : ""}`} key={session.id}><button className="session-select" type="button" onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><button className="icon-button subtle" type="button" aria-label={`Delete conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Delete ${session.title}`} onClick={() => void deleteConversation(session)}>{deletingSessionId === session.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></div>)}
+            {sessions.map((session) => <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" type="button" onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><button className="icon-button subtle" type="button" aria-label={`Rename conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Rename ${session.title}`} onClick={() => startRenamingConversation(session)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Delete ${session.title}`} onClick={() => void deleteConversation(session)}>{deletingSessionId === session.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></>}</div>)}
+            {renameError && <p className="session-list-error" role="alert">{renameError}</p>}
           </nav>
         </aside>}
         <section className="session-workspace">

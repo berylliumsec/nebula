@@ -131,6 +131,7 @@ class ToolPackInstallationStatus(StringEnum):
 class ToolPackTrust(StringEnum):
     CURATED = "curated"
     TRUSTED_PUBLISHER = "trusted_publisher"
+    LOCAL_TRUSTED = "local_trusted"
     LOCAL_UNSIGNED = "local_unsigned"
 
 

@@ -11,10 +11,13 @@ import nebula.v3.api as api_module
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
+    Engagement,
+    EngagementToolAssignment,
     RunnerIsolation,
     RunnerProfile,
     RunnerRuntime,
     ToolPackInstallationStatus,
+    ToolPackTrust,
 )
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_platform import (
@@ -116,6 +119,7 @@ def test_journal_is_bounded_monotonic_and_reports_replay_truncation():
 def test_local_install_events_are_sanitized_and_ordered(tmp_path, monkeypatch):
     platform = _platform(tmp_path)
     manifest = _manifest()
+    engagement = platform.store.create(Engagement(name="Existing engagement"))
     platform.store.create(
         RunnerProfile(
             id="PRIVATE-RUNNER-ID",
@@ -158,6 +162,31 @@ def test_local_install_events_are_sanitized_and_ordered(tmp_path, monkeypatch):
             confirm_permissions=True,
         )
     )
+
+    assert installed.trust == ToolPackTrust.LOCAL_TRUSTED
+    [assignment] = platform.store.list_entities(
+        EngagementToolAssignment,
+        engagement_id=engagement.id,
+    )
+    assert assignment.enabled is True
+    assert assignment.allowed_tool_names == ["sample.query"]
+
+    # An explicit opt-out survives subsequent default-enablement passes.
+    assignment = platform.store.update(
+        EngagementToolAssignment,
+        assignment.id,
+        {"enabled": False},
+        expected_revision=assignment.revision,
+    )
+    assert platform.enable_default_local_packs(engagement.id) == []
+    assert (
+        platform.store.get(EngagementToolAssignment, assignment.id).enabled is False
+    )
+
+    future = platform.store.create(Engagement(name="Future engagement"))
+    [future_assignment] = platform.enable_default_local_packs(future.id)
+    assert future_assignment.enabled is True
+    assert future_assignment.manifest_digest == installed.manifest_digest
 
     events = platform.events.replay().events
     assert [event.phase for event in events] == [

@@ -94,4 +94,14 @@ describe("exact assistant Markdown", () => {
     rerender(<AssistantMarkdown content={'```python\nprint(1)\n```'} durable={false} messageId="m" runnableLanguages={new Set(["python"])} onRun={onRun} />);
     expect(screen.queryByRole("button", { name: /Review and run/ })).toBeNull();
   });
+
+  it("recognizes common terminal fence labels as shell commands", () => {
+    const onRun = vi.fn();
+    const { rerender } = render(
+      <AssistantMarkdown content={'```console\nnmap -sV example.test\n```'} durable messageId="m" runnableLanguages={new Set(["bash"])} onRun={onRun} />,
+    );
+    expect(screen.getByRole("button", { name: "Review and run bash code" })).toBeVisible();
+    rerender(<AssistantMarkdown content={'```zsh\ncurl https://example.test\n```'} durable messageId="m" runnableLanguages={new Set(["bash"])} onRun={onRun} />);
+    expect(screen.getByRole("button", { name: "Review and run bash code" })).toBeVisible();
+  });
 });

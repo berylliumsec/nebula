@@ -7,6 +7,7 @@ import type {
   ChatCitation,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ChatSessionRenameRequest,
   ChatSessionSummary,
   ChatStreamEvent,
   ChatTurn,
@@ -742,7 +743,7 @@ interface WireToolPackInstallation extends JsonObject {
   interface_catalog_digest?: string | null;
   manifest_digest: string;
   source?: string;
-  trust?: "curated" | "trusted_publisher" | "local_unsigned";
+  trust?: "curated" | "trusted_publisher" | "local_trusted" | "local_unsigned";
   trust_state?: ToolPackInstallation["trustState"];
   runtime_profile_id?: string | null;
   image_locks?: Record<string, string>;
@@ -1693,6 +1694,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     toolsEnabled: value.metadata?.tools_enabled === true,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
+    revision: value.revision,
   };
 }
 
@@ -2210,7 +2212,7 @@ export class ApiClient {
     }).then((items) => items.map(mapToolPackInstallation));
   }
 
-  installLocalToolPack(bundleBase64: string, runtimeProfileId: string, developerModeConfirmed: boolean): Promise<ToolPackInstallation> {
+  installLocalToolPack(bundleBase64: string, runtimeProfileId: string, developerModeConfirmed = false): Promise<ToolPackInstallation> {
     return this.request<WireToolPackInstallation>("tool-packs/install-local", {
       method: "POST",
       body: JSON.stringify({
@@ -3164,6 +3166,16 @@ export class ApiClient {
   listChatSessions(engagementId: string, signal?: AbortSignal): Promise<Page<ChatSessionSummary>> {
     return this.listAll<WireChatSession>("chat-sessions", signal, engagementId)
       .then((items) => page(items.map(mapChatSession)));
+  }
+
+  renameChatSession(sessionId: string, body: ChatSessionRenameRequest): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(`chat-sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        title: body.title.trim(),
+        expected_revision: body.expectedRevision,
+      }),
+    }).then(mapChatSession);
   }
 
   async deleteChatSession(sessionId: string): Promise<void> {

@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     AgentRun,
     Approval,
@@ -40,6 +41,8 @@ from nebula.v3.providers import (
     ProviderKind,
 )
 from nebula.v3.storage import NebulaStore
+from nebula.v3.tool_platform import ToolPlatform
+from nebula.v3.toolpacks import compile_manifest_yaml, manifest_digest
 
 
 AUTH = {"Authorization": "Bearer test-token"}
@@ -354,6 +357,77 @@ def test_engagement_scope_is_synthesized_then_revisioned_on_update(tmp_path):
         json={"allowed_ports": [443], "expected_revision": 1},
     )
     assert stale.status_code == 409
+
+
+def test_new_engagement_inherits_ready_locally_trusted_pack(tmp_path):
+    store = NebulaStore(tmp_path / "local-defaults.db")
+    platform = ToolPlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "core-data",
+        tool_pack_root=tmp_path / "packs",
+    )
+    manifest = compile_manifest_yaml(
+        f"""api_version: tools.nebula.security/v1
+kind: ToolPack
+metadata:
+  publisher: example
+  name: local-default
+  version: 1.0.0
+  minimum_nebula_version: 3.0.0a1
+  description: A locally trusted test pack.
+  licenses: [BSD-3-Clause]
+images:
+  - name: sample
+    platform: linux/amd64
+    image: example.invalid/sample@sha256:{PACK_DIGEST}
+    sbom: sample.cdx.json
+    provenance: sample.intoto.jsonl
+permissions: {{network: false, workspace: none, credentials: []}}
+tools:
+  - name: {TOOL_NAME}
+    description: Run a local test capability.
+    image: sample
+    executable: /usr/bin/nmap
+    input_schema: {{type: object, additionalProperties: false}}
+    output_schema: {{type: object, additionalProperties: false}}
+    policy: {{risk_class: local_read}}
+    parser: {{built_in: json/v1}}
+    smoke_tests:
+      - arguments: {{}}
+"""
+    )
+    digest = manifest_digest(manifest)
+    manifest_path = platform.manifests.put(manifest)
+    store.create(
+        ToolPackInstallation(
+            publisher=manifest.metadata.publisher,
+            name=manifest.metadata.name,
+            version=manifest.metadata.version,
+            manifest_digest=digest,
+            source="local-upload",
+            trust=ToolPackTrust.LOCAL_TRUSTED,
+            runtime_profile_id="runner-test",
+            image_locks={"sample": manifest.images[0].image},
+            status=ToolPackInstallationStatus.READY,
+            manifest_path=str(manifest_path),
+            installed_at=utc_now(),
+            verified_at=utc_now(),
+        )
+    )
+    client = TestClient(
+        create_app(store, auth_token="test-token", tool_platform=platform)
+    )
+
+    engagement = _create_engagement(client, "Local pack defaults")
+
+    [assignment] = store.list_entities(
+        EngagementToolAssignment,
+        engagement_id=engagement["id"],
+    )
+    assert assignment.manifest_digest == digest
+    assert assignment.allowed_tool_names == [TOOL_NAME]
+    assert assignment.enabled is True
 
 
 def test_runner_profiles_validate_create_and_revisioned_update(tmp_path):

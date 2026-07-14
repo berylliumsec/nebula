@@ -900,17 +900,34 @@ describe("ApiClient", () => {
         content: "Review scope",
         citations: [],
         metadata: {},
-      }]), { status: 200 }));
+      }]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ...entity,
+        revision: 2,
+        id: "session-1",
+        engagement_id: "engagement-1",
+        title: "Renamed scope review",
+        provider_profile_id: "provider-1",
+        model: "model-1",
+        metadata: {},
+      }), { status: 200 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
 
     const sessions = await client.listChatSessions("engagement-1");
     const messages = await client.listChatMessages("session-1");
+    const renamed = await client.renameChatSession("session-1", { title: "  Renamed scope review  ", expectedRevision: 1 });
 
-    expect(sessions.items[0]).toMatchObject({ id: "session-1", providerId: "provider-1" });
+    expect(sessions.items[0]).toMatchObject({ id: "session-1", providerId: "provider-1", revision: 1 });
     expect(messages[0]).toMatchObject({ sessionId: "session-1", sequence: 1, role: "user" });
+    expect(renamed).toMatchObject({ id: "session-1", title: "Renamed scope review", revision: 2 });
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://127.0.0.1:8765/api/v1/chat-sessions?engagement_id=engagement-1&limit=1000&offset=0",
     );
+    expect(fetchMock.mock.calls[2][0]).toBe("http://127.0.0.1:8765/api/v1/chat-sessions/session-1");
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({
+      method: "PATCH",
+      body: JSON.stringify({ title: "Renamed scope review", expected_revision: 1 }),
+    });
   });
 
   it("maps provenance-backed chat and mission context status", async () => {
@@ -1056,6 +1073,24 @@ describe("ApiClient", () => {
     expect(saved).toMatchObject({ manifestDigest: "sha256:catalog", toolNames: ["nmap.connect_scan"], enabled: true });
     const assignmentBody = JSON.parse(String(fetchMock.mock.calls.find(([input, init]) => String(input).endsWith("/tool-assignment") && init?.method === "PUT")?.[1]?.body));
     expect(assignmentBody).toEqual({ manifest_digest: "sha256:catalog", tool_names: ["nmap.connect_scan"], enabled: true });
+  });
+
+  it("maps locally trusted packs as trusted", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([{
+      id: "pack-local",
+      publisher: "local",
+      name: "custom",
+      version: "1.0.0",
+      manifest_digest: "sha256:local",
+      source: "local-upload",
+      trust: "local_trusted",
+      status: "ready",
+    }]), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const [pack] = await client.listToolPacks();
+
+    expect(pack.trustState).toBe("trusted");
   });
 
   it("sends analysis-only mission defaults and bounded tool mission budgets", async () => {

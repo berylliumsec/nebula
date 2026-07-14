@@ -4,12 +4,14 @@ import {
   CircleDashed,
   Clock3,
   DollarSign,
+  FileCheck2,
   GitBranch,
   Network,
   ScanSearch,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { AssistantMarkdown } from "../components/AssistantMarkdown";
 import { PageHeader } from "../components/PageHeader";
 import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -27,6 +29,7 @@ const agents = [
 export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const { setActivityOpen } = useChrome();
   const { approvals, events, previewMode, run } = useWorkspace();
+  const resultEvent = events.find((event) => event.kind === "run.completed" || event.kind === "run.failed");
   if (!previewMode) {
     return (
       <div className="page agents-page">
@@ -40,9 +43,14 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replace("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{approvals.length} pending approval request{approvals.length === 1 ? "" : "s"}.</p></div>
           <div className="mission-hero-progress"><span><strong>{run?.completedTasks ?? 0}</strong><small>complete</small></span><span><strong>{run?.totalTasks ?? 0}</strong><small>recorded tasks</small></span><span><strong>{events.length}</strong><small>events loaded</small></span></div>
         </section>
+        {resultEvent && <section className={`panel mission-result ${resultEvent.kind === "run.failed" ? "failed" : "complete"}`} aria-labelledby="mission-result-title">
+          <header><span className="mission-result-icon"><FileCheck2 size={19} /></span><div><small>{resultEvent.kind === "run.failed" ? "Mission ended with errors" : "Completed mission"}</small><h2 id="mission-result-title">Mission result</h2></div><span className="mission-result-sequence">#{resultEvent.sequence}</span></header>
+          <div className="mission-result-body"><AssistantMarkdown content={resultEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /></div>
+          <footer>{resultEvent.actor ?? "Nebula Core"} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resultEvent.occurredAt))}</footer>
+        </section>}
         <section className="panel data-panel">
           <header className="panel-header compact"><div><h2>Activity</h2><p>Latest mission transitions</p></div><GitBranch size={19} /></header>
-          {events.length > 0 ? <ol className="event-list">{events.slice(0, 10).map((event) => <li key={event.id}><span className="event-icon"><Bot size={15} /></span><div><p>{event.summary}</p><small>{event.actor ?? "Nebula Core"} · #{event.sequence}</small></div></li>)}</ol> : <div className="empty-state compact"><CircleDashed size={23} /><strong>No run events</strong><p>The selected run has not recorded a transition yet.</p></div>}
+          {events.length > 0 ? <ol className="event-list">{events.slice(0, 10).map((event) => <li key={event.id}><span className="event-icon"><Bot size={15} /></span><div className="event-summary"><AssistantMarkdown content={event.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /><small>{event.actor ?? "Nebula Core"} · #{event.sequence}</small></div></li>)}</ol> : <div className="empty-state compact"><CircleDashed size={23} /><strong>No run events</strong><p>The selected run has not recorded a transition yet.</p></div>}
         </section>
       </div>
     );

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import {
   Activity,
   Bot,
@@ -14,6 +14,8 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { ModalSurface } from "./DialogSystem";
 
 type CenterTab = "activity" | "approvals";
+
+const AssistantMarkdown = lazy(() => import("./AssistantMarkdown").then((module) => ({ default: module.AssistantMarkdown })));
 
 const eventIcons: Partial<Record<RunEventKind, typeof Activity>> = {
   "approval.requested": ShieldAlert,
@@ -121,8 +123,8 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
                   <span className={`event-icon ${event.kind.split(".")[0]}`}>
                     <Icon size={15} aria-hidden="true" />
                   </span>
-                  <div>
-                    <p>{event.summary}</p>
+                  <div className="event-summary">
+                    <Suspense fallback={<p>{event.summary}</p>}><AssistantMarkdown content={event.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /></Suspense>
                     <small>
                       {event.actor ?? "Nebula"} · {shortTime(event.occurredAt)} · #{event.sequence}
                     </small>
