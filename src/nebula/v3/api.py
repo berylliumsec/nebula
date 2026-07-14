@@ -205,6 +205,7 @@ from .terminal_history import (
     TerminalCommandHistoryPreferenceUpdate,
     TerminalCommandHistoryStatus,
     TerminalCommandPage,
+    TerminalCommandStatus,
     TerminalRecordingTools,
     TerminalRecordingToolsConflict,
     TerminalRecordingToolsUpdate,
@@ -251,6 +252,8 @@ API_PREFIX = "/api/v1"
 PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS = 30
 TOOL_PACK_EVENT_POLL_SECONDS = 0.25
 TOOL_PACK_EVENT_HEARTBEAT_TICKS = 20
+
+
 def _websocket_protocol_secret(
     protocols: list[str], prefix: str, *, decode_base64: bool
 ) -> str | None:
@@ -519,9 +522,7 @@ def create_app(
     def chat_provider_factory(profile: ProviderProfile):
         # Keep ChatService's provider seam available to embedders, but resolve
         # opaque Core-managed references before a request leaves the process.
-        if profile.secret_ref and profile.secret_ref.startswith(
-            ("vault:", "session:")
-        ):
+        if profile.secret_ref and profile.secret_ref.startswith(("vault:", "session:")):
             return provider_factory(profile)
         return chat_runtime.provider_from_profile(profile)
 
@@ -599,10 +600,7 @@ def create_app(
         and container_terminals.execution_service is None
     ):
         container_terminals.bind_execution_service(executions)
-    if (
-        container_terminals is not None
-        and container_terminals.command_history is None
-    ):
+    if container_terminals is not None and container_terminals.command_history is None:
         container_terminals.bind_command_history(terminal_commands)
     workspaces = workspace_service
     if workspaces is None and artifact_store is not None and tool_platform is not None:
@@ -1090,7 +1088,9 @@ def create_app(
         search: str | None = Query(default=None, max_length=4096),
         operator_id: str | None = Query(default=None, max_length=200),
         session_id: str | None = Query(default=None, max_length=200),
-        command_status: str | None = Query(default=None, alias="status", max_length=40),
+        command_status: TerminalCommandStatus | None = Query(
+            default=None, alias="status"
+        ),
         exit_code: int | None = Query(default=None),
         date_from: datetime | None = Query(default=None),
         date_to: datetime | None = Query(default=None),
@@ -1991,7 +1991,9 @@ def create_app(
             raise HTTPException(
                 status_code=428,
                 detail=(
-                    "engagement bundles contain unredacted evidence; "
+                    "engagement bundles contain unredacted evidence, raw execution "
+                    "output, retained selected-tool terminal results, and terminal "
+                    "command metadata; "
                     "acknowledge the sensitive-data warning before export"
                 ),
             )
@@ -2113,9 +2115,7 @@ def create_app(
         )
         if approval.origin == ToolCallOrigin.CHAT:
             if request.decision == "stop":
-                chat_service().cancel_turn(
-                    approval.run_id
-                )
+                chat_service().cancel_turn(approval.run_id)
             return updated
         if (
             approval_run is not None
@@ -3046,9 +3046,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def cancel_chat_turn(turn_id: str) -> ChatTurnSummary:
-        return _chat_turn_summary(
-            chat_service().cancel_turn(turn_id)
-        )
+        return _chat_turn_summary(chat_service().cancel_turn(turn_id))
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",
@@ -3057,9 +3055,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_chat_session_messages(session_id: str) -> list[ChatMessage]:
-        return chat_service().session_messages(
-            session_id
-        )
+        return chat_service().session_messages(session_id)
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/context",
@@ -3068,9 +3064,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_chat_session_context(session_id: str) -> ContextStatus:
-        return chat_service().context_status(
-            session_id
-        )
+        return chat_service().context_status(session_id)
 
     @app.patch(
         f"{API_PREFIX}/chat-sessions/{{session_id}}",
@@ -3426,9 +3420,7 @@ def _server_sent_event(event: str, payload: dict[str, Any]) -> bytes:
 def _setup_server_sent_event(event: SetupEvent) -> bytes:
     payload = event.model_dump(mode="json")
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return (
-        f"id: {event.sequence}\nevent: setup\ndata: {encoded}\n\n"
-    ).encode()
+    return (f"id: {event.sequence}\nevent: setup\ndata: {encoded}\n\n").encode()
 
 
 def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:

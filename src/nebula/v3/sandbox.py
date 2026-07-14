@@ -1446,6 +1446,7 @@ class PreparedContainerImage:
     detail: str
     security_tools: tuple[str, ...] = ()
     security_tool_packages: tuple[str, ...] = ()
+    security_tool_provenance: tuple[tuple[str, tuple[str, ...]], ...] = ()
     security_tool_manifest_sha256: str | None = None
 
 
@@ -1461,6 +1462,7 @@ class _VerifiedDerivedImage:
     configured_user: str
     security_tools: tuple[str, ...]
     security_tool_packages: tuple[str, ...]
+    security_tool_provenance: tuple[tuple[str, tuple[str, ...]], ...]
     security_tool_manifest_sha256: str
 
 
@@ -1701,18 +1703,29 @@ class ContainerImagePreparer:
                 "runtime did not prove the human-workstation image build recipe"
             )
         user = _mapping_get(config, "User", "user")
-        tools, packages, manifest_sha256 = await self._security_tool_manifest(image_id)
+        (
+            tools,
+            packages,
+            provenance,
+            manifest_sha256,
+        ) = await self._security_tool_manifest(image_id)
         return _VerifiedDerivedImage(
             image_id=image_id,
             configured_user=user if isinstance(user, str) else "",
             security_tools=tools,
             security_tool_packages=packages,
+            security_tool_provenance=provenance,
             security_tool_manifest_sha256=manifest_sha256,
         )
 
     async def _security_tool_manifest(
         self, image_id: str
-    ) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    ) -> tuple[
+        tuple[str, ...],
+        tuple[str, ...],
+        tuple[tuple[str, tuple[str, ...]], ...],
+        str,
+    ]:
         stdout, stderr, return_code = await self._runtime_command(
             "run",
             "--rm",
@@ -1789,7 +1802,13 @@ class ContainerImagePreparer:
             raise SandboxUnavailable(
                 "prepared human-workstation security-tool provenance is incomplete"
             )
-        return tuple(tools), tuple(packages), hashlib.sha256(raw).hexdigest()
+        normalized_provenance = tuple((tool, tuple(provenance[tool])) for tool in tools)
+        return (
+            tuple(tools),
+            tuple(packages),
+            normalized_provenance,
+            hashlib.sha256(raw).hexdigest(),
+        )
 
     async def _inspect_image(self, reference: str) -> tuple[dict[str, Any] | None, str]:
         stdout, stderr, return_code = await self._runtime_command(
@@ -1882,6 +1901,7 @@ class ContainerImagePreparer:
             detail=detail,
             security_tools=derived.security_tools,
             security_tool_packages=derived.security_tool_packages,
+            security_tool_provenance=derived.security_tool_provenance,
             security_tool_manifest_sha256=derived.security_tool_manifest_sha256,
         )
 

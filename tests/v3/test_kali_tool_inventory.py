@@ -17,7 +17,7 @@ def test_inventory_uses_installed_security_dependencies_and_path_executables(
     status = """
 Package: kali-linux-headless
 Status: install ok installed
-Depends: kali-linux-core, hashcat, nmap, git, vim | vim-nox, absent | replacement
+Depends: kali-linux-core, hashcat, nmap, git, vim | vim-nox, plocate | mlocate, absent | replacement
 
 Package: kali-linux-core
 Status: install ok installed
@@ -32,6 +32,9 @@ Package: git
 Status: install ok installed
 
 Package: vim
+Status: install ok installed
+
+Package: mlocate
 Status: install ok installed
 
 Package: replacement

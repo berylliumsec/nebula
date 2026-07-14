@@ -69,6 +69,7 @@ from nebula.v3.tools import (
 
 DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
+DIGEST_C = "c" * 64
 
 
 def manifest_source(*, publisher="example", second_platform=True):
@@ -1109,6 +1110,10 @@ def test_human_terminal_image_is_prepared_once_per_runner_revision(
                 detail="pulled",
                 security_tools=("hashcat", "nmap"),
                 security_tool_packages=("hashcat", "nmap"),
+                security_tool_provenance=(
+                    ("hashcat", ("hashcat",)),
+                    ("nmap", ("nmap",)),
+                ),
                 security_tool_manifest_sha256=DIGEST_C,
             )
 
@@ -1145,6 +1150,10 @@ def test_human_terminal_image_is_prepared_once_per_runner_revision(
         "installed_packages": ["kali-linux-headless", "iputils-ping"],
         "security_tools": ["hashcat", "nmap"],
         "security_tool_packages": ["hashcat", "nmap"],
+        "security_tool_provenance": {
+            "hashcat": ["hashcat"],
+            "nmap": ["nmap"],
+        },
         "security_tool_manifest_sha256": DIGEST_C,
         "registry_refreshed": True,
     }

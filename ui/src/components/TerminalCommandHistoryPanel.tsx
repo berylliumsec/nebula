@@ -67,7 +67,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
         api.terminalRecordingTools(engagementId, signal),
       ]);
       setStatus(nextStatus);
-      applyTools(nextTools);
+      if (offset === 0) applyTools(nextTools);
       setRecords((current) => offset ? [...current, ...page.records] : page.records);
       setNextOffset(page.nextOffset);
     } catch (loadError) {
@@ -96,7 +96,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
     const queryText = toolQuery.trim().toLocaleLowerCase();
     return queryText ? availableTools.filter((tool) => tool.toLocaleLowerCase().includes(queryText)) : availableTools;
   }, [availableTools, toolQuery]);
-  const dirtyTools = Boolean(tools) && (
+  const dirtyTools = tools !== undefined && (
     JSON.stringify(customTools) !== JSON.stringify(tools.customTools)
     || JSON.stringify(disabledTools) !== JSON.stringify(tools.disabledTools)
   );
@@ -209,7 +209,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
           <button className="button primary" type="button" disabled={!dirtyTools || savingTools} onClick={() => void saveTools()}><Save size={13} /> {savingTools ? "Saving…" : "Save tools"}</button>
         </div>
       </header>
-      {tools?.inventoryStatus === "verified" ? <p className="terminal-tool-provenance"><ShieldCheck size={13} /> {tools.defaultTools.length.toLocaleString()} image defaults · <code title={tools.runtimeImageDigest}>{tools.runtimeImageDigest?.slice(0, 19)}…</code> · policy revision {tools.revision}</p> : <p className="workspace-notice"><AlertTriangle size={13} /> The verified Kali catalog is not available yet. Start image preparation to load defaults; custom names can still be saved.</p>}
+      {tools?.inventoryStatus === "verified" ? <p className="terminal-tool-provenance"><ShieldCheck size={13} /> {tools.defaultTools.length.toLocaleString()} image defaults · image <code title={tools.runtimeImageDigest}>{tools.runtimeImageDigest?.slice(0, 19)}…</code> · manifest <code title={tools.manifestSha256}>{tools.manifestSha256?.slice(0, 12)}…</code> · policy revision {tools.revision}</p> : <p className="workspace-notice"><AlertTriangle size={13} /> The verified Kali catalog is not available yet. Start image preparation to load defaults; custom names can still be saved.</p>}
       <div className="terminal-tool-controls">
         <label><span className="sr-only">Search recorded security tools</span><input type="search" value={toolQuery} placeholder="Search security tools" onChange={(event) => setToolQuery(event.target.value)} /></label>
         <button className="button quiet" type="button" disabled={!availableTools.length} onClick={() => setDisabledTools((current) => current.filter((item) => !availableTools.includes(item)))}>Select all</button>

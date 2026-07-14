@@ -25,6 +25,7 @@ from nebula.v3.terminal_history import (
     TerminalRecordingPolicy,
     TerminalRecordingToolsConflict,
     TerminalRecordingToolsUpdate,
+    command_executables,
 )
 
 
@@ -43,12 +44,15 @@ def command_history(tmp_path):
     project = store.create(Engagement(name="Command history"))
     clock = MutableClock(datetime(2026, 1, 3, tzinfo=timezone.utc))
     try:
-        yield TerminalCommandHistory(
-            database,
-            store=store,
-            artifact_store=ArtifactStore(tmp_path / "artifacts"),
-            clock=clock,
-        ), project
+        yield (
+            TerminalCommandHistory(
+                database,
+                store=store,
+                artifact_store=ArtifactStore(tmp_path / "artifacts"),
+                clock=clock,
+            ),
+            project,
+        )
     finally:
         database.dispose()
 
@@ -88,9 +92,7 @@ def test_history_is_default_on_exact_searchable_and_paginated(command_history):
     assert page.total == 2
     assert page.next_offset == 1
     next_page = history.list(project.id, offset=page.next_offset, limit=1)
-    assert [record.command for record in next_page.records] == [
-        "  printf 'one_%'  \n"
-    ]
+    assert [record.command for record in next_page.records] == ["  printf 'one_%'  \n"]
     assert next_page.next_offset is None
     assert history.list(project.id, search="ONE_%").records == [first]
 
@@ -147,6 +149,12 @@ def test_recording_tool_preferences_overlay_verified_image_defaults(command_hist
     assert policy.effective_tools == frozenset(
         {"custom-scanner", "hashcat", "new-kali-tool"}
     )
+    policy_events = history.store.replay_operation_events(
+        f"terminal-recording-policy:{project.id}"
+    )
+    assert policy_events[-1].event_type == "terminal.recording_policy.updated"
+    assert policy_events[-1].actor_id == "operator-1"
+    assert policy_events[-1].payload["revision"] == 1
     with pytest.raises(TerminalRecordingToolsConflict):
         history.update_recording_tools(
             project.id,
@@ -165,9 +173,7 @@ def test_unselected_command_retains_metadata_without_output_artifacts(tmp_path):
     store = NebulaStore(database)
     project = store.create(Engagement(name="Selective terminal audit"))
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    history = TerminalCommandHistory(
-        database, store=store, artifact_store=artifacts
-    )
+    history = TerminalCommandHistory(database, store=store, artifact_store=artifacts)
     now = datetime.now(timezone.utc)
     output = b"must not become durable"
     record = history.record_capture(
@@ -226,7 +232,10 @@ def test_audit_records_have_project_lifetime_without_age_or_count_pruning(tmp_pa
             )
 
         assert [record.command for record in history.list(project.id).records] == [
-            "command-3", "command-2", "command-1", "command-0"
+            "command-3",
+            "command-2",
+            "command-1",
+            "command-0",
         ]
         clock.current += timedelta(days=91)
         assert history.status(project.id).record_count == 4
@@ -276,7 +285,9 @@ def test_terminal_audit_and_raw_result_are_in_sensitive_engagement_exports(tmp_p
     secret_command = "printf terminal-audit-exported"
     output = b"password=exported-secret-value\n"
     now = datetime.now(timezone.utc)
-    TerminalCommandHistory(database, store=store, artifact_store=artifacts).record_capture(
+    TerminalCommandHistory(
+        database, store=store, artifact_store=artifacts
+    ).record_capture(
         engagement_id=project.id,
         session_id="terminal-export",
         operator_id="system",
@@ -353,7 +364,11 @@ def test_nonce_bound_frames_capture_only_command_result_and_detect_truncation():
     )
     end = _audit_frame("End", nonce, "8", b"3")
     spoofed = _audit_frame(
-        "Start", "differentnonce123", "9", base64.b64encode(b"/"), base64.b64encode(b"whoami")
+        "Start",
+        "differentnonce123",
+        "9",
+        base64.b64encode(b"/"),
+        base64.b64encode(b"whoami"),
     )
 
     first = parser.feed(b"prompt$ printf result\r\n" + start + b"abcdef")
@@ -392,15 +407,15 @@ def test_exec_frames_select_only_tools_that_actually_run():
         base64.b64encode(b"/workspace"),
         base64.b64encode(b"printf before; false && nmap; /usr/bin/nmap --version"),
     )
-    printf_exec = _audit_frame(
-        "Exec", nonce, "11", base64.b64encode(b"printf before")
-    )
+    printf_exec = _audit_frame("Exec", nonce, "11", base64.b64encode(b"printf before"))
     nmap_exec = _audit_frame(
         "Exec", nonce, "11", base64.b64encode(b"/usr/bin/nmap --version")
     )
     end = _audit_frame("End", nonce, "12", b"0", b"1")
 
-    result = parser.feed(start + printf_exec + b"before\n" + nmap_exec + b"Nmap 7" + end)
+    result = parser.feed(
+        start + printf_exec + b"before\n" + nmap_exec + b"Nmap 7" + end
+    )
 
     assert len(result.captures) == 1
     capture = result.captures[0]
@@ -408,6 +423,164 @@ def test_exec_frames_select_only_tools_that_actually_run():
     assert capture.matched_tools == ("nmap",)
     assert capture.output == b"before\nNmap 7"
     assert capture.recording_policy_revision == 4
+
+
+@pytest.mark.parametrize(
+    ("command", "executables"),
+    [
+        ("TARGET=host /usr/bin/nmap -sT", ("nmap",)),
+        ("command env MODE=safe /usr/bin/nmap --version", ("command", "env", "nmap")),
+        ("sudo -u root -- /usr/bin/nmap", ("sudo", "nmap")),
+        ("timeout --signal=TERM 5 nmap", ("timeout", "nmap")),
+        ("nice -n 5 stdbuf -oL nohup nmap", ("nice", "stdbuf", "nohup", "nmap")),
+        ("printf data | nmap", ("printf",)),
+    ],
+)
+def test_debug_simple_command_classifier_resolves_paths_assignments_and_wrappers(
+    command, executables
+):
+    assert command_executables(command) == executables
+
+
+def test_debug_simple_command_classifier_is_exact_and_case_sensitive():
+    assert command_executables("/usr/bin/Nmap --version") == ("Nmap",)
+    assert command_executables("my-nmap-wrapper") == ("my-nmap-wrapper",)
+    with pytest.raises(ValueError, match="could not be classified"):
+        command_executables("nmap 'unterminated")
+
+
+def test_recording_policy_is_snapshotted_until_the_next_top_level_command():
+    nonce = "terminalpolicysnapshot"
+    current = {
+        "policy": TerminalRecordingPolicy(
+            revision=1,
+            effective_tools=frozenset({"nmap"}),
+            runtime_image_digest="sha256:" + "a" * 64,
+            manifest_sha256="b" * 64,
+        )
+    }
+    parser = Osc633CommandParser(
+        nonce=nonce,
+        policy_provider=lambda: current["policy"],
+    )
+    first_start = _audit_frame(
+        "Start",
+        nonce,
+        "1",
+        base64.b64encode(b"/workspace"),
+        base64.b64encode(b"nmap --version"),
+    )
+    parser.feed(first_start)
+    current["policy"] = TerminalRecordingPolicy(
+        revision=2,
+        effective_tools=frozenset(),
+        runtime_image_digest="sha256:" + "a" * 64,
+        manifest_sha256="b" * 64,
+    )
+    first = parser.feed(
+        _audit_frame("Exec", nonce, "0", base64.b64encode(b"nmap --version"))
+        + b"Nmap 7\n"
+        + _audit_frame("End", nonce, "1", b"0", b"1")
+    ).captures[0]
+    second = parser.feed(
+        _audit_frame(
+            "Start",
+            nonce,
+            "2",
+            base64.b64encode(b"/workspace"),
+            base64.b64encode(b"nmap --version"),
+        )
+        + _audit_frame("Exec", nonce, "1", base64.b64encode(b"nmap --version"))
+        + b"Nmap 7\n"
+        + _audit_frame("End", nonce, "2", b"0", b"1")
+    ).captures[0]
+
+    assert (first.capture_decision, first.recording_policy_revision) == (
+        "selected_tool",
+        1,
+    )
+    assert (second.capture_decision, second.recording_policy_revision) == (
+        "not_selected",
+        2,
+    )
+
+
+def test_classifier_integrity_failure_discards_provisional_output(tmp_path):
+    database = Database(tmp_path / "classification-failure.db")
+    store = NebulaStore(database)
+    project = store.create(Engagement(name="Classification failure"))
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    history = TerminalCommandHistory(database, store=store, artifact_store=artifacts)
+    nonce = "terminalclassifierfail"
+    parser = history.new_parser(
+        nonce=nonce,
+        engagement_id=project.id,
+        session_id="classification-session",
+        operator_id="operator-1",
+        runtime_image_digest="sha256:" + "a" * 64,
+        manifest_sha256="b" * 64,
+        default_tools=("nmap",),
+    )
+    parsed = parser.feed(
+        _audit_frame(
+            "Start",
+            nonce,
+            "1",
+            base64.b64encode(b"/workspace"),
+            base64.b64encode(b"nmap --version"),
+        )
+        + _audit_frame("Exec", nonce, "0", base64.b64encode(b"nmap --version"))
+        + b"provisional secret output"
+        + _audit_frame("End", nonce, "1", b"0", b"0")
+    )
+    record = history.record_capture(
+        engagement_id=project.id,
+        session_id="classification-session",
+        operator_id="operator-1",
+        capture=parsed.captures[0],
+    )
+
+    assert record.capture_decision == "classification_failed"
+    assert record.raw_output_available is False
+    assert record.observed_output_bytes == 0
+    assert store.list_entities(Artifact) == []
+    assert history.status(project.id).classification_failure_count == 1
+
+
+def test_restart_discards_spool_without_a_proven_selected_tool(tmp_path):
+    store = NebulaStore(tmp_path / "unproven-recovery.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    project = store.create(Engagement(name="Unproven spool recovery"))
+    history = TerminalCommandHistory(
+        store.database, store=store, artifact_store=artifacts
+    )
+    nonce = "terminalunproven123"
+    parser = history.new_parser(
+        nonce=nonce,
+        engagement_id=project.id,
+        session_id="unproven-session",
+        operator_id="operator-1",
+    )
+    parser.feed(
+        _audit_frame(
+            "Start",
+            nonce,
+            "1",
+            base64.b64encode(b"/workspace"),
+            base64.b64encode(b"cat secret.txt"),
+        )
+        + b"must be discarded"
+    )
+
+    restarted = TerminalCommandHistory(
+        store.database, store=store, artifact_store=artifacts
+    )
+    assert restarted.recover_spools() == 1
+    record = restarted.list(project.id).records[0]
+    assert record.capture_decision == "classification_failed"
+    assert record.raw_output_available is False
+    assert store.list_entities(Artifact) == []
+    assert list(restarted.spool_root.glob("*")) == []
 
 
 def test_audit_parser_preserves_multiline_binary_results_and_async_output_boundaries():
@@ -491,6 +664,9 @@ def test_durable_spool_recovers_an_interrupted_command_after_core_restart(tmp_pa
         engagement_id=project.id,
         session_id="interrupted-session",
         operator_id="system",
+        runtime_image_digest="sha256:" + "a" * 64,
+        manifest_sha256="b" * 64,
+        default_tools=("long-running-scan",),
     )
     start = _audit_frame(
         "Start",
@@ -499,7 +675,13 @@ def test_durable_spool_recovers_an_interrupted_command_after_core_restart(tmp_pa
         base64.b64encode(b"/workspace"),
         base64.b64encode(b"long-running-scan"),
     )
-    parser.feed(start + b"partial result\n")
+    executed = _audit_frame(
+        "Exec",
+        nonce,
+        "12",
+        base64.b64encode(b"long-running-scan"),
+    )
+    parser.feed(start + executed + b"partial result\n")
 
     restarted = TerminalCommandHistory(
         store.database, store=store, artifact_store=artifacts
@@ -508,9 +690,15 @@ def test_durable_spool_recovers_an_interrupted_command_after_core_restart(tmp_pa
     records = restarted.list(project.id).records
     assert len(records) == 1
     assert records[0].status == "interrupted"
-    assert records[0].capture_error == "Core restarted before the command completion marker"
+    assert (
+        records[0].capture_error
+        == "Core restarted before the command completion marker"
+    )
     assert restarted.status(project.id).degraded_count == 1
-    assert restarted.output_bytes(project.id, records[0].id, raw=True)[0] == b"partial result\n"
+    assert (
+        restarted.output_bytes(project.id, records[0].id, raw=True)[0]
+        == b"partial result\n"
+    )
     assert list(restarted.spool_root.glob("*")) == []
 
 
@@ -532,6 +720,12 @@ def test_spool_recovery_retains_full_stream_hash_after_capture_truncation(tmp_pa
             "session_id": "truncated-session",
             "operator_id": "operator-1",
         },
+        policy_provider=lambda: TerminalRecordingPolicy(
+            revision=1,
+            effective_tools=frozenset({"printf"}),
+            runtime_image_digest="sha256:" + "a" * 64,
+            manifest_sha256="b" * 64,
+        ),
     )
     start = _audit_frame(
         "Start",
@@ -540,7 +734,13 @@ def test_spool_recovery_retains_full_stream_hash_after_capture_truncation(tmp_pa
         base64.b64encode(b"/workspace"),
         base64.b64encode(b"printf abcdef"),
     )
-    parser.feed(start + b"abcdef")
+    executed = _audit_frame(
+        "Exec",
+        nonce,
+        "18",
+        base64.b64encode(b"printf abcdef"),
+    )
+    parser.feed(start + executed + b"abcdef")
 
     restarted = TerminalCommandHistory(
         store.database, store=store, artifact_store=artifacts
@@ -707,7 +907,9 @@ def test_audit_health_counts_truncation_and_persistence_gaps(command_history):
     assert status.audit_gap_count == 1
 
 
-def test_audit_row_artifact_entities_and_command_event_commit_atomically(command_history):
+def test_audit_row_artifact_entities_and_command_event_commit_atomically(
+    command_history,
+):
     history, project = command_history
     assert history.store is not None
     record_id = "atomic-terminal-record"
@@ -750,7 +952,9 @@ def test_audit_row_artifact_entities_and_command_event_commit_atomically(command
     assert history.store.list_entities(Artifact) == []
 
 
-def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(tmp_path):
+def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "api-history.db")
     project = store.create(Engagement(name="History API"))
     artifacts = ArtifactStore(tmp_path / "artifacts")
@@ -768,10 +972,17 @@ def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(t
         session_id="terminal-api",
         operator_id="system",
         capture=CapturedTerminalCommand(
-            shell_sequence="4", command="printf 'api command'", cwd="/workspace",
-            status="completed", exit_code=0, started_at=now, completed_at=now,
-            output=output, observed_output_bytes=len(output),
-            output_sha256=hashlib.sha256(output).hexdigest(), output_truncated=False,
+            shell_sequence="4",
+            command="printf 'api command'",
+            cwd="/workspace",
+            status="completed",
+            exit_code=0,
+            started_at=now,
+            completed_at=now,
+            output=output,
+            observed_output_bytes=len(output),
+            output_sha256=hashlib.sha256(output).hexdigest(),
+            output_truncated=False,
         ),
     )
     base = f"/api/v1/engagements/{project.id}/terminal/commands"
@@ -782,9 +993,12 @@ def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(t
         assert client.get(base).status_code == 401
         assert client.put(f"{base}/status", json={"enabled": False}).status_code == 401
         assert client.delete(base).status_code == 401
-        assert client.get(
-            f"/api/v1/engagements/{project.id}/terminal/recording-tools"
-        ).status_code == 401
+        assert (
+            client.get(
+                f"/api/v1/engagements/{project.id}/terminal/recording-tools"
+            ).status_code
+            == 401
+        )
 
         recording_tools_url = (
             f"/api/v1/engagements/{project.id}/terminal/recording-tools"
@@ -792,6 +1006,40 @@ def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(t
         catalog = client.get(recording_tools_url, headers=headers)
         assert catalog.status_code == 200
         assert catalog.json()["effective_tools"] == ["hashcat", "nmap"]
+        assert (
+            client.put(
+                recording_tools_url,
+                json={
+                    "custom_tools": [],
+                    "disabled_tools": [],
+                    "expected_revision": 0,
+                    "expected_manifest_sha256": "d" * 64,
+                },
+            ).status_code
+            == 401
+        )
+        stale_catalog = client.put(
+            recording_tools_url,
+            headers=headers,
+            json={
+                "custom_tools": [],
+                "disabled_tools": [],
+                "expected_revision": 0,
+                "expected_manifest_sha256": None,
+            },
+        )
+        assert stale_catalog.status_code == 409
+        invalid_tool = client.put(
+            recording_tools_url,
+            headers=headers,
+            json={
+                "custom_tools": ["../nmap"],
+                "disabled_tools": [],
+                "expected_revision": 0,
+                "expected_manifest_sha256": "d" * 64,
+            },
+        )
+        assert invalid_tool.status_code == 422
         updated_catalog = client.put(
             recording_tools_url,
             headers=headers,
@@ -807,6 +1055,17 @@ def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(t
             "custom-scanner",
             "hashcat",
         ]
+        stale_revision = client.put(
+            recording_tools_url,
+            headers=headers,
+            json={
+                "custom_tools": [],
+                "disabled_tools": [],
+                "expected_revision": 0,
+                "expected_manifest_sha256": "d" * 64,
+            },
+        )
+        assert stale_revision.status_code == 409
 
         status = client.get(f"{base}/status", headers=headers)
         assert status.status_code == 200
@@ -870,12 +1129,18 @@ def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(t
             params={"offset": snowman_offset, "limit": 10},
         )
         assert second_page.content == expected_redacted[snowman_offset:]
-        assert client.get(
-            output_url,
-            headers=headers,
-            params={"offset": snowman_offset + 1},
-        ).status_code == 416
-        assert client.get(output_url, headers=headers, params={"raw": True}).status_code == 428
+        assert (
+            client.get(
+                output_url,
+                headers=headers,
+                params={"offset": snowman_offset + 1},
+            ).status_code
+            == 416
+        )
+        assert (
+            client.get(output_url, headers=headers, params={"raw": True}).status_code
+            == 428
+        )
         raw = client.get(
             output_url,
             headers={**headers, "X-Nebula-Sensitive-Data-Acknowledged": "true"},

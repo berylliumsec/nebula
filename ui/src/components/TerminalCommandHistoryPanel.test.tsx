@@ -87,4 +87,88 @@ describe("TerminalCommandHistoryPanel", () => {
     expect(screen.getAllByRole("checkbox")).toHaveLength(2);
     expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
   });
+
+  it("saves custom names without an image catalog and keeps metadata-only output actions unavailable", async () => {
+    const catalog = {
+      engagementId: "project-1",
+      inventoryStatus: "unavailable" as const,
+      defaultTools: [],
+      customTools: [],
+      disabledTools: [],
+      effectiveTools: [],
+      revision: 0,
+    };
+    const api = {
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({
+        engagementId: "project-1",
+        enabled: true,
+        captureMode: "selected_tools",
+        recordCount: 1,
+        recordedOutputCount: 0,
+        metadataOnlyCount: 1,
+        classificationFailureCount: 0,
+        degradedCount: 0,
+        truncatedCount: 0,
+        auditGapCount: 0,
+        capturedOutputBytes: 0,
+      }),
+      listTerminalCommands: vi.fn().mockResolvedValue({
+        records: [{
+          id: "command-metadata",
+          engagementId: "project-1",
+          sessionId: "terminal-1",
+          operatorId: "operator-1",
+          shellSequence: "3",
+          command: "ls -la",
+          cwd: "/workspace",
+          status: "completed",
+          exitCode: 0,
+          occurredAt: "2026-07-13T20:00:01Z",
+          rawOutputAvailable: false,
+          redactedOutputAvailable: false,
+          observedOutputBytes: 0,
+          capturedOutputBytes: 0,
+          outputTruncated: false,
+          outputPreview: "",
+          captureDecision: "not_selected",
+          matchedTools: [],
+          recordingPolicyRevision: 0,
+          runtimeImageDigest: `sha256:${"c".repeat(64)}`,
+        }],
+        total: 1,
+        offset: 0,
+        limit: 100,
+      }),
+      terminalCommandOutput: vi.fn(),
+      terminalRecordingTools: vi.fn().mockResolvedValue(catalog),
+      updateTerminalRecordingTools: vi.fn().mockResolvedValue({
+        ...catalog,
+        customTools: ["session-scanner"],
+        effectiveTools: ["session-scanner"],
+        revision: 1,
+      }),
+    } as unknown as ApiClient;
+    const user = userEvent.setup();
+    render(<DialogProvider><TerminalCommandHistoryPanel api={api} engagementId="project-1" /></DialogProvider>);
+
+    expect(await screen.findByText(/verified Kali catalog is not available/)).toBeVisible();
+    await user.type(screen.getByRole("textbox", { name: "Custom executable name" }), "session-scanner");
+    await user.click(screen.getByRole("button", { name: "Add custom" }));
+    expect(screen.getByRole("checkbox", { name: /session-scanner/ })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Save tools" }));
+    await waitFor(() => expect(api.updateTerminalRecordingTools).toHaveBeenCalledWith(
+      "project-1",
+      {
+        customTools: ["session-scanner"],
+        disabledTools: [],
+        expectedRevision: 0,
+        expectedManifestSha256: undefined,
+      },
+    ));
+
+    await user.click(screen.getByRole("button", { name: /ls -la/ }));
+    expect(screen.getByText("Output was not retained for this metadata-only record.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Raw" })).toBeDisabled();
+    expect(api.terminalCommandOutput).not.toHaveBeenCalled();
+  });
 });

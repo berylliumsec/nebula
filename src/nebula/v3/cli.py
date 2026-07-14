@@ -925,7 +925,10 @@ def doctor(
             else:
                 if raw_artifact.size != row.captured_output_bytes:
                     terminal_audit_errors.append(f"{row.id}:captured_output_bytes")
-                if not row.output_truncated and raw_artifact.sha256 != row.output_sha256:
+                if (
+                    not row.output_truncated
+                    and raw_artifact.sha256 != row.output_sha256
+                ):
                     terminal_audit_errors.append(f"{row.id}:output_hash")
             if output_artifacts.get("redacted_output") is None:
                 terminal_audit_errors.append(f"{row.id}:redacted_output_reference")
@@ -941,17 +944,24 @@ def doctor(
             terminal_audit_errors.append(f"{row.id}:unexpected_output_capture")
         if row.capture_decision == "classification_failed":
             terminal_audit_errors.append(f"{row.id}:classification_failed")
+        try:
+            matched_tools = json.loads(row.matched_tools)
+        except (TypeError, json.JSONDecodeError):
+            matched_tools = None
+            terminal_audit_errors.append(f"{row.id}:matched_tools_invalid")
+        if row.capture_decision == "selected_tool" and not matched_tools:
+            terminal_audit_errors.append(f"{row.id}:selected_tool_missing_match")
         if row.session_id not in command_events:
             events: list[Any] = []
             after_sequence = 0
             while True:
-                page = store.replay_operation_events(
+                operation_page = store.replay_operation_events(
                     row.session_id, after_sequence=after_sequence, limit=10_000
                 )
-                events.extend(page)
-                if len(page) < 10_000:
+                events.extend(operation_page)
+                if len(operation_page) < 10_000:
                     break
-                after_sequence = page[-1].sequence
+                after_sequence = operation_page[-1].sequence
             command_events[row.session_id] = {
                 str(event.payload.get("record_id")): event
                 for event in events
@@ -976,7 +986,7 @@ def doctor(
             expected_event_values.update(
                 {
                     "capture_decision": row.capture_decision,
-                    "matched_tools": json.loads(row.matched_tools),
+                    "matched_tools": matched_tools,
                     "recording_policy_revision": row.recording_policy_revision,
                     "runtime_image_digest": row.runtime_image_digest,
                 }

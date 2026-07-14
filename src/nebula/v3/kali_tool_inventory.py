@@ -51,6 +51,7 @@ EXCLUDED_DIRECT_PACKAGES = frozenset(
         "libimage-exiftool-perl",
         "minicom",
         "miredo",
+        "mlocate",
         "multimac",
         "netmask",
         "netsniff-ng",
@@ -127,7 +128,9 @@ def dependency_candidates(value: str) -> tuple[tuple[str, ...], ...]:
         alternatives: list[str] = []
         for alternative in group.split("|"):
             candidate = re.sub(r"\([^)]*\)|\[[^]]*\]|<[^>]*>", "", alternative)
-            candidate = candidate.strip().split(maxsplit=1)[0] if candidate.strip() else ""
+            candidate = (
+                candidate.strip().split(maxsplit=1)[0] if candidate.strip() else ""
+            )
             candidate = re.sub(r":(?:any|native|[A-Za-z0-9_-]+)\Z", "", candidate)
             if re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", candidate):
                 alternatives.append(candidate)
@@ -190,10 +193,7 @@ def executable_tools(
             if executable:
                 provenance.setdefault(name, set()).add(package)
     tools = tuple(sorted(provenance))
-    return tools, {
-        name: tuple(sorted(provenance[name]))
-        for name in tools
-    }
+    return tools, {name: tuple(sorted(provenance[name])) for name in tools}
 
 
 def build_manifest(
@@ -214,8 +214,7 @@ def build_manifest(
         "packages": list(packages),
         "tools": list(tools),
         "provenance": {
-            name: list(package_names)
-            for name, package_names in provenance.items()
+            name: list(package_names) for name, package_names in provenance.items()
         },
     }
 

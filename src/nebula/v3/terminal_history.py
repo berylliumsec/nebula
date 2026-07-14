@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import builtins
 import hashlib
 import json
 import logging
@@ -15,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -29,15 +30,17 @@ from sqlalchemy import (
     Text,
     func,
     select,
+    update,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from .artifacts import ArtifactStore
 from .database import Base, Database, EntityRow, OperationEventRow
 from .domain import Artifact, Engagement, OperationEvent, utc_now
+from .kali_tool_inventory import TOOL_NAME_PATTERN
 from .redaction import redacted_display
 from .storage import NebulaStore, NotFoundError, StoreTransaction
-from .kali_tool_inventory import TOOL_NAME_PATTERN
 
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 1_000
@@ -125,10 +128,16 @@ class TerminalCommandRow(Base):
     redacted_output_artifact_id: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )
-    observed_output_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    captured_output_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    observed_output_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    captured_output_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
     output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    output_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    output_truncated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     output_preview: Mapped[str] = mapped_column(Text, nullable=False, default="")
     capture_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     capture_decision: Mapped[str] = mapped_column(
@@ -138,9 +147,7 @@ class TerminalCommandRow(Base):
     recording_policy_revision: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
-    runtime_image_digest: Mapped[str | None] = mapped_column(
-        String(71), nullable=True
-    )
+    runtime_image_digest: Mapped[str | None] = mapped_column(String(71), nullable=True)
 
 
 class TerminalCommandPreferenceRow(Base):
@@ -481,18 +488,21 @@ class TerminalCommandHistory:
         manifest_sha256: str | None = None,
         default_tools: tuple[str, ...] | list[str] = (),
     ) -> "Osc633CommandParser":
-        policy_provider = (
-            lambda: self.recording_policy(
-                engagement_id,
-                runtime_image_digest=runtime_image_digest,
-                manifest_sha256=manifest_sha256,
-                default_tools=default_tools,
-            )
-            if runtime_image_digest is not None
+        policy_provider: Callable[[], TerminalRecordingPolicy] | None = None
+        if (
+            runtime_image_digest is not None
             and manifest_sha256 is not None
-            and bool(default_tools)
-            else None
-        )
+            and default_tools
+        ):
+
+            def policy_provider() -> TerminalRecordingPolicy:
+                return self.recording_policy(
+                    engagement_id,
+                    runtime_image_digest=runtime_image_digest,
+                    manifest_sha256=manifest_sha256,
+                    default_tools=default_tools,
+                )
+
         return Osc633CommandParser(
             nonce=nonce,
             spool_root=self.spool_root,
@@ -557,65 +567,82 @@ class TerminalCommandHistory:
         with self._inventory_lock:
             inventory = self._inventory
         current_manifest = inventory[1] if inventory is not None else None
-        if (
-            request.expected_manifest_sha256 is not None
-            and request.expected_manifest_sha256 != current_manifest
-        ):
+        if request.expected_manifest_sha256 != current_manifest:
             raise TerminalRecordingToolsConflict(
                 "the verified Kali security-tool inventory changed; reload before saving"
             )
         now = _aware_utc(self._clock(), field="clock")
         next_revision = request.expected_revision + 1
-        with self.database.session() as session:
-            self._require_project(session, engagement_id)
-            row = session.get(TerminalCommandPreferenceRow, engagement_id)
-            observed_revision = row.revision if row is not None else 0
-            if observed_revision != request.expected_revision:
-                raise TerminalRecordingToolsConflict(
-                    "terminal recording-tool preference revision changed"
+        try:
+            with self.database.session() as session:
+                self._require_project(session, engagement_id)
+                row = session.get(TerminalCommandPreferenceRow, engagement_id)
+                observed_revision = row.revision if row is not None else 0
+                if observed_revision != request.expected_revision:
+                    raise TerminalRecordingToolsConflict(
+                        "terminal recording-tool preference revision changed"
+                    )
+                custom_json = _dump_tool_names(request.custom_tools)
+                disabled_json = _dump_tool_names(request.disabled_tools)
+                if row is None:
+                    session.add(
+                        TerminalCommandPreferenceRow(
+                            engagement_id=engagement_id,
+                            enabled=True,
+                            custom_tools=custom_json,
+                            disabled_tools=disabled_json,
+                            revision=next_revision,
+                            updated_at=now,
+                        )
+                    )
+                else:
+                    changed = session.execute(
+                        update(TerminalCommandPreferenceRow)
+                        .where(
+                            TerminalCommandPreferenceRow.engagement_id == engagement_id,
+                            TerminalCommandPreferenceRow.revision
+                            == request.expected_revision,
+                        )
+                        .values(
+                            enabled=True,
+                            custom_tools=custom_json,
+                            disabled_tools=disabled_json,
+                            revision=next_revision,
+                            updated_at=now,
+                        )
+                    )
+                    if changed.rowcount != 1:
+                        raise TerminalRecordingToolsConflict(
+                            "terminal recording-tool preference revision changed"
+                        )
+                operation_id = f"terminal-recording-policy:{engagement_id}"
+                last_sequence = session.scalar(
+                    select(func.max(OperationEventRow.sequence)).where(
+                        OperationEventRow.operation_id == operation_id
+                    )
                 )
-            custom_json = _dump_tool_names(request.custom_tools)
-            disabled_json = _dump_tool_names(request.disabled_tools)
-            if row is None:
-                row = TerminalCommandPreferenceRow(
+                event = OperationEvent(
+                    operation_id=operation_id,
+                    operation_kind="terminal_recording_policy",
                     engagement_id=engagement_id,
-                    enabled=True,
-                    custom_tools=custom_json,
-                    disabled_tools=disabled_json,
-                    revision=next_revision,
-                    updated_at=now,
+                    sequence=int(last_sequence or 0) + 1,
+                    event_type="terminal.recording_policy.updated",
+                    payload={
+                        "revision": next_revision,
+                        "custom_tools": request.custom_tools,
+                        "disabled_tools": request.disabled_tools,
+                        "manifest_sha256": current_manifest,
+                    },
+                    actor_id=actor_id,
+                    idempotency_key=f"terminal-recording-policy:{next_revision}",
+                    occurred_at=now,
                 )
-                session.add(row)
-            else:
-                row.enabled = True
-                row.custom_tools = custom_json
-                row.disabled_tools = disabled_json
-                row.revision = next_revision
-                row.updated_at = now
-            operation_id = f"terminal-recording-policy:{engagement_id}"
-            last_sequence = session.scalar(
-                select(func.max(OperationEventRow.sequence)).where(
-                    OperationEventRow.operation_id == operation_id
-                )
-            )
-            event = OperationEvent(
-                operation_id=operation_id,
-                operation_kind="terminal_recording_policy",
-                engagement_id=engagement_id,
-                sequence=int(last_sequence or 0) + 1,
-                event_type="terminal.recording_policy.updated",
-                payload={
-                    "revision": next_revision,
-                    "custom_tools": request.custom_tools,
-                    "disabled_tools": request.disabled_tools,
-                    "manifest_sha256": current_manifest,
-                },
-                actor_id=actor_id,
-                idempotency_key=f"terminal-recording-policy:{next_revision}",
-                occurred_at=now,
-            )
-            session.add(OperationEventRow(**event.model_dump(mode="python")))
-            session.flush()
+                session.add(OperationEventRow(**event.model_dump(mode="python")))
+                session.flush()
+        except IntegrityError as exc:
+            raise TerminalRecordingToolsConflict(
+                "terminal recording-tool preference revision changed"
+            ) from exc
         return self.recording_tools(engagement_id)
 
     def recording_policy(
@@ -682,7 +709,7 @@ class TerminalCommandHistory:
                     else None
                 )
                 if policy_revision is None:
-                    decision: TerminalOutputCaptureDecision = "legacy_all_commands"
+                    decision: TerminalOutputCaptureDecision = "classification_failed"
                 elif bool(metadata.get("classification_failed")):
                     decision = "classification_failed"
                 elif matched_tools:
@@ -743,8 +770,7 @@ class TerminalCommandHistory:
                             },
                             actor_id=actor,
                             idempotency_key=(
-                                "terminal-audit-spool-recovery:"
-                                f"{metadata_path.stem}"
+                                f"terminal-audit-spool-recovery:{metadata_path.stem}"
                             ),
                         )
                     except Exception:
@@ -765,7 +791,9 @@ class TerminalCommandHistory:
                     func.count(TerminalCommandRow.id),
                     func.min(TerminalCommandRow.occurred_at),
                     func.max(TerminalCommandRow.occurred_at),
-                    func.coalesce(func.sum(TerminalCommandRow.captured_output_bytes), 0),
+                    func.coalesce(
+                        func.sum(TerminalCommandRow.captured_output_bytes), 0
+                    ),
                 ).where(TerminalCommandRow.engagement_id == engagement_id)
             ).one()
             degraded_count = int(
@@ -804,8 +832,7 @@ class TerminalCommandHistory:
                 session.scalar(
                     select(func.count(TerminalCommandRow.id)).where(
                         TerminalCommandRow.engagement_id == engagement_id,
-                        TerminalCommandRow.capture_decision
-                        == "classification_failed",
+                        TerminalCommandRow.capture_decision == "classification_failed",
                     )
                 )
                 or 0
@@ -823,8 +850,7 @@ class TerminalCommandHistory:
                 session.scalar(
                     select(func.count(OperationEventRow.id)).where(
                         OperationEventRow.engagement_id == engagement_id,
-                        OperationEventRow.event_type
-                        == "container_terminal.audit_gap",
+                        OperationEventRow.event_type == "container_terminal.audit_gap",
                     )
                 )
                 or 0
@@ -885,17 +911,22 @@ class TerminalCommandHistory:
         engagement_id = _bounded_identifier("engagement_id", engagement_id)
         session_id = _bounded_identifier("session_id", session_id)
         operator_id = _bounded_identifier("operator_id", operator_id)
-        _validate_text_bytes("command", capture.command, minimum=1, maximum=MAX_COMMAND_BYTES)
+        _validate_text_bytes(
+            "command", capture.command, minimum=1, maximum=MAX_COMMAND_BYTES
+        )
         _validate_text_bytes("cwd", capture.cwd, minimum=0, maximum=MAX_CWD_BYTES)
         if capture.observed_output_bytes < len(capture.output):
-            raise ValueError("observed terminal output cannot be smaller than captured output")
+            raise ValueError(
+                "observed terminal output cannot be smaller than captured output"
+            )
         if capture.output_truncated != (
             capture.observed_output_bytes > len(capture.output)
         ):
             raise ValueError("terminal output truncation metadata is inconsistent")
-        if not capture.output_truncated and hashlib.sha256(
-            capture.output
-        ).hexdigest() != capture.output_sha256:
+        if (
+            not capture.output_truncated
+            and hashlib.sha256(capture.output).hexdigest() != capture.output_sha256
+        ):
             raise ValueError("terminal output hash does not match captured bytes")
         if capture.capture_decision in {"not_selected", "classification_failed"}:
             try:
@@ -1038,9 +1069,7 @@ class TerminalCommandHistory:
                 ),
                 occurred_at=capture.completed_at,
             )
-            session.add(
-                OperationEventRow(**event.model_dump(mode="python"))
-            )
+            session.add(OperationEventRow(**event.model_dump(mode="python")))
             session.flush()
         self._cleanup_spool(capture)
         return self._to_record(row)
@@ -1191,7 +1220,8 @@ class TerminalCommandHistory:
             predicate = predicate & (TerminalCommandRow.exit_code == exit_code)
         if date_from is not None:
             predicate = predicate & (
-                TerminalCommandRow.occurred_at >= _aware_utc(date_from, field="date_from")
+                TerminalCommandRow.occurred_at
+                >= _aware_utc(date_from, field="date_from")
             )
         if date_to is not None:
             predicate = predicate & (
@@ -1200,7 +1230,9 @@ class TerminalCommandHistory:
         with self.database.session() as session:
             self._require_project(session, engagement_id)
             total = int(
-                session.scalar(select(func.count(TerminalCommandRow.id)).where(predicate))
+                session.scalar(
+                    select(func.count(TerminalCommandRow.id)).where(predicate)
+                )
                 or 0
             )
             rows = session.scalars(
@@ -1223,8 +1255,8 @@ class TerminalCommandHistory:
             next_offset=consumed if consumed < total else None,
         )
 
-    def all_records(self, engagement_id: str) -> list[TerminalCommandRecord]:
-        records: list[TerminalCommandRecord] = []
+    def all_records(self, engagement_id: str) -> builtins.list[TerminalCommandRecord]:
+        records: builtins.list[TerminalCommandRecord] = []
         offset = 0
         while True:
             page = self.list(engagement_id, offset=offset, limit=MAX_PAGE_SIZE)
@@ -1235,7 +1267,7 @@ class TerminalCommandHistory:
 
     def export_payload(
         self, engagement_id: str
-    ) -> tuple[list[dict[str, Any]], set[str]]:
+    ) -> tuple[builtins.list[dict[str, Any]], set[str]]:
         """Return chronological audit records plus their immutable artifacts."""
 
         engagement_id = _bounded_identifier("engagement_id", engagement_id)
@@ -1327,7 +1359,7 @@ class TerminalCommandHistory:
             command=row.command,
             command_sha256=row.command_sha256,
             cwd=row.cwd,
-            status=row.status,
+            status=cast(TerminalCommandStatus, row.status),
             exit_code=row.exit_code,
             started_at=_optional_utc(row.started_at),
             completed_at=_optional_utc(row.completed_at),
@@ -1340,7 +1372,7 @@ class TerminalCommandHistory:
             output_truncated=row.output_truncated,
             output_preview=row.output_preview,
             capture_error=row.capture_error,
-            capture_decision=row.capture_decision,
+            capture_decision=cast(TerminalOutputCaptureDecision, row.capture_decision),
             matched_tools=list(_load_tool_names(row.matched_tools)),
             recording_policy_revision=row.recording_policy_revision,
             runtime_image_digest=row.runtime_image_digest,
@@ -1442,7 +1474,9 @@ class Osc633CommandParser:
                                 self._active.finish(
                                     status="framing_lost",
                                     exit_code=None,
-                                    completed_at=_aware_utc(self._clock(), field="clock"),
+                                    completed_at=_aware_utc(
+                                        self._clock(), field="clock"
+                                    ),
                                     capture_error="a new command started before the prior completion marker",
                                 )
                             )
@@ -1459,7 +1493,9 @@ class Osc633CommandParser:
                                 self._active.finish(
                                     status="completed",
                                     exit_code=exit_code,
-                                    completed_at=_aware_utc(self._clock(), field="clock"),
+                                    completed_at=_aware_utc(
+                                        self._clock(), field="clock"
+                                    ),
                                 )
                             )
                             self._active = None
@@ -1528,9 +1564,7 @@ class Osc633CommandParser:
         return min(candidates, key=lambda item: item[0]) if candidates else None
 
     @classmethod
-    def _find_terminator(
-        cls, data: bytes, start: int
-    ) -> tuple[int, int] | None:
+    def _find_terminator(cls, data: bytes, start: int) -> tuple[int, int] | None:
         bel = data.find(cls._BEL, start)
         st = data.find(cls._ST, start)
         if bel < 0 and st < 0:
@@ -1613,7 +1647,9 @@ class Osc633CommandParser:
             spool_metadata=spool_metadata,
             selected_tools=policy.effective_tools if policy is not None else None,
             recording_policy_revision=policy.revision if policy is not None else None,
-            runtime_image_digest=policy.runtime_image_digest if policy is not None else None,
+            runtime_image_digest=policy.runtime_image_digest
+            if policy is not None
+            else None,
             classification_failed=classification_failed,
         )
 
@@ -1713,9 +1749,7 @@ def command_executables(command: str) -> tuple[str, ...]:
 
 def _wrapper_target_index(wrapper: str, tokens: list[str], index: int) -> int:
     value_options: dict[str, frozenset[str]] = {
-        "sudo": frozenset(
-            {"-C", "-D", "-g", "-h", "-p", "-r", "-R", "-T", "-t", "-u"}
-        ),
+        "sudo": frozenset({"-C", "-D", "-g", "-h", "-p", "-r", "-R", "-T", "-t", "-u"}),
         "nice": frozenset({"-n"}),
         "stdbuf": frozenset({"-i", "-o", "-e"}),
         "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
@@ -1745,11 +1779,10 @@ def _wrapper_target_index(wrapper: str, tokens: list[str], index: int) -> int:
 def _normalized_tool_names(value: Any) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple, set, frozenset)):
         raise ValueError("tool names must be a collection")
+    if any(not isinstance(name, str) for name in value):
+        raise ValueError("tool names must be executable basenames")
     names = tuple(sorted(set(value)))
-    if any(
-        not isinstance(name, str) or TOOL_NAME_PATTERN.fullmatch(name) is None
-        for name in names
-    ):
+    if any(TOOL_NAME_PATTERN.fullmatch(name) is None for name in names):
         raise ValueError("tool names must be executable basenames")
     return names
 
@@ -1778,9 +1811,7 @@ def _bounded_identifier(field: str, value: str) -> str:
     return normalized
 
 
-def _validate_text_bytes(
-    field: str, value: str, *, minimum: int, maximum: int
-) -> None:
+def _validate_text_bytes(field: str, value: str, *, minimum: int, maximum: int) -> None:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a string")
     size = len(value.encode("utf-8"))

@@ -79,17 +79,17 @@ def terminal_ps0(nonce: str) -> str:
     """Emit a nonce-bound marker after input echo and before command output."""
 
     return (
-        '${__nebula_in_ps0:=}$(HISTCONTROL= HISTIGNORE=; shopt -s cmdhist lithist; '
-        '__nebula_line="$(HISTTIMEFORMAT=$\'\\036\' builtin history 1 2>/dev/null)"; '
-        '__nebula_command="${__nebula_line#*$\'\\036\'}"; '
+        "${__nebula_in_ps0:=}$(HISTCONTROL= HISTIGNORE=; shopt -s cmdhist lithist; "
+        "__nebula_line=\"$(HISTTIMEFORMAT=$'\\036' builtin history 1 2>/dev/null)\"; "
+        "__nebula_command=\"${__nebula_line#*$'\\036'}\"; "
         '__nebula_cwd_b64="$(printf \'%s\' "$PWD" '
-        '| base64 2>/dev/null | tr -d \'\\n\')"; '
+        "| base64 2>/dev/null | tr -d '\\n')\"; "
         '__nebula_command_b64="$(printf \'%s\' "$__nebula_command" '
-        '| base64 2>/dev/null | tr -d \'\\n\')"; '
+        "| base64 2>/dev/null | tr -d '\\n')\"; "
         'if [ -n "$__nebula_command" ] && [ -n "$__nebula_cwd_b64" ] '
         '&& [ -n "$__nebula_command_b64" ]; then '
         "printf '\\033]633;NebulaCommandStart;%s;%s;%s;%s\\007' "
-        f"'{nonce}' \"${{HISTCMD:-0}}\" \"$__nebula_cwd_b64\" "
+        f'\'{nonce}\' "${{HISTCMD:-0}}" "$__nebula_cwd_b64" '
         '"$__nebula_command_b64"; fi)'
     )
 
@@ -106,7 +106,7 @@ def terminal_prompt_command(nonce: str) -> str:
         'if [ "${__nebula_history_ready:-0}" = 1 ] '
         '&& [ "${HISTCMD:-0}" != "${__nebula_last_histcmd:-0}" ]; then '
         "printf '\\033]633;NebulaCommandEnd;%s;%s;%s;%s\\007' "
-        f"'{nonce}' \"${{HISTCMD:-0}}\" \"$__nebula_exit\" "
+        f'\'{nonce}\' "${{HISTCMD:-0}}" "$__nebula_exit" '
         '"$__nebula_classifier_ok"; fi; '
         '__nebula_last_histcmd="${HISTCMD:-0}"; '
         "__nebula_history_ready=1; "
@@ -120,10 +120,10 @@ def terminal_prompt_command(nonce: str) -> str:
         '&& [ "${__nebula_in_debug:-0}" != 1 ]; then '
         "__nebula_in_debug=1; "
         '__nebula_seen_b64="$(printf \'%s\' "$__nebula_seen" '
-        '| base64 2>/dev/null | tr -d \'\\n\')"; '
+        "| base64 2>/dev/null | tr -d '\\n')\"; "
         'if [ -n "$__nebula_seen_b64" ]; then '
         "printf '\\033]633;NebulaCommandExec;%s;%s;%s\\007' "
-        f"'{nonce}' \"${{HISTCMD:-0}}\" \"$__nebula_seen_b64\"; fi; "
+        f'\'{nonce}\' "${{HISTCMD:-0}}" "$__nebula_seen_b64"; fi; '
         "unset __nebula_in_debug __nebula_seen_b64; fi; "
         'return "$__nebula_status"; }; '
         "trap '__nebula_debug' DEBUG; set -o functrace; "
@@ -393,7 +393,9 @@ class ContainerTerminalService:
         if self.command_history is not None:
             recovered = await asyncio.to_thread(self.command_history.recover_spools)
             if recovered:
-                LOGGER.warning("recovered %d interrupted terminal audit spool(s)", recovered)
+                LOGGER.warning(
+                    "recovered %d interrupted terminal audit spool(s)", recovered
+                )
         if self.tool_platform is not None:
             await self.tool_platform.cleanup_operator_terminals()
         self._recover_interrupted_events()
@@ -937,9 +939,7 @@ class ContainerTerminalService:
                 )
         process.resize(columns, rows)
 
-    async def close_attachment(
-        self, attachment: ContainerTerminalAttachment
-    ) -> None:
+    async def close_attachment(self, attachment: ContainerTerminalAttachment) -> None:
         async with self._lock:
             self._require_attachment_locked(attachment)
         await self.finish(attachment.session_id, outcome="closed")
@@ -1161,7 +1161,9 @@ class ContainerTerminalService:
                 session = current
         if interrupted:
             await process.close()
-            raise ContainerTerminalError("interrupted", "terminal launch was interrupted")
+            raise ContainerTerminalError(
+                "interrupted", "terminal launch was interrupted"
+            )
         self._event(
             session,
             "container_terminal.running",
@@ -1406,9 +1408,7 @@ class ContainerTerminalService:
         return session
 
     @staticmethod
-    def _validate_ticket_locked(
-        session: _TerminalReservation, ticket: str
-    ) -> None:
+    def _validate_ticket_locked(session: _TerminalReservation, ticket: str) -> None:
         if session.ticket_expires_at is None:
             raise ContainerTerminalError(
                 "ticket_used", "terminal WebSocket ticket has already been used"

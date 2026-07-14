@@ -1237,6 +1237,10 @@ class ToolPlatform:
             "installed_packages": list(image.installed_packages),
             "security_tools": list(image.security_tools),
             "security_tool_packages": list(image.security_tool_packages),
+            "security_tool_provenance": {
+                tool: list(packages)
+                for tool, packages in image.security_tool_provenance
+            },
             "security_tool_manifest_sha256": image.security_tool_manifest_sha256,
             "registry_refreshed": image.refreshed,
         }
@@ -1275,7 +1279,9 @@ class ToolPlatform:
             )
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
-        image_digest = payload.get("image_digest") if isinstance(payload, dict) else None
+        image_digest = (
+            payload.get("image_digest") if isinstance(payload, dict) else None
+        )
         manifest_sha256 = (
             payload.get("security_tool_manifest_sha256")
             if isinstance(payload, dict)
@@ -1292,8 +1298,7 @@ class ToolPlatform:
             or not tools
             or tools != sorted(set(tools))
             or any(
-                not isinstance(tool, str)
-                or TOOL_NAME_PATTERN.fullmatch(tool) is None
+                not isinstance(tool, str) or TOOL_NAME_PATTERN.fullmatch(tool) is None
                 for tool in tools
             )
         ):

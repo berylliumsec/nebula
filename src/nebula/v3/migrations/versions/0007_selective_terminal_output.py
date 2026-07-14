@@ -18,14 +18,10 @@ depends_on = None
 def upgrade() -> None:
     with op.batch_alter_table("terminal_command_preferences") as batch:
         batch.add_column(
-            sa.Column(
-                "custom_tools", sa.Text(), nullable=False, server_default="[]"
-            )
+            sa.Column("custom_tools", sa.Text(), nullable=False, server_default="[]")
         )
         batch.add_column(
-            sa.Column(
-                "disabled_tools", sa.Text(), nullable=False, server_default="[]"
-            )
+            sa.Column("disabled_tools", sa.Text(), nullable=False, server_default="[]")
         )
         batch.add_column(
             sa.Column("revision", sa.Integer(), nullable=False, server_default="0")
@@ -42,17 +38,16 @@ def upgrade() -> None:
             )
         )
         batch.add_column(
-            sa.Column(
-                "matched_tools", sa.Text(), nullable=False, server_default="[]"
-            )
+            sa.Column("matched_tools", sa.Text(), nullable=False, server_default="[]")
         )
         batch.add_column(sa.Column("recording_policy_revision", sa.Integer()))
         batch.add_column(sa.Column("runtime_image_digest", sa.String(length=71)))
     op.execute(
         sa.text(
             "UPDATE terminal_command_records SET capture_decision = "
-            "CASE WHEN status = 'legacy_metadata_only' "
-            "THEN 'legacy_metadata_only' ELSE 'legacy_all_commands' END"
+            "CASE WHEN raw_output_artifact_id IS NOT NULL "
+            "OR redacted_output_artifact_id IS NOT NULL "
+            "THEN 'legacy_all_commands' ELSE 'legacy_metadata_only' END"
         )
     )
 

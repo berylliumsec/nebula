@@ -5,6 +5,9 @@ import os
 
 import pytest
 
+from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.container_terminal import terminal_prompt_command, terminal_ps0
+from nebula.v3.domain import Engagement
 from nebula.v3.sandbox import (
     ContainerImagePreparer,
     ContainerSandboxRunner,
@@ -16,6 +19,8 @@ from nebula.v3.sandbox import (
     SandboxRootFilesystem,
     SandboxWorkspaceAccess,
 )
+from nebula.v3.storage import NebulaStore
+from nebula.v3.terminal_history import Osc633CommandParser, TerminalCommandHistory
 
 
 RUNTIME = os.getenv("NEBULA_TEST_CONTAINER_RUNTIME")
@@ -31,8 +36,23 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
     workspace.mkdir(mode=0o777)
     workspace.chmod(0o777)
     runner = ContainerSandboxRunner(runtime=RUNTIME, workspace_roots=[tmp_path])
+    store = NebulaStore(tmp_path / "terminal-audit.db")
+    project = store.create(Engagement(name="Real Kali selective recording"))
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    history = TerminalCommandHistory(
+        store.database,
+        store=store,
+        artifact_store=artifacts,
+    )
 
-    async def terminal(image: str, name: str, commands: bytes) -> bytes:
+    async def terminal(
+        image: str,
+        name: str,
+        commands: bytes,
+        *,
+        environment: dict[str, str] | None = None,
+        parser: Osc633CommandParser | None = None,
+    ) -> bytes:
         request = SandboxRequest(
             image=image,
             command=["/bin/bash", "--noprofile", "--norc", "-i"],
@@ -42,7 +62,11 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
             execution_kind=SandboxExecutionKind.HUMAN_TERMINAL,
             container_user=SandboxContainerUser.ROOT,
             root_filesystem=SandboxRootFilesystem.WRITABLE,
-            environment={"LANG": "C.UTF-8", "TERM": "xterm-256color"},
+            environment={
+                "LANG": "C.UTF-8",
+                "TERM": "xterm-256color",
+                **(environment or {}),
+            },
             limits=SandboxLimits(timeout_seconds=180),
         )
         process = await runner.open_terminal(
@@ -55,8 +79,30 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
                 chunk = await asyncio.wait_for(process.read(), timeout=180)
                 if not chunk:
                     break
-                output.extend(chunk)
+                parsed = parser.feed(chunk) if parser is not None else None
+                output.extend(parsed.passthrough if parsed is not None else chunk)
+                if parsed is not None:
+                    for capture in parsed.captures:
+                        history.record_capture(
+                            engagement_id=project.id,
+                            session_id=name,
+                            operator_id="integration-test",
+                            capture=capture,
+                        )
             assert await asyncio.wait_for(process.wait(), timeout=10) == 0
+            if parser is not None:
+                tail = parser.flush()
+                output.extend(tail.passthrough)
+                interrupted = parser.finish_active(
+                    detail="integration shell exited before its final prompt"
+                )
+                if interrupted is not None:
+                    history.record_capture(
+                        engagement_id=project.id,
+                        session_id=name,
+                        operator_id="integration-test",
+                        capture=interrupted,
+                    )
             return bytes(output)
         finally:
             await process.close()
@@ -89,6 +135,45 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
         assert b"ping-installed" in first
         assert b"apt-ok" in first
         assert (workspace / "kali-workspace.txt").read_text() == "persisted"
+
+        assert "nmap" in image.security_tools
+        assert "printf" not in image.security_tools
+        nonce = "realKaliSelectiveAudit123"
+        parser = history.new_parser(
+            nonce=nonce,
+            engagement_id=project.id,
+            session_id="nebula-terminal-kali-integration-audit",
+            operator_id="integration-test",
+            runtime_image_digest=image.digest,
+            manifest_sha256=image.security_tool_manifest_sha256,
+            default_tools=image.security_tools,
+        )
+        audited = await terminal(
+            image.resolved_reference,
+            "nebula-terminal-kali-integration-audit",
+            b"printf 'unselected-result\\n'\nnmap --version\nexit\n",
+            environment={
+                "HISTFILE": "/dev/null",
+                "PS0": terminal_ps0(nonce),
+                "PROMPT_COMMAND": terminal_prompt_command(nonce),
+                "PS1": "",
+            },
+            parser=parser,
+        )
+        assert b"unselected-result" in audited
+        assert b"Nmap version" in audited
+        records = {record.command: record for record in history.all_records(project.id)}
+        plain = records["printf 'unselected-result\\n'"]
+        selected = records["nmap --version"]
+        assert plain.capture_decision == "not_selected"
+        assert plain.raw_output_available is False
+        assert selected.capture_decision == "selected_tool"
+        assert selected.matched_tools == ["nmap"]
+        assert selected.raw_output_available is True
+        assert (
+            b"Nmap version"
+            in history.output_bytes(project.id, selected.id, raw=True)[0]
+        )
 
         second = await terminal(
             image.resolved_reference,

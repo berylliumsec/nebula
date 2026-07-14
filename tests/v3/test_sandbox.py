@@ -32,16 +32,19 @@ DIGEST_IMAGE = "registry.invalid/nebula-tool@sha256:" + "a" * 64
 
 
 def _security_tool_manifest():
-    return json.dumps(
-        {
-            "schema": "nebula.kali-security-tools/v1",
-            "packages": ["hashcat", "nmap"],
-            "tools": ["hashcat", "nmap"],
-            "provenance": {"hashcat": ["hashcat"], "nmap": ["nmap"]},
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ) + "\n"
+    return (
+        json.dumps(
+            {
+                "schema": "nebula.kali-security-tools/v1",
+                "packages": ["hashcat", "nmap"],
+                "tools": ["hashcat", "nmap"],
+                "provenance": {"hashcat": ["hashcat"], "nmap": ["nmap"]},
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
 
 
 def _request(tmp_path, **changes):
@@ -744,9 +747,59 @@ def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkey
     assert image.digest == "sha256:" + "d" * 64
     assert image.installed_packages == ("kali-linux-headless", "iputils-ping")
     assert image.security_tools == ("hashcat", "nmap")
+    assert image.security_tool_provenance == (
+        ("hashcat", ("hashcat",)),
+        ("nmap", ("nmap",)),
+    )
     assert image.refreshed is False
     assert image.configured_user == ""
     assert "no registry request" in image.detail
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "return_code", "message"),
+    [
+        ("", "manifest missing", 1, "manifest is unavailable"),
+        ("not-json", "", 0, "invalid JSON"),
+        (
+            json.dumps(
+                {
+                    "schema": "nebula.kali-security-tools/v1",
+                    "packages": ["nmap"],
+                    "tools": ["../nmap"],
+                    "provenance": {"../nmap": ["nmap"]},
+                }
+            ),
+            "",
+            0,
+            "tool names are invalid",
+        ),
+    ],
+)
+def test_human_terminal_rejects_missing_malformed_or_unsafe_tool_manifests(
+    monkeypatch, stdout, stderr, return_code, message
+):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    preparer = ContainerImagePreparer(
+        runner=runner,
+        platform="linux/amd64",
+        source_reference="docker.io/kalilinux/kali-rolling:latest",
+        expected_repository="docker.io/kalilinux/kali-rolling",
+    )
+
+    async def runtime_command(*arguments, timeout_seconds):
+        assert arguments[:4] == (
+            "run",
+            "--rm",
+            "--network=none",
+            "--entrypoint=/bin/cat",
+        )
+        assert timeout_seconds == 30
+        return stdout, stderr, return_code
+
+    monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
+    with pytest.raises(SandboxUnavailable, match=message):
+        asyncio.run(preparer._security_tool_manifest("sha256:" + "d" * 64))
 
 
 def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
