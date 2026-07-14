@@ -27,7 +27,7 @@ const agents = [
   { name: "Evidence verifier", detail: "Independent evidence validation", state: "queued", icon: CheckCircle2, tools: "No active tools" },
 ];
 
-export function AgentsPage() {
+export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const { setActivityOpen } = useChrome();
   const { api, approvals, events, previewMode, run } = useWorkspace();
   const [contextStatus, setContextStatus] = useState<ContextStatus>();
@@ -60,11 +60,11 @@ export function AgentsPage() {
   if (!previewMode) {
     return (
       <div className="page agents-page">
-        <PageHeader
+        {!embedded && <PageHeader
           title="Missions"
           description="Supervise specialists, approvals, and mission limits."
           actions={<><StopMissionButton /><NewMissionButton /></>}
-        />
+        />}
         {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission paused for review</strong><p>{approvals.length} request{approvals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
         <section className="mission-hero panel">
           <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replace("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{approvals.length} pending approval request{approvals.length === 1 ? "" : "s"}.</p></div>
@@ -83,7 +83,7 @@ export function AgentsPage() {
   }
   return (
     <div className="page agents-page">
-      <PageHeader
+      {!embedded && <PageHeader
         title="Missions"
         description="Supervise specialists, approvals, and mission limits."
         actions={
@@ -92,7 +92,7 @@ export function AgentsPage() {
             <NewMissionButton />
           </>
         }
-      />
+      />}
 
       {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Approval required</strong><p>{approvals.length} request{approvals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
 

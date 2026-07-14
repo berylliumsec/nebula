@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
+  Bot,
   Braces,
   FileClock,
   FolderOpen,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
+import { selectProjectTools } from "../api/toolAutomation";
 import type {
   ChatCitation,
   ChatCompletionRequest,
@@ -32,6 +34,7 @@ import { AssistantMarkdown, type FencedRunCandidate } from "../components/Assist
 import { sha256 } from "../components/assistantCode";
 import { ExecutionHistory } from "../components/ExecutionHistory";
 import { ExecutionReviewDialog } from "../components/ExecutionReviewDialog";
+import { NewMissionButton } from "../components/MissionControls";
 import { NotesPanel } from "../components/NotesPanel";
 import { PageHeader } from "../components/PageHeader";
 import { TerminalCommandHistoryPanel } from "../components/TerminalCommandHistoryPanel";
@@ -40,8 +43,9 @@ import { createHashedSelectionAttachment } from "../components/selection";
 import { WorkspacePanel } from "../components/WorkspacePanel";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { AgentsPage } from "./AgentsPage";
 
-type SessionView = "chat" | "terminal" | "activity" | "workspace" | "notes";
+type SessionView = "chat" | "terminal" | "missions" | "activity" | "workspace" | "notes";
 type MessageState = "complete" | "streaming" | "waiting_approval" | "error" | "cancelled";
 
 interface ToolLifecycleCard {
@@ -112,12 +116,12 @@ export function SessionsPage() {
   } = useWorkbenchDrafts();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedView = searchParams.get("view");
-  const initialView = requestedView === "chat" || requestedView === "terminal" || requestedView === "activity" || requestedView === "workspace" || requestedView === "notes"
+  const initialView = requestedView === "chat" || requestedView === "terminal" || requestedView === "missions" || requestedView === "activity" || requestedView === "workspace" || requestedView === "notes"
     ? requestedView
     : requestedView === "executions" ? "activity"
       : requestedView === "files" ? "workspace"
         : localStorage.getItem("nebula.workbench.view") as SessionView | null;
-  const [view, setViewState] = useState<SessionView>(initialView === "chat" || initialView === "activity" || initialView === "workspace" || initialView === "notes" ? initialView : "terminal");
+  const [view, setViewState] = useState<SessionView>(initialView === "chat" || initialView === "missions" || initialView === "activity" || initialView === "workspace" || initialView === "notes" ? initialView : "terminal");
   const setView = (next: SessionView) => {
     setViewState(next);
     localStorage.setItem("nebula.workbench.view", next);
@@ -193,7 +197,7 @@ export function SessionsPage() {
 
   useEffect(() => {
     const next = requestedView === "executions" ? "activity" : requestedView === "files" ? "workspace" : requestedView;
-    if (next === "chat" || next === "terminal" || next === "activity" || next === "workspace" || next === "notes") {
+    if (next === "chat" || next === "terminal" || next === "missions" || next === "activity" || next === "workspace" || next === "notes") {
       setViewState(next);
       localStorage.setItem("nebula.workbench.view", next);
     }
@@ -234,29 +238,10 @@ export function SessionsPage() {
       return;
     }
     let active = true;
-    void Promise.all([
-      api.listEngagementToolAssignments(engagement.id),
-      api.listTools(),
-      api.listToolPacks(),
-    ]).then(([assignments, tools, packs]) => {
+    void selectProjectTools(api, engagement.id).then(({ tools, unavailableReason }) => {
       if (!active) return;
-      const enabledAssignments = assignments.filter((item) => item.enabled);
-      const readyDigests = new Set(packs.filter((pack) => pack.status === "ready").map((pack) => pack.manifestDigest));
-      if (!enabledAssignments.length) {
-        setAssignedToolCount(0);
-        setToolRuntimeReason(undefined);
-        return;
-      }
-      const readyAssignments = enabledAssignments.filter((item) => item.manifestDigest && readyDigests.has(item.manifestDigest));
-      if (!readyAssignments.length) {
-        setAssignedToolCount(0);
-        setToolRuntimeReason("This project is assigned only to a removed or replaced Toolbox. Select a ready environment in Project or Advanced Settings.");
-        return;
-      }
-      const assigned = tools.filter((tool) => readyAssignments.some((assignment) => assignment.manifestDigest === tool.packManifestDigest && assignment.toolNames.includes(tool.name)));
-      const available = assigned.filter((tool) => tool.available);
-      setAssignedToolCount(available.length);
-      setToolRuntimeReason(available.length ? undefined : assigned[0]?.unavailableReason ?? "The assigned Toolbox runner is unavailable.");
+      setAssignedToolCount(tools.length);
+      setToolRuntimeReason(unavailableReason);
     }).catch(() => {
       if (!active) return;
       setAssignedToolCount(0);
@@ -829,7 +814,7 @@ export function SessionsPage() {
       <PageHeader
         title="Workbench"
         description="Start in Terminal, ask the assistant, or open your project files."
-        actions={view === "chat" ? <button className="button primary" type="button" disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : undefined}
+        actions={view === "chat" ? <button className="button primary" type="button" disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : view === "missions" ? <NewMissionButton /> : undefined}
       />
 
       <div className="session-toolbar">
@@ -838,6 +823,7 @@ export function SessionsPage() {
           <button type="button" role="tab" aria-label="Analyst chat" aria-selected={view === "chat"} onClick={() => setView("chat")}><MessageSquare size={16} /> Assistant</button>
           <button type="button" role="tab" aria-label="Workspace files" aria-selected={view === "workspace"} onClick={() => setView("workspace")}><FolderOpen size={16} /> Files</button>
           <button type="button" role="tab" aria-label="Project notes" aria-selected={view === "notes"} onClick={() => setView("notes")}><NotebookPen size={16} /> Notes</button>
+          <button type="button" role="tab" aria-label="Autonomous missions" aria-selected={view === "missions"} onClick={() => setView("missions")}><Bot size={16} /> Missions</button>
           <button type="button" role="tab" aria-label="Activity history" aria-selected={view === "activity"} onClick={() => setView("activity")}><FileClock size={16} /> Activity</button>
         </div>
         {view === "chat" && <button className="session-mobile-list" type="button" aria-pressed={mobileListOpen} onClick={() => setMobileListOpen((value) => !value)}><MessageSquare size={15} /> {mobileListOpen ? "Current chat" : "Conversations"}</button>}
@@ -858,7 +844,9 @@ export function SessionsPage() {
           </div>}
           {view === "terminal" && (!api || !engagement) ? (
             <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal becomes available as soon as Nebula finishes creating or loading a project.</p></div>
-          ) : view === "terminal" ? null : view === "activity" && api && engagement ? (
+          ) : view === "terminal" ? null : view === "missions" && api && engagement ? (
+            <AgentsPage embedded />
+          ) : view === "activity" && api && engagement ? (
             <div className="workbench-activity-stack">
               <ExecutionHistory api={api} engagementId={engagement.id} refreshKey={executionRefresh} onRerun={setRunCandidate} providers={providers} onChatAttached={openAttachedChat} />
               <TerminalCommandHistoryPanel api={api} engagementId={engagement.id} />
@@ -885,7 +873,6 @@ export function SessionsPage() {
                 <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label>
                 <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={sending || Boolean(sessionId) || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{selectedProvider?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
                 <label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? cloudKnowledgeAllowed ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label>
-                <div className="chat-knowledge-toggle" role="status" title={toolboxUnavailableReason}><ShieldCheck size={15} /><span>Toolbox automatic<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"} enabled` : toolboxUnavailableReason}</small></span></div>
                 </div>
               </details>
               <div className="chat-scroll" ref={scrollRef} aria-live="polite">
@@ -914,7 +901,7 @@ export function SessionsPage() {
                 </div>}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <textarea ref={composerRef} id="analyst-message" value={draft} disabled={!engagement || !selectedProvider || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : selectedProvider ? "Ask about this project…" : "Add a model in Settings when you want the assistant…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
-                <footer><span>{canUseTools ? `Toolbox automatic · ${assignedToolCount} assigned` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse) void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><span>{includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Assistant ready"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse) void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
             </div>
           )}

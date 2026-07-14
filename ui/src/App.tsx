@@ -29,8 +29,8 @@ export function App() {
         <Route path="project" element={route(<ProjectPage />)} />
         <Route path="settings" element={route(<SettingsPage />)} />
         <Route path="sessions" element={<LegacyRedirect destination="/" view="chat" />} />
-        <Route path="agents" element={<LegacyRedirect destination="/" view="activity" />} />
-        <Route path="missions" element={<LegacyRedirect destination="/" view="activity" />} />
+        <Route path="agents" element={<LegacyRedirect destination="/" view="missions" />} />
+        <Route path="missions" element={<LegacyRedirect destination="/" view="missions" />} />
         <Route path="assets" element={<LegacyRedirect destination="/project" view="assets" />} />
         <Route path="evidence" element={<LegacyRedirect destination="/project" view="evidence" />} />
         <Route path="knowledge" element={<LegacyRedirect destination="/project" view="sources" />} />
