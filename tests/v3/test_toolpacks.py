@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import json
+import logging
 from datetime import timedelta
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from nebula.v3.domain import (
     AgentRun,
     Engagement,
     EngagementToolAssignment,
+    RiskClass,
     RunnerIsolation,
     RunnerProfile,
     RunnerRuntime,
@@ -24,7 +27,7 @@ from nebula.v3.domain import (
     ToolPackTrust,
     utc_now,
 )
-from nebula.v3.sandbox import PreparedContainerImage
+from nebula.v3.sandbox import ContainerSandboxRunner, PreparedContainerImage
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_platform import (
     ToolPlatform,
@@ -55,7 +58,13 @@ from nebula.v3.toolpacks import (
     fetch_bounded_https,
     manifest_digest,
 )
-from nebula.v3.tools import InvalidToolArguments, build_declared_command
+from nebula.v3.tools import (
+    AnalysisTool,
+    InvalidToolArguments,
+    ToolRegistry,
+    ToolSpec,
+    build_declared_command,
+)
 
 
 DIGEST_A = "a" * 64
@@ -763,6 +772,98 @@ def test_tool_platform_uses_fixed_pack_root_with_test_override(tmp_path, monkeyp
     )
 
 
+def test_chat_components_ignore_stale_assignment_when_ready_digest_exists(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(Database(tmp_path / "chat-platform.db"))
+    engagement = store.create(Engagement(name="Chat tools"))
+    scope = store.create(ScopePolicy(engagement_id=engagement.id))
+    engagement = store.update(
+        Engagement,
+        engagement.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=engagement.revision,
+    )
+    store.create(
+        RunnerProfile(
+            id="local",
+            name="Local",
+            runtime=RunnerRuntime.DOCKER,
+            executable="/usr/bin/docker",
+            context="rootless",
+            platform="linux/amd64",
+            isolation=RunnerIsolation.ROOTLESS,
+            healthy=True,
+        )
+    )
+    store.create(
+        ToolPackInstallation(
+            publisher="example",
+            name="ready-pack",
+            version="1.0.0",
+            manifest_digest=DIGEST_B,
+            source="test",
+            trust=ToolPackTrust.LOCAL_UNSIGNED,
+            runtime_profile_id="local",
+            status=ToolPackInstallationStatus.READY,
+            manifest_path=str(tmp_path / "ready-pack.json"),
+            installed_at=utc_now(),
+            verified_at=utc_now(),
+        )
+    )
+    for digest in (DIGEST_A, DIGEST_B):
+        store.create(
+            EngagementToolAssignment(
+                engagement_id=engagement.id,
+                manifest_digest=digest,
+                allowed_tool_names=["sample.query"],
+                assigned_by="operator",
+            )
+        )
+
+    async def query(_arguments):
+        return {"result": "ok"}
+
+    registry = ToolRegistry()
+    registry.register(
+        AnalysisTool(
+            ToolSpec(
+                name="sample.query",
+                description="Query the ready pack",
+                input_schema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.LOCAL_READ,
+            ),
+            query,
+        )
+    )
+    monkeypatch.setattr(
+        "nebula.v3.tool_platform.build_tool_registry",
+        lambda *_args, **_kwargs: registry,
+    )
+    platform = ToolPlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "core-data",
+        tool_pack_root=tmp_path / "packs",
+        execution_enabled=True,
+    )
+
+    components = platform.chat_components(
+        engagement_id=engagement.id,
+        turn_id="turn-1",
+        provider=object(),
+        model="model-1",
+    )
+
+    assert components.tool_pack_digests == (DIGEST_B,)
+    assert set(components.specs) == {"sample.query"}
+
+
 def test_human_terminal_runner_prefers_local_and_rejects_ambiguity(tmp_path):
     store = NebulaStore(Database(tmp_path / "human-runner.db"))
     engagement = store.create(Engagement(name="Kali lab"))
@@ -801,6 +902,149 @@ def test_human_terminal_runner_prefers_local_and_rejects_ambiguity(tmp_path):
     profile("third")
     with pytest.raises(ToolPlatformError, match="ambiguous"):
         platform.resolve_human_terminal_profile(engagement.id)
+
+
+def test_terminal_startup_cleanup_never_executes_unhealthy_or_unverified_profiles(
+    tmp_path, monkeypatch, caplog
+):
+    runtime = tmp_path / "bin" / "docker"
+    runtime.parent.mkdir()
+    runtime.write_text("test runtime", encoding="utf-8")
+    runtime.chmod(0o755)
+    store = NebulaStore(Database(tmp_path / "unsafe-cleanup.db"))
+    for profile_id, healthy, checked_at, detail in (
+        (
+            "persisted-remote",
+            False,
+            utc_now(),
+            "Docker context must use a local absolute Unix socket",
+        ),
+        (
+            "persisted-rootful",
+            False,
+            utc_now(),
+            "Docker daemon is not operating in rootless mode",
+        ),
+        ("persisted-unverified", True, None, None),
+        ("persisted-untrusted-path", True, utc_now(), "previously healthy"),
+    ):
+        store.create(
+            RunnerProfile(
+                id=profile_id,
+                name=profile_id,
+                runtime=RunnerRuntime.DOCKER,
+                executable=str(runtime),
+                context=profile_id,
+                platform="linux/amd64",
+                isolation=RunnerIsolation.ROOTLESS,
+                enabled=True,
+                healthy=healthy,
+                last_health_at=checked_at,
+                last_health_detail=detail,
+            )
+        )
+    platform = ToolPlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "core-data",
+        tool_pack_root=tmp_path / "packs",
+        execution_enabled=True,
+    )
+    runtime_commands: list[tuple[str, ...]] = []
+
+    async def capture(_runner, *arguments):
+        runtime_commands.append(arguments)
+        return "", "", 1
+
+    monkeypatch.setattr(ContainerSandboxRunner, "_capture", capture)
+    caplog.set_level(logging.WARNING, logger="nebula.v3.tool_platform")
+
+    asyncio.run(platform.cleanup_operator_terminals())
+
+    assert runtime_commands == []
+    for profile_id in (
+        "persisted-remote",
+        "persisted-rootful",
+        "persisted-unverified",
+        "persisted-untrusted-path",
+    ):
+        assert profile_id in caplog.text
+    assert caplog.text.count("profile is not verified healthy") == 3
+    assert "outside the fixed-path allowlist" in caplog.text
+
+
+def test_terminal_startup_cleanup_revalidates_live_remote_and_rootful_profiles(
+    tmp_path, monkeypatch, caplog
+):
+    runtime = tmp_path / "bin" / "docker"
+    runtime.parent.mkdir()
+    runtime.write_text("test runtime", encoding="utf-8")
+    runtime.chmod(0o755)
+    monkeypatch.setattr(ContainerSandboxRunner, "_trusted_runtime_paths", (runtime,))
+    store = NebulaStore(Database(tmp_path / "revalidate-cleanup.db"))
+    checked_at = utc_now()
+    for profile_id in ("remote-now", "rootful-now"):
+        store.create(
+            RunnerProfile(
+                id=profile_id,
+                name=profile_id,
+                runtime=RunnerRuntime.DOCKER,
+                executable=str(runtime),
+                context=profile_id,
+                platform="linux/amd64",
+                isolation=RunnerIsolation.ROOTLESS,
+                enabled=True,
+                healthy=True,
+                last_health_at=checked_at,
+                last_health_detail="previously verified rootless",
+            )
+        )
+    platform = ToolPlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts-live"),
+        data_root=tmp_path / "core-data-live",
+        tool_pack_root=tmp_path / "packs-live",
+        execution_enabled=True,
+    )
+    runtime_commands: list[tuple[str, tuple[str, ...]]] = []
+    removals: list[str] = []
+
+    async def capture(runner, *arguments):
+        assert runner.profile is not None
+        context = runner.profile.context or ""
+        runtime_commands.append((context, arguments))
+        if arguments[:2] == ("context", "inspect"):
+            endpoint = (
+                "tcp://runner.example:2376"
+                if context == "remote-now"
+                else "unix:///run/user/1000/docker.sock"
+            )
+            return json.dumps([{"Endpoints": {"docker": {"Host": endpoint}}}]), "", 0
+        if arguments == ("info", "--format", "{{json .}}"):
+            return (
+                json.dumps({"OSType": "linux", "SecurityOptions": ["name=seccomp"]}),
+                "",
+                0,
+            )
+        if arguments[0] == "ps":
+            return "nebula-terminal-must-not-remove", "", 0
+        raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
+
+    async def remove(_runner, name):
+        removals.append(name)
+
+    monkeypatch.setattr(ContainerSandboxRunner, "_capture", capture)
+    monkeypatch.setattr(ContainerSandboxRunner, "_force_remove", remove)
+    caplog.set_level(logging.WARNING, logger="nebula.v3.sandbox")
+
+    asyncio.run(platform.cleanup_operator_terminals())
+
+    assert removals == []
+    assert all(arguments[0] != "ps" for _context, arguments in runtime_commands)
+    assert ("remote-now", ("context", "inspect", "remote-now")) in runtime_commands
+    assert ("rootful-now", ("info", "--format", "{{json .}}")) in runtime_commands
+    assert "local absolute Unix socket" in caplog.text
+    assert "not operating in rootless mode" in caplog.text
 
 
 def test_human_terminal_image_is_prepared_once_per_runner_revision(
@@ -867,6 +1111,27 @@ def test_human_terminal_image_is_prepared_once_per_runner_revision(
     assert first.image == second.image
     assert first.image.base_resolved_reference.endswith(DIGEST_A)
     assert first.image.resolved_reference.endswith(DIGEST_B)
+    metadata = json.loads(
+        platform.human_terminal_image_metadata_path.read_text(encoding="utf-8")
+    )
+    assert metadata == {
+        "schema": "nebula.human-terminal-image/v1",
+        "verified_at": metadata["verified_at"],
+        "runner_profile_id": "local",
+        "runner_profile_revision": 1,
+        "source_reference": "docker.io/kalilinux/kali-rolling:latest",
+        "source_is_digest_pinned": False,
+        "base_resolved_reference": (
+            "docker.io/kalilinux/kali-rolling@sha256:" + DIGEST_A
+        ),
+        "base_digest": "sha256:" + DIGEST_A,
+        "resolved_reference": "sha256:" + DIGEST_B,
+        "image_digest": "sha256:" + DIGEST_B,
+        "platform": "linux/amd64",
+        "installed_packages": ["kali-linux-headless", "iputils-ping"],
+        "registry_refreshed": True,
+    }
+    assert platform.human_terminal_image_metadata_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_tool_platform_includes_declared_shell_capabilities_implicitly(tmp_path):
@@ -926,3 +1191,31 @@ def test_default_tool_platform_enables_brokered_execution(tmp_path, monkeypatch)
     )
     assert platform.execution_enabled is True
     assert platform.has_trusted_keys is True
+
+
+def test_default_tool_platform_accepts_only_official_digest_image_override(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "nebula.v3.tool_platform.default_tool_pack_root",
+        lambda: tmp_path / "packs",
+    )
+    pinned = "docker.io/kalilinux/kali-rolling@sha256:" + DIGEST_A
+    monkeypatch.setenv("NEBULA_HUMAN_TERMINAL_SOURCE_IMAGE", pinned)
+    platform = default_tool_platform(
+        store=NebulaStore(tmp_path / "pinned.db"),
+        artifact_store=ArtifactStore(tmp_path / "pinned-artifacts"),
+        data_root=tmp_path / "pinned-core",
+    )
+    assert platform.human_terminal_source_image == pinned
+
+    monkeypatch.setenv(
+        "NEBULA_HUMAN_TERMINAL_SOURCE_IMAGE",
+        "attacker.invalid/workstation@sha256:" + DIGEST_A,
+    )
+    with pytest.raises(ToolPlatformError, match="digest-pinned official"):
+        default_tool_platform(
+            store=NebulaStore(tmp_path / "rejected.db"),
+            artifact_store=ArtifactStore(tmp_path / "rejected-artifacts"),
+            data_root=tmp_path / "rejected-core",
+        )

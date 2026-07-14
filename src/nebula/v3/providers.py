@@ -14,7 +14,7 @@ import json
 import os
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from enum import Enum
 from typing import Any
 from urllib.parse import urlsplit
@@ -114,6 +114,8 @@ class ProviderConfig(BaseModel):
     default_model: str | None = None
     model_allowlist: list[str] = Field(default_factory=list)
     api_key_env: str | None = None
+    api_key_value: SecretStr | None = Field(default=None, exclude=True)
+    credential_ref: str | None = Field(default=None, exclude=True)
     extra_headers: dict[str, str] = Field(default_factory=dict)
     timeout_seconds: float = Field(default=120.0, gt=0, le=900)
     local: bool = False
@@ -178,6 +180,12 @@ class ProviderConfig(BaseModel):
         return self
 
     def resolve_api_key(self) -> SecretStr | None:
+        if self.api_key_value is not None:
+            return self.api_key_value
+        if self.credential_ref:
+            raise ProviderError(
+                f"provider {self.id!r} credential reference is unavailable"
+            )
         if not self.api_key_env:
             return None
         value = os.getenv(self.api_key_env)
@@ -428,6 +436,24 @@ def _arguments(value: Any) -> dict[str, Any]:
     return parsed
 
 
+def _vllm_grammar_schema(value: Any) -> Any:
+    """Remove validation-only keywords unsupported by vLLM's grammar compiler.
+
+    Nebula retains and validates the original schema at the broker boundary; this
+    copy is only the provider-facing grammar used to constrain model output.
+    """
+
+    if isinstance(value, dict):
+        return {
+            key: _vllm_grammar_schema(item)
+            for key, item in value.items()
+            if key != "uniqueItems"
+        }
+    if isinstance(value, list):
+        return [_vllm_grammar_schema(item) for item in value]
+    return value
+
+
 class OpenAIResponsesProvider(ModelProvider):
     """OpenAI Responses API adapter.
 
@@ -562,6 +588,7 @@ class OpenAICompatibleProvider(ModelProvider):
         return self._bearer_or_key_headers()
 
     def _payload(self, request: ModelRequest, model: str) -> dict[str, Any]:
+        vllm_grammar = self.config.flavor == ProviderFlavor.VLLM
         payload: dict[str, Any] = {
             "model": model,
             "messages": [message.model_dump() for message in request.messages],
@@ -612,7 +639,11 @@ class OpenAICompatibleProvider(ModelProvider):
                     "function": {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": tool.input_schema,
+                        "parameters": (
+                            _vllm_grammar_schema(tool.input_schema)
+                            if vllm_grammar
+                            else tool.input_schema
+                        ),
                         "strict": tool.strict,
                     },
                 }
@@ -626,7 +657,11 @@ class OpenAICompatibleProvider(ModelProvider):
                 "json_schema": {
                     "name": "nebula_response",
                     "strict": True,
-                    "schema": request.response_schema,
+                    "schema": (
+                        _vllm_grammar_schema(request.response_schema)
+                        if vllm_grammar
+                        else request.response_schema
+                    ),
                 },
             }
         return payload
@@ -1521,6 +1556,8 @@ def config_from_catalog(
     flavor: ProviderFlavor,
     base_url: str | None = None,
     api_key_env: str | None = None,
+    api_key_value: SecretStr | None = None,
+    credential_ref: str | None = None,
     capabilities: ModelCapabilities | None = None,
     **overrides: Any,
 ) -> ProviderConfig:
@@ -1538,7 +1575,13 @@ def config_from_catalog(
         kind=entry.adapter,
         flavor=flavor,
         base_url=endpoint,
-        api_key_env=api_key_env or entry.suggested_key_env,
+        api_key_env=(
+            api_key_env or entry.suggested_key_env
+            if credential_ref is None
+            else api_key_env
+        ),
+        api_key_value=api_key_value,
+        credential_ref=credential_ref,
         local=local,
         capabilities=capabilities or ModelCapabilities(),
         options=options,
@@ -1546,7 +1589,10 @@ def config_from_catalog(
     )
 
 
-def provider_from_profile(profile: ProviderProfile) -> ModelProvider:
+def provider_from_profile(
+    profile: ProviderProfile,
+    credential_resolver: Callable[[str], SecretStr] | None = None,
+) -> ModelProvider:
     """Build a runtime adapter from a persisted, secret-safe provider profile."""
 
     legacy_flavors = {
@@ -1564,10 +1610,19 @@ def provider_from_profile(profile: ProviderProfile) -> ModelProvider:
             "use provider-catalog values"
         ) from exc
     secret_env: str | None = None
+    secret_value: SecretStr | None = None
+    credential_ref: str | None = None
     if profile.secret_ref:
-        if not profile.secret_ref.startswith("env:"):
-            raise ValueError("provider secret_ref must use an env:NAME reference")
-        secret_env = profile.secret_ref.removeprefix("env:")
+        if profile.secret_ref.startswith("env:"):
+            secret_env = profile.secret_ref.removeprefix("env:")
+        elif profile.secret_ref.startswith(("vault:", "session:")):
+            credential_ref = profile.secret_ref
+            if credential_resolver is not None:
+                secret_value = credential_resolver(profile.secret_ref)
+        else:
+            raise ValueError(
+                "provider secret_ref must use env:NAME, vault:ID, or session:ID"
+            )
     raw_options = profile.metadata.get("options", {})
     options = raw_options if isinstance(raw_options, dict) else {}
     context_window = options.get("context_window")
@@ -1603,6 +1658,8 @@ def provider_from_profile(profile: ProviderProfile) -> ModelProvider:
         flavor=flavor,
         base_url=profile.endpoint,
         api_key_env=secret_env,
+        api_key_value=secret_value,
+        credential_ref=credential_ref,
         default_model=default_model,
         model_allowlist=profile.model_allowlist,
         capabilities=capabilities,

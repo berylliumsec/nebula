@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from functools import wraps
 from types import SimpleNamespace
 
@@ -216,6 +217,45 @@ async def _await_terminal(
     if task is not None:
         await asyncio.wait_for(asyncio.shield(task), timeout=5)
     return service.store.get(OperatorExecution, execution_id)
+
+
+@async_test
+async def test_terminal_selection_enters_the_same_mandatory_review_path(tmp_path):
+    _store, _artifacts, engagement, _policy, _runner, service, request = _fixture(
+        tmp_path
+    )
+    source = "printf 'selected command\\n'\n"
+    selected = request.model_copy(
+        update={
+            "engagement_id": engagement.id,
+            "language": "bash",
+            "source": source,
+            "origin": ExecutionOrigin(
+                kind="selection",
+                source_kind="terminal",
+                source_id="terminal-session-1",
+                source_label="Terminal selection",
+                source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+            ),
+        }
+    )
+
+    preview = await service.preflight(selected)
+    assert preview.allowed is True
+    assert preview.canonical_language == "bash"
+    assert preview.source_sha256 == selected.origin.source_sha256
+
+    tampered = selected.model_copy(
+        update={
+            "origin": selected.origin.model_copy(
+                update={"source_sha256": "0" * 64}
+            )
+        }
+    )
+    denied = await service.preflight(tampered)
+    assert denied.allowed is False
+    assert denied.error_code == "origin_mismatch"
+    assert "reviewed SHA-256" in denied.detail
 
 
 @async_test

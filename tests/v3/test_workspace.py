@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 
@@ -183,3 +184,110 @@ def test_reset_refuses_a_queued_execution(tmp_path):
         assert getattr(exc, "code", None) == "workspace_busy"
     else:
         raise AssertionError("queued execution should block workspace reset")
+
+
+def test_workspace_upload_is_atomic_bounded_and_requires_overwrite(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    (root / "notes").mkdir()
+
+    async def chunks(*values: bytes):
+        for value in values:
+            yield value
+
+    result = asyncio.run(
+        workspace.upload(
+            engagement.id,
+            "notes/result.txt",
+            chunks(b"hello ", b"world"),
+        )
+    )
+    assert result.path == "notes/result.txt"
+    assert result.size == 11
+    assert result.sha256 == hashlib.sha256(b"hello world").hexdigest()
+    assert (root / result.path).read_bytes() == b"hello world"
+
+    try:
+        asyncio.run(
+            workspace.upload(
+                engagement.id,
+                "notes/result.txt",
+                chunks(b"replacement"),
+            )
+        )
+    except Exception as exc:
+        assert getattr(exc, "code", None) == "workspace_file_exists"
+    else:
+        raise AssertionError("upload should require overwrite confirmation")
+    assert (root / result.path).read_bytes() == b"hello world"
+
+    replaced = asyncio.run(
+        workspace.upload(
+            engagement.id,
+            "notes/result.txt",
+            chunks(b"replacement"),
+            overwrite=True,
+        )
+    )
+    assert replaced.overwritten is True
+    assert (root / result.path).read_bytes() == b"replacement"
+    assert not list((root / "notes").glob(".nebula-upload-*.tmp"))
+
+
+def test_workspace_upload_rejects_escape_and_symlink_destination(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    os.symlink(outside, root / "linked")
+
+    async def chunks():
+        yield b"unsafe"
+
+    for path in ("../escape", "linked"):
+        try:
+            asyncio.run(
+                workspace.upload(engagement.id, path, chunks(), overwrite=True)
+            )
+        except Exception as exc:
+            assert getattr(exc, "code", None) in {
+                "workspace_path_invalid",
+                "workspace_file_exists",
+            }
+        else:
+            raise AssertionError(f"unsafe upload {path!r} should fail")
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+
+    with client:
+        created = client.put(
+            f"/api/v1/engagements/{engagement.id}/workspace/file",
+            headers={**AUTH, "Content-Type": "application/octet-stream"},
+            params={"path": "result.bin"},
+            content=b"first payload",
+        )
+        assert created.status_code == 201
+        assert created.json()["sha256"] == hashlib.sha256(b"first payload").hexdigest()
+
+        conflict = client.put(
+            f"/api/v1/engagements/{engagement.id}/workspace/file",
+            headers={**AUTH, "Content-Type": "application/octet-stream"},
+            params={"path": "result.bin"},
+            content=b"second payload",
+        )
+        assert conflict.status_code == 409
+        assert conflict.json()["code"] == "workspace_file_exists"
+
+        replaced = client.put(
+            f"/api/v1/engagements/{engagement.id}/workspace/file",
+            headers={**AUTH, "Content-Type": "application/octet-stream"},
+            params={"path": "result.bin", "overwrite": "true"},
+            content=b"second payload",
+        )
+        assert replaced.status_code == 201
+        assert replaced.json()["overwritten"] is True
+
+    assert (platform.workspace_for(engagement.id) / "result.bin").read_bytes() == b"second payload"

@@ -1,11 +1,7 @@
 import {
-  Bot,
-  BookOpen,
   Bug,
-  FileSearch,
   FileText,
-  LayoutDashboard,
-  Network,
+  FolderKanban,
   Settings,
   SquareTerminal,
   type LucideIcon,
@@ -20,50 +16,19 @@ export interface NavigationItem {
   description: string;
   icon: LucideIcon;
   shortcut: string;
-  group: "workspace" | "library" | "settings";
+  group: "workspace" | "settings";
 }
 
 export const navigationItems: NavigationItem[] = [
   {
-    commandId: "navigate.home",
+    commandId: "navigate.workbench",
     path: "/",
-    label: "Home",
-    legacyLabel: "Overview",
-    aliases: ["Overview", "Dashboard"],
-    description: "Engagement health, coverage, and mission progress",
-    icon: LayoutDashboard,
-    shortcut: "G O",
-    group: "workspace",
-  },
-  {
-    commandId: "navigate.sessions",
-    path: "/sessions",
-    label: "Sessions",
-    aliases: ["Chat", "Terminal", "Conversations"],
-    description: "Analyst chat, reviewed execution, and workspace",
+    label: "Workbench",
+    legacyLabel: "Sessions",
+    aliases: ["Sessions", "Chat", "Terminal", "Files", "Activity"],
+    description: "Terminal, assistant, files, and activity",
     icon: SquareTerminal,
-    shortcut: "G S",
-    group: "workspace",
-  },
-  {
-    commandId: "navigate.missions",
-    path: "/agents",
-    label: "Missions",
-    legacyLabel: "Agents",
-    aliases: ["Agents", "Runs"],
-    description: "Mission status and persisted activity",
-    icon: Bot,
-    shortcut: "G A",
-    group: "workspace",
-  },
-  {
-    commandId: "navigate.assets",
-    path: "/assets",
-    label: "Assets",
-    aliases: ["Inventory", "Attack surface"],
-    description: "Scoped asset records and inventory",
-    icon: Network,
-    shortcut: "G T",
+    shortcut: "G O",
     group: "workspace",
   },
   {
@@ -77,26 +42,6 @@ export const navigationItems: NavigationItem[] = [
     group: "workspace",
   },
   {
-    commandId: "navigate.evidence",
-    path: "/evidence",
-    label: "Evidence",
-    aliases: ["Artifacts", "Provenance"],
-    description: "Immutable artifacts and provenance",
-    icon: FileSearch,
-    shortcut: "G E",
-    group: "library",
-  },
-  {
-    commandId: "navigate.knowledge",
-    path: "/knowledge",
-    label: "Knowledge",
-    aliases: ["Sources", "Retrieval"],
-    description: "Engagement sources, citations, and indexes",
-    icon: BookOpen,
-    shortcut: "G K",
-    group: "library",
-  },
-  {
     commandId: "navigate.reports",
     path: "/reports",
     label: "Reports",
@@ -104,14 +49,25 @@ export const navigationItems: NavigationItem[] = [
     description: "Executive and technical deliverables",
     icon: FileText,
     shortcut: "G R",
-    group: "library",
+    group: "workspace",
+  },
+  {
+    commandId: "navigate.project",
+    path: "/project",
+    label: "Project",
+    legacyLabel: "Engagement",
+    aliases: ["Overview", "Assets", "Evidence", "Knowledge", "Sources", "Engagement"],
+    description: "Project overview, assets, evidence, and sources",
+    icon: FolderKanban,
+    shortcut: "G P",
+    group: "workspace",
   },
   {
     commandId: "navigate.settings",
     path: "/settings",
     label: "Settings",
-    aliases: ["Preferences", "Configuration"],
-    description: "Providers, local attribution, runtime, and appearance",
+    aliases: ["Preferences", "Configuration", "Providers", "Models", "Runners", "Policy", "Privacy"],
+    description: "Simple setup and advanced configuration",
     icon: Settings,
     shortcut: "G ,",
     group: "settings",
@@ -120,5 +76,4 @@ export const navigationItems: NavigationItem[] = [
 
 export const navigationGroups = [
   { id: "workspace" as const, label: "Workspace" },
-  { id: "library" as const, label: "Library" },
 ];

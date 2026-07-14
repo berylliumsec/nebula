@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Check, Contrast, Download, KeyRound, Moon, PackageCheck, Pencil, Plus, Server, Sun, Trash2, UserRound, X } from "lucide-react";
-import type { OperatorProfile, ProviderCatalogEntry, ProviderHealth } from "../api/types";
+import { Check, Contrast, Download, KeyRound, Moon, PackageCheck, Pencil, Plus, RefreshCw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
+import type { LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth } from "../api/types";
 import {
   checkForUpdate,
   getReleaseInfo,
@@ -24,21 +24,16 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 ];
 
 const settingsSections = [
-  ["general-settings", "General", "General"],
-  ["provider-settings", "Models", "AI Providers"],
-  ["tool-pack-settings", "Tools", "Toolbox"],
-  ["runtime-settings", "Runners", "Runners"],
-  ["engagement-policy-settings", "Policy", "Engagement Policy"],
-  ["operator-settings", "People", "Operators"],
-  ["security-settings", "Privacy", "Privacy & Security"],
+  ["setup-settings", "Setup", "Setup"],
+  ["advanced-settings", "Advanced", "Advanced settings"],
 ] as const;
 
 type SettingsSection = typeof settingsSections[number][0];
 
 function sectionFromHash(): SettingsSection {
   const hash = window.location.hash.slice(1);
-  if (hash === "appearance-settings") return "general-settings";
-  return settingsSections.some(([id]) => id === hash) ? hash as SettingsSection : "general-settings";
+  if (hash === "advanced-settings" || (hash && hash !== "setup-settings")) return "advanced-settings";
+  return "setup-settings";
 }
 
 function providerOption(provider: ProviderHealth, key: string): string {
@@ -55,7 +50,9 @@ export function SettingsPage() {
   const confirm = useConfirmation();
   const { preference, setPreference } = useTheme();
   const {
+    api,
     previewMode,
+    health,
     providers,
     providerCatalog,
     refreshProvider,
@@ -69,6 +66,9 @@ export function SettingsPage() {
     updateOperatorProfile,
     activateOperatorProfile,
     deleteOperatorProfile,
+    refreshSetupRuntime,
+    setupStatus,
+    workspaceState,
   } = useWorkspace();
   const [adding, setAdding] = useState(false);
   const [editingProvider, setEditingProvider] = useState<ProviderHealth>();
@@ -78,6 +78,8 @@ export function SettingsPage() {
   const [model, setModel] = useState("");
   const [modelAllowlistText, setModelAllowlistText] = useState("");
   const [credentialEnv, setCredentialEnv] = useState("");
+  const [credentialSecret, setCredentialSecret] = useState("");
+  const [sessionCredential, setSessionCredential] = useState(false);
   const [vertexProject, setVertexProject] = useState("");
   const [vertexLocation, setVertexLocation] = useState("");
   const [awsRegion, setAwsRegion] = useState("");
@@ -100,6 +102,11 @@ export function SettingsPage() {
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
   const [updateState, setUpdateState] = useState<"idle" | "checking" | "installing" | "current" | "restart" | "error">("idle");
   const [updateMessage, setUpdateMessage] = useState<string>();
+  const [checkingTerminal, setCheckingTerminal] = useState(false);
+  const [selectingRuntime, setSelectingRuntime] = useState<string>();
+  const [setupError, setSetupError] = useState<string>();
+  const [detectedLocalProviders, setDetectedLocalProviders] = useState<LocalProviderDetection[]>([]);
+  const [detectingLocalProviders, setDetectingLocalProviders] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -114,6 +121,25 @@ export function SettingsPage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!api || !["ready", "degraded"].includes(workspaceState)) {
+      setDetectedLocalProviders([]);
+      setDetectingLocalProviders(false);
+      return;
+    }
+    const controller = new AbortController();
+    setDetectingLocalProviders(true);
+    void api.discoverLocalProviders(controller.signal)
+      .then(setDetectedLocalProviders)
+      .catch(() => {
+        if (!controller.signal.aborted) setDetectedLocalProviders([]);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setDetectingLocalProviders(false);
+      });
+    return () => controller.abort();
+  }, [api, workspaceState]);
 
   useEffect(() => {
     const syncSection = () => setSettingsSection(sectionFromHash());
@@ -157,6 +183,31 @@ export function SettingsPage() {
     setModel("");
     setModelAllowlistText("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
+    setCredentialSecret("");
+    setSessionCredential(false);
+    setVertexProject("");
+    setVertexLocation("");
+    setAwsRegion("");
+    setContextWindow("");
+    setMaxOutputTokens("");
+    setPermitsSensitiveData(false);
+    setProviderActionError(undefined);
+    setFormError(undefined);
+    setAdding(true);
+  };
+
+  const openDetectedProvider = (detected: LocalProviderDetection) => {
+    const entry = providerCatalog.find((item) => item.flavor === detected.flavor);
+    if (!entry) return;
+    setEditingProvider(undefined);
+    setSelected(entry);
+    setName(detected.displayName);
+    setEndpoint(detected.endpoint);
+    setModel(detected.models[0] ?? "");
+    setModelAllowlistText(detected.models.join("\n"));
+    setCredentialEnv("");
+    setCredentialSecret("");
+    setSessionCredential(false);
     setVertexProject("");
     setVertexLocation("");
     setAwsRegion("");
@@ -177,6 +228,8 @@ export function SettingsPage() {
     setModel(provider.defaultModel ?? "");
     setModelAllowlistText(provider.modelAllowlist.join("\n"));
     setCredentialEnv(provider.credentialEnv ?? "");
+    setCredentialSecret("");
+    setSessionCredential(provider.credentialRef?.startsWith("session:") ?? false);
     setVertexProject(providerOption(provider, "project"));
     setVertexLocation(providerOption(provider, "location"));
     setAwsRegion(providerOption(provider, "region"));
@@ -197,6 +250,8 @@ export function SettingsPage() {
     setModel("");
     setModelAllowlistText("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
+    setCredentialSecret("");
+    setSessionCredential(false);
     setVertexProject("");
     setVertexLocation("");
     setAwsRegion("");
@@ -248,7 +303,19 @@ export function SettingsPage() {
     }
     setSaving(true);
     setFormError(undefined);
+    let createdCredentialRef: string | undefined;
     try {
+      if (credentialSecret) {
+        if (!api) throw new Error("Nebula Core must be available to store a credential.");
+        const credential = await api.createCredential(
+          credentialSecret,
+          sessionCredential ? "session" : "vault",
+        );
+        createdCredentialRef = credential.reference;
+      }
+      const credentialRef = createdCredentialRef
+        ?? (credentialEnv ? undefined : editingProvider?.credentialRef)
+        ?? undefined;
       if (editingProvider) {
         await updateProvider(editingProvider.id, {
           name,
@@ -257,7 +324,8 @@ export function SettingsPage() {
           local: editingProvider.local,
           defaultModel: model || undefined,
           modelAllowlist,
-          credentialEnv: credentialEnv || undefined,
+          credentialEnv: credentialRef ? undefined : credentialEnv || undefined,
+          credentialRef,
           permitsSensitiveData,
           retention: editingProvider.retention,
           residency: editingProvider.residency,
@@ -273,13 +341,18 @@ export function SettingsPage() {
           local: selected.local,
           defaultModel: model || undefined,
           modelAllowlist,
-          credentialEnv: credentialEnv || undefined,
+          credentialEnv: credentialRef ? undefined : credentialEnv || undefined,
+          credentialRef,
           permitsSensitiveData,
           options,
         });
       }
       setAdding(false);
+      setCredentialSecret("");
     } catch (error) {
+      if (createdCredentialRef && api) {
+        await api.deleteCredential(createdCredentialRef).catch(() => undefined);
+      }
       setFormError(error instanceof Error ? error.message : `Could not ${editingProvider ? "save" : "add"} provider.`);
     } finally {
       setSaving(false);
@@ -372,16 +445,70 @@ export function SettingsPage() {
       setOperatorBusy(undefined);
     }
   };
+  const checkTerminalSetup = async () => {
+    setCheckingTerminal(true);
+    setSetupError(undefined);
+    try {
+      await refreshSetupRuntime();
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : "Could not check Terminal setup.");
+    } finally {
+      setCheckingTerminal(false);
+    }
+  };
+  const selectRuntime = async (candidateId: string) => {
+    if (!api) return;
+    setSelectingRuntime(candidateId);
+    setSetupError(undefined);
+    try {
+      await api.selectSetupRuntime(candidateId);
+      await refreshSetupRuntime();
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : "Could not select the container runtime.");
+    } finally {
+      setSelectingRuntime(undefined);
+    }
+  };
   const dialogProviderType = editingProvider?.providerType ?? selected?.flavor ?? "";
   const dialogLocal = editingProvider?.local ?? selected?.local ?? false;
   const requiresDefaultModel = ["anthropic", "bedrock"].includes(dialogProviderType);
   const dialogAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
+  const unconfiguredDetectedProviders = detectedLocalProviders.filter((detected) =>
+    !providers.some((provider) => provider.endpoint === detected.endpoint && provider.enabled));
+  const primaryProviderFlavors = ["openai", "anthropic", "gemini"];
+  const primaryProviderCatalog = primaryProviderFlavors
+    .map((flavor) => providerCatalog.find((entry) => entry.flavor === flavor))
+    .filter((entry): entry is ProviderCatalogEntry => Boolean(entry));
+  const moreProviderCatalog = providerCatalog.filter(
+    (entry) => !primaryProviderFlavors.includes(entry.flavor),
+  );
   return (
     <div className="page settings-page">
       <PageHeader title="Settings" description="Workspace preferences." />
       <div className="settings-workspace">
       <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); window.history.replaceState(null, "", `#${id}`); setSettingsSection(id); }}>{label}</a>)}</nav>
       <div className="settings-detail" data-section={settingsSection}>
+      <section className="settings-section setup-overview" id="setup-settings">
+        <div className="section-heading"><div><h2>Ready to work</h2><p>Terminal works independently. Add a model only when you want the assistant.</p></div></div>
+        <div className="setup-card-grid">
+          <article className="panel setup-card">
+            <header><span className={`status-dot ${setupStatus?.terminal.status === "ready" ? "healthy" : ["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{setupStatus?.terminal.status === "ready" ? "Ready" : setupStatus?.terminal.status === "detecting_runner" ? "Checking your runtime…" : setupStatus?.terminal.status === "preparing_image" ? "Preparing workstation…" : setupStatus?.terminal.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>
+            <p>{setupStatus?.terminal.detail ?? (setupStatus?.terminal.status === "ready" ? "A verified local container runtime is ready for project terminals." : "Nebula checks trusted local Docker and Podman installations automatically.")}</p>
+            {setupStatus?.terminal.candidates.length ? <div className="setup-runtime-options" aria-label="Local container runtime choices">{setupStatus.terminal.candidates.map((candidate) => <article key={`${candidate.runtime}-${candidate.executable}`}><span><strong>{candidate.name}</strong><small>{candidate.runtime} · {candidate.platform} · {candidate.healthy ? "ready" : candidate.detail ?? "unavailable"}</small></span>{candidate.candidateId && candidate.healthy && candidate.runnerProfileId !== setupStatus.terminal.runnerProfileId ? <button className="button quiet" type="button" disabled={Boolean(selectingRuntime)} onClick={() => candidate.candidateId && void selectRuntime(candidate.candidateId)}>{selectingRuntime === candidate.candidateId ? "Selecting…" : "Use"}</button> : candidate.runnerProfileId === setupStatus.terminal.runnerProfileId ? <small><Check size={13} /> Selected</small> : null}</article>)}</div> : null}
+            <button className="button secondary" type="button" disabled={checkingTerminal || workspaceState === "starting" || workspaceState === "failed"} onClick={() => void checkTerminalSetup()}><RefreshCw className={checkingTerminal ? "spin" : undefined} size={15} /> {checkingTerminal ? "Checking…" : "Check again"}</button>
+          </article>
+          <article className="panel setup-card">
+            <header><span className={`status-dot ${setupStatus?.assistant.status === "configured" || providers.length ? "healthy" : "warning"}`} /><div><small>Assistant · optional</small><h3>{setupStatus?.assistant.status === "configured" || providers.length ? "Model connected" : "No model connected"}</h3></div></header>
+            <p>{setupStatus?.assistant.detail ?? (providers.length ? `${providers.length} model provider${providers.length === 1 ? " is" : "s are"} configured.` : "You can use Terminal and Files now, then connect a model whenever you need the assistant.")}</p>
+            {detectingLocalProviders && !detectedLocalProviders.length && <p className="setup-footnote"><RefreshCw className="spin" size={14} /> Checking Ollama, vLLM, and LM Studio…</p>}
+            {unconfiguredDetectedProviders.length > 0 && <div className="setup-detected-providers" aria-label="Detected local model services">{unconfiguredDetectedProviders.map((detected) => <button className="button secondary" type="button" key={`${detected.flavor}-${detected.endpoint}`} onClick={() => openDetectedProvider(detected)}><Server size={14} /> Use {detected.displayName}{detected.models[0] ? ` · ${detected.models[0]}` : ""}</button>)}</div>}
+            <button className="button secondary" type="button" onClick={() => { window.history.replaceState(null, "", "#advanced-settings"); setSettingsSection("advanced-settings"); }}>{providers.length ? "Manage models" : unconfiguredDetectedProviders.length ? "More providers" : "Connect a model"}</button>
+          </article>
+        </div>
+        {setupStatus?.scratchProjectId && <p className="setup-footnote"><Check size={14} /> Scratch Project is ready.</p>}
+        {setupError && <div className="knowledge-status error" role="alert">{setupError}</div>}
+        {!setupStatus && workspaceState !== "starting" && <p className="setup-footnote">Setup details are unavailable. Core reports runner status: {health?.runner ?? "unknown"}.</p>}
+      </section>
       <section className="settings-section" id="provider-settings">
         <div className="section-heading"><div><h2>Model providers</h2><p>Configured provider profiles and their declared capabilities.</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <div className="knowledge-status error" role="alert">{providerActionError}</div>}
@@ -411,7 +538,7 @@ export function SettingsPage() {
         </section>
         <section className="panel secrets-panel" id="security-settings">
           <header className="panel-header compact"><div><h2>Credential references</h2><p>Secrets never enter agent context</p></div><KeyRound size={19} /></header>
-          <div className="empty-state compact"><KeyRound size={23} /><strong>Managed outside prompts</strong><p>Set provider secrets in Core’s environment before launch, then save only the environment variable name in a provider profile. An in-app secret store is not available in this preview.</p></div>
+          <div className="empty-state compact"><KeyRound size={23} /><strong>Write-only by design</strong><p>Provider secrets entered here go to the operating-system credential vault; profiles retain only opaque references. Environment and session-only credentials remain available when needed.</p></div>
         </section>
         <section className="panel release-panel">
           <header className="panel-header compact"><div><h2>About Nebula</h2><p>Build and update channel</p></div><PackageCheck size={19} /></header>
@@ -449,29 +576,32 @@ export function SettingsPage() {
         <div className="dialog-backdrop">
           <form className="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title" onSubmit={(event) => void submitProvider(event)}>
             <header><div><small>Provider profile</small><h2 id="provider-dialog-title">{editingProvider ? `Edit ${editingProvider.name}` : "Add model provider"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close provider dialog" onClick={() => setAdding(false)}><X size={17} /></button></header>
-            <label>Provider type<select value={dialogProviderType} disabled={Boolean(editingProvider)} onChange={(event) => chooseProvider(event.target.value)}>{!providerCatalog.some((entry) => entry.flavor === dialogProviderType) && <option value={dialogProviderType}>{dialogProviderType}</option>}{providerCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</select></label>
+            <label>Provider type<select value={dialogProviderType} disabled={Boolean(editingProvider)} onChange={(event) => chooseProvider(event.target.value)}>{!providerCatalog.some((entry) => entry.flavor === dialogProviderType) && <option value={dialogProviderType}>{dialogProviderType}</option>}<optgroup label="Recommended cloud providers">{primaryProviderCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</optgroup><optgroup label="More providers">{moreProviderCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</optgroup></select></label>
             {editingProvider && <p className="provider-dialog-note">Provider type and locality are fixed after creation. Other profile settings use revision-safe updates.</p>}
             <label>Profile name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
             <label>Endpoint<input required={!selected?.defaultBaseUrl} value={endpoint} placeholder={selected?.defaultBaseUrl ?? "https://provider.example/v1"} onChange={(event) => setEndpoint(event.target.value)} /></label>
             <label>Default model<input required={requiresDefaultModel} aria-describedby="provider-model-help" value={model} placeholder={requiresDefaultModel ? "Required provider model ID" : "Runtime model ID (optional)"} onChange={(event) => setModel(event.target.value)} /></label>
             <p className="provider-dialog-note" id="provider-model-help">{requiresDefaultModel ? `${dialogProviderType === "bedrock" ? "AWS Bedrock" : "Anthropic"} needs an explicit model ID so a fresh profile can be used immediately for chat and missions.` : !model.trim() && dialogAllowlist.length ? `No explicit default is set. Core will use ${dialogAllowlist[0]}, the first allowed model, as its fallback.` : "When blank with no allowed models, Nebula uses a model discovered by the provider health check."}</p>
-            <label>Allowed model IDs<textarea rows={3} value={modelAllowlistText} placeholder="One provider model ID per line" onChange={(event) => setModelAllowlistText(event.target.value)} /></label>
-            <p className="provider-dialog-note">The explicit default is added to this allowlist automatically. Remove an old ID here when changing it if that model should no longer be selectable.</p>
-            <div className="resource-form-grid"><label>Context window (tokens)<input type="number" min="1" inputMode="numeric" value={contextWindow} placeholder="8192 safe fallback" onChange={(event) => setContextWindow(event.target.value)} /></label><label>Maximum output tokens<input type="number" min="1" inputMode="numeric" value={maxOutputTokens} placeholder="2048 default" onChange={(event) => setMaxOutputTokens(event.target.value)} /></label></div>
-            <p className="provider-dialog-note">Nebula compacts at 75% of the available input capacity. When the context window is blank, Core conservatively assumes 8,192 tokens.</p>
-            {dialogProviderType === "vertex" && <div className="resource-form-grid"><label>Google Cloud project<input required value={vertexProject} placeholder="my-security-project" onChange={(event) => setVertexProject(event.target.value)} /></label><label>Vertex location<input required value={vertexLocation} placeholder="us-central1" onChange={(event) => setVertexLocation(event.target.value)} /></label></div>}
-            {dialogProviderType === "bedrock" && <label>AWS region<input value={awsRegion} placeholder="Uses the ambient AWS region when blank" onChange={(event) => setAwsRegion(event.target.value)} /></label>}
-            <label>Credential environment variable<input value={credentialEnv} pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder={dialogLocal ? "Optional for authenticated local gateways" : "For example, OPENAI_API_KEY"} autoCapitalize="none" spellCheck={false} onChange={(event) => setCredentialEnv(event.target.value)} /></label>
-            {!dialogLocal && <label className="provider-consent"><input type="checkbox" checked={permitsSensitiveData} onChange={(event) => setPermitsSensitiveData(event.target.checked)} /><span><strong>Allow engagement and document data</strong><small>Permit this profile to receive redacted knowledge excerpts only after a separate confirmation for each chat request.</small></span></label>}
-            <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : "This profile will use the provider's ambient credential chain, if supported."}</p>
+            <label>Credential<input type="password" autoComplete="new-password" value={credentialSecret} placeholder={editingProvider?.credentialRef || editingProvider?.credentialEnv ? "Leave blank to keep the current credential" : dialogLocal ? "Optional for local services" : "API key or token"} onChange={(event) => setCredentialSecret(event.target.value)} /></label>
+            {credentialSecret && <label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the secret in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>}
+            <details className="provider-advanced"><summary>Advanced provider options</summary>
+              <label>Allowed model IDs<textarea rows={3} value={modelAllowlistText} placeholder="One provider model ID per line" onChange={(event) => setModelAllowlistText(event.target.value)} /></label>
+              <p className="provider-dialog-note">The explicit default is added to this allowlist automatically.</p>
+              <div className="resource-form-grid"><label>Context window (tokens)<input type="number" min="1" inputMode="numeric" value={contextWindow} placeholder="8192 safe fallback" onChange={(event) => setContextWindow(event.target.value)} /></label><label>Maximum output tokens<input type="number" min="1" inputMode="numeric" value={maxOutputTokens} placeholder="2048 default" onChange={(event) => setMaxOutputTokens(event.target.value)} /></label></div>
+              {dialogProviderType === "vertex" && <div className="resource-form-grid"><label>Google Cloud project<input required value={vertexProject} placeholder="my-security-project" onChange={(event) => setVertexProject(event.target.value)} /></label><label>Vertex location<input required value={vertexLocation} placeholder="us-central1" onChange={(event) => setVertexLocation(event.target.value)} /></label></div>}
+              {dialogProviderType === "bedrock" && <label>AWS region<input value={awsRegion} placeholder="Uses the ambient AWS region when blank" onChange={(event) => setAwsRegion(event.target.value)} /></label>}
+              <label>Credential environment variable<input value={credentialEnv} pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder={dialogLocal ? "Optional for authenticated local gateways" : "For example, OPENAI_API_KEY"} autoCapitalize="none" spellCheck={false} onChange={(event) => setCredentialEnv(event.target.value)} /></label>
+              {!dialogLocal && <label className="provider-consent"><input type="checkbox" checked={permitsSensitiveData} onChange={(event) => setPermitsSensitiveData(event.target.checked)} /><span><strong>Allow project and document data</strong><small>Permit redacted excerpts only after confirmation for each cloud request.</small></span></label>}
+            </details>
+            <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialSecret ? sessionCredential ? "The credential will remain only in Core memory for this session." : "The credential will be stored in the operating-system vault; only an opaque reference is saved." : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : editingProvider?.credentialRef ? "The current write-only credential reference will be retained." : "Ambient provider credentials remain available for supported services."}</p>
             {selected?.notes && <p className="provider-dialog-note">{selected.notes}</p>}
-            <p className="provider-dialog-note">Saving runs one small, harmless required-tool inference probe for the exact default model. Health refresh remains a no-cost liveness check.</p>
+            <p className="provider-dialog-note">Saving performs only liveness and model discovery. Tool calling is verified later, when you enable automation.</p>
             {formError && <p className="form-error" role="alert">{formError}</p>}
             <footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim() || (requiresDefaultModel && !model.trim()) || (dialogProviderType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim()))}>{saving ? "Saving…" : editingProvider ? "Save provider" : "Add provider"}</button></footer>
           </form>
         </div>
       )}
-      {operatorDialog && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="operator-dialog-title" onSubmit={(event) => void submitOperator(event)}><header><div><small>Local attribution</small><h2 id="operator-dialog-title">{editingOperator ? "Edit operator" : "Add operator"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close operator dialog" onClick={() => setOperatorDialog(false)}><X size={17} /></button></header><label>Display name<input required autoFocus value={operatorName} onChange={(event) => setOperatorName(event.target.value)} /></label><label>Email<input type="email" value={operatorEmail} onChange={(event) => setOperatorEmail(event.target.value)} /></label><label>Role<input value={operatorRole} placeholder="Engagement lead, analyst…" onChange={(event) => setOperatorRole(event.target.value)} /></label><p className="provider-dialog-note">This identity is stored locally for attribution only. It is not an authentication account and grants no permissions.</p>{operatorError && <p className="form-error" role="alert">{operatorError}</p>}<footer><button className="button secondary" type="button" onClick={() => setOperatorDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(operatorBusy)}>{operatorBusy ? "Saving…" : "Save operator"}</button></footer></form></div>}
+      {operatorDialog && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="operator-dialog-title" onSubmit={(event) => void submitOperator(event)}><header><div><small>Local attribution</small><h2 id="operator-dialog-title">{editingOperator ? "Edit operator" : "Add operator"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close operator dialog" onClick={() => setOperatorDialog(false)}><X size={17} /></button></header><label>Display name<input required autoFocus value={operatorName} onChange={(event) => setOperatorName(event.target.value)} /></label><label>Email<input type="email" value={operatorEmail} onChange={(event) => setOperatorEmail(event.target.value)} /></label><label>Role<input value={operatorRole} placeholder="Project lead, analyst…" onChange={(event) => setOperatorRole(event.target.value)} /></label><p className="provider-dialog-note">This identity is stored locally for attribution only. It is not an authentication account and grants no permissions.</p>{operatorError && <p className="form-error" role="alert">{operatorError}</p>}<footer><button className="button secondary" type="button" onClick={() => setOperatorDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(operatorBusy)}>{operatorBusy ? "Saving…" : "Save operator"}</button></footer></form></div>}
     </div>
   );
 }

@@ -7,10 +7,12 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
+from collections import deque
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import AsyncIterator, Callable, Literal
@@ -23,8 +25,6 @@ from .domain import (
     ExecutionLimitsSnapshot,
     NebulaModel,
     OperationEvent,
-    OperatorExecution,
-    OperatorExecutionStatus,
     RunnerIsolation,
     RunnerRuntime,
     utc_now,
@@ -47,6 +47,7 @@ from .sandbox import (
     SandboxWorkspaceAccess,
 )
 from .storage import NebulaStore
+from .terminal_history import Osc633CommandParser, TerminalCommandHistory
 from .tool_platform import (
     DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE,
     HumanTerminalRuntimeResolution,
@@ -56,11 +57,44 @@ from .tool_platform import (
 
 PREVIEW_TTL_SECONDS = 300
 TICKET_TTL_SECONDS = 60
+TERMINAL_RECONNECT_GRACE_SECONDS = 10 * 60
+TERMINAL_REPLAY_MAX_BYTES = 1024 * 1024
 MAX_TERMINAL_INPUT_BYTES = 1024 * 1024
 TERMINAL_OUTPUT_CHUNK_BYTES = 32_768
-TERMINAL_MAX_DURATION_SECONDS = 30 * 60
-TERMINAL_IDLE_TIMEOUT_SECONDS = 15 * 60
+# Interactive terminals have no application-level lifetime cutoff. The 24-hour
+# value is only the maximum representable sandbox safety limit; the watchdog
+# closes sessions based on inactivity, explicit stop, or Core shutdown.
+TERMINAL_MAX_DURATION_SECONDS = 24 * 60 * 60
+TERMINAL_IDLE_TIMEOUT_SECONDS = 30 * 60
 TERMINAL_COMMAND = ("--noprofile", "--norc", "-i")
+LOGGER = logging.getLogger(__name__)
+# Bash runs this fixed hook after each completed command and before drawing the
+# next prompt. It reads Bash's own completed history entry rather than terminal
+# keystrokes, preserving command boundaries without retaining terminal output.
+# A private HISTTIMEFORMAT delimiter separates Bash's line number from the
+# original command, including intentional leading whitespace.
+TERMINAL_PROMPT_COMMAND = (
+    "__nebula_exit=$?; "
+    "HISTCONTROL=; HISTIGNORE=; "
+    "shopt -s cmdhist lithist; "
+    'if [ "${__nebula_history_ready:-0}" = 1 ] '
+    '&& [ "${HISTCMD:-0}" != "${__nebula_last_histcmd:-0}" ]; then '
+    '__nebula_line="$(HISTTIMEFORMAT=$\'\\036\' builtin history 1 2>/dev/null)"; '
+    '__nebula_command="${__nebula_line#*$\'\\036\'}"; '
+    'if [ -n "$__nebula_command" ]; then '
+    '__nebula_cwd_b64="$(printf \'%s\' "$PWD" '
+    '| base64 2>/dev/null | tr -d \'\\n\')"; '
+    '__nebula_command_b64="$(printf \'%s\' "$__nebula_command" '
+    '| base64 2>/dev/null | tr -d \'\\n\')"; '
+    'if [ -n "$__nebula_cwd_b64" ] && [ -n "$__nebula_command_b64" ]; then '
+    "printf '\\033]633;NebulaCommand;%s;%s;%s\\007' "
+    '"$__nebula_exit" "$__nebula_cwd_b64" "$__nebula_command_b64"; '
+    "fi; fi; fi; "
+    '__nebula_last_histcmd="${HISTCMD:-0}"; '
+    "__nebula_history_ready=1; "
+    "unset __nebula_exit __nebula_line __nebula_command "
+    "__nebula_cwd_b64 __nebula_command_b64"
+)
 
 
 class ContainerTerminalError(RuntimeError):
@@ -173,6 +207,15 @@ class ContainerTerminalStartResponse(NebulaModel):
     websocket_ticket: str
     ticket_expires_at: datetime
     websocket_path: str
+    reconnect_grace_seconds: int = TERMINAL_RECONNECT_GRACE_SECONDS
+    replay_max_bytes: int = TERMINAL_REPLAY_MAX_BYTES
+    last_sequence: int = 0
+
+
+class ContainerTerminalRecoveryResponse(NebulaModel):
+    active: bool
+    session: ContainerTerminalStartResponse | None = None
+    runtime: ContainerTerminalRuntimeSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -192,15 +235,59 @@ class _TerminalReservation:
     request: ContainerTerminalPreflightRequest
     request_fingerprint: str
     preview_fingerprint: str
+    runtime: ContainerTerminalRuntimeSnapshot
     operator_id: str
     websocket_ticket: str
-    ticket_expires_at: datetime
+    ticket_expires_at: datetime | None
+    start_websocket_ticket: str
+    start_ticket_expires_at: datetime
     created_at: datetime
-    workspace_lock: asyncio.Lock
-    state: Literal["pending", "claimed", "running"] = "pending"
+    state: Literal["pending", "claimed", "launching", "running"] = "pending"
     process: SandboxTerminalProcess | None = None
     expiry_task: asyncio.Task[None] | None = None
+    grace_task: asyncio.Task[None] | None = None
+    reader_task: asyncio.Task[None] | None = None
+    monitor_task: asyncio.Task[None] | None = None
+    watchdog_task: asyncio.Task[None] | None = None
     last_activity: float = 0.0
+    parser: Osc633CommandParser = field(default_factory=Osc633CommandParser)
+    replay: deque["ContainerTerminalOutput"] = field(default_factory=deque)
+    replay_bytes: int = 0
+    next_sequence: int = 1
+    attachment: "ContainerTerminalAttachment | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerTerminalOutput:
+    sequence: int
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerTerminalExit:
+    outcome: str
+    exit_code: int | None = None
+    error_code: str | None = None
+    detail: str | None = None
+
+
+@dataclass(slots=True)
+class ContainerTerminalAttachment:
+    id: str
+    session_id: str
+    engagement_id: str
+    reconnect_ticket: str
+    reconnect_grace_seconds: int
+    replay_max_bytes: int
+    oldest_sequence: int
+    latest_sequence: int
+    replay_truncated: bool
+    next_sequence: int
+    terminal_replay: deque[ContainerTerminalOutput] = field(default_factory=deque)
+    wakeup: asyncio.Event = field(default_factory=asyncio.Event)
+    terminal_event: ContainerTerminalExit | None = None
+    terminal_event_delivered: bool = False
+    detached: bool = False
 
 
 class ContainerTerminalService:
@@ -212,16 +299,36 @@ class ContainerTerminalService:
         store: NebulaStore,
         tool_platform: ToolPlatform | None,
         execution_service: ExecutionService | None = None,
+        command_history: TerminalCommandHistory | None = None,
         operator_id: Callable[[], str] | None = None,
         max_active: int = 2,
+        reconnect_grace_seconds: float = TERMINAL_RECONNECT_GRACE_SECONDS,
+        idle_timeout_seconds: float = TERMINAL_IDLE_TIMEOUT_SECONDS,
+        watchdog_interval_seconds: float = 1.0,
+        replay_max_bytes: int = TERMINAL_REPLAY_MAX_BYTES,
     ) -> None:
         if not 1 <= max_active <= 32:
             raise ValueError("terminal concurrency must be between 1 and 32")
+        if reconnect_grace_seconds <= 0:
+            raise ValueError("terminal reconnect grace must be positive")
+        if idle_timeout_seconds <= 0:
+            raise ValueError("terminal idle timeout must be positive")
+        if watchdog_interval_seconds <= 0:
+            raise ValueError("terminal watchdog interval must be positive")
+        if not 1 <= replay_max_bytes <= TERMINAL_REPLAY_MAX_BYTES:
+            raise ValueError(
+                f"terminal replay must be between 1 and {TERMINAL_REPLAY_MAX_BYTES} bytes"
+            )
         self.store = store
         self.tool_platform = tool_platform
         self.execution_service = execution_service
-        self.operator_id = operator_id or (lambda: "local-operator")
+        self.command_history = command_history
+        self.operator_id = operator_id or (lambda: "system")
         self.max_active = max_active
+        self.reconnect_grace_seconds = reconnect_grace_seconds
+        self.idle_timeout_seconds = idle_timeout_seconds
+        self.watchdog_interval_seconds = watchdog_interval_seconds
+        self.replay_max_bytes = replay_max_bytes
         self._preview_secret = os.urandom(32)
         self._lock = asyncio.Lock()
         self._sessions: dict[str, _TerminalReservation] = {}
@@ -242,6 +349,13 @@ class ContainerTerminalService:
             raise ValueError("cannot bind execution service after terminal startup")
         self.execution_service = service
 
+    def bind_command_history(self, history: TerminalCommandHistory) -> None:
+        if history.database is not self.store.database:
+            raise ValueError("command history must share the terminal database")
+        if self._sessions:
+            raise ValueError("cannot bind command history after terminal startup")
+        self.command_history = history
+
     def workspace_lock(self, engagement_id: str) -> asyncio.Lock:
         if self.execution_service is not None:
             return self.execution_service.engagement_lock(engagement_id)
@@ -258,7 +372,7 @@ class ContainerTerminalService:
     async def guard_workspace_operation(
         self, engagement_id: str
     ) -> AsyncIterator[None]:
-        """Serialize reset with terminals and disposable code executions."""
+        """Serialize workspace mutations with terminals and code executions."""
 
         async with self._lock:
             if engagement_id in self._starting_engagements or any(
@@ -267,7 +381,7 @@ class ContainerTerminalService:
             ):
                 raise ContainerTerminalError(
                     "workspace_busy",
-                    "workspace cannot be reset while a terminal is pending or running",
+                    "workspace cannot be changed while a terminal is pending or running",
                 )
             self._starting_engagements.add(engagement_id)
         lock = self.workspace_lock(engagement_id)
@@ -314,6 +428,7 @@ class ContainerTerminalService:
             engagement_id=engagement_id,
             ready=ready,
             detail=detail,
+            idle_timeout_seconds=int(self.idle_timeout_seconds),
         )
 
     async def preflight(
@@ -407,17 +522,8 @@ class ContainerTerminalService:
                 )
             self._starting_engagements.add(request.engagement_id)
 
-        workspace_lock = self.workspace_lock(request.engagement_id)
-        lock_acquired = False
         reservation: _TerminalReservation | None = None
         try:
-            if self._execution_busy(request.engagement_id):
-                raise ContainerTerminalError(
-                    "workspace_busy",
-                    "container terminal cannot start while code execution is queued or running",
-                )
-            await workspace_lock.acquire()
-            lock_acquired = True
             async with self._lock:
                 if any(
                     item.request.engagement_id == request.engagement_id
@@ -435,11 +541,13 @@ class ContainerTerminalService:
                     request=base,
                     request_fingerprint=request_fingerprint,
                     preview_fingerprint=request.preview_fingerprint,
+                    runtime=prepared.runtime,
                     operator_id=self.operator_id(),
                     websocket_ticket=ticket,
                     ticket_expires_at=expires,
+                    start_websocket_ticket=ticket,
+                    start_ticket_expires_at=expires,
                     created_at=utc_now(),
-                    workspace_lock=workspace_lock,
                     last_activity=monotonic(),
                 )
                 self._sessions[session_id] = reservation
@@ -448,10 +556,7 @@ class ContainerTerminalService:
                     self._expire_ticket(session_id),
                     name=f"container-terminal-ticket-{session_id}",
                 )
-                lock_acquired = False
         finally:
-            if lock_acquired:
-                workspace_lock.release()
             async with self._lock:
                 self._starting_engagements.discard(request.engagement_id)
         assert reservation is not None
@@ -471,105 +576,295 @@ class ContainerTerminalService:
         )
         return self._start_response(reservation)
 
-    async def claim(self, session_id: str, ticket: str) -> None:
+    async def recover(
+        self,
+        engagement_id: str,
+    ) -> ContainerTerminalRecoveryResponse:
+        """Issue a fresh one-use ticket for this Project's active terminal.
+
+        Recovery never creates a process or extends a running session's
+        disconnect grace. Repeated authenticated calls rotate the outstanding
+        ticket, so a response lost during a webview restart can be retried
+        without retaining multiple valid credentials. If the old route has
+        not detached yet, the fresh ticket remains outstanding while attach()
+        rejects a second live socket; the bounded client retry can claim it
+        after the old transport closes.
+        """
+
+        self.store.get(Engagement, engagement_id)
+        expired_session_id: str | None = None
         async with self._lock:
-            session = self._sessions.get(session_id)
+            session = next(
+                (
+                    item
+                    for item in self._sessions.values()
+                    if item.request.engagement_id == engagement_id
+                ),
+                None,
+            )
             if session is None:
+                return ContainerTerminalRecoveryResponse(active=False)
+            if session.state == "claimed":
                 raise ContainerTerminalError(
-                    "terminal_not_found",
-                    "terminal session was not found",
-                    status_code=404,
+                    "terminal_connecting",
+                    "terminal is already being connected",
                 )
+            now = utc_now()
+            if (
+                session.state == "running"
+                and session.attachment is None
+                and session.ticket_expires_at is not None
+                and session.ticket_expires_at <= now
+            ):
+                expired_session_id = session.id
+            else:
+                return self._recover_session_locked(session, now)
+        assert expired_session_id is not None
+        await self.finish(
+            expired_session_id,
+            outcome="reconnect_timeout",
+            detail="terminal reconnect grace expired",
+            error_code="reconnect_timeout",
+        )
+        return ContainerTerminalRecoveryResponse(active=False)
+
+    def _recover_session_locked(
+        self,
+        session: _TerminalReservation,
+        now: datetime,
+    ) -> ContainerTerminalRecoveryResponse:
+        if session.state == "pending":
+            ticket_expires_at = now + timedelta(seconds=TICKET_TTL_SECONDS)
+            self._cancel_session_task_locked(session, "expiry_task")
+            session.expiry_task = asyncio.create_task(
+                self._expire_ticket(session.id),
+                name=f"container-terminal-ticket-{session.id}",
+            )
+        elif session.attachment is None and session.ticket_expires_at is not None:
+            # Preserve the original disconnect deadline. Merely viewing a
+            # route must not keep an unattended container alive forever.
+            ticket_expires_at = session.ticket_expires_at
+        else:
+            ticket_expires_at = now + timedelta(seconds=self.reconnect_grace_seconds)
+
+        ticket = secrets.token_urlsafe(32)
+        session.websocket_ticket = ticket
+        session.ticket_expires_at = ticket_expires_at
+        if session.attachment is not None:
+            session.attachment.reconnect_ticket = ticket
+        elif session.state == "running" and session.grace_task is None:
+            session.grace_task = asyncio.create_task(
+                self._expire_reconnect_grace(session.id),
+                name=f"container-terminal-grace-{session.id}",
+            )
+
+        recovered = ContainerTerminalStartResponse(
+            session_id=session.id,
+            websocket_ticket=ticket,
+            ticket_expires_at=ticket_expires_at,
+            websocket_path=f"/api/v1/container-terminals/{session.id}/ws",
+            reconnect_grace_seconds=max(1, int(self.reconnect_grace_seconds)),
+            replay_max_bytes=self.replay_max_bytes,
+            # A recovered view owns a new terminal surface. Replaying from zero
+            # restores as much bounded viewport history as Core still holds.
+            last_sequence=0,
+        )
+        return ContainerTerminalRecoveryResponse(
+            active=True,
+            session=recovered,
+            runtime=session.runtime,
+        )
+
+    async def claim(self, session_id: str, ticket: str) -> str:
+        """Compatibility seam for direct service users.
+
+        WebSocket callers should use :meth:`attach`, which atomically claims a
+        ticket, launches when needed, and establishes replay state.
+        """
+
+        async with self._lock:
+            session = self._require_session_locked(session_id)
             if session.state != "pending":
                 raise ContainerTerminalError(
                     "ticket_used", "terminal WebSocket ticket has already been used"
                 )
-            if session.ticket_expires_at <= utc_now():
-                raise ContainerTerminalError(
-                    "ticket_expired", "terminal WebSocket ticket has expired"
-                )
-            if not hmac.compare_digest(session.websocket_ticket, ticket):
-                raise ContainerTerminalError(
-                    "ticket_invalid",
-                    "terminal WebSocket ticket is invalid",
-                    status_code=401,
-                )
+            self._validate_ticket_locked(session, ticket)
             session.state = "claimed"
-            if session.expiry_task is not None:
-                session.expiry_task.cancel()
-                session.expiry_task = None
+            self._rotate_ticket_locked(session)
+            self._cancel_session_task_locked(session, "expiry_task")
         self._event(
             session,
             "container_terminal.claimed",
             {"status": "connecting"},
             key="claimed",
         )
+        return session.request.engagement_id
 
     async def launch(self, session_id: str) -> SandboxTerminalProcess:
-        async with self._lock:
-            session = self._sessions.get(session_id)
-            if session is None or session.state != "claimed":
-                raise ContainerTerminalError(
-                    "terminal_not_found",
-                    "terminal session is not connectable",
-                    status_code=404,
-                )
-        try:
-            preview, prepared = await self._create_preview(session.request)
-            if (
-                not preview.allowed
-                or preview.preview_fingerprint != session.preview_fingerprint
-            ):
-                raise ContainerTerminalError(
-                    "preview_stale",
-                    "runner, policy, DNS, or limits changed before container launch",
-                )
-            process = await prepared.resolution.runner.open_terminal(
-                prepared.sandbox_request,
-                container_name="nebula-terminal-" + session.id.replace("-", "")[:40],
-                columns=session.request.columns,
-                rows=session.request.rows,
-            )
-        except (SandboxError, ToolPlatformError) as exc:
-            await self.finish(
-                session_id,
-                outcome="failed",
-                detail=str(exc),
-                error_code="runner_unavailable",
-            )
+        """Compatibility seam that launches a previously claimed session."""
+
+        return await self._launch_session(session_id, expected_state="claimed")
+
+    async def attach(
+        self,
+        session_id: str,
+        ticket: str,
+        *,
+        after_sequence: int = 0,
+    ) -> ContainerTerminalAttachment:
+        if after_sequence < 0:
             raise ContainerTerminalError(
-                "runner_unavailable", str(exc), status_code=503
-            ) from exc
-        except ContainerTerminalError as exc:
-            await self.finish(
-                session_id,
-                outcome="failed",
-                detail=exc.detail,
-                error_code=exc.code,
+                "invalid_sequence", "terminal replay sequence cannot be negative"
             )
-            raise
+        launch_required = False
         async with self._lock:
-            current = self._sessions.get(session_id)
-            if current is None or current.state != "claimed":
-                await process.close()
+            session = self._require_session_locked(session_id)
+            if session.attachment is not None:
                 raise ContainerTerminalError(
-                    "interrupted", "terminal launch was interrupted"
+                    "terminal_attached",
+                    "terminal already has an active WebSocket attachment",
                 )
-            current.process = process
-            current.state = "running"
-            current.last_activity = monotonic()
-            session = current
-        self._event(
-            session,
-            "container_terminal.running",
-            {
-                "status": "running",
-                "container_name": process.container_name,
-                "workspace": "/workspace",
-            },
-            key="running",
-        )
-        return process
+            if session.state not in {"pending", "running"}:
+                raise ContainerTerminalError(
+                    "terminal_connecting",
+                    "terminal is already being connected",
+                )
+            self._validate_ticket_locked(session, ticket)
+            latest_sequence = session.next_sequence - 1
+            if after_sequence > latest_sequence:
+                raise ContainerTerminalError(
+                    "invalid_sequence",
+                    "terminal replay sequence is newer than available output",
+                )
+            oldest_sequence = (
+                session.replay[0].sequence if session.replay else session.next_sequence
+            )
+            next_sequence = max(after_sequence + 1, oldest_sequence)
+            reconnect_ticket = secrets.token_urlsafe(32)
+            attachment = ContainerTerminalAttachment(
+                id=str(uuid4()),
+                session_id=session.id,
+                engagement_id=session.request.engagement_id,
+                reconnect_ticket=reconnect_ticket,
+                reconnect_grace_seconds=max(1, int(self.reconnect_grace_seconds)),
+                replay_max_bytes=self.replay_max_bytes,
+                oldest_sequence=oldest_sequence,
+                latest_sequence=latest_sequence,
+                replay_truncated=(after_sequence < oldest_sequence - 1),
+                next_sequence=next_sequence,
+            )
+            session.websocket_ticket = reconnect_ticket
+            session.ticket_expires_at = None
+            session.attachment = attachment
+            self._cancel_session_task_locked(session, "expiry_task")
+            self._cancel_session_task_locked(session, "grace_task")
+            if session.state == "pending":
+                session.state = "launching"
+                launch_required = True
+        if launch_required:
+            self._event(
+                session,
+                "container_terminal.claimed",
+                {"status": "connecting"},
+                key="claimed",
+            )
+            try:
+                await self._launch_session(session_id, expected_state="launching")
+            except Exception:
+                await self.detach(attachment)
+                raise
+        return attachment
+
+    async def next_event(
+        self, attachment: ContainerTerminalAttachment
+    ) -> ContainerTerminalOutput | ContainerTerminalExit:
+        while True:
+            async with self._lock:
+                if attachment.detached:
+                    raise ContainerTerminalError(
+                        "terminal_detached", "terminal attachment is closed"
+                    )
+                if attachment.terminal_replay:
+                    output = attachment.terminal_replay.popleft()
+                    attachment.next_sequence = output.sequence + 1
+                    return output
+                session = self._sessions.get(attachment.session_id)
+                if session is not None and session.attachment is attachment:
+                    for output in session.replay:
+                        if output.sequence < attachment.next_sequence:
+                            continue
+                        attachment.next_sequence = output.sequence + 1
+                        return output
+                if (
+                    attachment.terminal_event is not None
+                    and not attachment.terminal_event_delivered
+                ):
+                    attachment.terminal_event_delivered = True
+                    return attachment.terminal_event
+                if session is None or session.attachment is not attachment:
+                    raise ContainerTerminalError(
+                        "terminal_detached", "terminal attachment is closed"
+                    )
+                attachment.wakeup.clear()
+            await attachment.wakeup.wait()
+
+    async def detach(self, attachment: ContainerTerminalAttachment) -> None:
+        async with self._lock:
+            session = self._sessions.get(attachment.session_id)
+            if (
+                session is None
+                or session.attachment is not attachment
+                or attachment.detached
+            ):
+                attachment.detached = True
+                attachment.wakeup.set()
+                return
+            session.attachment = None
+            attachment.detached = True
+            attachment.wakeup.set()
+            if session.state == "running":
+                session.ticket_expires_at = utc_now() + timedelta(
+                    seconds=self.reconnect_grace_seconds
+                )
+                session.grace_task = asyncio.create_task(
+                    self._expire_reconnect_grace(session.id),
+                    name=f"container-terminal-grace-{session.id}",
+                )
+
+    async def write_input(
+        self, attachment: ContainerTerminalAttachment, data: bytes
+    ) -> None:
+        async with self._lock:
+            session = self._require_attachment_locked(attachment)
+            process = session.process
+            if process is None or session.state != "running":
+                raise ContainerTerminalError(
+                    "terminal_not_ready", "terminal process is not running"
+                )
+        await process.write(data)
+        await self.touch(attachment.session_id)
+
+    async def resize(
+        self,
+        attachment: ContainerTerminalAttachment,
+        columns: int,
+        rows: int,
+    ) -> None:
+        async with self._lock:
+            session = self._require_attachment_locked(attachment)
+            process = session.process
+            if process is None or session.state != "running":
+                raise ContainerTerminalError(
+                    "terminal_not_ready", "terminal process is not running"
+                )
+        process.resize(columns, rows)
+
+    async def close_attachment(
+        self, attachment: ContainerTerminalAttachment
+    ) -> None:
+        async with self._lock:
+            self._require_attachment_locked(attachment)
+        await self.finish(attachment.session_id, outcome="closed")
 
     async def touch(self, session_id: str) -> None:
         async with self._lock:
@@ -611,25 +906,46 @@ class ContainerTerminalService:
         detail: str | None = None,
         error_code: str | None = None,
     ) -> None:
+        tasks: list[asyncio.Task[None]] = []
         async with self._lock:
             session = self._sessions.pop(session_id, None)
             if session is None:
                 return
-            task = session.expiry_task
-            session.expiry_task = None
-            if task is not None and task is not asyncio.current_task():
-                task.cancel()
+            for attribute in (
+                "expiry_task",
+                "grace_task",
+                "reader_task",
+                "monitor_task",
+                "watchdog_task",
+            ):
+                task = getattr(session, attribute)
+                setattr(session, attribute, None)
+                if task is not None and task is not asyncio.current_task():
+                    task.cancel()
+                    tasks.append(task)
+            if session.attachment is not None:
+                session.attachment.terminal_replay.extend(
+                    output
+                    for output in session.replay
+                    if output.sequence >= session.attachment.next_sequence
+                )
+                session.attachment.terminal_event = ContainerTerminalExit(
+                    outcome=outcome,
+                    exit_code=exit_code,
+                    error_code=error_code,
+                    detail=detail,
+                )
+                session.attachment.wakeup.set()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         cleanup_error: Exception | None = None
         try:
             if session.process is not None:
                 await session.process.close()
         except Exception as exc:
             cleanup_error = exc
-        finally:
-            if session.workspace_lock.locked():
-                session.workspace_lock.release()
         if cleanup_error is not None and detail is None:
-            detail = f"terminal cleanup reported: {cleanup_error}"
+            detail = f"terminal cleanup reported: {type(cleanup_error).__name__}"
             error_code = error_code or "cleanup_failed"
         duration = max(0.0, (utc_now() - session.created_at).total_seconds())
         payload: dict[str, object] = {
@@ -647,6 +963,228 @@ class ContainerTerminalService:
             key="terminal",
         )
 
+    async def _launch_session(
+        self,
+        session_id: str,
+        *,
+        expected_state: Literal["claimed", "launching"],
+    ) -> SandboxTerminalProcess:
+        async with self._lock:
+            session = self._require_session_locked(session_id)
+            if session.state != expected_state:
+                raise ContainerTerminalError(
+                    "terminal_not_found",
+                    "terminal session is not connectable",
+                    status_code=404,
+                )
+        try:
+            preview, prepared = await self._create_preview(session.request)
+            if (
+                not preview.allowed
+                or preview.preview_fingerprint != session.preview_fingerprint
+            ):
+                raise ContainerTerminalError(
+                    "preview_stale",
+                    "runner, policy, DNS, or limits changed before container launch",
+                )
+            process = await prepared.resolution.runner.open_terminal(
+                prepared.sandbox_request,
+                container_name="nebula-terminal-" + session.id.replace("-", "")[:40],
+                columns=session.request.columns,
+                rows=session.request.rows,
+            )
+        except (SandboxError, ToolPlatformError) as exc:
+            await self.finish(
+                session_id,
+                outcome="failed",
+                detail=str(exc),
+                error_code="runner_unavailable",
+            )
+            raise ContainerTerminalError(
+                "runner_unavailable", str(exc), status_code=503
+            ) from exc
+        except ContainerTerminalError as exc:
+            await self.finish(
+                session_id,
+                outcome="failed",
+                detail=exc.detail,
+                error_code=exc.code,
+            )
+            raise
+        except Exception as exc:
+            detail = f"terminal launch failed ({type(exc).__name__})"
+            await self.finish(
+                session_id,
+                outcome="failed",
+                detail=detail,
+                error_code="runner_unavailable",
+            )
+            raise ContainerTerminalError(
+                "runner_unavailable",
+                detail,
+                status_code=503,
+            ) from exc
+        interrupted = False
+        async with self._lock:
+            current = self._sessions.get(session_id)
+            if current is None or current.state != expected_state:
+                interrupted = True
+            else:
+                current.process = process
+                current.state = "running"
+                current.last_activity = monotonic()
+                current.reader_task = asyncio.create_task(
+                    self._read_process_output(current.id, process),
+                    name=f"container-terminal-reader-{current.id}",
+                )
+                current.monitor_task = asyncio.create_task(
+                    self._monitor_process(current.id, process),
+                    name=f"container-terminal-monitor-{current.id}",
+                )
+                current.watchdog_task = asyncio.create_task(
+                    self._watchdog(current.id),
+                    name=f"container-terminal-watchdog-{current.id}",
+                )
+                session = current
+        if interrupted:
+            await process.close()
+            raise ContainerTerminalError("interrupted", "terminal launch was interrupted")
+        self._event(
+            session,
+            "container_terminal.running",
+            {
+                "status": "running",
+                "container_name": process.container_name,
+                "workspace": "/workspace",
+            },
+            key="running",
+        )
+        return process
+
+    async def _read_process_output(
+        self, session_id: str, process: SandboxTerminalProcess
+    ) -> None:
+        try:
+            while True:
+                data = await process.read(TERMINAL_OUTPUT_CHUNK_BYTES)
+                if not data:
+                    async with self._lock:
+                        session = self._sessions.get(session_id)
+                        if session is None or session.process is not process:
+                            return
+                        tail = session.parser.flush()
+                        if tail.passthrough:
+                            self._publish_output_locked(session, tail.passthrough)
+                    return
+                async with self._lock:
+                    session = self._sessions.get(session_id)
+                    if session is None or session.process is not process:
+                        return
+                    session.last_activity = monotonic()
+                    parsed = session.parser.feed(data)
+                    if parsed.passthrough:
+                        self._publish_output_locked(session, parsed.passthrough)
+                if self.command_history is not None:
+                    for command_record in parsed.records:
+                        try:
+                            await asyncio.to_thread(
+                                self.command_history.record,
+                                engagement_id=session.request.engagement_id,
+                                session_id=session.id,
+                                command=command_record.command,
+                                cwd=command_record.cwd,
+                                exit_code=command_record.exit_code,
+                            )
+                        except Exception as exc:
+                            LOGGER.warning(
+                                "terminal command history write failed (%s)",
+                                type(exc).__name__,
+                            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.finish(
+                session_id,
+                outcome="failed",
+                error_code="terminal_io",
+                detail=f"terminal output reader failed ({type(exc).__name__})",
+            )
+
+    def _publish_output_locked(
+        self,
+        session: _TerminalReservation,
+        data: bytes,
+    ) -> None:
+        offset = 0
+        while offset < len(data):
+            chunk = data[offset : offset + self.replay_max_bytes]
+            offset += len(chunk)
+            output = ContainerTerminalOutput(
+                sequence=session.next_sequence,
+                data=chunk,
+            )
+            session.next_sequence += 1
+            session.replay.append(output)
+            session.replay_bytes += len(chunk)
+            while session.replay_bytes > self.replay_max_bytes:
+                removed = session.replay.popleft()
+                session.replay_bytes -= len(removed.data)
+            if session.attachment is not None:
+                session.attachment.wakeup.set()
+
+    async def _monitor_process(
+        self, session_id: str, process: SandboxTerminalProcess
+    ) -> None:
+        try:
+            exit_code = await process.wait()
+            async with self._lock:
+                session = self._sessions.get(session_id)
+                reader = session.reader_task if session is not None else None
+            if reader is not None and reader is not asyncio.current_task():
+                try:
+                    await asyncio.wait_for(asyncio.shield(reader), timeout=1)
+                except asyncio.TimeoutError:
+                    pass
+            await self.finish(
+                session_id,
+                outcome="completed",
+                exit_code=exit_code,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.finish(
+                session_id,
+                outcome="failed",
+                error_code="terminal_wait",
+                detail=f"terminal process wait failed ({type(exc).__name__})",
+            )
+
+    async def _watchdog(self, session_id: str) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self.watchdog_interval_seconds)
+                try:
+                    await self.enforce_workspace_limits(session_id)
+                except ContainerTerminalError as exc:
+                    await self.finish(
+                        session_id,
+                        outcome="workspace_limit",
+                        error_code=exc.code,
+                        detail=exc.detail,
+                    )
+                    return
+                if await self.idle_seconds(session_id) >= self.idle_timeout_seconds:
+                    await self.finish(
+                        session_id,
+                        outcome="idle_timeout",
+                        error_code="idle_timeout",
+                        detail="terminal closed after 30 minutes without input or output",
+                    )
+                    return
+        except asyncio.CancelledError:
+            raise
+
     async def _expire_ticket(self, session_id: str) -> None:
         try:
             await asyncio.sleep(TICKET_TTL_SECONDS)
@@ -658,6 +1196,72 @@ class ContainerTerminalService:
             )
         except asyncio.CancelledError:
             return
+
+    async def _expire_reconnect_grace(self, session_id: str) -> None:
+        try:
+            await asyncio.sleep(self.reconnect_grace_seconds)
+            await self.finish(
+                session_id,
+                outcome="reconnect_timeout",
+                detail="terminal reconnect grace expired",
+                error_code="reconnect_timeout",
+            )
+        except asyncio.CancelledError:
+            return
+
+    def _require_session_locked(self, session_id: str) -> _TerminalReservation:
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise ContainerTerminalError(
+                "terminal_not_found",
+                "terminal session was not found",
+                status_code=404,
+            )
+        return session
+
+    def _require_attachment_locked(
+        self, attachment: ContainerTerminalAttachment
+    ) -> _TerminalReservation:
+        session = self._require_session_locked(attachment.session_id)
+        if attachment.detached or session.attachment is not attachment:
+            raise ContainerTerminalError(
+                "terminal_detached", "terminal attachment is closed"
+            )
+        return session
+
+    @staticmethod
+    def _validate_ticket_locked(
+        session: _TerminalReservation, ticket: str
+    ) -> None:
+        if session.ticket_expires_at is None:
+            raise ContainerTerminalError(
+                "ticket_used", "terminal WebSocket ticket has already been used"
+            )
+        if session.ticket_expires_at <= utc_now():
+            raise ContainerTerminalError(
+                "ticket_expired", "terminal WebSocket ticket has expired"
+            )
+        if not hmac.compare_digest(session.websocket_ticket, ticket):
+            raise ContainerTerminalError(
+                "ticket_invalid",
+                "terminal WebSocket ticket is invalid",
+                status_code=401,
+            )
+
+    @staticmethod
+    def _rotate_ticket_locked(session: _TerminalReservation) -> None:
+        session.websocket_ticket = secrets.token_urlsafe(32)
+        session.ticket_expires_at = None
+
+    @staticmethod
+    def _cancel_session_task_locked(
+        session: _TerminalReservation,
+        attribute: Literal["expiry_task", "grace_task"],
+    ) -> None:
+        task = getattr(session, attribute)
+        setattr(session, attribute, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
 
     async def _create_preview(
         self, request: ContainerTerminalPreflightRequest
@@ -673,7 +1277,7 @@ class ContainerTerminalService:
             "workspace": "/workspace",
             "policy_rule": prepared.policy_rule,
             "fresh_container": True,
-            "idle_timeout_seconds": TERMINAL_IDLE_TIMEOUT_SECONDS,
+            "idle_timeout_seconds": int(self.idle_timeout_seconds),
         }
         fingerprint = _digest_json(binding)
         expires = utc_now() + timedelta(seconds=PREVIEW_TTL_SECONDS)
@@ -688,6 +1292,7 @@ class ContainerTerminalService:
                 preview_fingerprint=fingerprint,
                 preview_token=self._sign_preview(binding, fingerprint, expires),
                 expires_at=expires,
+                idle_timeout_seconds=int(self.idle_timeout_seconds),
             ),
             prepared,
         )
@@ -730,7 +1335,12 @@ class ContainerTerminalService:
             command=[runtime.interpreter, *runtime.arguments],
             workspace=resolution.workspace,
             workspace_access=SandboxWorkspaceAccess.WRITE,
-            environment={"LANG": "C.UTF-8", "TERM": "xterm-256color"},
+            environment={
+                "HISTFILE": "/dev/null",
+                "LANG": "C.UTF-8",
+                "PROMPT_COMMAND": TERMINAL_PROMPT_COMMAND,
+                "TERM": "xterm-256color",
+            },
             network=SandboxNetwork.UNRESTRICTED,
             execution_kind=SandboxExecutionKind.HUMAN_TERMINAL,
             container_user=SandboxContainerUser.ROOT,
@@ -754,26 +1364,6 @@ class ContainerTerminalService:
                 f"{resolution.image.detail}; human terminal has unrestricted outbound bridge networking"
             ),
         )
-
-    def _execution_busy(self, engagement_id: str) -> bool:
-        busy = {
-            OperatorExecutionStatus.QUEUED,
-            OperatorExecutionStatus.RUNNING,
-            OperatorExecutionStatus.CANCELLING,
-        }
-        offset = 0
-        while True:
-            executions = self.store.list_entities(
-                OperatorExecution,
-                engagement_id=engagement_id,
-                offset=offset,
-                limit=1_000,
-            )
-            if any(execution.status in busy for execution in executions):
-                return True
-            if len(executions) < 1_000:
-                return False
-            offset += len(executions)
 
     def _recover_interrupted_events(self) -> None:
         offset = 0
@@ -881,15 +1471,18 @@ class ContainerTerminalService:
             )
         return binding
 
-    @staticmethod
     def _start_response(
+        self,
         session: _TerminalReservation,
     ) -> ContainerTerminalStartResponse:
         return ContainerTerminalStartResponse(
             session_id=session.id,
-            websocket_ticket=session.websocket_ticket,
-            ticket_expires_at=session.ticket_expires_at,
+            websocket_ticket=session.start_websocket_ticket,
+            ticket_expires_at=session.start_ticket_expires_at,
             websocket_path=f"/api/v1/container-terminals/{session.id}/ws",
+            reconnect_grace_seconds=max(1, int(self.reconnect_grace_seconds)),
+            replay_max_bytes=self.replay_max_bytes,
+            last_sequence=session.next_sequence - 1,
         )
 
 
@@ -929,11 +1522,15 @@ def _unb64(value: str) -> bytes:
 
 
 __all__ = [
+    "ContainerTerminalAttachment",
     "ContainerTerminalCapabilities",
     "ContainerTerminalError",
+    "ContainerTerminalExit",
     "ContainerTerminalNetworkSnapshot",
+    "ContainerTerminalOutput",
     "ContainerTerminalPreflightRequest",
     "ContainerTerminalPreflightResponse",
+    "ContainerTerminalRecoveryResponse",
     "ContainerTerminalRuntimeSnapshot",
     "ContainerTerminalSecuritySnapshot",
     "ContainerTerminalService",
@@ -943,4 +1540,6 @@ __all__ = [
     "TERMINAL_IDLE_TIMEOUT_SECONDS",
     "TERMINAL_MAX_DURATION_SECONDS",
     "TERMINAL_OUTPUT_CHUNK_BYTES",
+    "TERMINAL_RECONNECT_GRACE_SECONDS",
+    "TERMINAL_REPLAY_MAX_BYTES",
 ]

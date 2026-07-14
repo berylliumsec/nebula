@@ -2,8 +2,6 @@ import {
   Command,
   PanelLeftClose,
   PanelLeftOpen,
-  PanelRightClose,
-  PanelRightOpen,
   RefreshCw,
   ShieldAlert,
   Wifi,
@@ -34,7 +32,8 @@ export function TopBar({
 }: TopBarProps) {
   const location = useLocation();
   const page = navigationItems.find((item) => item.path === location.pathname) ?? navigationItems[0];
-  const { coreError, coreState, previewMode, reconnect } = useWorkspace();
+  const { coreError, reconnect, workspaceState } = useWorkspace();
+  const canRetry = workspaceState === "failed" || workspaceState === "degraded";
 
   return (
     <header className="top-bar">
@@ -50,37 +49,36 @@ export function TopBar({
           {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
         </button>
         <div className="top-bar-title">
-          <span>Engagement</span>
+          <span>Project</span>
           <span aria-hidden="true">/</span>
           <strong>{page.label}</strong>
         </div>
       </div>
       <div className="top-bar-page-actions" ref={setToolbarHost} role="group" aria-label={`${page.label} actions`} />
       <div className="top-bar-actions">
-        {previewMode && <span className="preview-pill">Interface preview</span>}
         <button
-          className={`connection-chip ${coreState}`}
+          className={`connection-chip ${workspaceState}`}
           type="button"
-          onClick={coreState === "offline" ? reconnect : undefined}
-          disabled={coreState !== "offline"}
+          onClick={canRetry ? reconnect : undefined}
+          disabled={!canRetry}
           title={coreError}
-          aria-label={coreState === "offline" ? "Nebula Core offline. Retry connection" : `Nebula Core ${coreState}`}
+          aria-label={canRetry ? `Nebula Core ${workspaceState}. Retry connection` : `Nebula Core ${workspaceState}`}
         >
-          {coreState === "checking" ? (
+          {workspaceState === "starting" ? (
             <RefreshCw className="spin" size={14} aria-hidden="true" />
-          ) : coreState === "online" ? (
+          ) : workspaceState === "ready" ? (
             <Wifi size={14} aria-hidden="true" />
           ) : (
             <WifiOff size={14} aria-hidden="true" />
           )}
-          <span>Core {coreState}</span>
+          <span>{workspaceState === "degraded" ? "Limited" : workspaceState}</span>
         </button>
         <button className="command-trigger" type="button" onClick={onOpenPalette} aria-label="Search commands">
           <Command size={15} aria-hidden="true" />
           <span>Search</span>
           <kbd>⌘K</kbd>
         </button>
-        <button
+        {approvalsCount > 0 && <button
           className={`icon-button approval-trigger${approvalsCount > 0 ? " has-approvals" : ""}`}
           type="button"
           onClick={onToggleActivity}
@@ -89,15 +87,9 @@ export function TopBar({
           aria-label={`${activityOpen ? "Hide" : "Show"} activity inspector${approvalsCount ? `, ${approvalsCount} pending approval${approvalsCount === 1 ? "" : "s"}` : ""}`}
           title={`${activityOpen ? "Hide" : "Show"} activity inspector (⌥⌘I)`}
         >
-          {approvalsCount > 0 ? (
-            <ShieldAlert size={18} aria-hidden="true" />
-          ) : activityOpen ? (
-            <PanelRightClose size={18} aria-hidden="true" />
-          ) : (
-            <PanelRightOpen size={18} aria-hidden="true" />
-          )}
+          <ShieldAlert size={18} aria-hidden="true" />
           {approvalsCount > 0 && <span className="notification-count" aria-hidden="true">{approvalsCount}</span>}
-        </button>
+        </button>}
       </div>
     </header>
   );

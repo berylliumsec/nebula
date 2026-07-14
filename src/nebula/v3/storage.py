@@ -546,6 +546,102 @@ class NebulaStore:
         finally:
             connection.close()
 
+    def update_with_operation_event(
+        self,
+        model: type[EntityT],
+        entity_id: str,
+        changes: dict[str, Any],
+        *,
+        expected_revision: int,
+        operation_id: str,
+        operation_kind: str,
+        engagement_id: str,
+        event_type: str,
+        event_payload: dict[str, Any],
+        actor_id: str | None = None,
+        idempotency_key: str | None = None,
+        occurred_at: datetime | None = None,
+    ) -> tuple[EntityT, OperationEvent]:
+        """Atomically persist an entity transition and its operation event."""
+
+        if not all((operation_id, operation_kind, engagement_id, event_type)):
+            raise ValueError("operation event identifiers and type are required")
+        protected = {"id", "created_at", "updated_at", "revision"}.intersection(changes)
+        if protected:
+            raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
+
+        connection = self.database.engine.connect()
+        try:
+            self._begin_run_write(connection, f"operation:{operation_id}")
+            row = (
+                connection.execute(
+                    select(EntityRow).where(
+                        EntityRow.id == entity_id,
+                        EntityRow.kind == model.entity_kind,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                raise NotFoundError(
+                    f"{model.entity_kind} entity not found: {entity_id}"
+                )
+            if int(row["revision"]) != expected_revision:
+                raise ConflictError(
+                    f"revision conflict: expected {expected_revision}, "
+                    f"found {row['revision']}"
+                )
+
+            payload = dict(row["payload"])
+            payload.update(changes)
+            payload.update(
+                {
+                    "id": entity_id,
+                    "updated_at": utc_now(),
+                    "revision": expected_revision + 1,
+                }
+            )
+            updated_entity = model.model_validate(payload)
+            result = connection.execute(
+                update(EntityRow)
+                .where(
+                    EntityRow.id == entity_id,
+                    EntityRow.kind == model.entity_kind,
+                    EntityRow.revision == expected_revision,
+                )
+                .values(
+                    payload=_dump_entity(updated_entity),
+                    engagement_id=entity_engagement_id(updated_entity),
+                    revision=updated_entity.revision,
+                    updated_at=updated_entity.updated_at,
+                )
+            )
+            if result.rowcount != 1:
+                raise ConflictError("entity transition lost an optimistic lock race")
+
+            event = self._next_operation_event(
+                connection,
+                operation_id=operation_id,
+                operation_kind=operation_kind,
+                engagement_id=engagement_id,
+                event_type=event_type,
+                payload=event_payload,
+                actor_id=actor_id,
+                idempotency_key=idempotency_key,
+                occurred_at=occurred_at,
+            )
+            connection.execute(
+                insert(OperationEventRow).values(**event.model_dump(mode="python"))
+            )
+            connection.commit()
+            return updated_entity, event
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def replace(
         self,
         model: type[EntityT],
@@ -1019,6 +1115,36 @@ class NebulaStore:
         return RunEvent(
             id=str(uuid4()),
             run_id=run_id,
+            sequence=int(last_sequence or 0) + 1,
+            event_type=event_type,
+            payload=payload or {},
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+            occurred_at=occurred_at or utc_now(),
+        )
+
+    @staticmethod
+    def _next_operation_event(
+        connection: Any,
+        *,
+        operation_id: str,
+        operation_kind: str,
+        engagement_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None,
+        actor_id: str | None,
+        idempotency_key: str | None,
+        occurred_at: datetime | None = None,
+    ) -> OperationEvent:
+        last_sequence = connection.scalar(
+            select(func.max(OperationEventRow.sequence)).where(
+                OperationEventRow.operation_id == operation_id
+            )
+        )
+        return OperationEvent(
+            operation_id=operation_id,
+            operation_kind=operation_kind,
+            engagement_id=engagement_id,
             sequence=int(last_sequence or 0) + 1,
             event_type=event_type,
             payload=payload or {},

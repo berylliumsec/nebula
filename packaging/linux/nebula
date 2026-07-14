@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 
-exec /usr/bin/nebula-core "$@"
+exec /usr/bin/nebula-ui "$@"

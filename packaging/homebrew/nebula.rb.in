@@ -18,7 +18,8 @@ cask "nebula" do
   depends_on macos: ">= :ventura"
 
   app "Nebula.app"
-  binary "#{appdir}/Nebula.app/Contents/MacOS/nebula-core", target: "nebula"
+  binary "#{appdir}/Nebula.app/Contents/MacOS/nebula-ui", target: "nebula"
+  binary "#{appdir}/Nebula.app/Contents/MacOS/nebula-core", target: "nebula-core"
 
   caveats <<~EOS
     Active security tools require an independently installed and approved

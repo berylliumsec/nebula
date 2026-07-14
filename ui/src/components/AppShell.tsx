@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
+import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { ChromeProvider } from "../state/ChromeContext";
 import { ActivityCenter } from "./ActivityCenter";
@@ -9,7 +10,7 @@ import { TopBar } from "./TopBar";
 
 export function AppShell() {
   const navigate = useNavigate();
-  const { approvals } = useWorkspace();
+  const { approvals, coreError, reconnect, workspaceState } = useWorkspace();
   const [activityOpen, setActivityOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -101,8 +102,9 @@ export function AppShell() {
   }), [activityOpen, openPalette, paletteOpen, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
 
   return (
-    <ChromeProvider value={chrome}>
-      <div className={`app-shell${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <WorkbenchDraftProvider>
+      <ChromeProvider value={chrome}>
+        <div className={`app-shell${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
         <a className="skip-link" href="#main-content">Skip to main content</a>
         <SideNav collapsed={sidebarCollapsed} onNavigate={closeMobileSidebar} />
         <button className="sidebar-scrim" type="button" aria-label="Close sidebar" onClick={toggleSidebar} />
@@ -116,6 +118,9 @@ export function AppShell() {
           sidebarCollapsed={sidebarCollapsed}
         />
         <main id="main-content" className="main-content" tabIndex={-1}>
+          {workspaceState === "starting" && <div className="workspace-state-banner starting" role="status">Starting Nebula…</div>}
+          {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><span><strong>Nebula is ready with limited features.</strong>{coreError && <small>{coreError}</small>}</span><button className="button quiet" type="button" onClick={reconnect}>Retry</button></div>}
+          {workspaceState === "failed" && <div className="workspace-state-banner failed" role="alert"><span><strong>Nebula Core could not start.</strong><small>{coreError ?? "Check the local service and try again."}</small></span><button className="button primary" type="button" onClick={reconnect}>Try again</button></div>}
           <Outlet />
         </main>
         <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} />
@@ -125,7 +130,8 @@ export function AppShell() {
           onToggleActivity={toggleActivity}
           onToggleSidebar={toggleSidebar}
         />
-      </div>
-    </ChromeProvider>
+        </div>
+      </ChromeProvider>
+    </WorkbenchDraftProvider>
   );
 }

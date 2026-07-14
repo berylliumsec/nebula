@@ -1,8 +1,7 @@
-# Nebula 3 developer preview
+# Nebula 3
 
-Nebula 3 is implemented alongside the PyQt maintenance application. It is a
-local-first control plane and React/Tauri workspace; it is not yet a production
-team release.
+Nebula 3 is the native, local-first desktop workbench. The PyQt-based Nebula 2
+application remains a separately versioned maintenance distribution.
 
 ## What is available
 
@@ -29,29 +28,41 @@ team release.
 - Deterministic server-rendered PDF reports, operator-triggered AI execution
   notes, and integrity-manifested engagement bundle v2 export.
 
-## Run the Core
+## Run from a source checkout
 
 Nebula is packaged as one application and required imports fail immediately if
 the installation is incomplete.
 
 ```bash
 poetry install --without legacy,legacy-dev --with dev
-poetry run nebula3 doctor
-poetry run nebula3 migrate
-poetry run nebula3 serve --host 127.0.0.1 --port 8000
+poetry run nebula-core doctor
+poetry run nebula-core migrate
+poetry run nebula-core serve --host 127.0.0.1 --port 8765
 ```
 
 The server prints a generated bearer token. Remote binding requires an explicit
 `--allow-remote` acknowledgement and should be placed behind a properly
 authenticated deployment boundary. Local mode never exposes a runner socket.
+Keep the Core port distinct from local model runtimes; vLLM commonly listens on
+8000 or 8001. When developing the Vite workspace against another Core port, set
+`NEBULA_DEV_BACKEND=http://127.0.0.1:PORT` before `npm --prefix ui run dev`.
 
 Build and launch the browser workspace:
 
 ```bash
 npm --prefix ui ci
 npm --prefix ui run build
-poetry run nebula3 ui
+poetry run nebula-core ui
 ```
+
+`nebula-core ui` is the recommended source-checkout launch path. It chooses an
+available loopback port, starts Core, serves the built workspace, and transfers
+the generated bearer token through the URL fragment. Running Vite alone starts
+only the frontend and leaves durable and Toolbox controls offline.
+
+`poetry run nebula3` remains a compatibility alias. Native-install users launch
+the desktop with `nebula`; `nebula-core` is reserved for diagnostics,
+migrations, headless serving, imports, exports, and other administration.
 
 The browser token is carried in the URL fragment, consumed into memory, and
 removed immediately. Tauri sends its 256-bit one-time token through the Core
@@ -114,7 +125,7 @@ reported by that runtime.
 An explicit vLLM profile can also back a durable CLI mission:
 
 ```bash
-poetry run nebula3 run ENGAGEMENT_ID "Review the bounded scope" \
+poetry run nebula-core run ENGAGEMENT_ID "Review the bounded scope" \
   --provider PROVIDER_PROFILE_ID \
   --model SERVED_MODEL_ID \
   --max-tool-calls 0
@@ -127,9 +138,12 @@ analysis result; tool execution remains exclusively behind the policy broker.
 ## Import and export
 
 ```bash
-poetry run nebula3 import-2x /path/to/legacy-engagement
-poetry run nebula3 export ENGAGEMENT_ID engagement.nebula.zip
+nebula-core import-2x /path/to/legacy-engagement
+nebula-core export ENGAGEMENT_ID engagement.nebula.zip
 ```
+
+See [Migrating from Nebula 2](MIGRATING-2-TO-3.md) before importing production
+engagement data.
 
 Import records before/after checksums and does not write to the source folder.
 An external Chroma directory is skipped unless the operator supplies
@@ -153,8 +167,8 @@ model capacity. Provider profiles may declare `context_window` and
 window and a 2,048-token output allowance when no limits are configured.
 
 Compaction uses the conversation or mission's selected provider and model, so it
-can add model latency, token usage, and cost. The Sessions and Missions
-workspaces show the latest compaction status and usage. Compaction fails closed:
+can add model latency, token usage, and cost. Workbench and Activity show the
+latest compaction status and usage. Compaction fails closed:
 Nebula returns a retryable error instead of silently dropping older context when
 a required summary cannot be validated.
 
@@ -170,17 +184,22 @@ their canonical message sequences or task/result identifiers, are included in
 engagement exports, and are never treated as evidence. Memory is isolated to a
 single chat session or mission run; it is not shared across an engagement.
 
-## Reviewed code execution and workspace limits
+## Workbench terminal, reviewed execution, and workspace limits
 
-Nebula does not provide a host terminal. The Sessions workspace provides a
-human-operated **Terminal** in the official minimal
-`docker.io/kalilinux/kali-rolling:latest` image. On first use after each Core
-start, Core asks the selected verified runner to pull that tag, verifies the
-repository and platform, and resolves an immutable repository digest. Core then
-builds or reuses a locally cached image from that verified base with
-`kali-linux-headless` and `iputils-ping` installed. The build recipe, official
-base digest, and derived content-addressed image ID are verified and recorded;
-every session launches the derived image ID with `--pull=never`.
+Nebula does not provide a host terminal. Workbench uses a human-operated
+**Terminal** in a verified human-workstation image containing the
+`kali-linux-headless` baseline. Core verifies the official base repository,
+platform, immutable digest, derived image ID, and versioned build-recipe labels,
+then persists the verified metadata locally. A fully verified cached base and
+workstation image are inspected before any pull or build, so cached launches
+make no registry request and remain usable offline.
+
+The release configuration seam `NEBULA_HUMAN_TERMINAL_SOURCE_IMAGE` accepts
+only a digest-pinned image in the official Kali repository. Source builds retain
+the official tagged development default. Publishing a prebuilt signed Nebula
+workstation image, its final digest, signature trust root, SBOM, provenance,
+licenses, and update policy remains a release gate; the repository does not
+invent or claim a digest before that external artifact exists.
 
 The Kali container runs as root with a writable disposable container layer and
 ordinary unrestricted outbound bridge networking. This deliberate human-only
@@ -195,11 +214,13 @@ derived image config keeps APT usable despite the empty runtime capability set.
 Tools that require raw-packet or network-administration capabilities remain
 limited by design.
 
-The named container is removed when the WebSocket disconnects, the operator
-stops it, or Core shuts down. Every terminal retains the existing 1 CPU, 512 MiB
-RAM, 128 PID, 30-minute hard, 15-minute I/O idle, and workspace limits.
-Interactive input/output is not sent to an AI provider or automatically
-promoted to evidence.
+One active terminal is retained per Project across Workbench mode changes and
+short webview reconnects. It stops on explicit **Stop**, Core shutdown, or 30
+minutes with no input and no output; a disconnected UI has a 10-minute
+reconnect grace. Core keeps at most 1 MiB of sequenced output for reconnect
+replay and never persists terminal output automatically. Interactive
+input/output is not sent to an AI provider or promoted to evidence without an
+explicit operator action.
 
 A supported completed assistant fence (`bash`/`shell`, `sh`, or
 `python`/`python3`/`py`) can also be copied or sent through an exact one-shot
@@ -220,9 +241,10 @@ The persistent scratch workspace is limited to 5 GiB total allocated data,
 50,000 entries, and 1 GiB per file. Core rejects an already-over-limit
 workspace before launch and terminates an execution that crosses a limit.
 These are application-enforced limits: portable bind mounts do not provide a
-universal filesystem hard quota. The browser is read-only; promotion copies
-and verifies exact bytes into immutable artifacts, while reset never follows
-symlinks and never removes promoted evidence.
+universal filesystem hard quota. Browser uploads use streamed atomic writes
+with traversal and symlink protection. Promotion copies and verifies exact
+bytes into immutable artifacts, while reset never follows symlinks and never
+removes promoted evidence.
 
 ## Tool safety model
 
@@ -241,6 +263,13 @@ Executable tools are disabled unless all of these are present:
 
 Missing isolation results in analysis-only mode. There is no host execution
 fallback.
+
+Opening **Automate task** performs the first-use Toolbox setup in the
+background. Nebula accepts only the signed `berylliumsec/nebula-toolbox`
+catalog collection, installs it through the verified ready local runner, and
+assigns its normalized capabilities to the current Project. An unavailable
+catalog, runtime, or verified image leaves the task analysis-only; Nebula never
+substitutes an unsigned environment or a host command.
 
 The Toolbox source retains release digest placeholders intentionally. The
 protected `nebula-toolbox-v*` publisher resolves them from actual registry
@@ -270,10 +299,12 @@ to host execution.
 
 ## Current release boundary
 
-This developer preview is the Phase 0/1 foundation plus a connected Phase 2 UI
-shell. PostgreSQL team authorization, OIDC/RBAC, remote workers, full scanner
-normalization, generated-client drift enforcement, report signing/design tools,
-MCP/A2A, signed plugins, and advanced specialist environments remain release-gated.
+The native desktop is the canonical user path. Scanner import, topology,
+comparison, full-desktop capture, multiple detached terminals, rich HTML notes,
+legacy Chroma command search, and always-on AI suggestions remain deliberately
+out of the initial parity release. PostgreSQL team authorization, OIDC/RBAC,
+remote workers, MCP/A2A, signed third-party plugins, and advanced specialist
+environments remain separate projects.
 
 Nebula 2 remains a separately triggered legacy distribution. Its PyQt licensing
 review does not apply to Nebula 3 installers because the legacy dependency and

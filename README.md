@@ -1,17 +1,44 @@
-# Nebula – AI-Powered Penetration Testing Assistant
+# Nebula – Security Testing Workbench
 
-> **Nebula 3 developer preview:** the repository now contains the headless Core,
-> policy-controlled tool boundary, durable multi-agent runtime, React workspace,
-> and Tauri shell described in the modernization plan. See
-> [docs/NEBULA3.md](docs/NEBULA3.md) for commands, vLLM configuration, safety
-> invariants, and the remaining release gates. The separate
-> [Toolbox guide](docs/TOOLBOX.md) covers runners, installation locations,
-> the compatible-image contract, extension authoring, and publication.
-> Nebula 2.x is maintenance-only.
+Nebula 3 is the primary application in this repository. Install the native
+desktop package, open **Nebula**, and start in the Workbench; terminal use does
+not require a model provider. Nebula keeps human terminal work inside a
+verified Docker or Podman runtime and never falls back to a host shell.
 
-Nebula is an advanced, AI-powered penetration testing open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking.
+## Install and launch Nebula 3
 
-## Important upgrade notice
+Install a signed macOS DMG/Homebrew cask or Linux DEB/AppImage from the
+[Nebula releases](https://github.com/BerylliumSec/nebula/releases). Docker or
+Podman must be installed separately for terminal and automation features.
+
+Launch **Nebula** from the operating-system application menu or run:
+
+```console
+nebula
+```
+
+The `nebula` command opens the desktop application. Administration and
+diagnostics are deliberately separate:
+
+```console
+nebula-core doctor --json
+nebula-core migrate
+```
+
+For a source checkout, see [the Nebula 3 guide](docs/NEBULA3.md). Existing
+Nebula 2 data can be imported without changing its source; see
+[Migrating from Nebula 2](docs/MIGRATING-2-TO-3.md). The
+[Toolbox guide](docs/TOOLBOX.md) documents the isolated automation boundary.
+
+Nebula 3 is currently versioned separately from the maintenance-only Nebula 2
+Python distribution. The `nebula3` source command remains as a compatibility
+alias for existing development workflows.
+
+Nebula is designed for cybersecurity professionals, ethical hackers, and
+developers. It combines a terminal-first security workspace with optional AI
+assistance, immutable evidence, reviewed execution, and reporting.
+
+## Nebula 2 maintenance distribution
 
 Nebula 2.0.0 is now available. Because earlier releases were published as beta versions, pip may have kept some existing installations on an older version even when `--upgrade` was used. Users running Python 3.11 through 3.13 should upgrade with:
 
@@ -44,7 +71,7 @@ Introducing the Deep Application Profiler (DAP). DAP uses neural networks to ana
 Nebula is a cutting-edge, AI-powered penetration testing tool designed for cybersecurity professionals and ethical hackers. It integrates both hosted models available through the OpenAI API and open-source models such as Meta's Llama-3.1-8B-Instruct, Mistral AI's Mistral-7B-Instruct-v0.2, and DeepSeek-R1-Distill-Llama-8B directly into the command line interface (CLI). By leveraging these state-of-the-art models, Nebula not only enhances vulnerability assessments and penetration testing workflows but also supports any tool that can be invoked from the CLI.
 
 
-## Installation
+## Nebula 2 installation
 
 **System Requirements:**
 
@@ -59,7 +86,7 @@ python -m pip install nebula-ai --upgrade
 ```
 
 
-## Running Nebula
+## Running Nebula 2
 
 **Important:** 
 
@@ -99,13 +126,13 @@ only as an unsafe compatibility option by setting
 recommended.
 
 
-Run nebula
+Run the maintenance application installed from PyPI:
 
 ```
 nebula
 ```
 
-**Nebula 3 container preview**
+**Nebula 3 headless deployment**
 
 The legacy root/X11 container is not a Nebula 3 release path. Run the non-root,
 loopback-published Core profile with an explicit API token:

@@ -7,6 +7,7 @@ import errno
 import fcntl
 import ipaddress
 import json
+import logging
 import os
 import platform as host_platform
 import pty
@@ -28,6 +29,9 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .domain import utc_now
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class SandboxError(RuntimeError):
@@ -722,6 +726,7 @@ class ContainerSandboxRunner(SandboxRunner):
         "AZURE",
         "AWS_",
     )
+    _human_terminal_only_environment = {"HISTFILE", "PROMPT_COMMAND"}
     # Desktop applications do not reliably inherit a login shell's PATH. More
     # importantly, resolving an executable from an operator-controlled PATH is
     # the wrong trust boundary for the mandatory sandbox. Keep automatic
@@ -768,11 +773,13 @@ class ContainerSandboxRunner(SandboxRunner):
         self.egress_controller = egress_controller or NoEgressController()
         self.allow_unpinned_images = allow_unpinned_images
         self.allowed_environment = allowed_environment or {
+            "HISTFILE",
             "LANG",
             "LC_ALL",
             "TZ",
             "TERM",
             "NO_COLOR",
+            "PROMPT_COMMAND",
         }
         self.workspace_roots = (
             [root.expanduser().resolve(strict=True) for root in workspace_roots]
@@ -800,6 +807,36 @@ class ContainerSandboxRunner(SandboxRunner):
             if candidate.is_file() and os.access(candidate, os.X_OK):
                 return str(candidate)
         return None
+
+    @classmethod
+    def trusted_runtime_paths(cls) -> tuple[Path, ...]:
+        """Return the fixed automatic-discovery allowlist.
+
+        Callers must still run ``available()`` before trusting a candidate. The
+        list deliberately ignores PATH and all container endpoint environment
+        variables.
+        """
+
+        return cls._trusted_runtime_paths
+
+    def terminal_cleanup_eligibility(self) -> tuple[bool, str]:
+        """Validate the non-executing trust boundary for startup cleanup.
+
+        Startup cleanup must not execute an arbitrary path recovered from the
+        database.  Only the same fixed paths used by automatic discovery are
+        eligible; the live runtime connection and isolation posture are still
+        re-certified separately by :meth:`available` before any ``ps`` or
+        ``rm`` operation.
+        """
+
+        if not self.runtime or self.profile is None:
+            return False, "no explicit container runner profile is configured"
+        executable = self.profile.executable
+        if executable not in self.trusted_runtime_paths():
+            return False, "runner executable is outside the fixed-path allowlist"
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            return False, "fixed-path runner executable is unavailable"
+        return True, "fixed-path runner executable is eligible for re-verification"
 
     async def available(self) -> tuple[bool, str]:
         if not self.runtime or self.profile is None:
@@ -1023,6 +1060,13 @@ class ContainerSandboxRunner(SandboxRunner):
                 raise SandboxError(
                     f"environment variable {name!r} is not allowed in workers"
                 )
+            if (
+                name in self._human_terminal_only_environment
+                and request.execution_kind != SandboxExecutionKind.HUMAN_TERMINAL
+            ):
+                raise SandboxError(
+                    f"environment variable {name!r} is reserved for human terminals"
+                )
         return workspace
 
     def _argv(
@@ -1194,7 +1238,16 @@ class ContainerSandboxRunner(SandboxRunner):
     async def cleanup_terminal_containers(self) -> None:
         """Best-effort removal of terminals orphaned by a prior Core process."""
 
-        if not self.runtime or self.profile is None:
+        eligible, eligibility_detail = self.terminal_cleanup_eligibility()
+        if not eligible:
+            LOGGER.warning("Skipped orphan terminal cleanup: %s", eligibility_detail)
+            return
+        healthy, health_detail = await self.available()
+        if not healthy:
+            LOGGER.warning(
+                "Skipped orphan terminal cleanup after runner re-verification: %s",
+                health_detail,
+            )
             return
         try:
             stdout, _stderr, return_code = await self._capture(
@@ -1210,6 +1263,17 @@ class ContainerSandboxRunner(SandboxRunner):
             if re.fullmatch(r"nebula-terminal-[a-z0-9][a-z0-9_.-]{0,53}", line.strip())
         }
         for name in sorted(names):
+            # A context or daemon can change after enumeration. Re-certify the
+            # local/rootless/security boundary immediately before destructive
+            # removal as well as before ``ps``.
+            healthy, health_detail = await self.available()
+            if not healthy:
+                LOGGER.warning(
+                    "Stopped orphan terminal cleanup after runner "
+                    "re-verification failed: %s",
+                    health_detail,
+                )
+                return
             await self._force_remove(name)
 
     async def run_stream(
@@ -1379,6 +1443,18 @@ class PreparedContainerImage:
     detail: str
 
 
+@dataclass(frozen=True)
+class _VerifiedBaseImage:
+    resolved_reference: str
+    digest: str
+
+
+@dataclass(frozen=True)
+class _VerifiedDerivedImage:
+    image_id: str
+    configured_user: str
+
+
 class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
@@ -1409,21 +1485,41 @@ class ContainerImagePreparer:
             raise ValueError("build timeout must be between 1 and 7200 seconds")
         if runner.profile is None:
             raise ValueError("container image preparation requires an explicit runner")
-        if not re.fullmatch(
-            r"[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+:[A-Za-z0-9_.-]+",
+        tagged_source = re.fullmatch(
+            r"[a-z0-9.-]+(?::[0-9]+)?"
+            r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+:[A-Za-z0-9_.-]+",
             source_reference,
-        ):
+        )
+        pinned_source = re.fullmatch(
+            r"[a-z0-9.-]+(?::[0-9]+)?"
+            r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+"
+            r"@sha256:[0-9a-f]{64}",
+            source_reference,
+        )
+        if tagged_source is None and pinned_source is None:
             raise ValueError(
-                "container image source must be a fully qualified tagged image"
+                "container image source must be a fully qualified tag or digest"
             )
         if "@" in expected_repository or ":" in expected_repository.rsplit("/", 1)[-1]:
             raise ValueError("expected image repository cannot contain a tag or digest")
         if _normalized_repository(expected_repository) != expected_repository:
             raise ValueError("expected image repository must be fully qualified")
+        source_repository = (
+            source_reference.rsplit("@", 1)[0]
+            if pinned_source is not None
+            else source_reference.rsplit(":", 1)[0]
+        )
+        if _normalized_repository(source_repository) != expected_repository:
+            raise ValueError(
+                "container image source must use the expected official repository"
+            )
         self.runner = runner
         self.platform = platform
         self.source_reference = source_reference
         self.expected_repository = expected_repository
+        self.expected_source_digest = (
+            source_reference.rsplit("@", 1)[1] if pinned_source is not None else None
+        )
         self.pull_timeout_seconds = pull_timeout_seconds
         self.build_timeout_seconds = build_timeout_seconds
 
@@ -1432,7 +1528,29 @@ class ContainerImagePreparer:
         if not available:
             raise SandboxUnavailable(detail)
 
-        refreshed = False
+        cached_base, cached_base_detail = await self._try_verified_base()
+        if cached_base is not None:
+            derived_tag = self._derived_tag(cached_base.digest)
+            cached_derived, _ = await self._try_verified_derived(
+                derived_tag, cached_base.resolved_reference
+            )
+            if cached_derived is not None:
+                return self._prepared_result(
+                    cached_base,
+                    cached_derived,
+                    refreshed=False,
+                    detail=(
+                        "using the fully verified cached human-workstation image; "
+                        "no registry request or image build was required"
+                    ),
+                )
+            return await self._build_and_verify(
+                cached_base,
+                derived_tag,
+                refreshed=False,
+                prefix="using a verified cached official base image; ",
+            )
+
         pull_detail: str | None = None
         try:
             stdout, stderr, return_code = await self._runtime_command(
@@ -1441,41 +1559,61 @@ class ContainerImagePreparer:
                 self.source_reference,
                 timeout_seconds=self.pull_timeout_seconds,
             )
-            if return_code == 0:
-                refreshed = True
-            else:
+            if return_code != 0:
                 pull_detail = (stderr.strip() or stdout.strip() or str(return_code))[
                     :1000
                 ]
         except (OSError, SandboxError) as exc:
             pull_detail = str(exc)[:1000]
-
-        stdout, stderr, return_code = await self._runtime_command(
-            "image",
-            "inspect",
-            self.source_reference,
-            "--format",
-            "{{json .}}",
-            timeout_seconds=30,
-        )
-        if return_code != 0:
-            inspect_detail = (stderr.strip() or stdout.strip() or str(return_code))[
-                :1000
-            ]
-            if pull_detail:
-                raise SandboxUnavailable(
-                    f"Kali image pull failed ({pull_detail}); no verified cached image is available ({inspect_detail})"
-                )
+        if pull_detail is not None:
             raise SandboxUnavailable(
-                f"pulled Kali image could not be inspected: {inspect_detail}"
+                "human-workstation image pull failed "
+                f"({pull_detail}); no verified cached base image is available "
+                f"({cached_base_detail})"
             )
-        try:
-            document = _first_document(json.loads(stdout))
-        except json.JSONDecodeError as exc:
-            raise SandboxUnavailable(
-                "Kali image inspection returned invalid JSON"
-            ) from exc
 
+        base = await self._verified_base(required=True)
+        assert base is not None
+        derived_tag = self._derived_tag(base.digest)
+        cached_derived, _ = await self._try_verified_derived(
+            derived_tag, base.resolved_reference
+        )
+        if cached_derived is not None:
+            return self._prepared_result(
+                base,
+                cached_derived,
+                refreshed=True,
+                detail=(
+                    "pulled and verified the configured official base image; "
+                    "using the verified cached human-workstation image"
+                ),
+            )
+        return await self._build_and_verify(
+            base,
+            derived_tag,
+            refreshed=True,
+            prefix="pulled and verified the configured official base image; ",
+        )
+
+    async def _try_verified_base(
+        self,
+    ) -> tuple[_VerifiedBaseImage | None, str]:
+        try:
+            base = await self._verified_base(required=False)
+        except SandboxUnavailable as exc:
+            return None, str(exc)[:1000]
+        if base is None:
+            return None, "the configured base image is not present locally"
+        return base, "verified cached base image"
+
+    async def _verified_base(self, *, required: bool) -> _VerifiedBaseImage | None:
+        document, detail = await self._inspect_image(self.source_reference)
+        if document is None:
+            if required:
+                raise SandboxUnavailable(
+                    f"configured base image could not be inspected: {detail}"
+                )
+            return None
         repo_digests = _mapping_get(document, "RepoDigests", "repoDigests")
         matching: list[str] = []
         if isinstance(repo_digests, list):
@@ -1487,135 +1625,172 @@ class ContainerImagePreparer:
                     matching.append(digest)
         if not matching:
             raise SandboxUnavailable(
-                "runtime did not prove that the Kali image belongs to the official repository"
+                "runtime did not prove that the base image belongs to the official "
+                "repository"
             )
-        digest = sorted(set(matching))[0]
-        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-            raise SandboxUnavailable("runtime returned an invalid Kali image digest")
-
-        os_name = str(_mapping_get(document, "Os", "OS", "os")).lower()
-        architecture = str(
-            _mapping_get(document, "Architecture", "architecture", "Arch")
-        ).lower()
-        observed_platform = f"{os_name}/{architecture}"
-        if observed_platform != self.platform:
-            raise SandboxUnavailable(
-                f"Kali image platform mismatch: expected {self.platform}, observed {observed_platform}"
-            )
-        base_resolved_reference = f"{self.expected_repository}@{digest}"
-        derived_tag = (
-            f"{self._derived_repository}:"
-            f"{self._recipe_version}-{digest.removeprefix('sha256:')}"
-        )
-        build_detail: str | None = None
-        built = False
-        try:
-            stdout, stderr, return_code = await self._build_derived_image(
-                base_resolved_reference,
-                derived_tag,
-            )
-            if return_code == 0:
-                built = True
-            else:
-                build_detail = (stderr.strip() or stdout.strip() or str(return_code))[
-                    -1000:
-                ]
-        except (OSError, SandboxError) as exc:
-            build_detail = str(exc)[-1000:]
-
-        (
-            derived_stdout,
-            derived_stderr,
-            derived_return_code,
-        ) = await self._runtime_command(
-            "image",
-            "inspect",
-            derived_tag,
-            "--format",
-            "{{json .}}",
-            timeout_seconds=30,
-        )
-        if derived_return_code != 0:
-            inspect_detail = (
-                derived_stderr.strip()
-                or derived_stdout.strip()
-                or str(derived_return_code)
-            )[-1000:]
-            if build_detail:
+        digests = sorted(set(matching))
+        if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", item) for item in digests):
+            raise SandboxUnavailable("runtime returned an invalid base image digest")
+        if self.expected_source_digest is not None:
+            if self.expected_source_digest not in digests:
                 raise SandboxUnavailable(
-                    "Kali headless tool image build failed "
-                    f"({build_detail}); no verified cached tool image is available "
-                    f"({inspect_detail})"
+                    "runtime did not prove the release-pinned base image digest"
                 )
-            raise SandboxUnavailable(
-                f"prepared Kali headless tool image could not be inspected: {inspect_detail}"
-            )
-        try:
-            derived_document = _first_document(json.loads(derived_stdout))
-        except json.JSONDecodeError as exc:
-            raise SandboxUnavailable(
-                "Kali headless tool image inspection returned invalid JSON"
-            ) from exc
+            digest = self.expected_source_digest
+        else:
+            digest = digests[0]
+        self._verify_platform(document, label="base image")
+        return _VerifiedBaseImage(
+            resolved_reference=f"{self.expected_repository}@{digest}",
+            digest=digest,
+        )
 
-        image_id = str(_mapping_get(derived_document, "Id", "ID", "id")).lower()
+    async def _try_verified_derived(
+        self, derived_tag: str, base_resolved_reference: str
+    ) -> tuple[_VerifiedDerivedImage | None, str]:
+        try:
+            derived = await self._verified_derived(
+                derived_tag, base_resolved_reference, required=False
+            )
+        except SandboxUnavailable as exc:
+            return None, str(exc)[:1000]
+        if derived is None:
+            return None, "the prepared image is not present locally"
+        return derived, "verified cached prepared image"
+
+    async def _verified_derived(
+        self,
+        derived_tag: str,
+        base_resolved_reference: str,
+        *,
+        required: bool,
+    ) -> _VerifiedDerivedImage | None:
+        document, detail = await self._inspect_image(derived_tag)
+        if document is None:
+            if required:
+                raise SandboxUnavailable(
+                    f"prepared human-workstation image could not be inspected: {detail}"
+                )
+            return None
+        image_id = str(_mapping_get(document, "Id", "ID", "id")).lower()
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
             raise SandboxUnavailable(
-                "runtime returned an invalid Kali headless tool image ID"
+                "runtime returned an invalid human-workstation image ID"
             )
-        derived_os = str(_mapping_get(derived_document, "Os", "OS", "os")).lower()
-        derived_architecture = str(
-            _mapping_get(derived_document, "Architecture", "architecture", "Arch")
-        ).lower()
-        derived_platform = f"{derived_os}/{derived_architecture}"
-        if derived_platform != self.platform:
-            raise SandboxUnavailable(
-                "Kali headless tool image platform mismatch: "
-                f"expected {self.platform}, observed {derived_platform}"
-            )
-        config = _mapping_get(derived_document, "Config", "config")
+        self._verify_platform(document, label="human-workstation image")
+        config = _mapping_get(document, "Config", "config")
         labels = _mapping_get(config, "Labels", "labels")
         if not isinstance(labels, dict):
-            labels = _mapping_get(derived_document, "Labels", "labels")
+            labels = _mapping_get(document, "Labels", "labels")
         if not isinstance(labels, dict) or (
             labels.get(self._base_label) != base_resolved_reference
             or labels.get(self._profile_label) != "kali-linux-headless"
             or labels.get(self._recipe_label) != self._recipe_version
         ):
             raise SandboxUnavailable(
-                "runtime did not prove the Kali headless tool image build recipe"
+                "runtime did not prove the human-workstation image build recipe"
             )
         user = _mapping_get(config, "User", "user")
+        return _VerifiedDerivedImage(
+            image_id=image_id,
+            configured_user=user if isinstance(user, str) else "",
+        )
+
+    async def _inspect_image(self, reference: str) -> tuple[dict[str, Any] | None, str]:
+        stdout, stderr, return_code = await self._runtime_command(
+            "image",
+            "inspect",
+            reference,
+            "--format",
+            "{{json .}}",
+            timeout_seconds=30,
+        )
+        if return_code != 0:
+            return None, (stderr.strip() or stdout.strip() or str(return_code))[:1000]
+        try:
+            return _first_document(json.loads(stdout)), ""
+        except json.JSONDecodeError as exc:
+            raise SandboxUnavailable(
+                f"image inspection returned invalid JSON for {reference}"
+            ) from exc
+
+    def _verify_platform(self, document: dict[str, Any], *, label: str) -> None:
+        os_name = str(_mapping_get(document, "Os", "OS", "os")).lower()
+        architecture = str(
+            _mapping_get(document, "Architecture", "architecture", "Arch")
+        ).lower()
+        observed = f"{os_name}/{architecture}"
+        if observed != self.platform:
+            raise SandboxUnavailable(
+                f"{label} platform mismatch: expected {self.platform}, observed {observed}"
+            )
+
+    async def _build_and_verify(
+        self,
+        base: _VerifiedBaseImage,
+        derived_tag: str,
+        *,
+        refreshed: bool,
+        prefix: str,
+    ) -> PreparedContainerImage:
+        build_detail: str | None = None
+        try:
+            stdout, stderr, return_code = await self._build_derived_image(
+                base.resolved_reference, derived_tag
+            )
+            if return_code != 0:
+                build_detail = (stderr.strip() or stdout.strip() or str(return_code))[
+                    -1000:
+                ]
+        except (OSError, SandboxError) as exc:
+            build_detail = str(exc)[-1000:]
+        try:
+            derived = await self._verified_derived(
+                derived_tag, base.resolved_reference, required=True
+            )
+        except SandboxUnavailable as exc:
+            if build_detail is not None:
+                raise SandboxUnavailable(
+                    "human-workstation image build failed "
+                    f"({build_detail}); no verified prepared image is available "
+                    f"({exc})"
+                ) from exc
+            raise
+        assert derived is not None
+        detail = (
+            prefix + "prepared and verified the human-workstation image"
+            if build_detail is None
+            else prefix
+            + "using the verified human-workstation image after rebuild failed: "
+            + build_detail
+        )
+        return self._prepared_result(base, derived, refreshed=refreshed, detail=detail)
+
+    def _prepared_result(
+        self,
+        base: _VerifiedBaseImage,
+        derived: _VerifiedDerivedImage,
+        *,
+        refreshed: bool,
+        detail: str,
+    ) -> PreparedContainerImage:
         return PreparedContainerImage(
             source_reference=self.source_reference,
-            base_resolved_reference=base_resolved_reference,
-            base_digest=digest,
-            resolved_reference=image_id,
-            digest=image_id,
+            base_resolved_reference=base.resolved_reference,
+            base_digest=base.digest,
+            resolved_reference=derived.image_id,
+            digest=derived.image_id,
             platform=self.platform,
-            # Docker and Podman may omit Config.User when the image uses the
-            # OCI default user. The human terminal always supplies
-            # --user=0:0 explicitly, so this metadata is informational only.
-            configured_user=user if isinstance(user, str) else "",
+            configured_user=derived.configured_user,
             installed_packages=self._installed_packages,
             refreshed=refreshed,
-            detail=(
-                "pulled and verified the latest official Kali image; "
-                + (
-                    "prepared the cached kali-linux-headless tool image"
-                    if built
-                    else "using the verified cached kali-linux-headless tool image "
-                    f"after rebuild failed: {build_detail}"
-                )
-                if refreshed
-                else "using a verified cached official Kali image after refresh failed: "
-                f"{pull_detail}; "
-                + (
-                    "prepared the cached kali-linux-headless tool image"
-                    if built
-                    else "using the verified cached kali-linux-headless tool image "
-                    f"after rebuild failed: {build_detail}"
-                )
-            ),
+            detail=detail,
+        )
+
+    def _derived_tag(self, digest: str) -> str:
+        return (
+            f"{self._derived_repository}:"
+            f"{self._recipe_version}-{digest.removeprefix('sha256:')}"
         )
 
     async def _build_derived_image(

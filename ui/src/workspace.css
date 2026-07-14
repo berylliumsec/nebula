@@ -354,6 +354,11 @@
 .mission-tool-selection > header strong { color: var(--text); font-size: 11px; }
 .mission-tool-empty { display: flex; align-items: center; gap: 7px; padding: 8px; color: var(--muted); }
 .mission-tool-empty p { margin: 0; font-size: 11px; line-height: 1.4; }
+.automatic-tool-list > div { display: flex; align-items: center; gap: 7px; padding: 5px; color: var(--muted); font-size: 11px; }
+.automatic-tool-list > div > svg { flex: 0 0 auto; color: var(--green); }
+.automatic-tool-list > div > span { display: flex; flex-direction: column; gap: 2px; }
+.automatic-tool-list strong { color: var(--text); font-size: 11px; }
+.automatic-tool-list small { color: var(--muted); font-size: 11px; }
 
 /* Responsive shell */
 @media (max-width: 1320px) {

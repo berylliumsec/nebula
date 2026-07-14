@@ -33,6 +33,26 @@ def test_nebula3_version_is_synchronized_without_changing_legacy_version():
     assert project["tool"]["poetry"]["version"].startswith("2.")
 
 
+def test_native_launcher_and_admin_command_contract():
+    with (ROOT / "pyproject.toml").open("rb") as stream:
+        scripts = tomli.load(stream)["tool"]["poetry"]["scripts"]
+    assert scripts["nebula"] == "nebula.nebula:main"
+    assert scripts["nebula-core"] == "nebula.v3.cli:main"
+    assert scripts["nebula3"] == scripts["nebula-core"]
+
+    linux_launcher = (ROOT / "packaging/linux/nebula").read_text(
+        encoding="utf-8"
+    )
+    assert "exec /usr/bin/nebula-ui \"$@\"" in linux_launcher
+    assert "exec /usr/bin/nebula-core" not in linux_launcher
+
+    cask = (ROOT / "packaging/homebrew/nebula.rb.in").read_text(
+        encoding="utf-8"
+    )
+    assert 'Contents/MacOS/nebula-ui", target: "nebula"' in cask
+    assert 'Contents/MacOS/nebula-core", target: "nebula-core"' in cask
+
+
 def test_version_cli_supports_release_check_contract():
     result = subprocess.run(
         [

@@ -179,7 +179,7 @@ class MissionService:
         model: str,
         budget: RunBudget,
         tool_names: list[str] | None = None,
-        actor_id: str = "operator",
+        actor_id: str = "system",
     ) -> AgentRun:
         """Validate, queue, and schedule one explicit analysis-only mission."""
 
@@ -368,7 +368,7 @@ class MissionService:
         run_id: str,
         *,
         reason: str = "Stopped by operator",
-        actor_id: str = "operator",
+        actor_id: str = "system",
     ) -> AgentRun:
         """Cancel actual work or durably cancel a dormant non-terminal run."""
 
@@ -424,7 +424,7 @@ class MissionService:
         return self.store.get(AgentRun, run.id)
 
     async def resume_after_approval(
-        self, approval: Approval, *, actor_id: str = "operator"
+        self, approval: Approval, *, actor_id: str = "system"
     ) -> AgentRun:
         """Resume the durable graph using only the persisted operator decision."""
 

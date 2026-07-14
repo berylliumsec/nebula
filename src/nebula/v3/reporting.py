@@ -78,7 +78,7 @@ class ReportRenderService:
     ) -> None:
         self.store = store
         self.artifact_store = artifact_store
-        self.operator_id = operator_id or (lambda: "operator")
+        self.operator_id = operator_id or (lambda: "system")
         self.font_root = Path(
             font_root or Path(__file__).parent / "report_assets" / "fonts"
         )

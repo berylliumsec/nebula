@@ -200,6 +200,7 @@ def serve(
         static_dir=static_dir,
         tool_platform=tool_platform,
         execution_data_root=root,
+        bootstrap_workspace=True,
     )
     try:
         bind_address = ipaddress.ip_address(host)

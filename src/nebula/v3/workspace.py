@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import mimetypes
 import os
 import stat
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Literal
@@ -22,7 +23,12 @@ from .domain import (
     OperatorExecution,
     OperatorExecutionStatus,
 )
-from .executions import ExecutionServiceError
+from .executions import (
+    WORKSPACE_MAX_BYTES,
+    WORKSPACE_MAX_ENTRIES,
+    WORKSPACE_MAX_FILE_BYTES,
+    ExecutionServiceError,
+)
 from .storage import NebulaStore
 from .tool_platform import ToolPlatform
 
@@ -83,6 +89,14 @@ class WorkspaceResetResult(NebulaModel):
     removed_entries: int = Field(ge=0)
 
 
+class WorkspaceUploadResult(NebulaModel):
+    engagement_id: str
+    path: str
+    size: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    overwritten: bool = False
+
+
 class WorkspaceDownload:
     def __init__(
         self, stream: BinaryIO, *, filename: str, media_type: str, size: int
@@ -115,7 +129,8 @@ class WorkspaceService:
         self.store = store
         self.artifact_store = artifact_store
         self.tool_platform = tool_platform
-        self.operator_id = operator_id or (lambda: "operator")
+        self.operator_id = operator_id or (lambda: "system")
+        self._upload_locks: dict[str, asyncio.Lock] = {}
 
     def list(
         self,
@@ -267,6 +282,165 @@ class WorkspaceService:
             idempotency_key=f"workspace-promotion:{evidence.id}",
         )
         return evidence
+
+    async def upload(
+        self,
+        engagement_id: str,
+        path: str,
+        chunks: AsyncIterator[bytes],
+        *,
+        overwrite: bool = False,
+    ) -> WorkspaceUploadResult:
+        """Atomically stream one regular file into an engagement workspace."""
+
+        lock = self._upload_locks.setdefault(engagement_id, asyncio.Lock())
+        async with lock:
+            return await self._upload_locked(
+                engagement_id, path, chunks, overwrite=overwrite
+            )
+
+    async def _upload_locked(
+        self,
+        engagement_id: str,
+        path: str,
+        chunks: AsyncIterator[bytes],
+        *,
+        overwrite: bool,
+    ) -> WorkspaceUploadResult:
+        """Write an upload while serializing only other API uploads."""
+
+        self.store.get(Engagement, engagement_id)
+        relative = _relative_parts(path, require_value=True)
+        parent = self._open_directory(engagement_id, relative[:-1])
+        temporary_name = f".nebula-upload-{uuid4().hex}.tmp"
+        descriptor: int | None = None
+        size = 0
+        digest = hashlib.sha256()
+        replaced = False
+        try:
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=parent,
+            )
+            async for chunk in chunks:
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > WORKSPACE_MAX_FILE_BYTES:
+                    raise ExecutionServiceError(
+                        "workspace_file_limit",
+                        f"workspace uploads may not exceed {WORKSPACE_MAX_FILE_BYTES} bytes",
+                        status_code=413,
+                    )
+                digest.update(chunk)
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(descriptor, view)
+                    view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = None
+
+            try:
+                destination = os.stat(
+                    relative[-1], dir_fd=parent, follow_symlinks=False
+                )
+            except FileNotFoundError:
+                destination = None
+            if destination is not None:
+                if not stat.S_ISREG(destination.st_mode):
+                    raise ExecutionServiceError(
+                        "workspace_path_invalid",
+                        "upload destination must be a regular file",
+                        status_code=422,
+                    )
+                if not overwrite:
+                    raise ExecutionServiceError(
+                        "workspace_file_exists",
+                        "workspace file already exists; confirm overwrite to replace it",
+                        status_code=409,
+                    )
+                replaced = True
+
+            root = self._workspace_root(engagement_id)
+            temporary_path = PurePosixPath(*relative[:-1], temporary_name).as_posix()
+            allocated, entries = _workspace_usage(
+                root,
+                exclude={PurePosixPath(*relative).as_posix(), temporary_path},
+            )
+            uploaded = os.stat(
+                temporary_name, dir_fd=parent, follow_symlinks=False
+            )
+            allocated += uploaded.st_blocks * 512
+            entries += 1
+            if entries > WORKSPACE_MAX_ENTRIES:
+                raise ExecutionServiceError(
+                    "workspace_entry_limit",
+                    f"workspace may not contain more than {WORKSPACE_MAX_ENTRIES} entries",
+                    status_code=413,
+                )
+            if allocated > WORKSPACE_MAX_BYTES:
+                raise ExecutionServiceError(
+                    "workspace_size_limit",
+                    f"workspace may not exceed {WORKSPACE_MAX_BYTES} allocated bytes",
+                    status_code=413,
+                )
+
+            if replaced:
+                os.replace(
+                    temporary_name,
+                    relative[-1],
+                    src_dir_fd=parent,
+                    dst_dir_fd=parent,
+                )
+            else:
+                os.link(
+                    temporary_name,
+                    relative[-1],
+                    src_dir_fd=parent,
+                    dst_dir_fd=parent,
+                    follow_symlinks=False,
+                )
+                os.unlink(temporary_name, dir_fd=parent)
+            os.fsync(parent)
+        except FileExistsError as exc:
+            raise ExecutionServiceError(
+                "workspace_file_exists",
+                "workspace file already exists; confirm overwrite to replace it",
+                status_code=409,
+            ) from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+            os.close(parent)
+
+        normalized = PurePosixPath(*relative).as_posix()
+        result = WorkspaceUploadResult(
+            engagement_id=engagement_id,
+            path=normalized,
+            size=size,
+            sha256=digest.hexdigest(),
+            overwritten=replaced,
+        )
+        self.store.append_operation_event(
+            str(uuid4()),
+            "workspace_upload",
+            engagement_id,
+            "workspace.uploaded",
+            result.model_dump(mode="json"),
+            actor_id=self.operator_id(),
+            idempotency_key=f"workspace-upload:{engagement_id}:{normalized}:{result.sha256}",
+        )
+        return result
 
     def reset(
         self, engagement_id: str, request: WorkspaceResetRequest
@@ -421,6 +595,25 @@ def _remove_directory_contents(descriptor: int) -> int:
     return removed
 
 
+def _workspace_usage(root: Path, *, exclude: set[str]) -> tuple[int, int]:
+    allocated = 0
+    entries = 0
+    for current, directories, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        for name in [*directories, *files]:
+            path = current_path / name
+            relative = path.relative_to(root).as_posix()
+            if relative in exclude:
+                continue
+            metadata = path.lstat()
+            entries += 1
+            allocated += metadata.st_blocks * 512
+        directories[:] = [
+            name for name in directories if not (current_path / name).is_symlink()
+        ]
+    return allocated, entries
+
+
 __all__ = [
     "MAX_PREVIEW_BYTES",
     "WorkspaceDownload",
@@ -430,5 +623,6 @@ __all__ = [
     "WorkspacePromotionRequest",
     "WorkspaceResetRequest",
     "WorkspaceResetResult",
+    "WorkspaceUploadResult",
     "WorkspaceService",
 ]

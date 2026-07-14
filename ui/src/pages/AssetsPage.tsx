@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { Network, Plus, Search, Server, Upload, X } from "lucide-react";
+import { Network, Plus, Search, Server, X } from "lucide-react";
 import type { AssetSummary } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -10,7 +10,7 @@ function displayTime(value?: string): string {
 }
 
 export function AssetsPage() {
-  const { addAsset, assets, engagement, findings, previewMode } = useWorkspace();
+  const { addAsset, assets, engagement, findings } = useWorkspace();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<"all" | AssetSummary["kind"]>("all");
   const [exposure, setExposure] = useState<"all" | AssetSummary["exposure"]>("all");
@@ -74,10 +74,7 @@ export function AssetsPage() {
       <PageHeader
         title="Assets"
         description="Assets in scope and their observed exposure."
-        actions={<>
-          <button className="button secondary" type="button" disabled title="Scanner inventory normalization is release-gated"><Upload size={16} /> Import inventory</button>
-          <button className="button primary" type="button" disabled={previewMode || !engagement} onClick={() => { setError(undefined); setAdding(true); }}><Plus size={16} /> Add asset</button>
-        </>}
+        actions={<button className="button primary" type="button" disabled={!engagement} onClick={() => { setError(undefined); setAdding(true); }}><Plus size={16} /> Add asset</button>}
       />
       <section className="summary-strip" aria-label="Asset totals">
         <div><span className="summary-icon blue"><Network size={18} /></span><span><strong>{assets.length}</strong><small>Assets</small></span></div>
@@ -93,22 +90,21 @@ export function AssetsPage() {
             <label><span>Kind</span><select aria-label="Filter assets by kind" value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="all">All kinds</option>{(["host", "domain", "url", "cloud", "repository", "other"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
             <label><span>Exposure</span><select aria-label="Filter assets by exposure" value={exposure} onChange={(event) => setExposure(event.target.value as typeof exposure)}><option value="all">All exposure</option>{(["external", "internal", "unknown"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
             {activeFilters > 0 && <button className="button quiet" type="button" onClick={() => { setKind("all"); setExposure("all"); }}>Clear {activeFilters}</button>}
-            <button className="button quiet" type="button" disabled title="Interactive topology is release-gated">Topology</button>
           </div>
         </header>
         <div className="table-scroll">
           <table className="data-table assets-table">
             <thead><tr><th scope="col">Asset</th><th scope="col">Exposure</th><th scope="col">Criticality</th><th scope="col">Services</th><th scope="col">Findings</th><th scope="col">Last observed</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
             <tbody>
-              {visibleAssets.map((asset) => { const linkedFindingCount = findingCount(asset.id); return <tr key={asset.id}><td><div className="asset-name"><span><Server size={16} /></span><div><strong>{asset.displayName}</strong><small>{asset.kind} · {engagement?.name ?? "preview engagement"}</small></div></div></td><td><span className={`exposure-badge ${asset.exposure}`}>{asset.exposure}</span></td><td><span className={`severity-label ${asset.criticality}`}><span />{asset.criticality}</span></td><td><strong>{asset.serviceCount ?? "—"}</strong></td><td>{linkedFindingCount > 0 ? <span className="finding-count">{linkedFindingCount}</span> : "—"}</td><td>{displayTime(asset.lastSeenAt)}</td><td><button className="text-link" type="button" onClick={() => setSelected(asset)}>Inspect</button></td></tr>; })}
-              {visibleAssets.length === 0 && <tr><td colSpan={7}>{query || activeFilters ? "No assets match the current search and filters." : "No assets have been recorded for this engagement."}</td></tr>}
+              {visibleAssets.map((asset) => { const linkedFindingCount = findingCount(asset.id); return <tr key={asset.id}><td><div className="asset-name"><span><Server size={16} /></span><div><strong>{asset.displayName}</strong><small>{asset.kind} · {engagement?.name ?? "project"}</small></div></div></td><td><span className={`exposure-badge ${asset.exposure}`}>{asset.exposure}</span></td><td><span className={`severity-label ${asset.criticality}`}><span />{asset.criticality}</span></td><td><strong>{asset.serviceCount ?? "—"}</strong></td><td>{linkedFindingCount > 0 ? <span className="finding-count">{linkedFindingCount}</span> : "—"}</td><td>{displayTime(asset.lastSeenAt)}</td><td><button className="text-link" type="button" onClick={() => setSelected(asset)}>Inspect</button></td></tr>; })}
+              {visibleAssets.length === 0 && <tr><td colSpan={7}>{query || activeFilters ? "No assets match the current search and filters." : "No assets have been recorded for this project."}</td></tr>}
             </tbody>
           </table>
         </div>
         <footer className="table-footer"><span>{visibleAssets.length} of {assets.length} assets</span></footer>
       </section>
 
-      {adding && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="asset-dialog-title" onSubmit={(event) => void submit(event)}><header><div><small>Engagement asset</small><h2 id="asset-dialog-title">Add asset</h2></div><button className="icon-button subtle" type="button" aria-label="Close asset dialog" onClick={() => setAdding(false)}><X size={17} /></button></header><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Kind<select value={assetKind} onChange={(event) => setAssetKind(event.target.value as AssetSummary["kind"])}>{(["host", "domain", "url", "cloud", "repository", "other"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label><div className="resource-form-grid"><label>Address<input value={address} placeholder="IP, CIDR, or URL" onChange={(event) => setAddress(event.target.value)} /></label><label>Hostname<input value={hostname} onChange={(event) => setHostname(event.target.value)} /></label><label>Criticality<select value={criticality} onChange={(event) => setCriticality(event.target.value as AssetSummary["criticality"])}>{(["critical", "high", "medium", "low", "info"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label>Exposure<select value={assetExposure} onChange={(event) => setAssetExposure(event.target.value as AssetSummary["exposure"])}>{(["unknown", "external", "internal"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label></div><label>Tags<input value={tags} placeholder="production, api (comma-separated)" onChange={(event) => setTags(event.target.value)} /></label>{error && <p className="form-error" role="alert">{error}</p>}<footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim()}>{saving ? "Adding…" : "Add asset"}</button></footer></form></div>}
+      {adding && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="asset-dialog-title" onSubmit={(event) => void submit(event)}><header><div><small>Project asset</small><h2 id="asset-dialog-title">Add asset</h2></div><button className="icon-button subtle" type="button" aria-label="Close asset dialog" onClick={() => setAdding(false)}><X size={17} /></button></header><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Kind<select value={assetKind} onChange={(event) => setAssetKind(event.target.value as AssetSummary["kind"])}>{(["host", "domain", "url", "cloud", "repository", "other"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label><div className="resource-form-grid"><label>Address<input value={address} placeholder="IP, CIDR, or URL" onChange={(event) => setAddress(event.target.value)} /></label><label>Hostname<input value={hostname} onChange={(event) => setHostname(event.target.value)} /></label><label>Criticality<select value={criticality} onChange={(event) => setCriticality(event.target.value as AssetSummary["criticality"])}>{(["critical", "high", "medium", "low", "info"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label>Exposure<select value={assetExposure} onChange={(event) => setAssetExposure(event.target.value as AssetSummary["exposure"])}>{(["unknown", "external", "internal"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label></div><label>Tags<input value={tags} placeholder="production, api (comma-separated)" onChange={(event) => setTags(event.target.value)} /></label>{error && <p className="form-error" role="alert">{error}</p>}<footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim()}>{saving ? "Adding…" : "Add asset"}</button></footer></form></div>}
 
       {selected && <aside className="resource-inspector" role="complementary" aria-labelledby="asset-detail-title"><header><div><small>{selected.kind} · {selected.exposure}</small><h2 id="asset-detail-title">{selected.displayName}</h2></div><button className="icon-button subtle" type="button" aria-label="Close asset details" onClick={() => setSelected(undefined)}><X size={17} /></button></header><dl className="resource-details"><div><dt>Address</dt><dd>{selected.address || "Not recorded"}</dd></div><div><dt>Hostname</dt><dd>{selected.hostname || "Not recorded"}</dd></div><div><dt>Criticality</dt><dd>{selected.criticality}</dd></div><div><dt>Services</dt><dd>{selected.serviceCount ?? "Not recorded"}</dd></div><div><dt>Findings</dt><dd>{findingCount(selected.id)}</dd></div><div><dt>Last observed</dt><dd>{displayTime(selected.lastSeenAt)}</dd></div></dl><div className="scope-chip-list">{selected.tags.length ? selected.tags.map((tag) => <span key={tag}>{tag}</span>) : <span>No tags</span>}</div></aside>}
     </div>

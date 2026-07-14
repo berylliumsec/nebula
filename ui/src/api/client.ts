@@ -13,11 +13,15 @@ import type {
   ContainerTerminalCapabilities,
   ContainerTerminalPreflight,
   ContainerTerminalRequest,
+  ContainerTerminalRecovery,
   ContainerTerminalSession,
+  TerminalCommandHistoryStatus,
+  TerminalCommandPage,
   ContextMemory,
   ContextSnapshot,
   ContextSourceReference,
   ContextStatus,
+  CredentialStatus,
   EngagementSummary,
   EngagementCreateRequest,
   ExecutionCapabilities,
@@ -31,6 +35,7 @@ import type {
   EngagementScopeUpdateRequest,
   FindingCreateRequest,
   FindingSummary,
+  FindingUpdateRequest,
   GeneratedDraft,
   GeneratedDraftContent,
   HealthResponse,
@@ -39,11 +44,14 @@ import type {
   MissionCreateRequest,
   OperatorExecution,
   ObservationSummary,
+  ObservationCreateRequest,
+  ObservationUpdateRequest,
   OperatorProfile,
   OperatorProfileCreateRequest,
   OperatorProfileUpdateRequest,
   Page,
   PersistedChatMessage,
+  LocalProviderDetection,
   ProviderCatalogEntry,
   ProviderCreateRequest,
   ProviderHealth,
@@ -56,6 +64,8 @@ import type {
   RunStopRequest,
   RunnerProfile,
   RunnerProfileUpdateRequest,
+  SetupControlResponse,
+  SetupStatus,
   EngagementToolAssignment,
   EngagementToolAssignmentUpdateRequest,
   ToolPackCatalogEntry,
@@ -64,6 +74,7 @@ import type {
   WorkspaceListing,
   WorkspacePreview,
   WorkspaceResetResult,
+  WorkspaceUploadResult,
 } from "./types";
 
 type JsonObject = Record<string, unknown>;
@@ -73,6 +84,55 @@ interface WireEntity extends JsonObject {
   created_at: string;
   updated_at: string;
   revision: number;
+}
+
+interface WireSetupStatus {
+  core: { status: SetupStatus["core"]["status"]; detail?: string | null };
+  scratch_project_id?: string | null;
+  terminal: {
+    status: SetupStatus["terminal"]["status"];
+    runner_profile_id?: string | null;
+    candidates?: Array<{
+      candidate_id?: string | null;
+      runner_profile_id?: string | null;
+      source: "configured" | "detected";
+      name: string;
+      runtime: "podman" | "docker";
+      executable: string;
+      context?: string | null;
+      platform: "linux/amd64" | "linux/arm64";
+      isolation: "rootless" | "podman_machine" | "docker_desktop_vm";
+      healthy: boolean;
+      detail?: string | null;
+    }>;
+    image_preparation?: {
+      phase: SetupStatus["terminal"]["imagePreparation"]["phase"];
+      operation_id?: string | null;
+      project_id?: string | null;
+      progress_percent?: number | null;
+      progress_indeterminate?: boolean;
+      can_cancel?: boolean;
+      can_retry?: boolean;
+      image_digest?: string | null;
+      started_at?: string | null;
+      completed_at?: string | null;
+      detail?: string | null;
+    };
+    detail?: string | null;
+  };
+  assistant: {
+    status: SetupStatus["assistant"]["status"];
+    provider_profile_id?: string | null;
+    detail?: string | null;
+  };
+}
+
+interface WireSetupControlResponse {
+  operation: SetupControlResponse["operation"];
+  accepted: boolean;
+  idempotent: boolean;
+  operation_id?: string | null;
+  setup: WireSetupStatus;
 }
 
 interface WireEngagement extends WireEntity {
@@ -155,7 +215,12 @@ interface WireObservation extends WireEntity {
   observation_type: string;
   title: string;
   body?: string;
+  asset_ids?: string[];
+  service_ids?: string[];
   evidence_ids?: string[];
+  source?: string | null;
+  confidence?: number;
+  metadata?: JsonObject;
 }
 
 interface WireReportRender extends WireEntity {
@@ -277,6 +342,13 @@ interface WireProviderCatalogEntry extends JsonObject {
   suggested_key_env?: string | null;
   support_tier: ProviderCatalogEntry["supportTier"];
   notes?: string | null;
+}
+
+interface WireLocalProviderDetection extends JsonObject {
+  flavor: string;
+  display_name: string;
+  endpoint: string;
+  models?: string[];
 }
 
 interface WireKnowledgeSource extends WireEntity {
@@ -462,13 +534,17 @@ interface WireExecutionNetwork extends JsonObject {
 }
 
 interface WireExecutionOrigin extends JsonObject {
-  kind: "assistant_message" | "rerun";
+  kind: "assistant_message" | "rerun" | "selection";
   message_id?: string | null;
   block_ordinal?: number | null;
   block_sha256?: string | null;
   selection_start_byte?: number | null;
   selection_end_byte?: number | null;
   execution_id?: string | null;
+  source_kind?: string | null;
+  source_id?: string | null;
+  source_label?: string | null;
+  source_sha256?: string | null;
 }
 
 interface WireOperatorExecution extends WireEntity {
@@ -600,6 +676,15 @@ interface WireContainerTerminalSession extends JsonObject {
   websocket_ticket: string;
   ticket_expires_at: string;
   websocket_path: string;
+  reconnect_grace_seconds: number;
+  replay_max_bytes: number;
+  last_sequence: number;
+}
+
+interface WireContainerTerminalRecovery extends JsonObject {
+  active: boolean;
+  session?: WireContainerTerminalSession | null;
+  runtime?: WireContainerTerminalRuntime | null;
 }
 
 interface WireWorkspaceListing extends JsonObject {
@@ -942,6 +1027,7 @@ function mapFinding(value: WireFinding): FindingSummary {
     verifierId: value.verifier_id ?? undefined,
     verifiedAt: value.verified_at ?? undefined,
     updatedAt: value.updated_at,
+    revision: value.revision,
   };
 }
 
@@ -970,9 +1056,15 @@ function mapObservation(value: WireObservation): ObservationSummary {
     observationType: value.observation_type,
     title: value.title,
     body: value.body ?? "",
+    assetIds: value.asset_ids ?? [],
+    serviceIds: value.service_ids ?? [],
     evidenceIds: value.evidence_ids ?? [],
+    source: value.source ?? undefined,
+    confidence: value.confidence ?? 1,
+    metadata: value.metadata ?? {},
     createdAt: value.created_at,
     updatedAt: value.updated_at,
+    revision: value.revision,
   };
 }
 
@@ -1110,6 +1202,7 @@ function mapProvider(value: WireProvider): ProviderHealth {
     credentialEnv: value.secret_ref?.startsWith("env:")
       ? value.secret_ref.slice(4)
       : undefined,
+    credentialRef: value.secret_ref ?? undefined,
     permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
     retention: value.privacy?.retention ?? undefined,
     residency: value.privacy?.residency ?? [],
@@ -1158,6 +1251,15 @@ function mapProviderCatalog(value: WireProviderCatalogEntry): ProviderCatalogEnt
     suggestedKeyEnv: value.suggested_key_env ?? undefined,
     supportTier: value.support_tier,
     notes: value.notes ?? undefined,
+  };
+}
+
+function mapLocalProviderDetection(value: WireLocalProviderDetection): LocalProviderDetection {
+  return {
+    flavor: value.flavor,
+    displayName: value.display_name,
+    endpoint: value.endpoint,
+    models: value.models ?? [],
   };
 }
 
@@ -1362,6 +1464,10 @@ function mapExecutionOrigin(value: WireExecutionOrigin) {
     selectionStartByte: value.selection_start_byte ?? undefined,
     selectionEndByte: value.selection_end_byte ?? undefined,
     executionId: value.execution_id ?? undefined,
+    sourceKind: value.source_kind ?? undefined,
+    sourceId: value.source_id ?? undefined,
+    sourceLabel: value.source_label ?? undefined,
+    sourceSha256: value.source_sha256 ?? undefined,
   };
 }
 
@@ -1484,6 +1590,20 @@ function mapContainerTerminalPreflight(
   };
 }
 
+function mapContainerTerminalSession(
+  value: WireContainerTerminalSession,
+): ContainerTerminalSession {
+  return {
+    sessionId: value.session_id,
+    websocketTicket: value.websocket_ticket,
+    ticketExpiresAt: value.ticket_expires_at,
+    websocketPath: value.websocket_path,
+    reconnectGraceSeconds: value.reconnect_grace_seconds,
+    replayMaxBytes: value.replay_max_bytes,
+    lastSequence: value.last_sequence,
+  };
+}
+
 function executionBody(value: ExecutionRequest): JsonObject {
   return {
     engagement_id: value.engagementId,
@@ -1497,6 +1617,10 @@ function executionBody(value: ExecutionRequest): JsonObject {
       selection_start_byte: value.origin.selectionStartByte,
       selection_end_byte: value.origin.selectionEndByte,
       execution_id: value.origin.executionId,
+      source_kind: value.origin.sourceKind,
+      source_id: value.origin.sourceId,
+      source_label: value.origin.sourceLabel,
+      source_sha256: value.origin.sourceSha256,
     },
     network: {
       mode: value.network.mode,
@@ -1541,6 +1665,14 @@ function chatRequestBody(body: ChatCompletionRequest, stream: boolean): JsonObje
     session_id: body.sessionId,
     model: body.model || undefined,
     messages: body.messages,
+    context_attachments: (body.contextAttachments ?? []).map((item) => ({
+      source_kind: item.sourceKind,
+      source_id: item.sourceId,
+      source_label: item.sourceLabel,
+      text: item.text,
+      sha256: item.sha256,
+      truncated: item.truncated,
+    })),
     max_output_tokens: body.maxOutputTokens,
     temperature: body.temperature,
     include_knowledge: body.includeKnowledge ?? true,
@@ -1596,6 +1728,21 @@ function mapPersistedChatMessage(value: WirePersistedChatMessage): PersistedChat
     finishReason: value.finish_reason ?? undefined,
     providerRequestId: value.provider_request_id ?? undefined,
     citations: (value.citations ?? []).map(mapChatCitation),
+    contextAttachments: Array.isArray(value.metadata?.context_attachments)
+      ? value.metadata.context_attachments.flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const row = item as JsonObject;
+        if (typeof row.source_kind !== "string" || typeof row.source_label !== "string" || typeof row.text !== "string" || typeof row.sha256 !== "string") return [];
+        return [{
+          sourceKind: row.source_kind,
+          sourceId: typeof row.source_id === "string" ? row.source_id : undefined,
+          sourceLabel: row.source_label,
+          text: row.text,
+          sha256: row.sha256,
+          truncated: row.truncated === true,
+        }];
+      })
+      : [],
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
@@ -1755,6 +1902,62 @@ async function responseError(response: Response): Promise<ApiError> {
   );
 }
 
+function mapSetupStatus(value: WireSetupStatus): SetupStatus {
+  return {
+    core: {
+      status: value.core.status,
+      detail: value.core.detail ?? undefined,
+    },
+    scratchProjectId: value.scratch_project_id ?? undefined,
+    terminal: {
+      status: value.terminal.status,
+      runnerProfileId: value.terminal.runner_profile_id ?? undefined,
+      candidates: (value.terminal.candidates ?? []).map((candidate) => ({
+        candidateId: candidate.candidate_id ?? undefined,
+        runnerProfileId: candidate.runner_profile_id ?? undefined,
+        source: candidate.source,
+        name: candidate.name,
+        runtime: candidate.runtime,
+        executable: candidate.executable,
+        context: candidate.context ?? undefined,
+        platform: candidate.platform,
+        isolation: candidate.isolation,
+        healthy: candidate.healthy,
+        detail: candidate.detail ?? undefined,
+      })),
+      imagePreparation: {
+        phase: value.terminal.image_preparation?.phase ?? "not_started",
+        operationId: value.terminal.image_preparation?.operation_id ?? undefined,
+        projectId: value.terminal.image_preparation?.project_id ?? undefined,
+        progressPercent: value.terminal.image_preparation?.progress_percent ?? undefined,
+        progressIndeterminate: value.terminal.image_preparation?.progress_indeterminate ?? false,
+        canCancel: value.terminal.image_preparation?.can_cancel ?? false,
+        canRetry: value.terminal.image_preparation?.can_retry ?? false,
+        imageDigest: value.terminal.image_preparation?.image_digest ?? undefined,
+        startedAt: value.terminal.image_preparation?.started_at ?? undefined,
+        completedAt: value.terminal.image_preparation?.completed_at ?? undefined,
+        detail: value.terminal.image_preparation?.detail ?? undefined,
+      },
+      detail: value.terminal.detail ?? undefined,
+    },
+    assistant: {
+      status: value.assistant.status,
+      providerProfileId: value.assistant.provider_profile_id ?? undefined,
+      detail: value.assistant.detail ?? undefined,
+    },
+  };
+}
+
+function mapSetupControlResponse(value: WireSetupControlResponse): SetupControlResponse {
+  return {
+    operation: value.operation,
+    accepted: value.accepted,
+    idempotent: value.idempotent,
+    operationId: value.operation_id ?? undefined,
+    setup: mapSetupStatus(value.setup),
+  };
+}
+
 export class ApiClient {
   readonly baseUrl: string;
   private readonly tokenSource?: ApiClientOptions["token"];
@@ -1825,6 +2028,69 @@ export class ApiClient {
       runner: health.runner ?? "unavailable",
       containerTerminal: health.container_terminal ?? "unavailable",
     }));
+  }
+
+  setupStatus(signal?: AbortSignal): Promise<SetupStatus> {
+    return this.request<WireSetupStatus>("setup/status", { signal }).then(mapSetupStatus);
+  }
+
+  refreshSetupRuntime(signal?: AbortSignal): Promise<SetupStatus> {
+    return this.request<WireSetupStatus>("setup/runtime/refresh", { method: "POST", signal })
+      .then(mapSetupStatus);
+  }
+
+  selectSetupRuntime(candidateId: string, signal?: AbortSignal): Promise<SetupControlResponse> {
+    return this.request<WireSetupControlResponse>("setup/runtime/select", {
+      method: "POST",
+      body: JSON.stringify({ candidate_id: candidateId }),
+      signal,
+    }).then(mapSetupControlResponse);
+  }
+
+  prepareSetupImage(projectId?: string, signal?: AbortSignal): Promise<SetupControlResponse> {
+    return this.setupImageOperation("prepare", projectId, signal);
+  }
+
+  retrySetupImage(projectId?: string, signal?: AbortSignal): Promise<SetupControlResponse> {
+    return this.setupImageOperation("retry", projectId, signal);
+  }
+
+  cancelSetupImage(operationId: string, signal?: AbortSignal): Promise<SetupControlResponse> {
+    return this.request<WireSetupControlResponse>("setup/image/cancel", {
+      method: "POST",
+      body: JSON.stringify({ operation_id: operationId }),
+      signal,
+    }).then(mapSetupControlResponse);
+  }
+
+  private setupImageOperation(
+    operation: "prepare" | "retry",
+    projectId?: string,
+    signal?: AbortSignal,
+  ): Promise<SetupControlResponse> {
+    return this.request<WireSetupControlResponse>(`setup/image/${operation}`, {
+      method: "POST",
+      body: JSON.stringify(projectId ? { project_id: projectId } : {}),
+      signal,
+    }).then(mapSetupControlResponse);
+  }
+
+  createCredential(
+    secret: string,
+    persistence: "vault" | "session" = "vault",
+  ): Promise<CredentialStatus> {
+    return this.request<{ reference: string; persistence: CredentialStatus["persistence"]; available: boolean }>("credentials", {
+      method: "POST",
+      body: JSON.stringify({ secret, persistence }),
+    });
+  }
+
+  credentialStatus(reference: string, signal?: AbortSignal): Promise<CredentialStatus> {
+    return this.request<CredentialStatus>(`credentials/${encodeURIComponent(reference)}/status`, { signal });
+  }
+
+  async deleteCredential(reference: string): Promise<void> {
+    await this.request<void>(`credentials/${encodeURIComponent(reference)}`, { method: "DELETE" });
   }
 
   listEngagements(signal?: AbortSignal): Promise<Page<EngagementSummary>> {
@@ -2114,6 +2380,21 @@ export class ApiClient {
     }).then(mapFinding);
   }
 
+  updateFinding(id: string, body: FindingUpdateRequest): Promise<FindingSummary> {
+    return this.request<WireFinding>(`findings/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expected_revision: body.expectedRevision,
+        changes: {
+          ...(body.status === undefined ? {} : { status: body.status.replaceAll("_", "-") }),
+          ...(body.evidenceIds === undefined ? {} : { evidence_ids: [...new Set(body.evidenceIds)] }),
+          ...(body.verifierId === undefined ? {} : { verifier_id: body.verifierId }),
+          ...(body.verifiedAt === undefined ? {} : { verified_at: body.verifiedAt }),
+        },
+      }),
+    }).then(mapFinding);
+  }
+
   listEvidence(engagementId: string, signal?: AbortSignal): Promise<Page<EvidenceSummary>> {
     return this.listAll<WireEvidence>("evidence", signal, engagementId)
       .then((items) => page(items.map(mapEvidence)));
@@ -2136,6 +2417,9 @@ export class ApiClient {
         asset_ids: body.assetIds ?? [],
         captured_by: body.capturedBy,
         source_version: body.sourceVersion,
+        parent_artifact_id: body.parentArtifactId,
+        source_context: body.sourceContext ?? {},
+        edit_recipe: body.editRecipe,
         metadata: body.metadata ?? {},
       }),
     }).then(mapEvidence);
@@ -2178,9 +2462,65 @@ export class ApiClient {
     }).then(mapReport);
   }
 
+  signOffReport(
+    id: string,
+    expectedRevision: number,
+    operatorId: string,
+    attestation?: string,
+  ): Promise<ReportSummary> {
+    return this.request<WireReport>(`reports/${encodeURIComponent(id)}/sign-off`, {
+      method: "POST",
+      body: JSON.stringify({
+        expected_revision: expectedRevision,
+        operator_id: operatorId,
+        ...(attestation ? { attestation } : {}),
+      }),
+    }).then(mapReport);
+  }
+
   listObservations(engagementId: string, signal?: AbortSignal): Promise<Page<ObservationSummary>> {
     return this.listAll<WireObservation>("observations", signal, engagementId)
       .then((items) => page(items.map(mapObservation)));
+  }
+
+  createObservation(body: ObservationCreateRequest): Promise<ObservationSummary> {
+    return this.request<WireObservation>("observations", {
+      method: "POST",
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        observation_type: body.observationType ?? "note",
+        title: body.title.trim(),
+        body: body.body ?? "",
+        asset_ids: [...new Set(body.assetIds ?? [])],
+        service_ids: [...new Set(body.serviceIds ?? [])],
+        evidence_ids: [...new Set(body.evidenceIds ?? [])],
+        source: body.source ?? "operator-note",
+        confidence: body.confidence ?? 1,
+        metadata: body.metadata ?? {},
+      }),
+    }).then(mapObservation);
+  }
+
+  updateObservation(id: string, body: ObservationUpdateRequest): Promise<ObservationSummary> {
+    const changes: Record<string, unknown> = {};
+    if (body.title !== undefined) changes.title = body.title.trim();
+    if (body.body !== undefined) changes.body = body.body;
+    if (body.assetIds !== undefined) changes.asset_ids = [...new Set(body.assetIds)];
+    if (body.serviceIds !== undefined) changes.service_ids = [...new Set(body.serviceIds)];
+    if (body.evidenceIds !== undefined) changes.evidence_ids = [...new Set(body.evidenceIds)];
+    if (body.confidence !== undefined) changes.confidence = body.confidence;
+    if (body.metadata !== undefined) changes.metadata = body.metadata;
+    return this.request<WireObservation>(`observations/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ changes, expected_revision: body.expectedRevision }),
+    }).then(mapObservation);
+  }
+
+  async deleteObservation(id: string, expectedRevision: number): Promise<void> {
+    await this.request<void>(`observations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "If-Match": String(expectedRevision) },
+    });
   }
 
   renderReport(id: string, reportRevision: number): Promise<ReportRender> {
@@ -2234,6 +2574,11 @@ export class ApiClient {
       .then((items) => items.map(mapProviderCatalog));
   }
 
+  discoverLocalProviders(signal?: AbortSignal): Promise<LocalProviderDetection[]> {
+    return this.request<WireLocalProviderDetection[]>("providers/discover-local", { signal })
+      .then((items) => items.map(mapLocalProviderDetection));
+  }
+
   createProvider(body: ProviderCreateRequest): Promise<ProviderHealth> {
     const defaultModel = configuredDefaultModel(body.providerType, body.defaultModel);
     const modelAllowlist = [...new Set(
@@ -2250,7 +2595,7 @@ export class ApiClient {
         endpoint: body.endpoint?.trim() || null,
         enabled: true,
         is_local: body.local,
-        secret_ref: credentialEnv ? `env:${credentialEnv}` : null,
+        secret_ref: body.credentialRef ?? (credentialEnv ? `env:${credentialEnv}` : null),
         model_allowlist: modelAllowlist,
         capabilities: { streaming: true },
         privacy: {
@@ -2284,7 +2629,7 @@ export class ApiClient {
         changes: {
           name: body.name.trim(),
           endpoint: body.endpoint?.trim() || null,
-          secret_ref: credentialEnv ? `env:${credentialEnv}` : null,
+          secret_ref: body.credentialRef ?? (credentialEnv ? `env:${credentialEnv}` : null),
           model_allowlist: modelAllowlist,
           privacy: {
             local_only: body.local,
@@ -2403,6 +2748,105 @@ export class ApiClient {
     }));
   }
 
+  terminalCommandHistoryStatus(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<TerminalCommandHistoryStatus> {
+    return this.request<{
+      engagement_id: string;
+      enabled: boolean;
+      record_count: number;
+      retention_days: number;
+      max_records: number;
+      oldest_recorded_at?: string | null;
+      newest_recorded_at?: string | null;
+    }>(`engagements/${encodeURIComponent(engagementId)}/terminal/commands/status`, { signal })
+      .then((value) => ({
+        engagementId: value.engagement_id,
+        enabled: value.enabled,
+        recordCount: value.record_count,
+        retentionDays: value.retention_days,
+        maxRecords: value.max_records,
+        oldestRecordedAt: value.oldest_recorded_at ?? undefined,
+        newestRecordedAt: value.newest_recorded_at ?? undefined,
+      }));
+  }
+
+  listTerminalCommands(
+    engagementId: string,
+    search = "",
+    offset = 0,
+    limit = 100,
+    signal?: AbortSignal,
+  ): Promise<TerminalCommandPage> {
+    const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+    if (search) params.set("search", search);
+    return this.request<{
+      records: Array<{
+        id: string;
+        engagement_id: string;
+        session_id: string;
+        command: string;
+        cwd: string;
+        exit_code: number;
+        occurred_at: string;
+      }>;
+      total: number;
+      offset: number;
+      limit: number;
+      next_offset?: number | null;
+    }>(`engagements/${encodeURIComponent(engagementId)}/terminal/commands?${params}`, { signal })
+      .then((value) => ({
+        records: value.records.map((record) => ({
+          id: record.id,
+          engagementId: record.engagement_id,
+          sessionId: record.session_id,
+          command: record.command,
+          cwd: record.cwd,
+          exitCode: record.exit_code,
+          occurredAt: record.occurred_at,
+        })),
+        total: value.total,
+        offset: value.offset,
+        limit: value.limit,
+        nextOffset: value.next_offset ?? undefined,
+      }));
+  }
+
+  setTerminalCommandHistoryEnabled(
+    engagementId: string,
+    enabled: boolean,
+  ): Promise<TerminalCommandHistoryStatus> {
+    return this.request<{
+      engagement_id: string;
+      enabled: boolean;
+      record_count: number;
+      retention_days: number;
+      max_records: number;
+      oldest_recorded_at?: string | null;
+      newest_recorded_at?: string | null;
+    }>(`engagements/${encodeURIComponent(engagementId)}/terminal/commands/status`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }).then((value) => ({
+      engagementId: value.engagement_id,
+      enabled: value.enabled,
+      recordCount: value.record_count,
+      retentionDays: value.retention_days,
+      maxRecords: value.max_records,
+      oldestRecordedAt: value.oldest_recorded_at ?? undefined,
+      newestRecordedAt: value.newest_recorded_at ?? undefined,
+    }));
+  }
+
+  async clearTerminalCommands(engagementId: string): Promise<number> {
+    const result = await this.request<{ engagement_id: string; cleared: number }>(
+      `engagements/${encodeURIComponent(engagementId)}/terminal/commands`,
+      { method: "DELETE" },
+    );
+    return result.cleared;
+  }
+
   preflightContainerTerminal(
     body: ContainerTerminalRequest,
     signal?: AbortSignal,
@@ -2435,11 +2879,20 @@ export class ApiClient {
           client_idempotency_key: clientIdempotencyKey,
         }),
       },
+    ).then(mapContainerTerminalSession);
+  }
+
+  recoverContainerTerminal(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ContainerTerminalRecovery> {
+    return this.request<WireContainerTerminalRecovery>(
+      `engagements/${encodeURIComponent(engagementId)}/container-terminal/recover`,
+      { method: "POST", signal },
     ).then((value) => ({
-      sessionId: value.session_id,
-      websocketTicket: value.websocket_ticket,
-      ticketExpiresAt: value.ticket_expires_at,
-      websocketPath: value.websocket_path,
+      active: value.active,
+      session: value.session ? mapContainerTerminalSession(value.session) : undefined,
+      runtime: value.runtime ? mapContainerTerminalRuntime(value.runtime) : undefined,
     }));
   }
 
@@ -2650,6 +3103,38 @@ export class ApiClient {
       engagementId: value.engagement_id,
       removedEntries: value.removed_entries,
     }));
+  }
+
+  async uploadWorkspaceFile(
+    engagementId: string,
+    path: string,
+    file: Blob,
+    overwrite = false,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceUploadResult> {
+    const headers = new Headers({ "Content-Type": "application/octet-stream" });
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const parameters = new URLSearchParams({ path, overwrite: String(overwrite) });
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/engagements/${encodeURIComponent(engagementId)}/workspace/file?${parameters}`,
+      { method: "PUT", headers, body: file, signal, credentials: "same-origin" },
+    );
+    if (!response.ok) throw await responseError(response);
+    const value = await response.json() as {
+      engagement_id: string;
+      path: string;
+      size: number;
+      sha256: string;
+      overwritten: boolean;
+    };
+    return {
+      engagementId: value.engagement_id,
+      path: value.path,
+      size: value.size,
+      sha256: value.sha256,
+      overwritten: value.overwritten,
+    };
   }
 
   async downloadWorkspaceFile(

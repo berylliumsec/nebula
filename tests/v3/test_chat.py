@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 
 import pytest
 from pydantic import ValidationError
@@ -200,6 +201,57 @@ def test_local_chat_retrieves_only_its_engagement_and_persists(tmp_path, monkeyp
         (2, ChatRole.ASSISTANT),
     ]
     assert persisted[-1].citations[0].source_id == "source-a"
+
+
+def test_selected_context_is_bounded_hashed_sent_as_data_and_persisted(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "selected-context.db")
+    engagement = store.create(Engagement(id="eng-a", name="Selected context"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+    selected = "443/tcp open https — λ"
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            engagement_id=engagement.id,
+            provider_id=profile.id,
+            include_knowledge=False,
+            messages=[{"role": "user", "content": "What does this mean?"}],
+            context_attachments=[
+                {
+                    "source_kind": "terminal",
+                    "source_id": "terminal-1",
+                    "source_label": "Terminal selection",
+                    "text": selected,
+                    "sha256": hashlib.sha256(selected.encode()).hexdigest(),
+                    "truncated": False,
+                }
+            ],
+        )
+    )
+    content = str(prepared.model_request.messages[-1].content)
+    assert "BEGIN UNTRUSTED SELECTED CONTEXT" in content
+    assert selected in content
+    completion = asyncio.run(service.complete(prepared))
+    persisted = service.session_messages(completion.session_id)
+    attachment = persisted[0].metadata["context_attachments"][0]
+    assert attachment["text"] == selected
+    assert attachment["source_id"] == "terminal-1"
+
+    with pytest.raises(ValidationError, match="sha256 does not match"):
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            messages=[{"role": "user", "content": "Question"}],
+            context_attachments=[
+                {
+                    "source_kind": "terminal",
+                    "source_label": "Terminal",
+                    "text": selected,
+                    "sha256": "0" * 64,
+                }
+            ],
+        )
 
 
 def test_cloud_knowledge_requires_profile_and_per_request_consent_and_redacts(

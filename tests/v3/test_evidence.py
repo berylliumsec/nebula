@@ -1,19 +1,33 @@
 import base64
+from io import BytesIO
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import nebula.v3.evidence as evidence_module
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import Artifact, Asset, Engagement, Evidence, Finding
 from nebula.v3.evidence import (
+    EvidenceReferenceError,
     EvidenceTooLargeError,
     EvidenceUploadRequest,
+    InvalidEvidenceUploadError,
     upload_evidence,
 )
 from nebula.v3.operators import OperatorProfileService
 from nebula.v3.storage import NebulaStore, StoreTransaction
+
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
+def _raster_bytes(image_format: str) -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (4, 3), (20, 40, 60)).save(output, format=image_format)
+    return output.getvalue()
 
 
 def _auth() -> dict[str, str]:
@@ -239,6 +253,340 @@ def test_database_failure_compensates_only_a_new_blob(tmp_path, monkeypatch):
             request=request,
         )
     assert list(artifacts.iter_digests()) == [existing.sha256]
+
+
+def test_derived_evidence_preserves_parent_lineage_and_edit_recipe(tmp_path):
+    store = NebulaStore(tmp_path / "derived.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(id="eng-a", name="Derived"))
+    parent = artifacts.put_bytes(
+        b"original", engagement_id=engagement.id, filename="original.png"
+    )
+    store.create(parent)
+
+    evidence = upload_evidence(
+        store=store,
+        artifact_store=artifacts,
+        request=EvidenceUploadRequest(
+            engagement_id=engagement.id,
+            filename="annotated.png",
+            title="Annotated terminal",
+            evidence_type="terminal-screenshot",
+            content_base64=base64.b64encode(PNG_1X1).decode(),
+            media_type="image/png",
+            parent_artifact_id=parent.id,
+            source_context={"terminal_session_id": "terminal-1"},
+            edit_recipe={
+                "version": 1,
+                "source_width": 1,
+                "source_height": 1,
+                "output_width": 1,
+                "output_height": 1,
+                "operations": [
+                    {
+                        "id": "redact-1",
+                        "type": "redact",
+                        "rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "color": "#000000",
+                    }
+                ],
+            },
+        ),
+    )
+
+    derived = store.get(Artifact, evidence.artifact_id)
+    assert derived.parent_artifact_id == parent.id
+    assert derived.metadata["source_context"]["terminal_session_id"] == "terminal-1"
+    assert derived.metadata["edit_recipe"]["operations"][0]["type"] == "redact"
+    assert evidence.metadata["edit_recipe"]["version"] == 1
+
+
+def test_derived_evidence_rejects_cross_engagement_parent(tmp_path):
+    store = NebulaStore(tmp_path / "cross-parent.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(id="eng-a", name="One"))
+    other = store.create(Engagement(id="eng-b", name="Two"))
+    parent = artifacts.put_bytes(b"original", engagement_id=other.id)
+    store.create(parent)
+
+    with pytest.raises(EvidenceReferenceError, match="parent artifact"):
+        upload_evidence(
+            store=store,
+            artifact_store=artifacts,
+            request=EvidenceUploadRequest(
+                engagement_id=engagement.id,
+                filename="bad.png",
+                title="Bad lineage",
+                evidence_type="terminal-screenshot",
+                content_base64=base64.b64encode(b"derived").decode(),
+                parent_artifact_id=parent.id,
+            ),
+        )
+
+
+def test_image_upload_rejects_svg_corrupt_signatures_and_decoded_bombs():
+    svg = EvidenceUploadRequest(
+        engagement_id="eng-a",
+        filename="proof.svg",
+        title="Unsafe vector",
+        evidence_type="image",
+        media_type="image/svg+xml",
+        content_base64=base64.b64encode(
+            b"<svg xmlns='http://www.w3.org/2000/svg'/>"
+        ).decode(),
+    )
+    with pytest.raises(InvalidEvidenceUploadError, match="SVG"):
+        svg.decoded_content()
+
+    disguised = EvidenceUploadRequest(
+        engagement_id="eng-a",
+        filename="proof.png",
+        title="Disguised image",
+        evidence_type="image",
+        media_type="image/png",
+        content_base64=base64.b64encode(b"not a png").decode(),
+    )
+    with pytest.raises(InvalidEvidenceUploadError, match="unsupported or corrupt"):
+        disguised.decoded_content()
+
+    huge_header = (
+        b"\x89PNG\r\n\x1a\n"
+        + b"\x00\x00\x00\rIHDR"
+        + (20_000).to_bytes(4, "big")
+        + (20_000).to_bytes(4, "big")
+    )
+    huge = EvidenceUploadRequest(
+        engagement_id="eng-a",
+        filename="huge.png",
+        title="Huge decoded image",
+        evidence_type="image",
+        media_type="image/png",
+        content_base64=base64.b64encode(huge_header).decode(),
+    )
+    with pytest.raises(InvalidEvidenceUploadError, match="dimensions"):
+        huge.decoded_content()
+
+
+@pytest.mark.parametrize(
+    ("image_format", "filename", "media_type"),
+    [
+        ("PNG", "proof.png", "image/png"),
+        ("JPEG", "proof.jpg", "image/jpeg"),
+        ("WEBP", "proof.webp", "image/webp"),
+    ],
+)
+def test_image_upload_fully_decodes_supported_rasters(
+    image_format, filename, media_type
+):
+    content = _raster_bytes(image_format)
+    request = EvidenceUploadRequest(
+        engagement_id="eng-a",
+        filename=filename,
+        title="Verified raster",
+        evidence_type="image",
+        media_type=media_type,
+        content_base64=base64.b64encode(content).decode(),
+    )
+
+    assert request.decoded_content() == content
+
+
+@pytest.mark.parametrize(
+    ("image_format", "filename", "media_type", "removed_bytes"),
+    [
+        ("PNG", "truncated.png", "image/png", 12),
+        ("JPEG", "truncated.jpg", "image/jpeg", 32),
+        ("WEBP", "truncated.webp", "image/webp", 8),
+    ],
+)
+def test_image_upload_rejects_header_valid_truncated_rasters(
+    image_format, filename, media_type, removed_bytes
+):
+    content = _raster_bytes(image_format)[:-removed_bytes]
+    request = EvidenceUploadRequest(
+        engagement_id="eng-a",
+        filename=filename,
+        title="Truncated raster",
+        evidence_type="image",
+        media_type=media_type,
+        content_base64=base64.b64encode(content).decode(),
+    )
+
+    with pytest.raises(InvalidEvidenceUploadError, match="truncated or corrupt"):
+        request.decoded_content()
+
+
+def test_edit_recipe_accepts_bounded_canvas_manifest():
+    recipe = {
+        "version": 1,
+        "source_width": 10,
+        "source_height": 8,
+        "output_width": 6,
+        "output_height": 5,
+        "operations": [
+            {
+                "id": "crop-1",
+                "type": "crop",
+                "rect": {"x": 1, "y": 1, "width": 6, "height": 5},
+            },
+            {
+                "id": "rectangle-1",
+                "type": "rectangle",
+                "rect": {"x": 0, "y": 0, "width": 2, "height": 2},
+                "color": "#ff00AA",
+                "thickness": 2,
+            },
+            {
+                "id": "arrow-1",
+                "type": "arrow",
+                "from": {"x": 0, "y": 0},
+                "to": {"x": 6, "y": 5},
+                "color": "#00ff00",
+                "thickness": 3,
+            },
+            {
+                "id": "blur-1",
+                "type": "blur",
+                "rect": {"x": 1, "y": 1, "width": 2, "height": 2},
+                "radius": 8,
+            },
+            {
+                "id": "redact-1",
+                "type": "redact",
+                "rect": {"x": 2, "y": 2, "width": 2, "height": 2},
+                "color": "#000000",
+            },
+            {
+                "id": "text-1",
+                "type": "text",
+                "at": {"x": 1, "y": 1},
+                "text": "Review",
+                "color": "#ffffff",
+                "fontSize": 16,
+            },
+        ],
+    }
+
+    request = EvidenceUploadRequest(
+        engagement_id="eng-a",
+        filename="edited.png",
+        title="Edited screenshot",
+        evidence_type="terminal-screenshot",
+        content_base64=base64.b64encode(PNG_1X1).decode(),
+        media_type="image/png",
+        edit_recipe=recipe,
+    )
+
+    assert request.edit_recipe == recipe
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"version": 2}, "version is unsupported"),
+        ({"version": 1.0}, "version is unsupported"),
+        ({"unexpected": True}, "must contain only"),
+        ({"output_width": 2}, "output dimensions"),
+        (
+            {
+                "operations": [
+                    {
+                        "id": "bad-1",
+                        "type": "redact",
+                        "rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "color": "black",
+                    }
+                ]
+            },
+            "colors must be opaque",
+        ),
+        (
+            {"operations": [{"id": "bad-1", "type": "rotate"}]},
+            "unsupported operation",
+        ),
+        (
+            {
+                "operations": [
+                    {
+                        "id": "duplicate",
+                        "type": "redact",
+                        "rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "color": "#000000",
+                    },
+                    {
+                        "id": "duplicate",
+                        "type": "redact",
+                        "rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "color": "#000000",
+                    },
+                ]
+            },
+            "operation ids must be unique",
+        ),
+    ],
+)
+def test_edit_recipe_rejects_unversioned_unknown_or_invalid_manifests(changes, message):
+    recipe = {
+        "version": 1,
+        "source_width": 1,
+        "source_height": 1,
+        "output_width": 1,
+        "output_height": 1,
+        "operations": [],
+    }
+    recipe.update(changes)
+
+    with pytest.raises(ValueError, match=message):
+        EvidenceUploadRequest(
+            engagement_id="eng-a",
+            filename="edited.png",
+            title="Edited screenshot",
+            evidence_type="terminal-screenshot",
+            content_base64=base64.b64encode(PNG_1X1).decode(),
+            media_type="image/png",
+            edit_recipe=recipe,
+        )
+
+
+def test_edit_recipe_rejects_excess_operations_and_mismatched_uploaded_image():
+    recipe = {
+        "version": 1,
+        "source_width": 1,
+        "source_height": 1,
+        "output_width": 1,
+        "output_height": 1,
+        "operations": [{}] * 201,
+    }
+    with pytest.raises(ValueError, match="at most 200 operations"):
+        EvidenceUploadRequest(
+            engagement_id="eng-a",
+            filename="edited.png",
+            title="Edited screenshot",
+            evidence_type="terminal-screenshot",
+            content_base64=base64.b64encode(PNG_1X1).decode(),
+            media_type="image/png",
+            edit_recipe=recipe,
+        )
+
+    mismatched = {
+        **recipe,
+        "source_width": 2,
+        "source_height": 2,
+        "output_width": 2,
+        "output_height": 2,
+        "operations": [],
+    }
+    request = EvidenceUploadRequest(
+        engagement_id="eng-a",
+        filename="edited.png",
+        title="Edited screenshot",
+        evidence_type="terminal-screenshot",
+        content_base64=base64.b64encode(PNG_1X1).decode(),
+        media_type="image/png",
+        edit_recipe=mismatched,
+    )
+    with pytest.raises(InvalidEvidenceUploadError, match="output dimensions"):
+        request.decoded_content()
 
 
 def test_linked_finding_update_failure_rolls_back_entities_and_new_blob(

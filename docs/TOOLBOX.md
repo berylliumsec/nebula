@@ -21,16 +21,18 @@ an engagement needs them.
 
 ## Installation and use
 
-1. Configure and verify Docker Desktop or Podman Machine on macOS, or rootless
-   Docker/Podman on Linux, under **Settings → Runners**.
-2. Open **Settings → Toolbox** and install **Nebula Toolbox**. The installer
-   pulls the exact platform digest, verifies the non-root image and signed
-   manifest, and runs every smoke test before the environment becomes ready.
-3. Under **Settings → Engagement Policy**, define the CIDRs/domains/URLs and
-   ports, select the installed environment, enable its seven capabilities, and
-   save the digest-locked assignment.
-4. Start a mission with a strict tool-calling model. Assigned Toolbox
-   capabilities are selected by default and begin with a 50-call budget.
+1. Install Docker Desktop or Podman Machine on macOS, or rootless
+   Docker/Podman on Linux. Nebula detects supported fixed-path runtimes; use
+   **Settings → Advanced** only to resolve multiple candidates or diagnose an
+   unavailable runtime.
+2. Choose **Automate task** in Workbench. On first use Nebula prepares the
+   official signed Toolbox in the background, verifies the exact platform
+   digest and non-root manifest, and runs its smoke tests.
+3. Define authorized CIDRs/domains/URLs and ports under **Project → Assets**.
+   Advanced policy and digest-locked environment assignment remain available
+   in **Settings → Advanced**.
+4. Enter the automation objective. Model, capabilities, budgets, retries, and
+   concurrency use safe defaults and remain available under **Advanced**.
 
 Ordinary local commands and in-scope active scans run without a per-command
 approval. Core still enforces scope, ports, time windows, prohibited actions,
@@ -47,10 +49,10 @@ never falls back to host execution.
 The same operations are available from the bundled CLI:
 
 ```bash
-nebula tools doctor
-nebula tools catalog
-nebula tools install berylliumsec/nebula-toolbox --runner local --yes
-nebula tools list
+nebula-core tools doctor
+nebula-core tools catalog
+nebula-core tools install berylliumsec/nebula-toolbox --runner local --yes
+nebula-core tools list
 ```
 
 The installer stores immutable manifests and verification state per user:
@@ -145,16 +147,16 @@ Build each platform image, push it to a registry, and record the immutable
 digests. Create a local environment bundle using the existing author SDK:
 
 ```bash
-nebula tools init my-toolbox --publisher your-company
+nebula-core tools init my-toolbox --publisher your-company
 # Replace the generated image/tool definitions with the Toolbox compatibility
 # manifest and its exact platform digests.
-nebula tools validate my-toolbox
-nebula tools test my-toolbox --runner local
-nebula tools pack my-toolbox --output my-toolbox.nebula-toolpack
+nebula-core tools validate my-toolbox
+nebula-core tools test my-toolbox --runner local
+nebula-core tools pack my-toolbox --output my-toolbox.nebula-toolpack
 ```
 
 Enable device developer mode, then upload the bundle under **Settings →
-Toolbox → Use a custom compatible environment**. Unsigned local environments
+Advanced → Toolbox → Use a custom compatible environment**. Unsigned local environments
 retain a permanent warning. Nebula does not fetch unsigned manifests from a
 URL, import third-party code into Core, or grant a newly installed environment
 to existing engagements.

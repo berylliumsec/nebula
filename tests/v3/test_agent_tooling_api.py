@@ -657,7 +657,7 @@ def test_approval_decision_resumes_the_same_executable_run(tmp_path):
     resume_response = record["resume_response"]
     assert resume_response["approval_id"] == record["approval_id"]
     assert resume_response["status"] == "approved"
-    assert resume_response["decided_by"] == "operator"
+    assert resume_response["decided_by"] == "system"
     assert datetime.fromisoformat(
         resume_response["decided_at"]
     ) == datetime.fromisoformat(decision.json()["decided_at"].replace("Z", "+00:00"))

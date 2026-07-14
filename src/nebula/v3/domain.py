@@ -171,6 +171,7 @@ class ExecutionNetworkMode(StringEnum):
 class ExecutionOriginKind(StringEnum):
     ASSISTANT_MESSAGE = "assistant_message"
     RERUN = "rerun"
+    SELECTION = "selection"
 
 
 class GeneratedDraftStatus(StringEnum):
@@ -925,8 +926,13 @@ class ProviderProfile(Entity):
     @field_validator("secret_ref")
     @classmethod
     def secret_must_be_an_environment_reference(cls, value: str | None) -> str | None:
-        if value is not None and not re.fullmatch(r"env:[A-Za-z_][A-Za-z0-9_]*", value):
-            raise ValueError("secret_ref must use an env:NAME reference")
+        if value is not None and not re.fullmatch(
+            r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
+            value,
+        ):
+            raise ValueError(
+                "secret_ref must use env:NAME, vault:ID, or session:ID"
+            )
         return value
 
     @field_validator("model_allowlist")
@@ -1166,6 +1172,12 @@ class ExecutionOrigin(NebulaModel):
     selection_start_byte: int | None = Field(default=None, ge=0, le=1_000_000)
     selection_end_byte: int | None = Field(default=None, ge=0, le=1_000_000)
     execution_id: str | None = Field(default=None, max_length=200)
+    source_kind: str | None = Field(
+        default=None, pattern=r"^[a-z0-9._-]{1,100}$"
+    )
+    source_id: str | None = Field(default=None, max_length=200)
+    source_label: str | None = Field(default=None, min_length=1, max_length=500)
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def complete_origin(self) -> "ExecutionOrigin":
@@ -1187,7 +1199,19 @@ class ExecutionOrigin(NebulaModel):
                 and self.selection_end_byte <= self.selection_start_byte
             ):
                 raise ValueError("selection end must be greater than selection start")
-        else:
+            if any(
+                value is not None
+                for value in (
+                    self.source_kind,
+                    self.source_id,
+                    self.source_label,
+                    self.source_sha256,
+                )
+            ):
+                raise ValueError(
+                    "assistant-message origins cannot contain selection-source metadata"
+                )
+        elif self.kind == ExecutionOriginKind.RERUN:
             if not self.execution_id:
                 raise ValueError("rerun origins require an execution_id")
             if any(
@@ -1198,9 +1222,32 @@ class ExecutionOrigin(NebulaModel):
                     self.block_sha256,
                     self.selection_start_byte,
                     self.selection_end_byte,
+                    self.source_kind,
+                    self.source_id,
+                    self.source_label,
+                    self.source_sha256,
                 )
             ):
-                raise ValueError("rerun origins cannot contain message coordinates")
+                raise ValueError("rerun origins cannot contain other origin metadata")
+        else:
+            if not self.source_kind or not self.source_label or not self.source_sha256:
+                raise ValueError(
+                    "selection origins require source kind, label, and SHA-256"
+                )
+            if any(
+                value is not None
+                for value in (
+                    self.message_id,
+                    self.block_ordinal,
+                    self.block_sha256,
+                    self.selection_start_byte,
+                    self.selection_end_byte,
+                    self.execution_id,
+                )
+            ):
+                raise ValueError(
+                    "selection origins cannot contain message or execution coordinates"
+                )
         return self
 
 

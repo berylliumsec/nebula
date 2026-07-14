@@ -92,7 +92,7 @@ class ExecutionAIService:
         self.store = store
         self.artifact_store = artifact_store
         self.provider_factory = provider_factory
-        self.operator_id = operator_id or (lambda: "operator")
+        self.operator_id = operator_id or (lambda: "system")
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
         self._shutting_down = False

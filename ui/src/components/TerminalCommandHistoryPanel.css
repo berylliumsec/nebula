@@ -1,0 +1,22 @@
+.terminal-command-history { margin-top: 18px; overflow: hidden; }
+.terminal-command-history > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px; border-bottom: 1px solid var(--border); }
+.terminal-command-history > header h2 { display: flex; align-items: center; gap: 8px; margin: 3px 0 5px; font-size: 1rem; }
+.terminal-command-history > header p { margin: 0; color: var(--muted); max-width: 720px; }
+.terminal-command-history > header > div:last-child { display: flex; align-items: center; gap: 10px; }
+.history-toggle { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.history-search { display: flex; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.history-search label { flex: 1; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); }
+.history-search input { width: 100%; border: 0; background: transparent; }
+.terminal-command-list { display: grid; max-height: 420px; overflow: auto; }
+.terminal-command-list article { padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.terminal-command-list article > code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.terminal-command-list article footer { display: flex; gap: 14px; margin-top: 7px; color: var(--muted); font-size: .78rem; }
+.terminal-command-list article footer span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-command-list article footer .success { color: var(--green); }
+.terminal-command-list article footer .failure { color: var(--red); }
+.history-retention { padding: 10px 18px; color: var(--muted); font-size: .78rem; }
+@media (max-width: 760px) {
+  .terminal-command-history > header { flex-direction: column; }
+  .terminal-command-history > header > div:last-child { width: 100%; justify-content: space-between; }
+  .terminal-command-list article footer { flex-wrap: wrap; }
+}

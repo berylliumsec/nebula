@@ -40,6 +40,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import Scope
 
+from . import chat as chat_runtime
 from .artifacts import ArtifactStore, ArtifactStoreError
 from .api_validation import ApiEntityValidator
 from .chat import (
@@ -55,15 +56,16 @@ from .chat import (
 from .container_terminal import (
     ContainerTerminalCapabilities,
     ContainerTerminalError,
+    ContainerTerminalExit,
+    ContainerTerminalOutput,
     ContainerTerminalPreflightRequest,
     ContainerTerminalPreflightResponse,
+    ContainerTerminalRecoveryResponse,
     ContainerTerminalService,
     ContainerTerminalStartRequest,
     ContainerTerminalStartResponse,
     MAX_TERMINAL_INPUT_BYTES,
-    TERMINAL_IDLE_TIMEOUT_SECONDS,
     TERMINAL_MAX_DURATION_SECONDS,
-    TERMINAL_OUTPUT_CHUNK_BYTES,
 )
 from .database import Database
 from .context import (
@@ -73,6 +75,13 @@ from .context import (
     estimate_tokens,
     memory_text,
     resolve_context_limits,
+)
+from .credentials import (
+    CredentialCreateRequest,
+    CredentialError,
+    CredentialStatus,
+    CredentialStore,
+    CredentialUnavailableError,
 )
 from .domain import (
     ENTITY_MODEL_BY_KIND,
@@ -103,6 +112,7 @@ from .domain import (
     ProviderCapabilityVerification,
     ProviderProfile,
     ProviderVerificationStatus,
+    Report,
     Task,
     ReportRender,
     RunnerIsolation,
@@ -168,13 +178,33 @@ from .providers import (
     ModelRequest,
     PROVIDER_CATALOG,
     ProviderError,
+    ProviderFlavor,
     ProviderHealth,
     ToolChoice,
     ToolDefinition,
     provider_from_profile,
 )
 from .reporting import ReportRenderError, ReportRenderService
+from .report_signoff import ReportSignoffRequest, sign_off_report
+from .setup import (
+    ImagePreparationCancellationRequest,
+    ImagePreparationRequest,
+    RunnerSelectionRequest,
+    SetupControlResponse,
+    SetupEvent,
+    SetupService,
+    SetupServiceError,
+    SetupStatus,
+    bootstrap_scratch_project,
+)
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .terminal_history import (
+    TerminalCommandHistory,
+    TerminalCommandHistoryClearResult,
+    TerminalCommandHistoryPreferenceUpdate,
+    TerminalCommandHistoryStatus,
+    TerminalCommandPage,
+)
 from .tool_platform import ToolPlatform, ToolPlatformError
 from .version import __version__, build_metadata
 from .workspace import (
@@ -184,6 +214,7 @@ from .workspace import (
     WorkspaceResetRequest,
     WorkspaceResetResult,
     WorkspaceService,
+    WorkspaceUploadResult,
 )
 
 READ_ONLY_RESOURCES = {
@@ -216,8 +247,6 @@ API_PREFIX = "/api/v1"
 PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS = 30
 TOOL_PACK_EVENT_POLL_SECONDS = 0.25
 TOOL_PACK_EVENT_HEARTBEAT_TICKS = 20
-
-
 def _websocket_protocol_secret(
     protocols: list[str], prefix: str, *, decode_base64: bool
 ) -> str | None:
@@ -286,6 +315,13 @@ class ProviderCapabilityVerifyResponse(NebulaModel):
     provider_id: str
     provider_revision: int
     verification: ProviderCapabilityVerification
+
+
+class LocalProviderDetection(NebulaModel):
+    flavor: ProviderFlavor
+    display_name: str = Field(min_length=1, max_length=200)
+    endpoint: str = Field(min_length=1, max_length=2_048)
+    models: list[str] = Field(default_factory=list, max_length=256)
 
 
 class ChatTurnSummary(NebulaModel):
@@ -430,6 +466,8 @@ def create_app(
     workspace_service: WorkspaceService | None = None,
     report_render_service: ReportRenderService | None = None,
     execution_ai_service: ExecutionAIService | None = None,
+    credential_store: CredentialStore | None = None,
+    bootstrap_workspace: bool = False,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -449,15 +487,39 @@ def create_app(
         raise ValueError(
             "pass either mission_service or mission_checkpoint_path, not both"
         )
+    if bootstrap_workspace:
+        bootstrap_scratch_project(store)
     executable_missions_enabled = (
         tool_platform.execution_enabled
         if enable_executable_missions is None and tool_platform is not None
         else bool(enable_executable_missions)
     )
 
+    credentials = credential_store or CredentialStore()
+
+    def provider_factory(profile: ProviderProfile):
+        try:
+            if profile.secret_ref and profile.secret_ref.startswith(
+                ("vault:", "session:")
+            ):
+                return provider_from_profile(profile, credentials.resolve)
+            return provider_from_profile(profile)
+        except CredentialError as exc:
+            raise ProviderError(str(exc)) from exc
+
+    def chat_provider_factory(profile: ProviderProfile):
+        # Keep ChatService's provider seam available to embedders, but resolve
+        # opaque Core-managed references before a request leaves the process.
+        if profile.secret_ref and profile.secret_ref.startswith(
+            ("vault:", "session:")
+        ):
+            return provider_factory(profile)
+        return chat_runtime.provider_from_profile(profile)
+
     missions = mission_service or MissionService(
         store,
         checkpoint_path=mission_checkpoint_path,
+        provider_factory=provider_factory,
         tool_components_factory=(
             tool_platform.mission_components if tool_platform is not None else None
         ),
@@ -467,9 +529,19 @@ def create_app(
     entity_validator = ApiEntityValidator(store)
     operators = OperatorProfileService(store)
 
+    def chat_service() -> ChatService:
+        return ChatService(
+            store,
+            tool_platform=tool_platform,
+            provider_factory=chat_provider_factory,
+            operator_id=active_operator_id,
+        )
+
     def active_operator_id() -> str:
         active = operators.active_profile_or_none()
-        return active.id if active is not None else "operator"
+        # Work can begin before the user chooses a display name. Attribute that
+        # technical activity to the system rather than inventing a human actor.
+        return active.id if active is not None else "system"
 
     executions = execution_service
     if executions is None and artifact_store is not None and tool_platform is not None:
@@ -482,12 +554,14 @@ def create_app(
         )
     if executions is not None and executions.store is not store:
         raise ValueError("execution_service must use the API store")
+    terminal_commands = TerminalCommandHistory(store.database)
     container_terminals = container_terminal_service
     if container_terminals is None and tool_platform is not None:
         container_terminals = ContainerTerminalService(
             store=store,
             tool_platform=tool_platform,
             execution_service=executions,
+            command_history=terminal_commands,
             operator_id=active_operator_id,
         )
     if container_terminals is not None and container_terminals.store is not store:
@@ -498,6 +572,11 @@ def create_app(
         and container_terminals.execution_service is None
     ):
         container_terminals.bind_execution_service(executions)
+    if (
+        container_terminals is not None
+        and container_terminals.command_history is None
+    ):
+        container_terminals.bind_command_history(terminal_commands)
     workspaces = workspace_service
     if workspaces is None and artifact_store is not None and tool_platform is not None:
         workspaces = WorkspaceService(
@@ -526,9 +605,11 @@ def create_app(
         )
     if execution_ai is not None and execution_ai.store is not store:
         raise ValueError("execution_ai_service must use the API store")
+    setup = SetupService(store, tool_platform)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        setup.start()
         if container_terminals is not None:
             await container_terminals.startup()
         if executions is not None:
@@ -550,6 +631,7 @@ def create_app(
                 await report_renders.shutdown()
             if execution_ai is not None:
                 await execution_ai.shutdown()
+            await setup.shutdown()
 
     app = FastAPI(
         title="Nebula 3 Core API",
@@ -563,12 +645,15 @@ def create_app(
     app.state.allow_unauthenticated = allow_unauthenticated
     app.state.mission_service = missions
     app.state.operator_profile_service = operators
+    app.state.credential_store = credentials
     app.state.tool_platform = tool_platform
     app.state.execution_service = executions
     app.state.container_terminal_service = container_terminals
     app.state.workspace_service = workspaces
     app.state.report_render_service = report_renders
     app.state.execution_ai_service = execution_ai
+    app.state.setup_service = setup
+    app.state.terminal_command_history = terminal_commands
     app.state.executable_missions_enabled = executable_missions_enabled
     app.add_middleware(
         CORSMiddleware,
@@ -585,6 +670,7 @@ def create_app(
             "Authorization",
             "Content-Type",
             "If-Match",
+            "Last-Event-ID",
             "X-Nebula-Sensitive-Data-Acknowledged",
         ],
     )
@@ -730,24 +816,144 @@ def create_app(
     @app.get(f"{API_PREFIX}/health", tags=["system"])
     async def health(_: str = Depends(require_auth)) -> dict[str, Any]:
         identity = build_metadata()
+        setup_status = await setup.status()
         return {
             "status": "ok",
             **identity,
             "mode": (
                 "local" if store.database.engine.dialect.name == "sqlite" else "team"
             ),
-            # Runner health belongs to the separately configured worker. The
-            # API never assumes that presence of a container CLI makes it safe.
-            "runner": "unavailable",
+            # A CLI is available only after the same local/rootless validation
+            # used by setup. Merely finding docker/podman is never sufficient.
+            "runner": (
+                "available"
+                if setup_status.terminal.status == "ready"
+                else setup_status.terminal.status
+            ),
             # Compatibility field; the host-backed terminal implementation is gone.
             "human_pty": "unavailable",
             # This is the human-operated Kali container, never the legacy host PTY.
             "container_terminal": (
-                "configured" if container_terminals is not None else "unavailable"
+                "configured"
+                if container_terminals is not None
+                and (tool_platform is None or setup_status.terminal.status == "ready")
+                else "unavailable"
             ),
             "api_version": "v1",
             **store.database.health(),
         }
+
+    @app.get(
+        f"{API_PREFIX}/setup/status",
+        response_model=SetupStatus,
+        tags=["setup"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def setup_status() -> SetupStatus:
+        return await setup.status()
+
+    @app.get(
+        f"{API_PREFIX}/setup/events",
+        tags=["setup"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def setup_events(
+        after_sequence: int = Query(default=0, ge=0),
+        follow: bool = Query(default=True),
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    ) -> StreamingResponse:
+        cursor = after_sequence
+        if last_event_id is not None:
+            try:
+                cursor = max(cursor, int(last_event_id))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Last-Event-ID must be a non-negative integer",
+                ) from exc
+            if cursor < 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Last-Event-ID must be a non-negative integer",
+                )
+
+        async def event_stream() -> Any:
+            async for event in setup.events(cursor, follow=follow):
+                if event is None:
+                    yield b": keep-alive\n\n"
+                else:
+                    yield _setup_server_sent_event(event)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post(
+        f"{API_PREFIX}/setup/runtime/refresh",
+        response_model=SetupStatus,
+        tags=["setup"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def refresh_setup_runtime() -> SetupStatus:
+        return await setup.refresh()
+
+    async def setup_control(operation: Any) -> SetupControlResponse:
+        try:
+            return await operation
+        except SetupServiceError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+
+    @app.post(
+        f"{API_PREFIX}/setup/runtime/select",
+        response_model=SetupControlResponse,
+        tags=["setup"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def select_setup_runtime(
+        request: RunnerSelectionRequest,
+    ) -> SetupControlResponse:
+        return await setup_control(setup.select_runner(request))
+
+    @app.post(
+        f"{API_PREFIX}/setup/image/prepare",
+        response_model=SetupControlResponse,
+        tags=["setup"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def prepare_setup_image(
+        request: ImagePreparationRequest,
+    ) -> SetupControlResponse:
+        return await setup_control(setup.prepare_image(request))
+
+    @app.post(
+        f"{API_PREFIX}/setup/image/retry",
+        response_model=SetupControlResponse,
+        tags=["setup"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def retry_setup_image(
+        request: ImagePreparationRequest,
+    ) -> SetupControlResponse:
+        return await setup_control(setup.retry_image_preparation(request))
+
+    @app.post(
+        f"{API_PREFIX}/setup/image/cancel",
+        response_model=SetupControlResponse,
+        tags=["setup"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def cancel_setup_image(
+        request: ImagePreparationCancellationRequest,
+    ) -> SetupControlResponse:
+        return await setup_control(setup.cancel_image_preparation(request))
 
     def require_execution_service() -> ExecutionService:
         if executions is None:
@@ -805,6 +1011,62 @@ def create_app(
     ) -> ContainerTerminalCapabilities:
         return require_container_terminal_service().capabilities(engagement_id)
 
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/commands/status",
+        response_model=TerminalCommandHistoryStatus,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def terminal_command_history_status(
+        engagement_id: str,
+    ) -> TerminalCommandHistoryStatus:
+        return terminal_commands.status(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/commands",
+        response_model=TerminalCommandPage,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_terminal_commands(
+        engagement_id: str,
+        search: str | None = Query(default=None, max_length=4096),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=1_000),
+    ) -> TerminalCommandPage:
+        return terminal_commands.list(
+            engagement_id,
+            search=search,
+            offset=offset,
+            limit=limit,
+        )
+
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/commands/status",
+        response_model=TerminalCommandHistoryStatus,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def set_terminal_command_history_status(
+        engagement_id: str,
+        request: TerminalCommandHistoryPreferenceUpdate,
+    ) -> TerminalCommandHistoryStatus:
+        return terminal_commands.set_enabled(engagement_id, enabled=request.enabled)
+
+    @app.delete(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/commands",
+        response_model=TerminalCommandHistoryClearResult,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def clear_terminal_commands(
+        engagement_id: str,
+    ) -> TerminalCommandHistoryClearResult:
+        return TerminalCommandHistoryClearResult(
+            engagement_id=engagement_id,
+            cleared=terminal_commands.clear(engagement_id),
+        )
+
     @app.post(
         f"{API_PREFIX}/container-terminal/preflight",
         response_model=ContainerTerminalPreflightResponse,
@@ -825,8 +1087,26 @@ def create_app(
     )
     async def start_container_terminal(
         request: ContainerTerminalStartRequest,
+        response: Response,
     ) -> ContainerTerminalStartResponse:
+        response.headers["Cache-Control"] = "private, no-store"
         return await require_container_terminal_service().start(request)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminal/recover",
+        response_model=ContainerTerminalRecoveryResponse,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def recover_container_terminal(
+        engagement_id: str,
+        response: Response,
+    ) -> ContainerTerminalRecoveryResponse:
+        response.headers["Cache-Control"] = "private, no-store"
+        if container_terminals is None:
+            store.get(Engagement, engagement_id)
+            return ContainerTerminalRecoveryResponse(active=False)
+        return await container_terminals.recover(engagement_id)
 
     @app.websocket(f"{API_PREFIX}/container-terminals/{{session_id}}/ws")
     async def container_terminal_socket(websocket: WebSocket, session_id: str) -> None:
@@ -870,55 +1150,89 @@ def create_app(
         if not ticket:
             await websocket.close(code=4401, reason="terminal ticket required")
             return
+        raw_after_sequence = websocket.query_params.get("after_sequence", "0")
+        if (
+            not raw_after_sequence.isascii()
+            or not raw_after_sequence.isdecimal()
+            or len(raw_after_sequence) > 16
+        ):
+            await websocket.close(code=4400, reason="invalid terminal replay sequence")
+            return
+        after_sequence = int(raw_after_sequence)
+        if after_sequence > 9_007_199_254_740_991:
+            await websocket.close(code=4400, reason="invalid terminal replay sequence")
+            return
         try:
-            await service.claim(session_id, ticket)
+            attachment = await service.attach(
+                session_id,
+                ticket,
+                after_sequence=after_sequence,
+            )
         except ContainerTerminalError as exc:
-            close_code = 4404 if exc.status_code == 404 else 4401
+            if exc.status_code == 404:
+                close_code = 4404
+            elif exc.code == "terminal_attached":
+                close_code = 4409
+            elif exc.status_code == 401 or exc.code.startswith("ticket_"):
+                close_code = 4401
+            elif exc.status_code >= 500:
+                close_code = 4503
+            else:
+                close_code = 4400
             await websocket.close(code=close_code, reason=exc.detail[:120])
             return
 
         await websocket.accept(subprotocol=terminal_protocol)
-        process = None
-        outcome = "disconnected"
-        exit_code: int | None = None
-        detail: str | None = None
-        error_code: str | None = None
         tasks: list[asyncio.Task[Any]] = []
         try:
-            try:
-                process = await service.launch(session_id)
-            except ContainerTerminalError as exc:
-                await websocket.send_json(
-                    {"type": "error", "code": exc.code, "detail": exc.detail}
-                )
-                await websocket.close(code=4503, reason=exc.detail[:120])
-                return
             await websocket.send_json(
                 {
                     "type": "ready",
                     "session_id": session_id,
                     "max_duration_seconds": TERMINAL_MAX_DURATION_SECONDS,
-                    "idle_timeout_seconds": TERMINAL_IDLE_TIMEOUT_SECONDS,
+                    "idle_timeout_seconds": int(service.idle_timeout_seconds),
+                    "reconnect_ticket": attachment.reconnect_ticket,
+                    "reconnect_grace_seconds": attachment.reconnect_grace_seconds,
+                    "replay_max_bytes": attachment.replay_max_bytes,
+                    "oldest_sequence": attachment.oldest_sequence,
+                    "latest_sequence": attachment.latest_sequence,
+                    "replay_truncated": attachment.replay_truncated,
                 }
             )
 
-            async def send_output() -> None:
-                assert process is not None
+            async def send_events() -> None:
                 while True:
-                    data = await process.read(TERMINAL_OUTPUT_CHUNK_BYTES)
-                    if not data:
-                        return
-                    await service.touch(session_id)
+                    event = await service.next_event(attachment)
+                    if isinstance(event, ContainerTerminalOutput):
+                        await websocket.send_json(
+                            {
+                                "type": "output",
+                                "sequence": event.sequence,
+                                "encoding": "base64",
+                                "data": base64.b64encode(event.data).decode("ascii"),
+                            }
+                        )
+                        continue
+                    if not isinstance(event, ContainerTerminalExit):
+                        raise RuntimeError("unsupported terminal broker event")
+                    if event.error_code is not None:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "code": event.error_code,
+                                "detail": event.detail or "terminal session ended",
+                            }
+                        )
                     await websocket.send_json(
                         {
-                            "type": "output",
-                            "encoding": "base64",
-                            "data": base64.b64encode(data).decode("ascii"),
+                            "type": "exit",
+                            "exit_code": event.exit_code,
+                            "outcome": event.outcome,
                         }
                     )
+                    return
 
             async def receive_input() -> str:
-                assert process is not None
                 while True:
                     encoded_message = await websocket.receive_text()
                     if (
@@ -985,8 +1299,10 @@ def create_app(
                                 }
                             )
                             continue
-                        await process.write(data)
-                        await service.touch(session_id)
+                        try:
+                            await service.write_input(attachment, data)
+                        except ContainerTerminalError:
+                            return "ended"
                     elif frame_type == "resize":
                         columns = message.get("columns")
                         rows = message.get("rows")
@@ -1005,7 +1321,7 @@ def create_app(
                             )
                             continue
                         try:
-                            process.resize(columns, rows)
+                            await service.resize(attachment, columns, rows)
                         except ValueError as exc:
                             await websocket.send_json(
                                 {
@@ -1015,8 +1331,10 @@ def create_app(
                                 }
                             )
                             continue
-                        await service.touch(session_id)
+                        except ContainerTerminalError:
+                            return "ended"
                     elif frame_type == "close":
+                        await service.close_attachment(attachment)
                         return "closed"
                     else:
                         await websocket.send_json(
@@ -1027,96 +1345,41 @@ def create_app(
                             }
                         )
 
-            async def watchdog() -> tuple[str, str, str]:
-                started = asyncio.get_running_loop().time()
-                while True:
-                    await asyncio.sleep(1)
-                    try:
-                        await service.enforce_workspace_limits(session_id)
-                    except ContainerTerminalError as exc:
-                        return "workspace_limit", exc.code, exc.detail
-                    if (
-                        asyncio.get_running_loop().time() - started
-                        >= TERMINAL_MAX_DURATION_SECONDS
-                    ):
-                        return (
-                            "timed_out",
-                            "timeout",
-                            "terminal reached its 30-minute maximum duration",
-                        )
-                    if (
-                        await service.idle_seconds(session_id)
-                        >= TERMINAL_IDLE_TIMEOUT_SECONDS
-                    ):
-                        return (
-                            "idle_timeout",
-                            "idle_timeout",
-                            "terminal closed after 15 minutes without input or output",
-                        )
-
             output_task = asyncio.create_task(
-                send_output(), name=f"container-terminal-output-{session_id}"
+                send_events(), name=f"container-terminal-output-{session_id}"
             )
             input_task = asyncio.create_task(
                 receive_input(), name=f"container-terminal-input-{session_id}"
             )
-            wait_task = asyncio.create_task(
-                process.wait(), name=f"container-terminal-wait-{session_id}"
-            )
-            watchdog_task = asyncio.create_task(
-                watchdog(), name=f"container-terminal-watchdog-{session_id}"
-            )
-            tasks = [output_task, input_task, wait_task, watchdog_task]
+            tasks = [output_task, input_task]
             done, _pending = await asyncio.wait(
-                {input_task, wait_task, watchdog_task},
+                tasks,
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            if wait_task in done:
-                exit_code = wait_task.result()
-                outcome = "completed"
-                try:
-                    await asyncio.wait_for(asyncio.shield(output_task), timeout=1)
-                except (asyncio.TimeoutError, WebSocketDisconnect):
-                    pass
-                await websocket.send_json(
-                    {"type": "exit", "exit_code": exit_code, "outcome": outcome}
-                )
-            elif watchdog_task in done:
-                outcome, error_code, detail = watchdog_task.result()
-                await websocket.send_json(
-                    {"type": "error", "code": error_code, "detail": detail}
-                )
-                await websocket.send_json(
-                    {"type": "exit", "exit_code": None, "outcome": outcome}
-                )
+            if output_task in done:
+                output_task.result()
             elif input_task in done:
-                try:
-                    outcome = input_task.result()
-                except WebSocketDisconnect:
-                    outcome = "disconnected"
-                if outcome == "closed":
-                    await websocket.send_json(
-                        {"type": "exit", "exit_code": None, "outcome": outcome}
-                    )
+                result = input_task.result()
+                if result in {"closed", "ended"}:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(output_task),
+                            timeout=1,
+                        )
+                    except (asyncio.TimeoutError, WebSocketDisconnect, RuntimeError):
+                        return
         except WebSocketDisconnect:
-            outcome = "disconnected"
-        except RuntimeError as exc:
+            pass
+        except RuntimeError:
             # Starlette raises RuntimeError when a peer disappears between
             # receive/send calls; treat it as a disconnect, not a Core failure.
-            outcome = "disconnected"
-            detail = str(exc)[:1_000]
+            pass
         finally:
             for task in tasks:
                 task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-            await service.finish(
-                session_id,
-                outcome=outcome,
-                exit_code=exit_code,
-                detail=detail,
-                error_code=error_code,
-            )
+            await service.detach(attachment)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/execution-capabilities",
@@ -1477,6 +1740,35 @@ def create_app(
             },
         )
 
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/file",
+        response_model=WorkspaceUploadResult,
+        status_code=201,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def upload_workspace_file(
+        engagement_id: str,
+        request: Request,
+        path: str = Query(min_length=1, max_length=4096),
+        overwrite: bool = Query(default=False),
+    ) -> WorkspaceUploadResult:
+        workspace = require_workspace_service()
+
+        async def upload() -> WorkspaceUploadResult:
+            return await workspace.upload(
+                engagement_id,
+                path,
+                request.stream(),
+                overwrite=overwrite,
+            )
+
+        # Uploads use a private file plus an atomic directory-fd rename and are
+        # serialized against other API uploads by WorkspaceService. They may
+        # safely coexist with a user's persistent terminal; destructive reset
+        # remains guarded until the terminal stops.
+        return await upload()
+
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/promote",
         response_model=Evidence,
@@ -1503,6 +1795,17 @@ def create_app(
             return workspace.reset(engagement_id, request)
         async with container_terminals.guard_workspace_operation(engagement_id):
             return workspace.reset(engagement_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/reports/{{report_id}}/sign-off",
+        response_model=Report,
+        tags=["reports"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def sign_off_saved_report(
+        report_id: str, request: ReportSignoffRequest
+    ) -> Report:
+        return sign_off_report(store, report_id, request)
 
     @app.post(
         f"{API_PREFIX}/reports/{{report_id}}/renders",
@@ -1641,8 +1944,7 @@ def create_app(
             "reject": ApprovalStatus.REJECTED,
             "stop": ApprovalStatus.CANCELLED,
         }
-        active_operator = operators.active_profile_or_none()
-        operator_id = active_operator.id if active_operator is not None else "operator"
+        operator_id = active_operator_id()
         changes: dict[str, Any] = {
             "status": status_by_decision[request.decision],
             "decided_by": operator_id,
@@ -1674,7 +1976,7 @@ def create_app(
         )
         if approval.origin == ToolCallOrigin.CHAT:
             if request.decision == "stop":
-                ChatService(store, tool_platform=tool_platform).cancel_turn(
+                chat_service().cancel_turn(
                     approval.run_id
                 )
             return updated
@@ -1859,8 +2161,7 @@ def create_app(
         engagement_id: str, request: ScopePolicyUpdateRequest
     ) -> ScopePolicy:
         engagement = store.get(Engagement, engagement_id)
-        active_operator = operators.active_profile_or_none()
-        operator_id = active_operator.id if active_operator is not None else "operator"
+        operator_id = active_operator_id()
         payload = request.model_dump(exclude={"expected_revision"})
         payload["grants"] = [
             grant.model_copy(update={"granted_by": operator_id})
@@ -1944,8 +2245,7 @@ def create_app(
             assigned_tool_names = tool_platform.normalize_assignment(
                 request.manifest_digest, request.tool_names
             )
-        active_operator = operators.active_profile_or_none()
-        operator_id = active_operator.id if active_operator is not None else "operator"
+        operator_id = active_operator_id()
         existing = next(
             (
                 assignment
@@ -2279,8 +2579,7 @@ def create_app(
                     "runner-isolation acceptance flow passes"
                 ),
             )
-        active_operator = operators.active_profile_or_none()
-        operator_id = active_operator.id if active_operator is not None else "operator"
+        operator_id = active_operator_id()
         budget = RunBudget(
             max_concurrency=request.max_concurrency,
             max_delegation_depth=1 if request.tool_names else 0,
@@ -2308,8 +2607,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def stop_mission(run_id: str, request: MissionStopRequest) -> AgentRun:
-        active_operator = operators.active_profile_or_none()
-        operator_id = active_operator.id if active_operator is not None else "operator"
+        operator_id = active_operator_id()
         return await missions.stop_mission(
             run_id,
             reason=request.reason,
@@ -2426,6 +2724,57 @@ def create_app(
             )
         ]
 
+    @app.get(
+        f"{API_PREFIX}/providers/discover-local",
+        response_model=list[LocalProviderDetection],
+        tags=["providers"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def discover_local_provider_services() -> list[LocalProviderDetection]:
+        """Probe fixed loopback model endpoints without generating content."""
+
+        return await _discover_local_provider_services(provider_factory)
+
+    @app.post(
+        f"{API_PREFIX}/credentials",
+        response_model=CredentialStatus,
+        status_code=201,
+        tags=["credentials"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_provider_credential(
+        request: CredentialCreateRequest,
+    ) -> CredentialStatus:
+        try:
+            return credentials.create(request)
+        except CredentialUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/credentials/{{reference}}/status",
+        response_model=CredentialStatus,
+        tags=["credentials"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def provider_credential_status(reference: str) -> CredentialStatus:
+        try:
+            return credentials.status(reference)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete(
+        f"{API_PREFIX}/credentials/{{reference}}",
+        status_code=204,
+        tags=["credentials"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_provider_credential(reference: str) -> Response:
+        try:
+            credentials.delete(reference)
+        except CredentialError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return Response(status_code=204)
+
     @app.post(
         f"{API_PREFIX}/providers/{{provider_id}}/health",
         response_model=ProviderHealth,
@@ -2434,7 +2783,7 @@ def create_app(
     )
     async def refresh_provider_health(provider_id: str) -> ProviderHealth:
         profile = store.get(ProviderProfile, provider_id)
-        return await _provider_health(profile)
+        return await _provider_health(profile, provider_factory)
 
     @app.post(
         f"{API_PREFIX}/providers/{{provider_id}}/capabilities/verify",
@@ -2452,7 +2801,9 @@ def create_app(
                 f"revision conflict: expected {request.expected_revision}, "
                 f"found {profile.revision}"
             )
-        return await _verify_provider_capability(store, profile, request.model)
+        return await _verify_provider_capability(
+            store, profile, request.model, provider_factory
+        )
 
     @app.post(
         f"{API_PREFIX}/provider-health/refresh",
@@ -2477,7 +2828,7 @@ def create_app(
 
         async def checked(profile: ProviderProfile) -> ProviderHealth:
             async with semaphore:
-                return await _provider_health(profile)
+                return await _provider_health(profile, provider_factory)
 
         return list(await asyncio.gather(*(checked(profile) for profile in profiles)))
 
@@ -2488,7 +2839,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def create_chat_completion(request: ChatCompletionRequest) -> Any:
-        service = ChatService(store, tool_platform=tool_platform)
+        service = chat_service()
         prepared = await service.prepare_async(request)
         if not request.stream:
             return await service.complete(prepared)
@@ -2522,7 +2873,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def resume_chat_turn(turn_id: str) -> StreamingResponse:
-        service = ChatService(store, tool_platform=tool_platform)
+        service = chat_service()
         prepared = service.prepare_resume(turn_id)
 
         async def event_stream() -> Any:
@@ -2547,7 +2898,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_pending_chat_turn(session_id: str) -> ChatTurnSummary | None:
-        turn = ChatService(store, tool_platform=tool_platform).pending_turn(session_id)
+        turn = chat_service().pending_turn(session_id)
         return _chat_turn_summary(turn) if turn is not None else None
 
     @app.post(
@@ -2558,7 +2909,7 @@ def create_app(
     )
     async def cancel_chat_turn(turn_id: str) -> ChatTurnSummary:
         return _chat_turn_summary(
-            ChatService(store, tool_platform=tool_platform).cancel_turn(turn_id)
+            chat_service().cancel_turn(turn_id)
         )
 
     @app.get(
@@ -2568,7 +2919,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_chat_session_messages(session_id: str) -> list[ChatMessage]:
-        return ChatService(store, tool_platform=tool_platform).session_messages(
+        return chat_service().session_messages(
             session_id
         )
 
@@ -2579,7 +2930,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_chat_session_context(session_id: str) -> ContextStatus:
-        return ChatService(store, tool_platform=tool_platform).context_status(
+        return chat_service().context_status(
             session_id
         )
 
@@ -2903,6 +3254,14 @@ def _server_sent_event(event: str, payload: dict[str, Any]) -> bytes:
     return f"event: {event}\ndata: {encoded}\n\n".encode()
 
 
+def _setup_server_sent_event(event: SetupEvent) -> bytes:
+    payload = event.model_dump(mode="json")
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return (
+        f"id: {event.sequence}\nevent: setup\ndata: {encoded}\n\n"
+    ).encode()
+
+
 def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
     return ChatTurnSummary(
         id=turn.id,
@@ -2914,7 +3273,56 @@ def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
     )
 
 
-async def _provider_health(profile: ProviderProfile) -> ProviderHealth:
+async def _discover_local_provider_services(
+    provider_factory: Callable[[ProviderProfile], Any] | None = None,
+) -> list[LocalProviderDetection]:
+    """Discover only fixed, known loopback services with bounded model probes."""
+
+    flavors = (
+        ProviderFlavor.OLLAMA,
+        ProviderFlavor.VLLM,
+        ProviderFlavor.LM_STUDIO,
+    )
+
+    async def detect(flavor: ProviderFlavor) -> LocalProviderDetection | None:
+        entry = PROVIDER_CATALOG[flavor]
+        if not entry.local or not entry.default_base_url:
+            return None
+        profile = ProviderProfile(
+            id=f"detected-{flavor.value}",
+            name=entry.display_name,
+            provider_type=flavor.value,
+            endpoint=entry.default_base_url,
+            is_local=True,
+        )
+        try:
+            health = await asyncio.wait_for(
+                _provider_health(profile, provider_factory), timeout=2.0
+            )
+        except asyncio.TimeoutError:
+            return None
+        if not health.healthy:
+            return None
+        models = [
+            model.strip()
+            for model in health.models
+            if isinstance(model, str) and model.strip() and len(model.strip()) <= 500
+        ][:256]
+        return LocalProviderDetection(
+            flavor=flavor,
+            display_name=entry.display_name,
+            endpoint=entry.default_base_url,
+            models=list(dict.fromkeys(models)),
+        )
+
+    discovered = await asyncio.gather(*(detect(flavor) for flavor in flavors))
+    return [candidate for candidate in discovered if candidate is not None]
+
+
+async def _provider_health(
+    profile: ProviderProfile,
+    provider_factory: Callable[[ProviderProfile], Any] | None = None,
+) -> ProviderHealth:
     """Return bounded, allowlisted health without reviving disabled profiles."""
 
     if not profile.enabled:
@@ -2924,7 +3332,7 @@ async def _provider_health(profile: ProviderProfile) -> ProviderHealth:
             detail="provider profile is disabled",
         )
     try:
-        health = await provider_from_profile(profile).health()
+        health = await (provider_factory or provider_from_profile)(profile).health()
     except (ProviderError, ValueError) as exc:
         return ProviderHealth(
             provider_id=profile.id,
@@ -2960,6 +3368,7 @@ async def _verify_provider_capability(
     store: NebulaStore,
     profile: ProviderProfile,
     model: str,
+    provider_factory: Callable[[ProviderProfile], Any] | None = None,
 ) -> ProviderCapabilityVerifyResponse:
     """Perform and durably record a harmless exact-model required-call probe."""
 
@@ -2980,7 +3389,7 @@ async def _verify_provider_capability(
     )
     try:
         response = await asyncio.wait_for(
-            provider_from_profile(probe_profile).complete(
+            (provider_factory or provider_from_profile)(probe_profile).complete(
                 ModelRequest(
                     model=model,
                     instructions=(
@@ -3054,6 +3463,10 @@ async def _verify_provider_capability(
         profile.id,
         {
             "capability_verifications": verifications,
+            # A health-discovered model may be verified before the operator has
+            # configured an allowlist. Persist that explicit verification target
+            # so subsequent profile reads and mission selectors do not forget it.
+            "model_allowlist": profile.model_allowlist or [model],
             "capabilities": profile.capabilities.model_copy(
                 update={
                     "tool_calling": has_verified_model,
@@ -3169,17 +3582,7 @@ def _register_crud_routes(
                     }
                 )
             entity_validator.validate_create(entity)
-            created = store.create(entity)
-            if isinstance(created, ProviderProfile):
-                default_model = created.metadata.get("default_model") or next(
-                    iter(created.model_allowlist), None
-                )
-                if isinstance(default_model, str) and default_model:
-                    verified = await _verify_provider_capability(
-                        store, created, default_model
-                    )
-                    return store.get(ProviderProfile, verified.provider_id)
-            return created
+            return store.create(entity)
 
         create_entity.__name__ = f"create_{resource.replace('-', '_')}"
         create_entity.__annotations__ = {"entity": model, "return": model}
@@ -3246,22 +3649,6 @@ def _register_crud_routes(
                 entity,
                 expected_revision=current.revision if if_match is None else if_match,
             )
-            if (
-                isinstance(current, ProviderProfile)
-                and isinstance(replaced, ProviderProfile)
-                and (
-                    _provider_contract_fingerprint(current)
-                    != _provider_contract_fingerprint(replaced)
-                )
-            ):
-                default_model = replaced.metadata.get("default_model") or next(
-                    iter(replaced.model_allowlist), None
-                )
-                if isinstance(default_model, str) and default_model:
-                    result = await _verify_provider_capability(
-                        store, replaced, default_model
-                    )
-                    return store.get(ProviderProfile, result.provider_id)
             return replaced
 
         replace_entity.__name__ = f"replace_{resource.replace('-', '_')}"
@@ -3310,22 +3697,6 @@ def _register_crud_routes(
                     else patch.expected_revision
                 ),
             )
-            if (
-                isinstance(current, ProviderProfile)
-                and isinstance(updated, ProviderProfile)
-                and (
-                    _provider_contract_fingerprint(current)
-                    != _provider_contract_fingerprint(updated)
-                )
-            ):
-                default_model = updated.metadata.get("default_model") or next(
-                    iter(updated.model_allowlist), None
-                )
-                if isinstance(default_model, str) and default_model:
-                    result = await _verify_provider_capability(
-                        store, updated, default_model
-                    )
-                    return store.get(ProviderProfile, result.provider_id)
             return updated
 
         patch_entity.__name__ = f"patch_{resource.replace('-', '_')}"

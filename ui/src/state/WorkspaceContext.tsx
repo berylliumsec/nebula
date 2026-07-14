@@ -10,6 +10,7 @@ import {
 } from "react";
 import { ApiClient } from "../api/client";
 import { NebulaEventStream, type StreamState } from "../api/events";
+import { providerVerificationModel } from "../api/providerCapabilities";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
 import type {
   AgentRunSummary,
@@ -23,6 +24,7 @@ import type {
   EvidenceUploadRequest,
   FindingCreateRequest,
   FindingSummary,
+  FindingUpdateRequest,
   HealthResponse,
   KnowledgeIngestRequest,
   KnowledgeSource,
@@ -40,16 +42,11 @@ import type {
   ReportSummary,
   ReportUpdateRequest,
   RunStopRequest,
+  SetupStatus,
 } from "../api/types";
-import {
-  previewApproval,
-  previewAssets,
-  previewEvents,
-  previewFindings,
-  previewProviders,
-} from "../data/demo";
 
 type CoreState = "checking" | "online" | "offline";
+export type WorkspaceState = "starting" | "ready" | "degraded" | "failed";
 
 export function evolveRunFromEvent(current: AgentRunSummary, event: RunEvent): AgentRunSummary {
   if (event.runId && event.runId !== current.id) return current;
@@ -82,8 +79,10 @@ interface WorkspaceContextValue {
   api?: ApiClient;
   runtime?: ApiRuntime;
   coreState: CoreState;
+  workspaceState: WorkspaceState;
   coreError?: string;
   health?: HealthResponse;
+  setupStatus?: SetupStatus;
   engagements: EngagementSummary[];
   operatorProfiles: OperatorProfile[];
   activeOperator?: OperatorProfile;
@@ -103,7 +102,7 @@ interface WorkspaceContextValue {
   previewMode: boolean;
   resolveApproval: (id: string, request: ApprovalDecisionRequest) => Promise<void>;
   refreshProvider: (id: string) => Promise<void>;
-  reverifyProvider: (id: string) => Promise<void>;
+  reverifyProvider: (id: string, model?: string) => Promise<void>;
   addProvider: (request: ProviderCreateRequest) => Promise<void>;
   updateProvider: (id: string, request: ProviderUpdateRequest) => Promise<ProviderHealth>;
   setProviderEnabled: (id: string, enabled: boolean, expectedRevision: number) => Promise<ProviderHealth>;
@@ -112,6 +111,7 @@ interface WorkspaceContextValue {
   createEngagement: (request: EngagementCreateRequest) => Promise<EngagementSummary>;
   addAsset: (request: AssetCreateRequest) => Promise<AssetSummary>;
   createFinding: (request: FindingCreateRequest) => Promise<FindingSummary>;
+  updateFinding: (id: string, request: FindingUpdateRequest) => Promise<FindingSummary>;
   uploadEvidence: (request: EvidenceUploadRequest) => Promise<EvidenceSummary>;
   startMission: (request: MissionCreateRequest) => Promise<AgentRunSummary>;
   stopMission: (id: string, request?: RunStopRequest) => Promise<AgentRunSummary>;
@@ -121,9 +121,11 @@ interface WorkspaceContextValue {
   deleteOperatorProfile: (id: string, expectedRevision?: number) => Promise<void>;
   createReport: (request: ReportCreateRequest) => Promise<ReportSummary>;
   updateReport: (id: string, request: ReportUpdateRequest) => Promise<ReportSummary>;
+  signOffReport: (id: string, expectedRevision: number, operatorId: string, attestation?: string) => Promise<ReportSummary>;
   ingestKnowledgeSource: (request: KnowledgeIngestRequest) => Promise<KnowledgeSource>;
   reindexKnowledgeSource: (id: string) => Promise<void>;
   removeKnowledgeSource: (id: string) => Promise<void>;
+  refreshSetupRuntime: () => Promise<void>;
   reconnect: () => void;
 }
 
@@ -132,32 +134,35 @@ const WorkspaceContext = createContext<WorkspaceContextValue | undefined>(undefi
 export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [runtime, setRuntime] = useState<ApiRuntime>();
   const [api, setApi] = useState<ApiClient>();
-  const [coreState, setCoreState] = useState<CoreState>("checking");
+  const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("starting");
+  const coreState: CoreState = workspaceState === "starting" ? "checking" : workspaceState === "failed" ? "offline" : "online";
   const [coreError, setCoreError] = useState<string>();
   const [health, setHealth] = useState<HealthResponse>();
+  const [setupStatus, setSetupStatus] = useState<SetupStatus>();
   const [engagements, setEngagements] = useState<EngagementSummary[]>([]);
   const [operatorProfiles, setOperatorProfiles] = useState<OperatorProfile[]>([]);
   const [engagement, setEngagement] = useState<EngagementSummary>();
   const [run, setRun] = useState<AgentRunSummary>();
   const [streamState, setStreamState] = useState<StreamState>("closed");
-  const [events, setEvents] = useState<RunEvent[]>(previewEvents);
-  const [approvals, setApprovals] = useState<ApprovalSummary[]>([previewApproval]);
-  const [assets, setAssets] = useState<AssetSummary[]>(previewAssets);
-  const [findings, setFindings] = useState<FindingSummary[]>(previewFindings);
+  const [events, setEvents] = useState<RunEvent[]>([]);
+  const [approvals, setApprovals] = useState<ApprovalSummary[]>([]);
+  const [assets, setAssets] = useState<AssetSummary[]>([]);
+  const [findings, setFindings] = useState<FindingSummary[]>([]);
   const [evidence, setEvidence] = useState<EvidenceSummary[]>([]);
   const [observations, setObservations] = useState<ObservationSummary[]>([]);
   const [reports, setReports] = useState<ReportSummary[]>([]);
-  const [providers, setProviders] = useState<ProviderHealth[]>(previewProviders);
+  const [providers, setProviders] = useState<ProviderHealth[]>([]);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([]);
   const [attempt, setAttempt] = useState(0);
-  const [selectedEngagementId, setSelectedEngagementId] = useState("");
+  const [selectedEngagementId, setSelectedEngagementId] = useState(() => localStorage.getItem("nebula.engagement") ?? "");
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
 
   const reconnect = useCallback(() => {
-    setCoreState("checking");
+    setWorkspaceState("starting");
     setCoreError(undefined);
     setHealth(undefined);
+    setSetupStatus(undefined);
     runtimeResolution.current = undefined;
     setAttempt((value) => value + 1);
   }, []);
@@ -174,7 +179,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       setRuntime(resolved);
       if (resolved.state !== "ready") {
         setCoreError(resolved.message ?? "Nebula Core could not be started.");
-        setCoreState("offline");
+        setWorkspaceState("failed");
         return;
       }
 
@@ -183,28 +188,65 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       try {
         const nextHealth = await nextApi.health(controller.signal);
         if (!active) return;
-        const [engagementPage, providerPage, nextProviderCatalog, nextOperatorProfiles] = await Promise.all([
+        setHealth(nextHealth);
+        setWorkspaceState(nextHealth.status === "degraded" ? "degraded" : "ready");
+
+        const loadErrors: string[] = [];
+        const [engagementResult, providerResult, catalogResult, operatorResult, setupResult] = await Promise.allSettled([
           nextApi.listEngagements(controller.signal),
           nextApi.listProviders(controller.signal),
           nextApi.listProviderCatalog(controller.signal),
           nextApi.listOperatorProfiles(controller.signal),
+          nextApi.setupStatus(controller.signal),
         ]);
         if (!active) return;
-        setEngagements(engagementPage.items);
+
+        const engagementItems = engagementResult.status === "fulfilled" ? engagementResult.value.items : [];
+        if (engagementResult.status === "rejected") loadErrors.push("projects");
+        setEngagements(engagementItems);
         const rememberedId = selectedEngagementId || localStorage.getItem("nebula.engagement") || "";
-        const nextEngagement = engagementPage.items.find((item) => item.id === rememberedId)
-          ?? engagementPage.items[0];
+        const nextEngagement = engagementItems.find((item) => item.id === rememberedId)
+          ?? engagementItems[0];
         if (nextEngagement && nextEngagement.id !== selectedEngagementId) {
           setSelectedEngagementId(nextEngagement.id);
           localStorage.setItem("nebula.engagement", nextEngagement.id);
         }
+        if (!nextEngagement) localStorage.removeItem("nebula.engagement");
+
+        if (providerResult.status === "fulfilled") setProviders(providerResult.value.items);
+        else {
+          setProviders([]);
+          loadErrors.push("model providers");
+        }
+        if (catalogResult.status === "fulfilled") setProviderCatalog(catalogResult.value);
+        else {
+          setProviderCatalog([]);
+          loadErrors.push("provider catalog");
+        }
+        if (operatorResult.status === "fulfilled") setOperatorProfiles(operatorResult.value);
+        else {
+          setOperatorProfiles([]);
+          loadErrors.push("operator profiles");
+        }
+        if (setupResult.status === "fulfilled") {
+          setSetupStatus(setupResult.value);
+          if (setupResult.value.core.status !== "ready") loadErrors.push("setup");
+        } else {
+          setSetupStatus(undefined);
+          loadErrors.push("setup status");
+        }
+
         let nextRun: AgentRunSummary | undefined;
-        setProviders(providerPage.items);
-        setProviderCatalog(nextProviderCatalog);
-        setOperatorProfiles(nextOperatorProfiles);
+        setApprovals([]);
+        setAssets([]);
+        setFindings([]);
+        setEvidence([]);
+        setObservations([]);
+        setKnowledgeSources([]);
+        setReports([]);
 
         if (nextEngagement) {
-          const [runPage, approvalPage, assetPage, findingPage, evidencePage, observationPage, knowledgePage, reportPage] = await Promise.all([
+          const detailResults = await Promise.allSettled([
             nextApi.listRuns(nextEngagement.id, controller.signal),
             nextApi.listApprovals(nextEngagement.id, controller.signal),
             nextApi.listAssets(nextEngagement.id, controller.signal),
@@ -215,29 +257,28 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
             nextApi.listReports(nextEngagement.id, controller.signal),
           ]);
           if (!active) return;
-          nextRun = runPage.items[runPage.items.length - 1];
-          setApprovals(approvalPage.items);
-          setAssets(assetPage.items);
-          setFindings(findingPage.items);
-          setEvidence(evidencePage.items);
-          setObservations(observationPage.items);
-          setKnowledgeSources(knowledgePage.items);
-          setReports(reportPage.items);
-        } else {
-          setApprovals([]);
-          setAssets([]);
-          setFindings([]);
-          setEvidence([]);
-          setObservations([]);
-          setKnowledgeSources([]);
-          setReports([]);
+          const labels = ["activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "reports"];
+          detailResults.forEach((result, index) => {
+            if (result.status === "rejected") loadErrors.push(labels[index]);
+          });
+          const [runResult, approvalResult, assetResult, findingResult, evidenceResult, observationResult, knowledgeResult, reportResult] = detailResults;
+          if (runResult.status === "fulfilled") nextRun = runResult.value.items[runResult.value.items.length - 1];
+          if (approvalResult.status === "fulfilled") setApprovals(approvalResult.value.items);
+          if (assetResult.status === "fulfilled") setAssets(assetResult.value.items);
+          if (findingResult.status === "fulfilled") setFindings(findingResult.value.items);
+          if (evidenceResult.status === "fulfilled") setEvidence(evidenceResult.value.items);
+          if (observationResult.status === "fulfilled") setObservations(observationResult.value.items);
+          if (knowledgeResult.status === "fulfilled") setKnowledgeSources(knowledgeResult.value.items);
+          if (reportResult.status === "fulfilled") setReports(reportResult.value.items);
         }
 
-        setHealth(nextHealth);
         setEngagement(nextEngagement);
         setRun(nextRun);
-        setCoreState("online");
-        setCoreError(undefined);
+        const degraded = nextHealth.status === "degraded" || loadErrors.length > 0;
+        setWorkspaceState(degraded ? "degraded" : "ready");
+        setCoreError(loadErrors.length
+          ? `Some workspace data could not be loaded: ${loadErrors.join(", ")}.`
+          : nextHealth.status === "degraded" ? "Nebula Core reported limited availability." : undefined);
         setEvents([]);
 
         if (nextRun) {
@@ -278,7 +319,22 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       } catch (error) {
         if (active) {
           setCoreError(error instanceof Error ? error.message : "Nebula Core could not be reached.");
-          setCoreState("offline");
+          setWorkspaceState("failed");
+          setHealth(undefined);
+          setSetupStatus(undefined);
+          setEngagements([]);
+          setEngagement(undefined);
+          setRun(undefined);
+          setEvents([]);
+          setApprovals([]);
+          setAssets([]);
+          setFindings([]);
+          setEvidence([]);
+          setObservations([]);
+          setReports([]);
+          setProviders([]);
+          setProviderCatalog([]);
+          setKnowledgeSources([]);
           setStreamState("closed");
         }
       }
@@ -291,11 +347,41 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     };
   }, [attempt, selectedEngagementId]);
 
+  useEffect(() => {
+    if (!api || workspaceState === "failed" || !["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "")) return;
+    let active = true;
+    let timer: number | undefined;
+    const poll = () => {
+      timer = globalThis.setTimeout(() => {
+        void api.setupStatus()
+          .then((next) => {
+            if (!active) return;
+            setSetupStatus(next);
+            if (["detecting_runner", "preparing_image"].includes(next.terminal.status)) poll();
+          })
+          .catch(() => {
+            if (active) poll();
+          });
+      }, 1_000);
+    };
+    poll();
+    return () => {
+      active = false;
+      if (timer !== undefined) globalThis.clearTimeout(timer);
+    };
+  }, [api, setupStatus?.terminal.status, workspaceState]);
+
+  const refreshSetupRuntime = useCallback(async () => {
+    if (!api || workspaceState === "failed") throw new Error("Nebula Core must be available to check Terminal setup.");
+    const next = await api.refreshSetupRuntime();
+    setSetupStatus(next);
+  }, [api, workspaceState]);
+
   const selectEngagement = useCallback((id: string) => {
     if (!id || id === selectedEngagementId) return;
     localStorage.setItem("nebula.engagement", id);
     setSelectedEngagementId(id);
-    setCoreState("checking");
+    setWorkspaceState("starting");
     setCoreError(undefined);
   }, [selectedEngagementId]);
 
@@ -307,7 +393,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setEngagements((current) => [created, ...current.filter((item) => item.id !== created.id)]);
     localStorage.setItem("nebula.engagement", created.id);
     setSelectedEngagementId(created.id);
-    setCoreState("checking");
+    setWorkspaceState("starting");
     return created;
   }, [api, coreState]);
 
@@ -390,12 +476,12 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return updated;
   }, [api, coreState]);
 
-  const reverifyProvider = useCallback(async (id: string) => {
+  const reverifyProvider = useCallback(async (id: string, requestedModel?: string) => {
     if (coreState !== "online" || !api) {
       throw new Error("Nebula Core must be online to verify a provider.");
     }
     const current = providers.find((provider) => provider.id === id);
-    const model = current?.defaultModel ?? current?.modelAllowlist[0];
+    const model = requestedModel?.trim() || providerVerificationModel(current);
     if (!current || !model) throw new Error("Configure an exact model before verification.");
     const updated = await api.verifyProviderCapabilities(id, model, current.revision);
     setProviders((items) => items.map((provider) => provider.id === id ? updated : provider));
@@ -434,6 +520,15 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     const created = await api.createFinding(request);
     setFindings((current) => [created, ...current.filter((finding) => finding.id !== created.id)]);
     return created;
+  }, [api, coreState]);
+
+  const updateFinding = useCallback(async (id: string, request: FindingUpdateRequest) => {
+    if (coreState !== "online" || !api) {
+      throw new Error("Nebula Core must be online to update a finding.");
+    }
+    const updated = await api.updateFinding(id, request);
+    setFindings((current) => current.map((finding) => finding.id === id ? updated : finding));
+    return updated;
   }, [api, coreState]);
 
   const uploadEvidence = useCallback(async (request: EvidenceUploadRequest) => {
@@ -520,6 +615,20 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return updated;
   }, [api, coreState]);
 
+  const signOffReport = useCallback(async (
+    id: string,
+    expectedRevision: number,
+    operatorId: string,
+    attestation?: string,
+  ) => {
+    if (coreState !== "online" || !api) {
+      throw new Error("Nebula Core must be online to sign off a report.");
+    }
+    const signed = await api.signOffReport(id, expectedRevision, operatorId, attestation);
+    setReports((current) => current.map((item) => item.id === id ? signed : item));
+    return signed;
+  }, [api, coreState]);
+
   const ingestKnowledgeSource = useCallback(
     async (request: KnowledgeIngestRequest) => {
       if (coreState !== "online" || !api) {
@@ -559,8 +668,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       api,
       runtime,
       coreState,
+      workspaceState,
       coreError,
       health,
+      setupStatus,
       engagements,
       operatorProfiles,
       activeOperator: operatorProfiles.find((profile) => profile.active),
@@ -577,7 +688,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       providers,
       providerCatalog,
       knowledgeSources,
-      previewMode: coreState !== "online",
+      previewMode: false,
       resolveApproval,
       refreshProvider,
       reverifyProvider,
@@ -589,6 +700,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       createEngagement,
       addAsset,
       createFinding,
+      updateFinding,
       uploadEvidence,
       startMission,
       stopMission,
@@ -598,9 +710,11 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteOperatorProfile,
       createReport,
       updateReport,
+      signOffReport,
       ingestKnowledgeSource,
       reindexKnowledgeSource,
       removeKnowledgeSource,
+      refreshSetupRuntime,
       reconnect,
     }),
     [
@@ -608,6 +722,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       approvals,
       assets,
       coreState,
+      workspaceState,
       coreError,
       engagement,
       engagements,
@@ -618,6 +733,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       observations,
       reports,
       health,
+      setupStatus,
       providers,
       providerCatalog,
       knowledgeSources,
@@ -630,6 +746,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       createEngagement,
       addAsset,
       createFinding,
+      updateFinding,
       uploadEvidence,
       startMission,
       stopMission,
@@ -639,9 +756,11 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteOperatorProfile,
       createReport,
       updateReport,
+      signOffReport,
       ingestKnowledgeSource,
       reindexKnowledgeSource,
       removeKnowledgeSource,
+      refreshSetupRuntime,
       refreshProvider,
       reverifyProvider,
       resolveApproval,

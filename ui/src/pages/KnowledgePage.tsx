@@ -19,12 +19,6 @@ import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
 
-const previewSources: KnowledgeSource[] = [
-  { id: "preview-roe", engagementId: "preview", name: "Acme rules of engagement.pdf", sourceType: "document", status: "ready", citation: "Acme rules of engagement.pdf", documentCount: 84, createdAt: "2026-07-12T08:04:00Z", updatedAt: "2026-07-12T08:04:00Z", metadata: { filename: "Acme rules of engagement.pdf", mediaType: "application/pdf", chunkCount: 84 } },
-  { id: "preview-owasp", engagementId: "preview", name: "OWASP Web Security Testing Guide", sourceType: "web", status: "ready", citation: "OWASP WSTG", documentCount: 1240, createdAt: "2026-07-10T09:00:00Z", updatedAt: "2026-07-10T09:00:00Z", metadata: { chunkCount: 1240 } },
-  { id: "preview-scanner", engagementId: "preview", name: "Imported scanner observations", sourceType: "structured", status: "ready", documentCount: 386, createdAt: "2026-07-12T18:00:00Z", updatedAt: "2026-07-12T19:02:00Z", metadata: { chunkCount: 386 } },
-];
-
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 
 function sourceIcon(source: KnowledgeSource) {
@@ -63,7 +57,6 @@ export function KnowledgePage() {
     engagement,
     ingestKnowledgeSource,
     knowledgeSources,
-    previewMode,
     reindexKnowledgeSource,
     removeKnowledgeSource,
   } = useWorkspace();
@@ -74,7 +67,7 @@ export function KnowledgePage() {
   const [statusMessage, setStatusMessage] = useState<string>();
   const [error, setError] = useState<string>();
   const [selected, setSelected] = useState<KnowledgeSource>();
-  const sources = previewMode ? previewSources : knowledgeSources;
+  const sources = knowledgeSources;
   const requestedSourceId = searchParams.get("source");
   const visibleSources = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -109,7 +102,7 @@ export function KnowledgePage() {
       return;
     }
     if (!engagement) {
-      setError("Create or select an engagement before adding a knowledge source.");
+      setError("Create or select a project before adding a knowledge source.");
       return;
     }
     setUploading(true);
@@ -235,13 +228,13 @@ export function KnowledgePage() {
                   <div className="source-actions">
                     <button className="text-link" type="button" onClick={() => setSelected(source)}>Inspect</button>
                     <button className="icon-button subtle" type="button" title="Reindex source" aria-label={`Reindex ${source.name}`} disabled={!canMutate || busy} onClick={() => void reindex(source)}><RefreshCw size={14} /></button>
-                    <button className="icon-button subtle" type="button" title="Download original" aria-label={`Download ${source.name}`} disabled={!source.artifactId || !api || busy || previewMode} onClick={() => void download(source)}><Download size={14} /></button>
+                    <button className="icon-button subtle" type="button" title="Download original" aria-label={`Download ${source.name}`} disabled={!source.artifactId || !api || busy} onClick={() => void download(source)}><Download size={14} /></button>
                     <button className="icon-button subtle" type="button" title="Remove from retrieval" aria-label={`Remove ${source.name}`} disabled={!canMutate || busy} onClick={() => void remove(source)}><Trash2 size={14} /></button>
                   </div>
                 </article>
               );
             })}
-            {visibleSources.length === 0 && <div className="empty-state compact"><BookOpen size={23} /><strong>{query ? "No matching knowledge sources" : "No knowledge sources loaded"}</strong><p>{query ? "Try a different source name or citation." : canMutate ? "Add a document to make it available for cited analyst chat." : "Connect Core and select an engagement to add sources."}</p></div>}
+            {visibleSources.length === 0 && <div className="empty-state compact"><BookOpen size={23} /><strong>{query ? "No matching knowledge sources" : "No knowledge sources loaded"}</strong><p>{query ? "Try a different source name or citation." : canMutate ? "Add a document to make it available for cited analyst chat." : "Connect Core and select a project to add sources."}</p></div>}
           </div>
         </section>
         <aside className="panel knowledge-policy">

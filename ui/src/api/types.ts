@@ -284,6 +284,7 @@ export interface FindingSummary {
   verifierId?: string;
   verifiedAt?: string;
   updatedAt: string;
+  revision: number;
 }
 
 export interface FindingCreateRequest {
@@ -295,6 +296,14 @@ export interface FindingCreateRequest {
   assetIds?: Identifier[];
   cveIds?: string[];
   cweIds?: string[];
+}
+
+export interface FindingUpdateRequest {
+  status?: FindingStatus;
+  evidenceIds?: Identifier[];
+  verifierId?: Identifier;
+  verifiedAt?: string;
+  expectedRevision: number;
 }
 
 export interface ReportSummary {
@@ -337,9 +346,39 @@ export interface ObservationSummary {
   observationType: string;
   title: string;
   body: string;
+  assetIds: Identifier[];
+  serviceIds: Identifier[];
   evidenceIds: Identifier[];
+  source?: string;
+  confidence: number;
+  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  revision: number;
+}
+
+export interface ObservationCreateRequest {
+  engagementId: Identifier;
+  observationType?: string;
+  title: string;
+  body?: string;
+  assetIds?: Identifier[];
+  serviceIds?: Identifier[];
+  evidenceIds?: Identifier[];
+  source?: string;
+  confidence?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ObservationUpdateRequest {
+  title?: string;
+  body?: string;
+  assetIds?: Identifier[];
+  serviceIds?: Identifier[];
+  evidenceIds?: Identifier[];
+  confidence?: number;
+  metadata?: Record<string, unknown>;
+  expectedRevision: number;
 }
 
 export interface ReportRender {
@@ -431,6 +470,9 @@ export interface EvidenceUploadRequest {
   assetIds?: Identifier[];
   capturedBy?: string;
   sourceVersion?: string;
+  parentArtifactId?: Identifier;
+  sourceContext?: Record<string, unknown>;
+  editRecipe?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 
@@ -477,6 +519,7 @@ export interface ProviderHealth {
   defaultModel?: string;
   effectiveDefaultModel?: string;
   credentialEnv?: string;
+  credentialRef?: string;
   permitsSensitiveData: boolean;
   retention?: string;
   residency: string[];
@@ -517,6 +560,13 @@ export interface ProviderCatalogEntry {
   notes?: string;
 }
 
+export interface LocalProviderDetection {
+  flavor: string;
+  displayName: string;
+  endpoint: string;
+  models: string[];
+}
+
 export interface ProviderCreateRequest {
   name: string;
   providerType: string;
@@ -525,6 +575,7 @@ export interface ProviderCreateRequest {
   defaultModel?: string;
   modelAllowlist?: string[];
   credentialEnv?: string;
+  credentialRef?: string;
   permitsSensitiveData?: boolean;
   options?: Record<string, unknown>;
 }
@@ -537,6 +588,7 @@ export interface ProviderUpdateRequest {
   defaultModel?: string;
   modelAllowlist: string[];
   credentialEnv?: string;
+  credentialRef?: string;
   permitsSensitiveData: boolean;
   retention?: string;
   residency: string[];
@@ -551,6 +603,15 @@ export interface ChatMessage {
   id?: Identifier;
   role: ChatRole;
   content: string;
+}
+
+export interface ChatContextAttachment {
+  sourceKind: string;
+  sourceId?: Identifier;
+  sourceLabel: string;
+  text: string;
+  sha256: string;
+  truncated: boolean;
 }
 
 export interface ChatCitation {
@@ -575,6 +636,7 @@ export interface ChatCompletionRequest {
   sessionId?: Identifier;
   model?: string;
   messages: ChatMessage[];
+  contextAttachments?: ChatContextAttachment[];
   maxOutputTokens?: number;
   temperature?: number;
   includeKnowledge?: boolean;
@@ -691,6 +753,7 @@ export interface PersistedChatMessage extends ChatMessage {
   finishReason?: string;
   providerRequestId?: string;
   citations: ChatCitation[];
+  contextAttachments: ChatContextAttachment[];
   createdAt: string;
   updatedAt: string;
 }
@@ -732,6 +795,68 @@ export interface HealthResponse {
   containerTerminal: "configured" | "unavailable";
 }
 
+export interface RunnerCandidate {
+  candidateId?: Identifier;
+  runnerProfileId?: Identifier;
+  source: "configured" | "detected";
+  name: string;
+  runtime: "podman" | "docker";
+  executable: string;
+  context?: string;
+  platform: "linux/amd64" | "linux/arm64";
+  isolation: "rootless" | "podman_machine" | "docker_desktop_vm";
+  healthy: boolean;
+  detail?: string;
+}
+
+export interface SetupImagePreparation {
+  phase: "not_started" | "queued" | "resolving_runtime" | "preparing_image" | "ready" | "cancelling" | "cancelled" | "error";
+  operationId?: Identifier;
+  projectId?: Identifier;
+  progressPercent?: number;
+  progressIndeterminate: boolean;
+  canCancel: boolean;
+  canRetry: boolean;
+  imageDigest?: string;
+  startedAt?: string;
+  completedAt?: string;
+  detail?: string;
+}
+
+export interface SetupStatus {
+  core: {
+    status: "ready" | "degraded" | "error";
+    detail?: string;
+  };
+  scratchProjectId?: Identifier;
+  terminal: {
+    status: "detecting_runner" | "needs_runner" | "preparing_image" | "ready" | "disabled" | "error";
+    runnerProfileId?: Identifier;
+    candidates: RunnerCandidate[];
+    imagePreparation: SetupImagePreparation;
+    detail?: string;
+  };
+  assistant: {
+    status: "needs_model" | "configured" | "error";
+    providerProfileId?: Identifier;
+    detail?: string;
+  };
+}
+
+export interface SetupControlResponse {
+  operation: "runner_selection" | "image_preparation" | "image_preparation_retry" | "image_preparation_cancellation";
+  accepted: boolean;
+  idempotent: boolean;
+  operationId?: Identifier;
+  setup: SetupStatus;
+}
+
+export interface CredentialStatus {
+  reference: string;
+  persistence: "environment" | "vault" | "session";
+  available: boolean;
+}
+
 export type ExecutionLanguage = "bash" | "sh" | "python";
 export type ExecutionStatus =
   | "queued"
@@ -745,13 +870,17 @@ export type ExecutionStatus =
   | "interrupted";
 
 export interface ExecutionOrigin {
-  kind: "assistant_message" | "rerun";
+  kind: "assistant_message" | "rerun" | "selection";
   messageId?: Identifier;
   blockOrdinal?: number;
   blockSha256?: string;
   selectionStartByte?: number;
   selectionEndByte?: number;
   executionId?: Identifier;
+  sourceKind?: string;
+  sourceId?: Identifier;
+  sourceLabel?: string;
+  sourceSha256?: string;
 }
 
 export interface ExecutionNetworkRequest {
@@ -911,6 +1040,43 @@ export interface ContainerTerminalSession {
   websocketTicket: string;
   ticketExpiresAt: string;
   websocketPath: string;
+  reconnectGraceSeconds: number;
+  replayMaxBytes: number;
+  lastSequence: number;
+}
+
+export interface ContainerTerminalRecovery {
+  active: boolean;
+  session?: ContainerTerminalSession;
+  runtime?: ContainerTerminalRuntimeSnapshot;
+}
+
+export interface TerminalCommandRecord {
+  id: Identifier;
+  engagementId: Identifier;
+  sessionId: Identifier;
+  command: string;
+  cwd: string;
+  exitCode: number;
+  occurredAt: string;
+}
+
+export interface TerminalCommandPage {
+  records: TerminalCommandRecord[];
+  total: number;
+  offset: number;
+  limit: number;
+  nextOffset?: number;
+}
+
+export interface TerminalCommandHistoryStatus {
+  engagementId: Identifier;
+  enabled: boolean;
+  recordCount: number;
+  retentionDays: number;
+  maxRecords: number;
+  oldestRecordedAt?: string;
+  newestRecordedAt?: string;
 }
 
 export interface WorkspaceChange {
@@ -980,6 +1146,14 @@ export interface WorkspacePreview {
 export interface WorkspaceResetResult {
   engagementId: Identifier;
   removedEntries: number;
+}
+
+export interface WorkspaceUploadResult {
+  engagementId: Identifier;
+  path: string;
+  size: number;
+  sha256: string;
+  overwritten: boolean;
 }
 
 export type RunEventKind =

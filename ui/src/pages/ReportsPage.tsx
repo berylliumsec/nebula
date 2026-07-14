@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Archive, Download, FileText, LoaderCircle, Plus, Save, ShieldCheck, X } from "lucide-react";
+import { Archive, BadgeCheck, Download, FileText, LoaderCircle, Plus, Save, ShieldCheck, X } from "lucide-react";
 import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -19,7 +19,18 @@ function downloadBlob(filename: string, content: Blob): void {
 
 export function ReportsPage() {
   const confirm = useConfirmation();
-  const { api, createReport, engagement, findings, observations, previewMode, reports, updateReport } = useWorkspace();
+  const {
+    activeOperator,
+    api,
+    createOperatorProfile,
+    createReport,
+    engagement,
+    findings,
+    observations,
+    reports,
+    signOffReport,
+    updateReport,
+  } = useWorkspace();
   const [selectedId, setSelectedId] = useState("");
   const selected = reports.find((report) => report.id === selectedId);
   const [title, setTitle] = useState("");
@@ -35,6 +46,10 @@ export function ReportsPage() {
   const [createSaving, setCreateSaving] = useState(false);
   const [pdfState, setPdfState] = useState<"idle" | "queued" | "rendering" | "downloading">("idle");
   const [bundleSaving, setBundleSaving] = useState(false);
+  const [signoffOpen, setSignoffOpen] = useState(false);
+  const [signoffName, setSignoffName] = useState("");
+  const [attestation, setAttestation] = useState("I reviewed this report and approve it as the final record.");
+  const [signing, setSigning] = useState(false);
   const readOnly = selected?.status === "final";
 
   useEffect(() => {
@@ -170,11 +185,35 @@ export function ReportsPage() {
     }
   };
 
+  const openSignoff = () => {
+    if (!selected || selected.status !== "review" || dirty) return;
+    setSignoffName(activeOperator?.displayName ?? "");
+    setAttestation("I reviewed this report and approve it as the final record.");
+    setError(undefined);
+    setSignoffOpen(true);
+  };
+
+  const completeSignoff = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selected || selected.status !== "review") return;
+    setSigning(true);
+    setError(undefined);
+    try {
+      const operator = activeOperator ?? await createOperatorProfile({ displayName: signoffName.trim() });
+      await signOffReport(selected.id, selected.revision, operator.id, attestation.trim());
+      setSignoffOpen(false);
+    } catch (signoffError) {
+      setError(signoffError instanceof Error ? signoffError.message : "Could not sign off the report.");
+    } finally {
+      setSigning(false);
+    }
+  };
+
   return (
     <div className="page reports-page">
-      <PageHeader title="Reports" description="Build reports from verified findings and evidence." actions={<button className="button primary" type="button" disabled={previewMode || !engagement} onClick={() => void openCreate()}><Plus size={16} /> New report</button>} />
+      <PageHeader title="Reports" description="Build reports from verified findings and evidence." actions={<button className="button primary" type="button" disabled={!engagement} onClick={() => void openCreate()}><Plus size={16} /> New report</button>} />
       {error && <div className="knowledge-status error" role="alert">{error}</div>}
-      {!selected ? <section className="panel empty-state report-empty-state"><FileText size={28} /><strong>{previewMode ? "Connect Core to create reports" : "No reports yet"}</strong><p>{previewMode ? "Reports are saved with your engagement." : "Create a draft when you’re ready."}</p></section> : <div className="report-layout">
+      {!selected ? <section className="panel empty-state report-empty-state"><FileText size={28} /><strong>No reports yet</strong><p>Create a draft when you’re ready.</p></section> : <div className="report-layout">
         <aside className="panel report-outline">
           <header><div><span>{reports.length} report{reports.length === 1 ? "" : "s"}</span><strong>{engagement?.name}</strong></div></header>
           <nav aria-label="Reports">{reports.map((report) => <button className={report.id === selected.id ? "active" : undefined} type="button" title={report.title} key={report.id} onClick={() => void selectReport(report.id)}><FileText size={15} /><span className="report-list-label">{report.title}<small>{report.status} · revision {report.revision}</small></span></button>)}</nav>
@@ -185,12 +224,13 @@ export function ReportsPage() {
           <div className="report-form">{readOnly && <p className="provider-dialog-note" role="status">This final report is an immutable signed record. Export remains available; create a new draft to make changes.</p>}<label>Report title<input value={title} readOnly={readOnly} onChange={(event) => setField(setTitle, event.target.value)} /></label><label>Executive summary<textarea rows={14} value={summary} readOnly={readOnly} placeholder="Summarize scope, posture, material findings, and recommended next actions…" onChange={(event) => setField(setSummary, event.target.value)} /></label><fieldset disabled={readOnly}><legend>Included findings</legend>{findings.length ? findings.map((finding) => <label key={finding.id}><input type="checkbox" checked={findingIds.includes(finding.id)} onChange={(event) => setField(setFindingIds, event.target.checked ? [...findingIds, finding.id] : findingIds.filter((id) => id !== finding.id))} /><span><strong>{finding.title}</strong><small>{finding.severity} · {finding.status.replaceAll("_", " ")}</small></span></label>) : <p>No findings are available.</p>}</fieldset><fieldset disabled={readOnly}><legend>Selected notes</legend>{observations.length ? observations.map((observation) => <label key={observation.id}><input type="checkbox" checked={observationIds.includes(observation.id)} onChange={(event) => setField(setObservationIds, event.target.checked ? [...observationIds, observation.id] : observationIds.filter((id) => id !== observation.id))} /><span><strong>{observation.title}</strong><small>{observation.observationType.replaceAll("_", " ")} · {observation.evidenceIds.length} evidence link{observation.evidenceIds.length === 1 ? "" : "s"}</small></span></label>) : <p>No observations are available.</p>}</fieldset><footer><span>{linkedFindings.length} finding{linkedFindings.length === 1 ? "" : "s"} · {linkedObservations.length} note{linkedObservations.length === 1 ? "" : "s"}</span><button className="button primary" type="button" disabled={readOnly || !dirty || saving || !title.trim()} onClick={() => void save()}><Save size={15} /> {readOnly ? "Final report" : saving ? "Saving…" : "Save report"}</button></footer></div>
         </section>
         <aside className="panel report-review">
-          <header><h2>Export</h2><p>{dirty ? "Save this revision before exporting. PDF output is always rendered from the persisted record." : `PDF output uses saved revision ${selected.revision}.`}</p></header>
+          <header><h2>{selected.status === "review" ? "Sign off & export" : "Export"}</h2><p>{dirty ? "Save this revision before exporting. PDF output is always rendered from the persisted record." : `PDF output uses saved revision ${selected.revision}.`}</p></header>
           <ul><li className={summary.trim() ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Executive summary</strong><small>{summary.trim() ? "Present" : "Needs content"}</small></span></li><li className={linkedFindings.length ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Finding coverage</strong><small>{linkedFindings.length} included</small></span></li></ul>
-          <div className="export-actions"><button className="button primary full" type="button" disabled={dirty || !api || pdfState !== "idle"} title={dirty ? "Save the report before exporting" : undefined} onClick={() => void exportPdf()}>{pdfState === "idle" ? <Download size={15} /> : <LoaderCircle className="spin" size={15} />} {pdfState === "idle" ? "Export PDF" : pdfState === "downloading" ? "Downloading…" : "Rendering PDF…"}</button><button className="button secondary full" type="button" disabled={!api || !engagement || bundleSaving} onClick={() => void exportBundle()}>{bundleSaving ? <LoaderCircle className="spin" size={15} /> : <Archive size={15} />} {bundleSaving ? "Exporting…" : "Export engagement bundle"}</button><p className="provider-dialog-note">The .nebula.zip bundle is a portable export, not a backup. It includes unredacted evidence and excludes scratch workspace files.</p></div>
+          <div className="export-actions">{selected.status === "review" && <button className="button primary full" type="button" disabled={dirty || signing} title={dirty ? "Save the report before sign-off" : undefined} onClick={openSignoff}><BadgeCheck size={15} /> Sign off final report</button>}<button className={`button ${selected.status === "review" ? "secondary" : "primary"} full`} type="button" disabled={dirty || !api || pdfState !== "idle"} title={dirty ? "Save the report before exporting" : undefined} onClick={() => void exportPdf()}>{pdfState === "idle" ? <Download size={15} /> : <LoaderCircle className="spin" size={15} />} {pdfState === "idle" ? "Export PDF" : pdfState === "downloading" ? "Downloading…" : "Rendering PDF…"}</button><button className="button secondary full" type="button" disabled={!api || !engagement || bundleSaving} onClick={() => void exportBundle()}>{bundleSaving ? <LoaderCircle className="spin" size={15} /> : <Archive size={15} />} {bundleSaving ? "Exporting…" : "Export engagement bundle"}</button><p className="provider-dialog-note">The .nebula.zip bundle is a portable export, not a backup. It includes unredacted evidence and excludes scratch workspace files.</p></div>
         </aside>
       </div>}
       {creating && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="report-dialog-title" onSubmit={(event) => void create(event)}><header><div><small>Persisted deliverable</small><h2 id="report-dialog-title">New report</h2></div><button className="icon-button subtle" type="button" aria-label="Close report dialog" onClick={() => setCreating(false)}><X size={17} /></button></header><label>Title<input required autoFocus value={newTitle} placeholder={`${engagement?.name ?? "Engagement"} assessment`} onChange={(event) => setNewTitle(event.target.value)} /></label><p className="provider-dialog-note">Validated and confirmed findings are included initially and can be changed in the editor.</p>{error && <p className="form-error" role="alert">{error}</p>}<footer><button className="button secondary" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={createSaving || !newTitle.trim()}>{createSaving ? "Creating…" : "Create report"}</button></footer></form></div>}
+      {signoffOpen && selected && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="report-signoff-title" onSubmit={(event) => void completeSignoff(event)}><header><div><small>Revision {selected.revision} · permanent attribution</small><h2 id="report-signoff-title">Sign off final report</h2></div><button className="icon-button subtle" type="button" aria-label="Close report sign-off" disabled={signing} onClick={() => setSignoffOpen(false)}><X size={17} /></button></header><p className="provider-dialog-note">Sign-off finalizes this saved revision and makes it read-only. Included findings must already be validated.</p>{!activeOperator && <label>Your display name<input required autoFocus maxLength={200} value={signoffName} placeholder="Name shown in report attribution" onChange={(event) => setSignoffName(event.target.value)} /></label>}{activeOperator && <label>Signing as<input value={activeOperator.displayName} readOnly aria-readonly="true" /></label>}<label>Attestation<textarea required rows={4} maxLength={2000} value={attestation} onChange={(event) => setAttestation(event.target.value)} /></label>{error && <p className="form-error" role="alert">{error}</p>}<footer><button className="button secondary" type="button" disabled={signing} onClick={() => setSignoffOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={signing || !attestation.trim() || (!activeOperator && !signoffName.trim())}>{signing ? <><LoaderCircle className="spin" size={15} /> Signing…</> : <><BadgeCheck size={15} /> Sign off report</>}</button></footer></form></div>}
     </div>
   );
 }

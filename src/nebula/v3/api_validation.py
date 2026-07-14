@@ -292,10 +292,11 @@ class ApiEntityValidator:
         if profile.endpoint is not None and not profile.endpoint.strip():
             raise ApiEntityValidationError("provider endpoint cannot be blank")
         if profile.secret_ref and not re.fullmatch(
-            r"env:[A-Za-z_][A-Za-z0-9_]*", profile.secret_ref
+            r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
+            profile.secret_ref,
         ):
             raise ApiEntityValidationError(
-                "provider secret_ref must use an env:NAME reference"
+                "provider secret_ref must use env:NAME, vault:ID, or session:ID"
             )
         if any(
             model != model.strip() or not model for model in profile.model_allowlist

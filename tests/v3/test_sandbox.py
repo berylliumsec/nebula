@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -154,20 +155,63 @@ def test_human_terminal_alone_can_be_root_writable_and_unrestricted(tmp_path):
             )
 
 
+def test_shell_history_environment_is_reserved_for_human_terminals(tmp_path):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
+    with pytest.raises(SandboxError, match="reserved for human terminals"):
+        runner._validate(
+            _request(tmp_path, environment={"PROMPT_COMMAND": "printf marker"})
+        )
+
+    request = _request(
+        tmp_path,
+        image="sha256:" + "a" * 64,
+        command=["/bin/bash", "--noprofile", "--norc", "-i"],
+        workspace_access=SandboxWorkspaceAccess.WRITE,
+        network=SandboxNetwork.UNRESTRICTED,
+        execution_kind=SandboxExecutionKind.HUMAN_TERMINAL,
+        container_user=SandboxContainerUser.ROOT,
+        root_filesystem=SandboxRootFilesystem.WRITABLE,
+        environment={
+            "HISTFILE": "/dev/null",
+            "PROMPT_COMMAND": "printf marker",
+        },
+    )
+    argv = runner._argv(
+        request,
+        runner._validate(request),
+        container_name="nebula-terminal-history",
+        interactive=True,
+        tty=True,
+    )
+    assert "--env" in argv
+    assert "HISTFILE=/dev/null" in argv
+    assert "PROMPT_COMMAND=printf marker" in argv
+
+
 def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeypatch):
-    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    runtime = tmp_path / "podman"
+    runtime.write_text("test runtime", encoding="utf-8")
+    runtime.chmod(0o755)
+    monkeypatch.setattr(ContainerSandboxRunner, "_trusted_runtime_paths", (runtime,))
+    runner = ContainerSandboxRunner(runtime=str(runtime))
     removed: list[str] = []
+    health_checks = 0
 
     async def capture(*arguments):
-        assert arguments == ("ps", "--all", "--format", "{{.Names}}")
-        return (
-            "nebula-terminal-good123\n"
-            "nebula-exec-preserve\n"
-            "nebula-terminal-bad/name\n"
-            "customer-container\n",
-            "",
-            0,
-        )
+        nonlocal health_checks
+        if arguments == ("info", "--format", "json"):
+            health_checks += 1
+            return '{"host":{"security":{"rootless":true},"os":"linux"}}', "", 0
+        if arguments == ("ps", "--all", "--format", "{{.Names}}"):
+            return (
+                "nebula-terminal-good123\n"
+                "nebula-exec-preserve\n"
+                "nebula-terminal-bad/name\n"
+                "customer-container\n",
+                "",
+                0,
+            )
+        raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
 
     async def remove(name):
         removed.append(name)
@@ -176,7 +220,44 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
     monkeypatch.setattr(runner, "_force_remove", remove)
     asyncio.run(runner.cleanup_terminal_containers())
 
+    assert health_checks == 2
     assert removed == ["nebula-terminal-good123"]
+
+
+def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
+    runtime = tmp_path / "podman"
+    runtime.write_text("test runtime", encoding="utf-8")
+    runtime.chmod(0o755)
+    monkeypatch.setattr(ContainerSandboxRunner, "_trusted_runtime_paths", (runtime,))
+    runner = ContainerSandboxRunner(runtime=str(runtime))
+    health_checks = 0
+    removed: list[str] = []
+
+    async def capture(*arguments):
+        nonlocal health_checks
+        if arguments == ("info", "--format", "json"):
+            health_checks += 1
+            rootless = health_checks == 1
+            return (
+                json.dumps(
+                    {"host": {"security": {"rootless": rootless}, "os": "linux"}}
+                ),
+                "",
+                0,
+            )
+        if arguments == ("ps", "--all", "--format", "{{.Names}}"):
+            return "nebula-terminal-orphan\n", "", 0
+        raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
+
+    async def remove(name):
+        removed.append(name)
+
+    monkeypatch.setattr(runner, "_capture", capture)
+    monkeypatch.setattr(runner, "_force_remove", remove)
+    asyncio.run(runner.cleanup_terminal_containers())
+
+    assert health_checks == 2
+    assert removed == []
 
 
 @pytest.mark.parametrize(
@@ -599,10 +680,7 @@ def test_toolpack_runtime_adapter_inspects_exact_digest_platform_and_user(
     assert info.user == "10001:10001"
 
 
-@pytest.mark.parametrize("pull_return_code,refreshed", [(0, True), (1, False)])
-def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
-    monkeypatch, pull_return_code, refreshed
-):
+def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkeypatch):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
     preparer = ContainerImagePreparer(
         runner=runner,
@@ -611,20 +689,12 @@ def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
         expected_repository="docker.io/kalilinux/kali-rolling",
     )
     calls = []
-    dockerfiles = []
 
     async def available():
         return True, "healthy"
 
     async def runtime_command(*arguments, timeout_seconds):
         calls.append((arguments, timeout_seconds))
-        if arguments[0] == "pull":
-            return "", "registry unavailable", pull_return_code
-        if arguments[0] == "build":
-            dockerfiles.append(
-                (Path(arguments[-1]) / "Dockerfile").read_text(encoding="utf-8")
-            )
-            return "built", "", 0
         if arguments[2] == "docker.io/kalilinux/kali-rolling:latest":
             return (
                 '{"RepoDigests":["kalilinux/kali-rolling@sha256:'
@@ -649,14 +719,8 @@ def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
     image = asyncio.run(preparer.prepare())
 
-    assert calls[0] == (
-        (
-            "pull",
-            "--platform=linux/amd64",
-            "docker.io/kalilinux/kali-rolling:latest",
-        ),
-        900,
-    )
+    assert [call[0][0] for call in calls] == ["image", "image"]
+    assert all("pull" not in call[0] and "build" not in call[0] for call in calls)
     assert image.base_resolved_reference == (
         "docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64
     )
@@ -664,8 +728,78 @@ def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
     assert image.resolved_reference == "sha256:" + "d" * 64
     assert image.digest == "sha256:" + "d" * 64
     assert image.installed_packages == ("kali-linux-headless", "iputils-ping")
-    assert image.refreshed is refreshed
+    assert image.refreshed is False
     assert image.configured_user == ""
+    assert "no registry request" in image.detail
+
+
+def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    preparer = ContainerImagePreparer(
+        runner=runner,
+        platform="linux/amd64",
+        source_reference="docker.io/kalilinux/kali-rolling:latest",
+        expected_repository="docker.io/kalilinux/kali-rolling",
+    )
+    calls = []
+    dockerfiles = []
+    base_present = False
+    derived_present = False
+
+    async def available():
+        return True, "healthy"
+
+    async def runtime_command(*arguments, timeout_seconds):
+        nonlocal base_present, derived_present
+        calls.append((arguments, timeout_seconds))
+        if arguments[0] == "pull":
+            base_present = True
+            return "pulled", "", 0
+        if arguments[0] == "build":
+            dockerfiles.append(
+                (Path(arguments[-1]) / "Dockerfile").read_text(encoding="utf-8")
+            )
+            derived_present = True
+            return "built", "", 0
+        if arguments[2] == "docker.io/kalilinux/kali-rolling:latest":
+            if not base_present:
+                return "", "not found", 1
+            return (
+                '{"RepoDigests":["kalilinux/kali-rolling@sha256:'
+                + "e" * 64
+                + '"],"Os":"linux","Architecture":"amd64"}',
+                "",
+                0,
+            )
+        if not derived_present:
+            return "", "not found", 1
+        return (
+            '{"Id":"sha256:'
+            + "d" * 64
+            + '","Os":"linux","Architecture":"amd64","Config":{"Labels":{'
+            + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
+            + "e" * 64
+            + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
+            + '"org.nebula.human-terminal.recipe":"v1"}}}',
+            "",
+            0,
+        )
+
+    monkeypatch.setattr(runner, "available", available)
+    monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
+    image = asyncio.run(preparer.prepare())
+
+    assert [call[0][0] for call in calls] == [
+        "image",
+        "pull",
+        "image",
+        "image",
+        "build",
+        "image",
+    ]
+    assert image.refreshed is True
+    assert image.base_digest == "sha256:" + "e" * 64
+    assert image.digest == "sha256:" + "d" * 64
     build = next(call for call in calls if call[0][0] == "build")
     assert build[0][1] == "--platform=linux/amd64"
     assert build[0][2] == "--pull=false"
@@ -674,8 +808,117 @@ def test_human_terminal_image_pull_resolves_official_digest_and_cached_fallback(
     assert "FROM docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64 in dockerfiles[0]
     assert "apt-get install -y kali-linux-headless iputils-ping" in dockerfiles[0]
     assert 'APT::Sandbox::User "root";' in dockerfiles[0]
-    if not refreshed:
-        assert "verified cached" in image.detail
+
+
+def test_human_terminal_cold_pull_failure_can_be_retried(monkeypatch):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    preparer = ContainerImagePreparer(
+        runner=runner,
+        platform="linux/amd64",
+        source_reference="docker.io/kalilinux/kali-rolling:latest",
+        expected_repository="docker.io/kalilinux/kali-rolling",
+    )
+    pull_attempts = 0
+    base_present = False
+    derived_present = False
+
+    async def available():
+        return True, "healthy"
+
+    async def runtime_command(*arguments, timeout_seconds):
+        nonlocal pull_attempts, base_present, derived_present
+        del timeout_seconds
+        if arguments[0] == "pull":
+            pull_attempts += 1
+            if pull_attempts == 1:
+                return "", "registry unavailable", 1
+            base_present = True
+            return "pulled", "", 0
+        if arguments[0] == "build":
+            derived_present = True
+            return "built", "", 0
+        if arguments[2] == "docker.io/kalilinux/kali-rolling:latest":
+            if not base_present:
+                return "", "not found", 1
+            return (
+                '{"RepoDigests":["kalilinux/kali-rolling@sha256:'
+                + "e" * 64
+                + '"],"Os":"linux","Architecture":"amd64"}',
+                "",
+                0,
+            )
+        if not derived_present:
+            return "", "not found", 1
+        return (
+            '{"Id":"sha256:'
+            + "d" * 64
+            + '","Os":"linux","Architecture":"amd64","Config":{"Labels":{'
+            + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
+            + "e" * 64
+            + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
+            + '"org.nebula.human-terminal.recipe":"v1"}}}',
+            "",
+            0,
+        )
+
+    monkeypatch.setattr(runner, "available", available)
+    monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
+
+    with pytest.raises(SandboxUnavailable, match="registry unavailable"):
+        asyncio.run(preparer.prepare())
+    image = asyncio.run(preparer.prepare())
+
+    assert pull_attempts == 2
+    assert image.refreshed is True
+    assert image.digest == "sha256:" + "d" * 64
+
+
+def test_human_terminal_digest_source_must_match_release_pin(monkeypatch):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    source = "docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64
+    preparer = ContainerImagePreparer(
+        runner=runner,
+        platform="linux/amd64",
+        source_reference=source,
+        expected_repository="docker.io/kalilinux/kali-rolling",
+    )
+    pulls = 0
+
+    async def available():
+        return True, "healthy"
+
+    async def runtime_command(*arguments, timeout_seconds):
+        nonlocal pulls
+        del timeout_seconds
+        if arguments[0] == "pull":
+            pulls += 1
+            assert arguments[-1] == source
+            return "pulled", "", 0
+        return (
+            '{"RepoDigests":["docker.io/kalilinux/kali-rolling@sha256:'
+            + "f" * 64
+            + '"],"Os":"linux","Architecture":"amd64"}',
+            "",
+            0,
+        )
+
+    monkeypatch.setattr(runner, "available", available)
+    monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
+
+    with pytest.raises(SandboxUnavailable, match="release-pinned"):
+        asyncio.run(preparer.prepare())
+    assert pulls == 1
+
+
+def test_human_terminal_source_cannot_cross_the_expected_repository():
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    with pytest.raises(ValueError, match="expected official repository"):
+        ContainerImagePreparer(
+            runner=runner,
+            platform="linux/amd64",
+            source_reference="attacker.invalid/kali:latest",
+            expected_repository="docker.io/kalilinux/kali-rolling",
+        )
 
 
 def test_human_terminal_image_rejects_unproven_repository(monkeypatch):

@@ -49,7 +49,7 @@
       "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt"
     },
     "shortDescription": "Local-first security engagement workspace",
-    "longDescription": "Nebula coordinates policy-controlled security assessment missions and their evidence.",
+    "longDescription": "Nebula provides a zero-setup security workbench with policy-controlled automation and evidence.",
     "linux": {
       "deb": {
         "files": {

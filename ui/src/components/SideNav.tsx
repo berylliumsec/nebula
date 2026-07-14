@@ -16,7 +16,6 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
     activeOperator,
     engagement,
     engagements,
-    previewMode,
     selectEngagement,
   } = useWorkspace();
   const [open, setOpen] = useState(false);
@@ -25,14 +24,14 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
   const [clientName, setClientName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
-  const engagementName = engagement?.name ?? (previewMode ? "Acme external assessment" : "No engagement selected");
+  const engagementName = engagement?.name ?? "No project available";
   const initials = engagementName
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("") || "NE";
-  const operatorName = previewMode ? "Jordan Diaz" : activeOperator?.displayName ?? "No active operator";
+  const operatorName = activeOperator?.displayName ?? "No operator profile";
   const operatorInitials = operatorName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "OP";
 
   const submit = async (event: FormEvent) => {
@@ -46,7 +45,7 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
       setCreating(false);
       setOpen(false);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Could not create the engagement.");
+      setError(createError instanceof Error ? createError.message : "Could not create the project.");
     } finally {
       setSaving(false);
     }
@@ -61,22 +60,22 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
           <strong>Nebula</strong>
           <small>Security workspace</small>
         </span>
-        <span className="alpha-label">3 alpha</span>
+        <span className="alpha-label">3.0</span>
       </div>
 
       <div className="engagement-picker">
-        <button className="engagement-switcher" type="button" title={engagementName} aria-label="Switch engagement" aria-expanded={open} disabled={previewMode} onClick={() => setOpen((value) => !value)}>
+        <button className="engagement-switcher" type="button" title={engagementName} aria-label="Switch project" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
           <span className="engagement-avatar">{initials}</span>
-          <span className="engagement-copy"><small>Active engagement</small><strong>{engagementName}</strong></span>
+          <span className="engagement-copy"><small>Active project</small><strong>{engagementName}</strong></span>
           <ChevronDown size={16} aria-hidden="true" />
         </button>
-        {open && <div className="engagement-menu" role="dialog" aria-label="Engagement switcher">
-          <header><strong>Engagements</strong><button className="icon-button subtle" type="button" aria-label="Close engagement switcher" onClick={() => setOpen(false)}><X size={14} /></button></header>
+        {open && <div className="engagement-menu" role="dialog" aria-label="Project switcher">
+          <header><strong>Projects</strong><button className="icon-button subtle" type="button" aria-label="Close project switcher" onClick={() => setOpen(false)}><X size={14} /></button></header>
           {!creating && <div className="engagement-options">
             {engagements.map((item) => <button type="button" key={item.id} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { selectEngagement(item.id); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>)}
-            {engagements.length === 0 && <p>No engagements yet.</p>}
+            {engagements.length === 0 && <p>No projects yet.</p>}
           </div>}
-          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label>{error && <p className="form-error" role="alert">{error}</p>}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New engagement</button>}
+          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label>{error && <p className="form-error" role="alert">{error}</p>}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}
         </div>}
       </div>
 
@@ -127,7 +126,7 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
           <span className="operator-avatar">{operatorInitials}</span>
           <span>
             <strong title={operatorName}>{operatorName}</strong>
-            <small>{previewMode ? "Engagement lead" : activeOperator?.role ?? activeOperator?.email ?? "Configure in Settings"}</small>
+            <small>{activeOperator?.role ?? activeOperator?.email ?? "Add when attribution is needed"}</small>
           </span>
           <LockKeyhole size={15} aria-label="Local attribution profile" />
         </div>

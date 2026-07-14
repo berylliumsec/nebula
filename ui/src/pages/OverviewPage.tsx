@@ -16,14 +16,6 @@ import { NewMissionButton, StopMissionButton } from "../components/MissionContro
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useChrome } from "../state/ChromeContext";
 
-const missionSteps = [
-  { label: "Validate scope and policy", state: "complete", actor: "Scope planner" },
-  { label: "Passive asset discovery", state: "complete", actor: "Recon specialist" },
-  { label: "Analyze exposed services", state: "running", actor: "Network analyst" },
-  { label: "Correlate vulnerability intelligence", state: "queued", actor: "Vulnerability analyst" },
-  { label: "Verify evidence and draft report", state: "queued", actor: "Evidence verifier" },
-];
-
 type EventStepState = "complete" | "running" | "waiting" | "failed" | "stopped" | "queued";
 
 function eventStepState(kind: string): EventStepState {
@@ -37,46 +29,29 @@ function eventStepState(kind: string): EventStepState {
 
 export function OverviewPage() {
   const { setActivityOpen } = useChrome();
-  const { approvals, assets, engagement, events, findings, health, previewMode, run } = useWorkspace();
+  const { approvals, assets, engagement, events, findings, health, run } = useWorkspace();
   const validatedFindings = findings.filter((finding) => ["validated", "confirmed"].includes(finding.status));
   const criticalFindings = findings.filter((finding) => finding.severity === "critical").length;
   const highFindings = findings.filter((finding) => finding.severity === "high").length;
-  const completedTasks = previewMode ? missionSteps.filter((step) => step.state === "complete").length : run?.completedTasks ?? 0;
-  const totalTasks = previewMode ? missionSteps.length : run?.totalTasks ?? 0;
+  const completedTasks = run?.completedTasks ?? 0;
+  const totalTasks = run?.totalTasks ?? 0;
   const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-  const missionTitle = previewMode ? "External attack surface review" : run?.title;
-  const missionStatus = previewMode ? "running" : run?.status.replace("_", " ");
+  const missionTitle = run?.title;
+  const missionStatus = run?.status.replace("_", " ");
   const priorityFinding = findings.find((finding) => finding.severity === "critical") ?? findings[0];
-  const hasCoverage = previewMode || assets.length > 0 || findings.length > 0 || events.length > 0 || approvals.length > 0;
+  const hasCoverage = assets.length > 0 || findings.length > 0 || events.length > 0 || approvals.length > 0;
   return (
     <div className="page overview-page">
       <PageHeader
-        eyebrow={engagement?.clientName ?? (previewMode ? "Acme external assessment" : "Nebula engagement")}
-        title={previewMode ? "Good afternoon, Jordan" : engagement?.name ?? "No engagement available"}
-        description={previewMode
-          ? "Mission status and findings at a glance."
-          : run
+        eyebrow={engagement?.clientName ?? "Nebula project"}
+        title={engagement?.name ?? "No project available"}
+        description={run
             ? `${run.title} · ${run.status.replace("_", " ")}`
-            : "Start a supervised mission when you’re ready."}
-        actions={
-          <>
-            <button className="button secondary" type="button" disabled title="Scanner normalization is release-gated">Import scan unavailable</button>
-            <NewMissionButton />
-          </>
-        }
+            : "Project assets, findings, and mission progress at a glance."}
+        actions={<NewMissionButton />}
       />
 
-      {previewMode && (
-        <div className="callout preview-callout" role="status">
-          <CircleAlert size={18} aria-hidden="true" />
-          <div>
-            <strong>Preview workspace</strong>
-            <p>Connect Core to work with live data.</p>
-          </div>
-        </div>
-      )}
-
-      {!previewMode && approvals.length > 0 && (
+      {approvals.length > 0 && (
         <div className="callout approval-callout" role="status">
           <Clock3 size={19} aria-hidden="true" />
           <div><strong>{approvals.length} approval{approvals.length === 1 ? "" : "s"} waiting</strong><p>Mission work is paused until an operator reviews the exact request and expected effects.</p></div>
@@ -84,10 +59,10 @@ export function OverviewPage() {
         </div>
       )}
 
-      <section className="metric-grid" aria-label="Engagement summary">
+      <section className="metric-grid" aria-label="Project summary">
         <article className="metric-card accent-blue">
           <span className="metric-icon"><Target size={19} /></span>
-          <div><small>Assets</small><strong>{assets.length}</strong><span>In this engagement</span></div>
+          <div><small>Assets</small><strong>{assets.length}</strong><span>In this project</span></div>
         </article>
         <article className="metric-card accent-violet">
           <span className="metric-icon"><Bot size={19} /></span>
@@ -104,16 +79,16 @@ export function OverviewPage() {
       </section>
 
       <div className="overview-grid">
-        <section className={`panel mission-panel${!previewMode && events.length === 0 ? " is-empty" : ""}`}>
+        <section className={`panel mission-panel${events.length === 0 ? " is-empty" : ""}`}>
           <header className="panel-header">
             <div>
               {missionStatus && <span className="section-kicker"><span className="pulse-dot" /> {missionStatus}</span>}
               <h2>{missionTitle ?? "No active mission"}</h2>
-              <p>{run?.startedAt ? `Started ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(run.startedAt))}` : previewMode ? "Supervised preview" : run ? "Mission status from Core" : "Start a supervised analysis when you’re ready."}</p>
+              <p>{run?.startedAt ? `Started ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(run.startedAt))}` : run ? "Mission status from Core" : "Start a supervised analysis when you’re ready."}</p>
             </div>
             <div className="panel-header-actions">
               {run && <StopMissionButton className="button quiet" />}
-              <Link className="button secondary" to="/agents">{run ? "Open mission" : "View missions"} <ArrowUpRight size={15} /></Link>
+              <Link className="button secondary" to="/?view=activity">{run ? "Open activity" : "View activity"} <ArrowUpRight size={15} /></Link>
             </div>
           </header>
           {totalTasks > 0 && <div className="progress-row">
@@ -124,19 +99,7 @@ export function OverviewPage() {
             <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
             <small>{completedTasks} of {totalTasks} tasks complete</small>
           </div>}
-          {previewMode ? (
-            <ol className="mission-steps">
-              {missionSteps.map((step) => (
-                <li className={step.state} key={step.label}>
-                  <span className="step-state">
-                    {step.state === "complete" ? <CheckCircle2 size={16} /> : step.state === "running" ? <span /> : null}
-                  </span>
-                  <div><strong>{step.label}</strong><small>{step.actor}</small></div>
-                  <span className="step-label">{step.state}</span>
-                </li>
-              ))}
-            </ol>
-          ) : events.length > 0 ? (
+          {events.length > 0 ? (
             <ol className="mission-steps">
               {events.slice(0, 5).map((event) => { const state = eventStepState(event.kind); return (
                 <li className={state} key={event.id}>
@@ -180,17 +143,12 @@ export function OverviewPage() {
             <ScanSearch size={19} aria-hidden="true" />
           </header>
           {hasCoverage ? <div className="coverage-list">
-            {(previewMode ? [
-              ["External discovery", 92, "31 / 34 assets"],
-              ["Service analysis", 67, "24 / 36 services"],
-              ["Web & API", 46, "6 / 13 applications"],
-              ["Evidence verification", 38, "12 / 32 observations"],
-            ] : [
+            {([
               ["Assets loaded", assets.length ? 100 : 0, `${assets.length} records`],
               ["Findings loaded", findings.length ? 100 : 0, `${findings.length} records`],
               ["Run ledger replay", events.length ? 100 : 0, `${events.length} events in view`],
               ["Approval review", approvals.length ? 0 : 100, `${approvals.length} pending`],
-            ]).map(([label, value, detail]) => (
+            ] as const).map(([label, value, detail]) => (
               <div className="coverage-row" key={String(label)}>
                 <div><strong>{label}</strong><span>{detail}</span></div>
                 <div className="progress-track small"><span style={{ width: `${value}%` }} /></div>

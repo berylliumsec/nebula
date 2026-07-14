@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
+import re
 import tempfile
 from collections import deque
 from collections.abc import Mapping
@@ -85,12 +87,16 @@ from .tools import (
 )
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 DEFAULT_CATALOG_URL = "https://berylliumsec.github.io/nebula/toolbox/catalog-v1.json"
 DEFAULT_CATALOG_SIGNATURE_URL = (
     "https://berylliumsec.github.io/nebula/toolbox/catalog-v1.json.signature.json"
 )
 DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE = "docker.io/kalilinux/kali-rolling:latest"
 DEFAULT_HUMAN_TERMINAL_REPOSITORY = "docker.io/kalilinux/kali-rolling"
+HUMAN_TERMINAL_IMAGE_METADATA_SCHEMA = "nebula.human-terminal-image/v1"
 MAX_REMOTE_MANIFEST_BYTES = 2_000_000
 MAX_LOCAL_BUNDLE_BYTES = 100_000_000
 DEFAULT_EVENT_RETENTION = 256
@@ -344,6 +350,8 @@ class ToolPlatform:
         developer_mode: bool = False,
         execution_enabled: bool = False,
         event_retention: int = DEFAULT_EVENT_RETENTION,
+        human_terminal_source_image: str = DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE,
+        human_terminal_repository: str = DEFAULT_HUMAN_TERMINAL_REPOSITORY,
     ) -> None:
         self.store = store
         self.artifact_store = artifact_store
@@ -366,6 +374,11 @@ class ToolPlatform:
         self.keyring = Ed25519Keyring(public_keys or {})
         self.developer_mode = developer_mode
         self.execution_enabled = execution_enabled
+        self.human_terminal_source_image = human_terminal_source_image
+        self.human_terminal_repository = human_terminal_repository
+        self.human_terminal_image_metadata_path = (
+            self.data_root / "human-terminal-image.json"
+        )
         self.events = ToolPackEventJournal(event_retention)
         self._human_terminal_images: dict[tuple[str, int], PreparedContainerImage] = {}
         self._human_terminal_image_locks: dict[tuple[str, int], asyncio.Lock] = {}
@@ -968,22 +981,26 @@ class ToolPlatform:
             )
             if item.enabled
         ]
+        ready_installations = [
+            item
+            for item in self.store.list_entities(ToolPackInstallation, limit=1_000)
+            if item.status == ToolPackInstallationStatus.READY
+        ]
+        ready_by_digest = {item.manifest_digest: item for item in ready_installations}
+        ready_assignments = [
+            item for item in assignments if item.manifest_digest in ready_by_digest
+        ]
+        if assignments and not ready_assignments:
+            raise ToolPlatformError("an assigned Toolbox pack is unavailable")
         selected = list(
             dict.fromkeys(
-                name for item in assignments for name in item.allowed_tool_names
+                name for item in ready_assignments for name in item.allowed_tool_names
             )
         )
         if not selected:
             raise ToolPlatformError("engagement has no enabled Toolbox assignment")
-        digests = sorted({item.manifest_digest for item in assignments})
-        installations = [
-            item
-            for item in self.store.list_entities(ToolPackInstallation, limit=1_000)
-            if item.manifest_digest in digests
-            and item.status == ToolPackInstallationStatus.READY
-        ]
-        if {item.manifest_digest for item in installations} != set(digests):
-            raise ToolPlatformError("an assigned Toolbox pack is unavailable")
+        digests = sorted({item.manifest_digest for item in ready_assignments})
+        installations = [ready_by_digest[digest] for digest in digests]
         interface_digests = sorted(
             {
                 item.interface_catalog_digest
@@ -1098,11 +1115,12 @@ class ToolPlatform:
                                 Literal["linux/amd64", "linux/arm64"],
                                 profile.platform,
                             ),
-                            source_reference=DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE,
-                            expected_repository=DEFAULT_HUMAN_TERMINAL_REPOSITORY,
+                            source_reference=self.human_terminal_source_image,
+                            expected_repository=self.human_terminal_repository,
                         ).prepare()
                     except (SandboxError, ValueError) as exc:
                         raise ToolPlatformError(str(exc)) from exc
+                    self._persist_human_terminal_image_metadata(profile, image)
                     self._human_terminal_images[key] = image
         return HumanTerminalRuntimeResolution(
             profile=profile,
@@ -1110,6 +1128,50 @@ class ToolPlatform:
             workspace=self.workspace_for(engagement_id),
             image=image,
         )
+
+    def _persist_human_terminal_image_metadata(
+        self,
+        profile: StoredRunnerProfile,
+        image: PreparedContainerImage,
+    ) -> None:
+        payload = {
+            "schema": HUMAN_TERMINAL_IMAGE_METADATA_SCHEMA,
+            "verified_at": utc_now().isoformat(),
+            "runner_profile_id": profile.id,
+            "runner_profile_revision": profile.revision,
+            "source_reference": image.source_reference,
+            "source_is_digest_pinned": "@sha256:" in image.source_reference,
+            "base_resolved_reference": image.base_resolved_reference,
+            "base_digest": image.base_digest,
+            "resolved_reference": image.resolved_reference,
+            "image_digest": image.digest,
+            "platform": image.platform,
+            "installed_packages": list(image.installed_packages),
+            "registry_refreshed": image.refreshed,
+        }
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix=".human-terminal-image-",
+                suffix=".tmp",
+                dir=self.data_root,
+                delete=False,
+            ) as stream:
+                json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+                temporary = Path(stream.name)
+            temporary.chmod(0o600)
+            temporary.replace(self.human_terminal_image_metadata_path)
+        except OSError as exc:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            raise ToolPlatformError(
+                "verified human-workstation image metadata could not be persisted"
+            ) from exc
 
     def resolve_human_terminal_profile(self, engagement_id: str) -> StoredRunnerProfile:
         """Select the one configured runner eligible for the human terminal."""
@@ -1141,16 +1203,50 @@ class ToolPlatform:
         """Best-effort cleanup for terminal containers orphaned by Core exit."""
 
         profiles = self.store.list_entities(StoredRunnerProfile, limit=1_000)
-        seen: set[tuple[str, str | None]] = set()
+        seen: set[tuple[str, str | None, str, str, str | None]] = set()
         runners: list[ContainerSandboxRunner] = []
         for profile in profiles:
-            identity = (profile.executable, profile.context)
+            if not profile.enabled:
+                LOGGER.warning(
+                    "Skipped orphan terminal cleanup for runner profile %s: "
+                    "profile is disabled",
+                    profile.id,
+                )
+                continue
+            if not profile.healthy or profile.last_health_at is None:
+                LOGGER.warning(
+                    "Skipped orphan terminal cleanup for runner profile %s: "
+                    "profile is not verified healthy",
+                    profile.id,
+                )
+                continue
+            identity = (
+                profile.executable,
+                profile.context,
+                profile.runtime.value,
+                profile.isolation.value,
+                profile.seccomp_profile,
+            )
             if identity in seen:
                 continue
-            seen.add(identity)
             try:
-                runners.append(self._runner(profile))
-            except (ValueError, ToolPlatformError):
+                runner = self._runner(profile)
+                eligible, detail = runner.terminal_cleanup_eligibility()
+                if not eligible:
+                    LOGGER.warning(
+                        "Skipped orphan terminal cleanup for runner profile %s: %s",
+                        profile.id,
+                        detail,
+                    )
+                    continue
+                runners.append(runner)
+                seen.add(identity)
+            except (ValueError, ToolPlatformError) as exc:
+                LOGGER.warning(
+                    "Skipped orphan terminal cleanup for runner profile %s: %s",
+                    profile.id,
+                    str(exc)[:1_000],
+                )
                 continue
         if runners:
             await asyncio.gather(
@@ -1424,6 +1520,17 @@ def default_tool_platform(
     data_root: Path,
 ) -> ToolPlatform:
     key_path = os.getenv("NEBULA_TOOL_PACK_PUBLIC_KEYS")
+    human_terminal_source = os.getenv("NEBULA_HUMAN_TERMINAL_SOURCE_IMAGE")
+    if human_terminal_source is None:
+        human_terminal_source = DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE
+    elif not re.fullmatch(
+        re.escape(DEFAULT_HUMAN_TERMINAL_REPOSITORY) + r"@sha256:[0-9a-f]{64}",
+        human_terminal_source,
+    ):
+        raise ToolPlatformError(
+            "NEBULA_HUMAN_TERMINAL_SOURCE_IMAGE must be a digest-pinned "
+            "official human-workstation base image"
+        )
     return ToolPlatform(
         store=store,
         artifact_store=artifact_store,
@@ -1436,6 +1543,7 @@ def default_tool_platform(
         ),
         developer_mode=os.getenv("NEBULA_TOOL_DEVELOPER_MODE") == "1",
         execution_enabled=True,
+        human_terminal_source_image=human_terminal_source,
     )
 
 
@@ -1443,6 +1551,7 @@ __all__ = [
     "DEFAULT_EVENT_RETENTION",
     "DEFAULT_HUMAN_TERMINAL_REPOSITORY",
     "DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE",
+    "HUMAN_TERMINAL_IMAGE_METADATA_SCHEMA",
     "HumanTerminalRuntimeResolution",
     "MAX_EVENT_RETENTION",
     "OperatorRuntimeResolution",

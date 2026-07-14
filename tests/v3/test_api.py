@@ -78,6 +78,39 @@ def test_health_and_data_routes_require_auth(api):
     )
 
 
+def test_local_provider_discovery_probes_only_fixed_services(api, monkeypatch):
+    client, _, _ = api
+    observed: list[tuple[ProviderFlavor, str]] = []
+
+    async def health(runtime):
+        observed.append((runtime.config.flavor, runtime.config.base_url))
+        if runtime.config.flavor == ProviderFlavor.VLLM:
+            return ProviderHealth(
+                provider_id=runtime.config.id,
+                healthy=True,
+                models=["security-model", "security-model"],
+            )
+        return ProviderHealth(provider_id=runtime.config.id, healthy=False)
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "health", health)
+    response = client.get("/api/v1/providers/discover-local", headers=_auth())
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "flavor": "vllm",
+            "display_name": "vLLM",
+            "endpoint": "http://127.0.0.1:8000/v1",
+            "models": ["security-model"],
+        }
+    ]
+    assert set(observed) == {
+        (ProviderFlavor.OLLAMA, "http://127.0.0.1:11434/v1"),
+        (ProviderFlavor.VLLM, "http://127.0.0.1:8000/v1"),
+        (ProviderFlavor.LM_STUDIO, "http://127.0.0.1:1234/v1"),
+    }
+
+
 def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
     client, store, _ = api
     profile = store.create(
@@ -111,7 +144,7 @@ def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
     }
 
 
-def test_exact_model_capability_probe_persists_and_runtime_edit_reverifies(
+def test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverification(
     api, monkeypatch
 ):
     client, store, _ = api
@@ -173,11 +206,8 @@ def test_exact_model_capability_probe_persists_and_runtime_edit_reverifies(
     )
 
     assert changed.status_code == 200
-    assert (
-        changed.json()["capability_verifications"]["coder-model"]["status"]
-        == "verified"
-    )
-    assert changed.json()["capabilities"]["tool_calling"] is True
+    assert changed.json()["capability_verifications"] == {}
+    assert changed.json()["capabilities"]["tool_calling"] is False
 
 
 def test_chat_origin_approval_decision_does_not_require_an_agent_run(api):
@@ -457,18 +487,18 @@ def test_approval_decision_is_revisioned_and_recorded_in_run_ledger(api):
     assert decided["status"] == ApprovalStatus.EDITED.value
     assert decided["revision"] == approval.revision + 1
     assert decided["exact_request"]["arguments"] == {"ports": [443]}
-    assert decided["decided_by"] == "operator"
+    assert decided["decided_by"] == "system"
     assert decided["decided_at"] is not None
     persisted = store.get(Approval, approval.id)
     assert persisted.status == ApprovalStatus.EDITED
     events = store.replay_events(run.id)
     assert len(events) == 1
     assert events[0].event_type == "approval.resolved"
-    assert events[0].actor_id == "operator"
+    assert events[0].actor_id == "system"
     assert events[0].payload == {
         "approval_id": approval.id,
         "status": "edited",
-        "decided_by": "operator",
+        "decided_by": "system",
     }
     assert (
         client.post(

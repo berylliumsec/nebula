@@ -24,6 +24,62 @@ describe("ApiClient", () => {
     expect(health.runner).toBe("ready");
   });
 
+  it("recovers an active Project terminal with its exact runtime snapshot", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      active: true,
+      session: {
+        session_id: "terminal-1",
+        websocket_ticket: "fresh-ticket",
+        ticket_expires_at: "2026-07-13T18:00:00Z",
+        websocket_path: "/api/v1/container-terminals/terminal-1/ws",
+        reconnect_grace_seconds: 600,
+        replay_max_bytes: 1_048_576,
+        last_sequence: 0,
+      },
+      runtime: {
+        source_image: "docker.io/kalilinux/kali-rolling:latest",
+        base_image: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
+        base_image_digest: `sha256:${"b".repeat(64)}`,
+        image: `sha256:${"c".repeat(64)}`,
+        image_digest: `sha256:${"c".repeat(64)}`,
+        installed_packages: ["kali-linux-headless", "iputils-ping"],
+        interpreter: "/bin/bash",
+        arguments: ["--noprofile", "--norc", "-i"],
+        runner_profile_id: "local",
+        runner_profile_revision: 1,
+        runner_runtime: "podman",
+        runner_isolation: "rootless",
+        runner_executable: "/usr/bin/podman",
+        runner_platform: "linux/amd64",
+        runner_context: null,
+      },
+    }), { status: 200 }));
+    const client = new ApiClient({
+      baseUrl: "http://127.0.0.1:8765",
+      token: "test-token",
+      fetch: fetchMock,
+    });
+
+    const recovered = await client.recoverContainerTerminal("project/one");
+
+    expect(recovered).toMatchObject({
+      active: true,
+      session: {
+        sessionId: "terminal-1",
+        websocketTicket: "fresh-ticket",
+        lastSequence: 0,
+      },
+      runtime: {
+        imageDigest: `sha256:${"c".repeat(64)}`,
+        runnerRuntime: "podman",
+      },
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/api/v1/engagements/project%2Fone/container-terminal/recover");
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-token");
+  });
+
   it("preserves structured API failures and request IDs", async () => {
     const client = new ApiClient({
       fetch: vi.fn<typeof fetch>().mockResolvedValue(
@@ -37,6 +93,157 @@ describe("ApiClient", () => {
     const error = await client.decideApproval("approval-1", { decision: "approve" }).catch((value) => value);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 409, requestId: "request-42", message: "Approval expired" });
+  });
+
+  it("maps zero-setup readiness and refreshes runtime detection idempotently", async () => {
+    const status = {
+      core: { status: "degraded", detail: "A model is optional" },
+      scratch_project_id: "scratch-project",
+      terminal: {
+        status: "ready",
+        runner_profile_id: "runner-local",
+        candidates: [{
+          candidate_id: `fixed:${"a".repeat(32)}`,
+          runner_profile_id: "runner-local",
+          source: "detected",
+          name: "Local Podman",
+          runtime: "podman",
+          executable: "/usr/bin/podman",
+          context: null,
+          platform: "linux/amd64",
+          isolation: "rootless",
+          healthy: true,
+          detail: null,
+        }],
+        image_preparation: {
+          phase: "ready",
+          operation_id: "00000000-0000-4000-8000-000000000001",
+          project_id: "scratch-project",
+          progress_percent: 100,
+          progress_indeterminate: false,
+          can_cancel: false,
+          can_retry: false,
+          image_digest: `sha256:${"b".repeat(64)}`,
+          started_at: "2026-07-13T18:00:00Z",
+          completed_at: "2026-07-13T18:01:00Z",
+          detail: "Cached and verified",
+        },
+        detail: null,
+      },
+      assistant: { status: "needs_model", provider_profile_id: null, detail: null },
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
+      new Response(JSON.stringify(status), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const initial = await client.setupStatus();
+    const refreshed = await client.refreshSetupRuntime();
+
+    expect(initial).toMatchObject({
+      core: { status: "degraded", detail: "A model is optional" },
+      scratchProjectId: "scratch-project",
+      terminal: {
+        status: "ready",
+        runnerProfileId: "runner-local",
+        candidates: [expect.objectContaining({ candidateId: `fixed:${"a".repeat(32)}`, name: "Local Podman", healthy: true })],
+        imagePreparation: expect.objectContaining({ phase: "ready", progressPercent: 100, canCancel: false }),
+      },
+      assistant: { status: "needs_model" },
+    });
+    expect(refreshed).toEqual(initial);
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method ?? "GET"])).toEqual([
+      ["http://127.0.0.1:8765/api/v1/setup/status", "GET"],
+      ["http://127.0.0.1:8765/api/v1/setup/runtime/refresh", "POST"],
+    ]);
+  });
+
+  it("maps idempotent setup control operations without losing preparation state", async () => {
+    const status = {
+      core: { status: "ready", detail: null },
+      scratch_project_id: "scratch-project",
+      terminal: {
+        status: "preparing_image",
+        runner_profile_id: "runner-local",
+        candidates: [],
+        image_preparation: {
+          phase: "preparing_image",
+          operation_id: "00000000-0000-4000-8000-000000000001",
+          project_id: "scratch-project",
+          progress_percent: 42,
+          progress_indeterminate: false,
+          can_cancel: true,
+          can_retry: false,
+          detail: "Preparing the workstation image",
+        },
+        detail: "Preparing the workstation image",
+      },
+      assistant: { status: "needs_model", provider_profile_id: null, detail: null },
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const pathname = new URL(String(input)).pathname;
+      const operation = pathname.endsWith("/runtime/select")
+        ? "runner_selection"
+        : pathname.endsWith("/image/retry")
+          ? "image_preparation_retry"
+          : pathname.endsWith("/image/cancel")
+            ? "image_preparation_cancellation"
+            : "image_preparation";
+      return new Response(JSON.stringify({
+        operation,
+        accepted: true,
+        idempotent: false,
+        operation_id: "00000000-0000-4000-8000-000000000001",
+        setup: status,
+      }), { status: 200 });
+    });
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const selected = await client.selectSetupRuntime(`fixed:${"a".repeat(32)}`);
+    const prepared = await client.prepareSetupImage("scratch-project");
+    await client.retrySetupImage("scratch-project");
+    await client.cancelSetupImage("00000000-0000-4000-8000-000000000001");
+
+    expect(selected.operation).toBe("runner_selection");
+    expect(prepared.setup.terminal.imagePreparation).toMatchObject({
+      phase: "preparing_image",
+      progressPercent: 42,
+      canCancel: true,
+    });
+    expect(fetchMock.mock.calls.map(([input, init]) => [
+      new URL(String(input)).pathname,
+      JSON.parse(String(init?.body)),
+    ])).toEqual([
+      ["/api/v1/setup/runtime/select", { candidate_id: `fixed:${"a".repeat(32)}` }],
+      ["/api/v1/setup/image/prepare", { project_id: "scratch-project" }],
+      ["/api/v1/setup/image/retry", { project_id: "scratch-project" }],
+      ["/api/v1/setup/image/cancel", { operation_id: "00000000-0000-4000-8000-000000000001" }],
+    ]);
+  });
+
+  it("streams raw workspace uploads with an explicit overwrite decision", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      engagement_id: "project-1",
+      path: "notes/proof.txt",
+      size: 5,
+      sha256: "a".repeat(64),
+      overwritten: true,
+    }), { status: 201 }));
+    const client = new ApiClient({
+      baseUrl: "http://127.0.0.1:8765",
+      token: "local-token",
+      fetch: fetchMock,
+    });
+    const file = new Blob(["proof"], { type: "text/plain" });
+
+    const result = await client.uploadWorkspaceFile("project-1", "notes/proof.txt", file, true);
+
+    expect(result).toMatchObject({ path: "notes/proof.txt", size: 5, overwritten: true });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:8765/api/v1/engagements/project-1/workspace/file?path=notes%2Fproof.txt&overwrite=true");
+    expect(init?.method).toBe("PUT");
+    expect(init?.body).toBe(file);
+    expect(new Headers(init?.headers).get("Content-Type")).toBe("application/octet-stream");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer local-token");
   });
 
   it("maps snake_case Core arrays into engagement and run summaries", async () => {
@@ -323,6 +530,27 @@ describe("ApiClient", () => {
       privacy: { local_only: true },
     });
     expect(created).toMatchObject({ name: "Local vLLM", kind: "local" });
+  });
+
+  it("maps fixed-loopback local provider discovery", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([{
+      flavor: "ollama",
+      display_name: "Ollama",
+      endpoint: "http://127.0.0.1:11434/v1",
+      models: ["qwen2.5-coder"],
+    }]), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.discoverLocalProviders()).resolves.toEqual([{
+      flavor: "ollama",
+      displayName: "Ollama",
+      endpoint: "http://127.0.0.1:11434/v1",
+      models: ["qwen2.5-coder"],
+    }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8765/api/v1/providers/discover-local",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
   });
 
   it("persists only provider credential references and explicit document-data permission", async () => {

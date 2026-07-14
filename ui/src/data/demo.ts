@@ -238,6 +238,7 @@ export const previewFindings: FindingSummary[] = [
     verifierId: "evidence-verifier",
     verifiedAt: "2026-07-12T18:52:00Z",
     updatedAt: "2026-07-12T18:52:00Z",
+    revision: 1,
   },
   {
     id: "finding-2",
@@ -254,6 +255,7 @@ export const previewFindings: FindingSummary[] = [
     cveIds: [],
     cweIds: ["CWE-347"],
     updatedAt: "2026-07-12T19:12:00Z",
+    revision: 1,
   },
   {
     id: "finding-3",
@@ -270,6 +272,7 @@ export const previewFindings: FindingSummary[] = [
     cveIds: [],
     cweIds: ["CWE-308"],
     updatedAt: "2026-07-12T18:24:00Z",
+    revision: 1,
   },
   {
     id: "finding-4",
@@ -286,5 +289,6 @@ export const previewFindings: FindingSummary[] = [
     cveIds: [],
     cweIds: ["CWE-200"],
     updatedAt: "2026-07-12T16:03:00Z",
+    revision: 1,
   },
 ];

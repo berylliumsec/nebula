@@ -59,7 +59,7 @@ class RoutingProvider(ModelProvider):
                     ToolCall(
                         id="route-1",
                         name="parse.scan",
-                        arguments={"items": ["one", "two"]},
+                        arguments={"items": ["one", "two"], "cwd": "/tmp"},
                     )
                 ],
                 finish_reason="tool_calls",
@@ -113,7 +113,10 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
     provider = RoutingProvider(profile.id)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
 
+    observed_arguments = []
+
     async def handler(arguments):
+        observed_arguments.append(arguments)
         return {"count": len(arguments["items"])}
 
     spec = ToolSpec(
@@ -121,8 +124,11 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
         description="Count normalized items",
         input_schema={
             "type": "object",
-            "properties": {"items": {"type": "array", "items": {"type": "string"}}},
-            "required": ["items"],
+            "properties": {
+                "items": {"type": "array", "items": {"type": "string"}},
+                "cwd": {"type": "string"},
+            },
+            "required": ["items", "cwd"],
             "additionalProperties": False,
         },
         output_schema={
@@ -131,7 +137,9 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
             "required": ["count"],
             "additionalProperties": False,
         },
-        risk_class=RiskClass.LOCAL_READ,
+        risk_class=RiskClass.WORKSPACE_WRITE,
+        filesystem_access="workspace_write",
+        path_arguments=["cwd"],
     )
     registry = ToolRegistry()
     registry.register(AnalysisTool(spec, handler))
@@ -189,4 +197,11 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
     assert messages[-1].metadata["tool_call_ids"] == turn.tool_call_ids
     assert provider.requests[0].tool_choice.value == "required"
     assert provider.requests[0].parallel_tool_calls is False
+    routed_cwd = provider.requests[0].tools[0].input_schema["properties"]["cwd"]
+    assert routed_cwd == {
+        "type": "string",
+        "const": ".",
+        "description": "Engagement workspace root; supplied by Nebula Core.",
+    }
+    assert observed_arguments[0]["cwd"] == "/workspace"
     assert provider.requests[-1].tools == []

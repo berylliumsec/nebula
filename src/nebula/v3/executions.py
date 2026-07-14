@@ -198,7 +198,7 @@ class ExecutionService:
         self.spool_root = self.data_root / "execution-spool"
         self.spool_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.spool_root.chmod(0o700)
-        self.operator_id = operator_id or (lambda: "local-operator")
+        self.operator_id = operator_id or (lambda: "system")
         self._preview_secret = os.urandom(32)
         self._global_slots = asyncio.Semaphore(max_concurrency)
         self._engagement_locks: dict[str, asyncio.Lock] = {}
@@ -709,7 +709,7 @@ class ExecutionService:
                 raise ExecutionServiceError(
                     "origin_mismatch", str(exc), status_code=422
                 ) from exc
-        else:
+        elif request.origin.kind == ExecutionOriginKind.RERUN:
             assert request.origin.execution_id is not None
             try:
                 parent = self.store.get(OperatorExecution, request.origin.execution_id)
@@ -730,6 +730,19 @@ class ExecutionService:
                     "origin_mismatch", "rerun source failed integrity verification"
                 )
             source = self.artifact_store.read(artifact).decode("utf-8", errors="strict")
+        else:
+            assert request.origin.source_sha256 is not None
+            observed_sha256 = hashlib.sha256(
+                request.source.encode("utf-8")
+            ).hexdigest()
+            if not hmac.compare_digest(
+                observed_sha256, request.origin.source_sha256
+            ):
+                raise ExecutionServiceError(
+                    "origin_mismatch",
+                    "selected source does not match its reviewed SHA-256",
+                )
+            source = request.source
         if source != request.source:
             raise ExecutionServiceError(
                 "origin_mismatch", "submitted source differs from durable provenance"

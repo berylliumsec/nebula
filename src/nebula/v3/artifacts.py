@@ -52,6 +52,7 @@ class ArtifactStore:
         filename: str | None = None,
         media_type: str | None = None,
         source: str | None = None,
+        parent_artifact_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Artifact:
         return self.put_bytes_with_status(
@@ -60,6 +61,7 @@ class ArtifactStore:
             filename=filename,
             media_type=media_type,
             source=source,
+            parent_artifact_id=parent_artifact_id,
             metadata=metadata,
         ).artifact
 
@@ -71,6 +73,7 @@ class ArtifactStore:
         filename: str | None = None,
         media_type: str | None = None,
         source: str | None = None,
+        parent_artifact_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> StoredArtifact:
         return self._put_stream(
@@ -79,6 +82,7 @@ class ArtifactStore:
             filename=filename,
             media_type=media_type,
             source=source,
+            parent_artifact_id=parent_artifact_id,
             metadata=metadata,
         )
 
@@ -90,6 +94,7 @@ class ArtifactStore:
         filename: str | None = None,
         media_type: str | None = None,
         source: str | None = None,
+        parent_artifact_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Artifact:
         return self.put_file_with_status(
@@ -98,6 +103,7 @@ class ArtifactStore:
             filename=filename,
             media_type=media_type,
             source=source,
+            parent_artifact_id=parent_artifact_id,
             metadata=metadata,
         ).artifact
 
@@ -109,6 +115,7 @@ class ArtifactStore:
         filename: str | None = None,
         media_type: str | None = None,
         source: str | None = None,
+        parent_artifact_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> StoredArtifact:
         source_path = Path(path)
@@ -130,6 +137,7 @@ class ArtifactStore:
                 filename=filename or source_path.name,
                 media_type=media_type,
                 source=source or str(source_path),
+                parent_artifact_id=parent_artifact_id,
                 metadata=metadata,
             )
 
@@ -141,6 +149,7 @@ class ArtifactStore:
         filename: str | None = None,
         media_type: str | None = None,
         source: str | None = None,
+        parent_artifact_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> StoredArtifact:
         """Copy an already-open, caller-validated stream into immutable storage."""
@@ -151,6 +160,7 @@ class ArtifactStore:
             filename=filename,
             media_type=media_type,
             source=source,
+            parent_artifact_id=parent_artifact_id,
             metadata=metadata,
         )
 
@@ -162,6 +172,7 @@ class ArtifactStore:
         filename: str | None,
         media_type: str | None,
         source: str | None,
+        parent_artifact_id: str | None,
         metadata: dict[str, Any] | None,
     ) -> StoredArtifact:
         descriptor, temporary_name = tempfile.mkstemp(dir=self._temporary_root)
@@ -218,6 +229,7 @@ class ArtifactStore:
                 or "application/octet-stream",
                 storage_path=relative_path,
                 source=source,
+                parent_artifact_id=parent_artifact_id,
                 metadata=metadata or {},
             )
             return StoredArtifact(artifact=artifact, created_blob=created)

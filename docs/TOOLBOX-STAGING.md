@@ -60,9 +60,9 @@ normal credential store and pulls the exact platform digest from the bundle.
    NEBULA_TOOL_DEVELOPER_MODE=1 npm --prefix ui run tauri -- dev
    ```
 
-3. In **Settings → Runners**, configure and verify Docker Desktop or Podman
-   Machine.
-4. In **Settings → Toolbox**, choose **Use a custom compatible environment**,
+3. In **Settings → Advanced**, configure and verify Docker Desktop or Podman
+   Machine if automatic detection did not select it.
+4. In **Settings → Advanced → Toolbox**, choose **Use a custom compatible environment**,
    select `nebula-toolbox-staging.nebula-toolpack`, review the permissions, and
    confirm the permanent unsigned-development warning.
 
@@ -73,22 +73,23 @@ contract, and runs the pack smoke tests. Mission execution subsequently uses
 
 ## CLI alternative
 
-If the packaged `nebula` command and a ready runner profile use the same Nebula
+If `nebula-core` and a ready runner profile use the same Nebula
 data directory as the app, install with:
 
 ```bash
-NEBULA_TOOL_DEVELOPER_MODE=1 nebula tools doctor
+NEBULA_TOOL_DEVELOPER_MODE=1 nebula-core tools doctor
 
-NEBULA_TOOL_DEVELOPER_MODE=1 nebula tools install-local \
+NEBULA_TOOL_DEVELOPER_MODE=1 nebula-core tools install-local \
   "$HOME/Downloads/nebula-toolbox-staging/nebula-toolbox-staging.nebula-toolpack" \
   --runner <runner-id> \
   --yes
 ```
 
-For a source checkout, replace `nebula` with `poetry run nebula3`.
+For a source checkout, use `poetry run nebula-core`. The old
+`poetry run nebula3` spelling remains a compatibility alias.
 
 ## Remove or replace the staging pack
 
 Staging packs never update through the official catalog. Remove the installed
-environment in **Settings → Toolbox**, then upload the bundle from a newer
+environment in **Settings → Advanced → Toolbox**, then upload the bundle from a newer
 workflow run. Historical missions retain their original digest locks.
