@@ -549,6 +549,7 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
                             "options": [],
                             "positionals": [{"id": "filter", "value": "."}],
                         },
+                        "cwd": "/tmp/provider-selected-path",
                     },
                 )
                 return ModelResponse(
@@ -563,6 +564,7 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
         async def execute(self, invocation, scope):
             del scope
             assert invocation.tool_name == "environment.run_local"
+            assert invocation.arguments["cwd"] == "."
             return ToolExecutionResult(
                 output={"ok": True},
                 exit_code=0,
@@ -577,12 +579,14 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
             "properties": {
                 "tool": {"type": "string"},
                 "invocation": {"type": "object"},
+                "cwd": {"type": "string"},
             },
-            "required": ["tool", "invocation"],
+            "required": ["tool", "invocation", "cwd"],
             "additionalProperties": False,
         },
         output_schema={"type": "object", "additionalProperties": True},
         risk_class=RiskClass.WORKSPACE_WRITE,
+        path_arguments=["cwd"],
     )
     provider = QueueProvider()
     specialist = BrokeredToolSpecialist(
@@ -621,6 +625,109 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
     assert [tool.name for tool in provider.requests[1].tools] == [
         "environment.run_local"
     ]
+    assert provider.requests[1].tools[0].input_schema["properties"]["cwd"] == {
+        "type": "string",
+        "const": ".",
+        "description": "Engagement workspace root; supplied by Nebula Core.",
+    }
+    assert spec.input_schema["properties"]["cwd"] == {"type": "string"}
+
+
+def test_specialist_corrects_single_catalogued_help_path(tmp_path):
+    catalog_path = tmp_path / "tool-catalog.json"
+    write_test_catalog(catalog_path)
+    catalog = load_interface_catalog(catalog_path.read_bytes())
+
+    class HelpProvider(ModelProvider):
+        def __init__(self):
+            super().__init__(
+                ProviderConfig(
+                    id="help",
+                    kind=ProviderKind.OPENAI_COMPATIBLE,
+                    flavor=ProviderFlavor.VLLM,
+                    base_url="http://127.0.0.1:8000/v1",
+                    local=True,
+                    enabled=True,
+                    capabilities=ModelCapabilities(tools=True, strict_tools=True),
+                )
+            )
+            self.calls = 0
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            del request
+            self.calls += 1
+            if self.calls == 1:
+                return ModelResponse(
+                    provider_id="help",
+                    model="test",
+                    tool_calls=[
+                        ToolCall(
+                            id="help-jq",
+                            name="environment.help",
+                            arguments={"tool": "jq", "command_path": ["jq"]},
+                        )
+                    ],
+                )
+            return ModelResponse(provider_id="help", model="test", text="jq help read")
+
+        async def health(self) -> ProviderHealth:
+            return ProviderHealth(provider_id="help", healthy=True)
+
+    class Broker:
+        async def execute(self, invocation, scope):
+            del scope
+            assert invocation.arguments == {"tool": "jq", "command_path": []}
+            return ToolExecutionResult(
+                output={"catalogued_guidance": True},
+                exit_code=0,
+                execution={"command": ["nebula-toolbox", "help"]},
+            )
+
+    spec = ToolSpec(
+        name="environment.help",
+        description="Read exact-version help.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string"},
+                "command_path": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["tool", "command_path"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.LOCAL_READ,
+    )
+    specialist = BrokeredToolSpecialist(
+        HelpProvider(),
+        role=SpecialistRole.NETWORK_SERVICE,
+        broker=Broker(),
+        scope=ScopePolicy(engagement_id="engagement"),
+        workspace=tmp_path,
+        specs={spec.name: spec},
+        interface_catalog=catalog,
+    )
+    task = PlannedTask(
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Read jq help",
+        instructions="Inspect jq's exact interface.",
+        allowed_tools=frozenset({spec.name}),
+    )
+
+    result = asyncio.run(
+        specialist.run(
+            SpecialistContext(
+                engagement_id="engagement",
+                run_id="run",
+                task=task,
+                objective="Read jq help",
+                prior_results={},
+                allowed_tools=frozenset({spec.name}),
+            )
+        )
+    )
+
+    assert result.tool_calls == 1
 
 
 def test_toolbox_shell_supports_full_pipeline_and_records_script_hash(tmp_path, capsys):

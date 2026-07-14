@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -308,6 +309,24 @@ class BrokeredToolSpecialist:
             )
             model_call_id = call.id
 
+        spec = self.specs[invocation.tool_name]
+        arguments = dict(invocation.arguments)
+        if "cwd" in spec.path_arguments:
+            arguments["cwd"] = "."
+        if invocation.tool_name == "environment.help" and self.interface_catalog:
+            tool_name = arguments.get("tool")
+            command_path = arguments.get("command_path")
+            tool = (
+                self.interface_catalog.tools.get(tool_name)
+                if isinstance(tool_name, str)
+                else None
+            )
+            if tool is not None and isinstance(command_path, list):
+                command_paths = [command["path"] for command in tool["commands"]]
+                if command_path not in command_paths and len(command_paths) == 1:
+                    arguments["command_path"] = command_paths[0]
+        invocation = invocation.model_copy(update={"arguments": arguments})
+
         try:
             result = await self.broker.execute(invocation, self.scope)
         except PolicyDenied as denial:
@@ -495,10 +514,18 @@ class BrokeredToolSpecialist:
 
     @staticmethod
     def _definition(spec: ToolSpec) -> ToolDefinition:
+        input_schema = deepcopy(spec.input_schema)
+        properties = input_schema.get("properties")
+        if "cwd" in spec.path_arguments and isinstance(properties, dict):
+            properties["cwd"] = {
+                "type": "string",
+                "const": ".",
+                "description": "Engagement workspace root; supplied by Nebula Core.",
+            }
         return ToolDefinition(
             name=spec.name,
             description=spec.description,
-            input_schema=spec.input_schema,
+            input_schema=input_schema,
             strict=True,
         )
 
