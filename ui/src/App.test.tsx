@@ -490,11 +490,7 @@ describe("Nebula workspace", () => {
     expect(screen.queryByText("The selected service uses port 8443.")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Working memory" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/sessions/session-1/context"))).toBe(false);
-    await user.click(screen.getByRole("button", { name: "Save Assistant Response" }));
-    expect(await screen.findByRole("tab", { name: "Project notes" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByRole("textbox", { name: "Note title" })).toHaveValue("Note from Assistant response");
-    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("Port retained");
-    await user.click(screen.getByRole("tab", { name: "Analyst chat" }));
+    expect(screen.queryByRole("button", { name: "Save Assistant Response" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete conversation Saved context" }));
     const dialog = screen.getByRole("dialog", { name: "Delete Saved context?" });
     await user.click(within(dialog).getByRole("button", { name: "Delete conversation" }));
