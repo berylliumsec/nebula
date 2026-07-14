@@ -218,6 +218,15 @@ async function installTruthfulCore(page: Page) {
       };
     } else if (path.endsWith("/terminal/commands")) {
       body = { records: [], total: 0, offset: 0, limit: 100, next_offset: null };
+    } else if (path.endsWith("/workspace")) {
+      body = {
+        engagement_id: "scratch-project",
+        path: "",
+        entries: [],
+        offset: 0,
+        next_offset: null,
+        total: 0,
+      };
     }
     await route.fulfill({
       status: 200,
@@ -241,9 +250,9 @@ async function openWorkspace(page: Page, route: string, heading: string) {
 }
 
 async function findPathologicalText(page: Page) {
-  return page.locator(".page").evaluate((root) => {
+  return page.locator(".page").evaluateAll((roots) => {
     const issues: string[] = [];
-    const candidates = [...root.querySelectorAll<HTMLElement>("h1, h2, h3, p, strong, small, dd")];
+    const candidates = roots.flatMap((root) => [...root.querySelectorAll<HTMLElement>("h1, h2, h3, p, strong, small, dd")]);
     for (const element of candidates) {
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -443,5 +452,84 @@ test("appearance variants preserve each critical workspace hierarchy", async ({ 
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await expect(page).toHaveScreenshot(`${name}-${theme}.png`, { fullPage: true });
     }
+  }
+});
+
+test("audit every primary workspace view", async ({ page }, testInfo) => {
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({ width: 1756, height: 1194 });
+  }
+
+  const capture = async (name: string) => {
+    await page.waitForTimeout(120);
+    const overflow = await page.locator("body").evaluate(() => {
+      const selector = [
+        ".page",
+        ".session-toolbar",
+        ".session-layout",
+        ".chat-context-bar",
+        ".execution-history",
+        ".workspace-browser",
+        ".notes-panel",
+        ".artifact-grid",
+        ".report-empty-state",
+        ".project-tabs",
+        ".settings-tabs",
+      ].join(", ");
+      return [...document.querySelectorAll<HTMLElement>(selector)]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0
+            && rect.height > 0
+            && style.display !== "none"
+            && element.scrollWidth > element.clientWidth + 2;
+        })
+        .map((element) => `${element.tagName.toLowerCase()}.${element.className}: ${element.clientWidth}/${element.scrollWidth}`);
+    });
+    expect(overflow, `${name} contains horizontally clipped UI`).toEqual([]);
+    expect(await findPathologicalText(page), `${name} renders prose in a pathologically narrow column`).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
+  };
+
+  await openWorkspace(page, "/", "Workbench");
+  for (const [name, label] of [
+    ["workbench-terminal", "Terminal"],
+    ["workbench-assistant", "Analyst chat"],
+    ["workbench-files", "Workspace files"],
+    ["workbench-notes", "Project notes"],
+    ["workbench-missions", "Autonomous missions"],
+    ["workbench-activity", "Activity history"],
+  ] as const) {
+    await page.getByRole("tab", { name: label, exact: true }).click();
+    await capture(name);
+  }
+
+  for (const [name, route, heading] of [
+    ["findings", "/findings", "Findings"],
+    ["reports", "/reports", "Reports"],
+  ] as const) {
+    await openWorkspace(page, route, heading);
+    await capture(name);
+  }
+
+  await openWorkspace(page, "/project", "Scratch Project");
+  for (const [name, label] of [
+    ["project-overview", "Overview"],
+    ["project-assets", "Assets"],
+    ["project-evidence", "Evidence"],
+    ["project-sources", "Sources"],
+  ] as const) {
+    await page.getByRole("button", { name: label, exact: true }).click();
+    await capture(name);
+  }
+
+  await openWorkspace(page, "/settings", "Settings");
+  for (const [name, label] of [
+    ["settings-setup", "Setup"],
+    ["settings-advanced", "Advanced settings"],
+  ] as const) {
+    await page.getByRole("link", { name: label, exact: true }).click();
+    await capture(name);
   }
 });

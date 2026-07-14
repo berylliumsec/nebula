@@ -59,6 +59,7 @@
 .evidence-callout { margin-bottom: 13px; }
 .evidence-callout > span { padding: 4px 7px; border: 1px solid var(--border); border-radius: 4px; color: var(--green); font: 11px var(--mono); }
 .artifact-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; padding: 12px; }
+.artifact-grid > .empty-state:only-child { grid-column: 1 / -1; }
 .artifact-card { min-width: 0; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-raised); }
 .artifact-preview { display: flex; min-height: 104px; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: var(--blue); background: radial-gradient(circle at center, color-mix(in srgb, var(--blue-muted) 70%, transparent), var(--surface-muted) 70%); }
 .artifact-preview span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }

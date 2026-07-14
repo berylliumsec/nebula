@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MessageSquareQuote, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ApiClient } from "../api/client";
@@ -194,7 +194,7 @@ export function NotesPanel({
         {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} onClick={() => { setCreating(false); setSelectedId(note.id); }}><strong>{note.title}</strong><small>{new Date(note.updatedAt).toLocaleString()}</small></button>)}
         {!notes.length && !loading && <p>No notes yet.</p>}
       </aside>
-      <section className="note-editor" aria-label={creating ? "New note" : selected ? `Edit ${selected.title}` : "Note editor"}>
+      <section className={`note-editor${creating || selected ? "" : " is-empty"}`} aria-label={creating ? "New note" : selected ? `Edit ${selected.title}` : "Note editor"}>
         {error && <p className="form-error" role="alert">{error}</p>}
         {(creating || selected) ? <>
           <header>
@@ -213,7 +213,7 @@ export function NotesPanel({
             {evidenceOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.evidenceIds.includes(option.id)} onChange={() => toggleLink("evidenceIds", option.id)} /> {option.label}</label>)}
             {assetOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.assetIds.includes(option.id)} onChange={() => toggleLink("assetIds", option.id)} /> {option.label}</label>)}
           </details>}
-        </> : <div className="empty-state"><strong>Select or create a note</strong><p>Notes are mutable Markdown. Preserve exact files and screenshots as Evidence.</p><button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button></div>}
+        </> : <div className="empty-state note-empty-state"><NotebookPen size={24} aria-hidden="true" /><strong>Start a project note</strong><p>Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence.</p><button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button></div>}
       </section>
     </div>
   );

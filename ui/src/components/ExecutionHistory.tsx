@@ -156,7 +156,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
       </header>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="execution-history-layout">
-        <aside aria-label="Execution records">
+        <aside className={items.length ? undefined : "is-empty"} aria-label="Execution records">
           {loading && !items.length ? <div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading executions…</strong></div> : items.length ? items.map((execution) => (
             <button type="button" className={execution.id === selectedId ? "active" : undefined} onClick={() => setSelectedId(execution.id)} key={execution.id}>
               <span className={`execution-status ${execution.status}`} />
@@ -164,7 +164,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
             </button>
           )) : <div className="empty-state compact"><FileClock size={21} /><strong>No executions match</strong><p>Reviewed code runs will appear here.</p></div>}
         </aside>
-        <section className="execution-detail">
+        <section className={`execution-detail${selected ? "" : " is-empty"}`}>
           {selected ? <>
             <header><div><h3>{selected.language} execution</h3><p>{selected.status.replaceAll("_", " ")} · exit {selected.exitCode ?? "—"} · {duration(selected)}</p></div><div><button className="button quiet" type="button" onClick={() => void copySource(selected)}><Clipboard size={13} /> Copy</button><button className="button secondary" type="button" onClick={() => void rerun(selected)}><Play size={13} /> Rerun through review</button>{!ACTIVE.has(selected.status) && <><button className="button secondary" type="button" onClick={() => setInsightAction("draft")}><NotebookPen size={13} /> Draft note</button><button className="button secondary" type="button" onClick={() => setInsightAction("chat")}><MessageSquare size={13} /> Discuss in chat</button></>}{ACTIVE.has(selected.status) && <button className="button danger" type="button" onClick={() => void cancel(selected)}><Ban size={13} /> Cancel</button>}</div></header>
             <dl><div><dt>Image</dt><dd><code>{selected.runtime.image}</code></dd></div><div><dt>Manifest</dt><dd><code>{selected.runtime.manifestDigest}</code></dd></div><div><dt>Network</dt><dd>{selected.network.mode === "none" ? "Offline" : `${selected.network.target} · ${selected.network.ports.join(", ")}`}</dd></div><div><dt>Policy</dt><dd>{selected.policyDecision}{selected.errorCode ? ` · ${selected.errorCode}` : ""}</dd></div></dl>

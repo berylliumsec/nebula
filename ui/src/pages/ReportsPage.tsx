@@ -213,7 +213,7 @@ export function ReportsPage() {
     <div className="page reports-page">
       <PageHeader title="Reports" description="Build reports from verified findings and evidence." actions={<button className="button primary" type="button" disabled={!engagement} onClick={() => void openCreate()}><Plus size={16} /> New report</button>} />
       {error && <div className="knowledge-status error" role="alert">{error}</div>}
-      {!selected ? <section className="panel empty-state report-empty-state"><FileText size={28} /><strong>No reports yet</strong><p>Create a draft when you’re ready.</p></section> : <div className="report-layout">
+      {!selected ? <section className="panel empty-state report-empty-state"><FileText size={28} /><strong>Create your first report</strong><p>Turn verified findings and evidence into a reviewable deliverable.</p><button className="button primary" type="button" disabled={!engagement} onClick={() => void openCreate()}><Plus size={15} /> New report</button></section> : <div className="report-layout">
         <aside className="panel report-outline">
           <header><div><span>{reports.length} report{reports.length === 1 ? "" : "s"}</span><strong>{engagement?.name}</strong></div></header>
           <nav aria-label="Reports">{reports.map((report) => <button className={report.id === selected.id ? "active" : undefined} type="button" title={report.title} key={report.id} onClick={() => void selectReport(report.id)}><FileText size={15} /><span className="report-list-label">{report.title}<small>{report.status} · revision {report.revision}</small></span></button>)}</nav>
