@@ -9,6 +9,8 @@ const workspaces = [
   ["settings", "/settings", "Settings"],
 ] as const;
 
+const firstRunThemeTest = "Zero is the first-run default theme";
+
 const entity = {
   created_at: "2026-07-12T10:00:00Z",
   updated_at: "2026-07-12T11:00:00Z",
@@ -284,7 +286,21 @@ async function findPathologicalText(page: Page) {
   });
 }
 
-test.beforeEach(async ({ page }) => installTruthfulCore(page));
+test.beforeEach(async ({ page }, testInfo) => {
+  await installTruthfulCore(page);
+  if (testInfo.title !== firstRunThemeTest) {
+    await page.addInitScript(() => {
+      if (localStorage.getItem("nebula.theme") === null) localStorage.setItem("nebula.theme", "dark");
+    });
+  }
+});
+
+test(firstRunThemeTest, async ({ page }) => {
+  await openWorkspace(page, "/", "Workbench");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
+});
 
 test("primary navigation exposes only the five task destinations", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");

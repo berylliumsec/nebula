@@ -50,6 +50,19 @@ describe("Nebula workspace", () => {
     expect(screen.queryByText(/Acme|Jordan/i)).not.toBeInTheDocument();
   });
 
+  it("uses Zero as the first-run theme while preserving explicit preferences", async () => {
+    const firstRender = renderApp();
+    expect(document.documentElement).toHaveAttribute("data-theme", "zero");
+    expect(await screen.findByRole("region", { name: "Zero Layer context" })).toBeVisible();
+    expect(localStorage.getItem("nebula.theme")).toBeNull();
+
+    firstRender.unmount();
+    localStorage.setItem("nebula.theme", "light");
+    renderApp();
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
+  });
+
   it("restores legacy mission links to the Workbench mission view", async () => {
     renderApp("/missions");
     expect(await screen.findByRole("heading", { name: "Workbench" })).toBeVisible();
@@ -846,7 +859,7 @@ describe("Nebula workspace", () => {
     await user.type(within(dialog).getByLabelText("CWE identifiers"), "cwe-79");
     await user.click(within(dialog).getByRole("button", { name: "Create candidate" }));
 
-    expect(await screen.findByText("Reflected script injection")).toBeVisible();
+    expect(await within(screen.getByRole("table")).findByText("Reflected script injection")).toBeVisible();
     const createCall = fetchMock.mock.calls.find(([input, init]) => new URL(String(input)).pathname.endsWith("/findings") && init?.method === "POST");
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ engagement_id: "engagement-1", status: "candidate", severity: "high", asset_ids: ["asset-1"], cve_ids: ["CVE-2026-1234"], cwe_ids: ["CWE-79"], metadata: { origin: "manual_operator_entry" } });
     expect(JSON.parse(String(createCall?.[1]?.body))).not.toHaveProperty("verifier_id");
@@ -982,7 +995,7 @@ describe("Nebula workspace", () => {
     expect(await screen.findByText("proof.txt")).toBeVisible();
 
     await user.click(screen.getByRole("link", { name: "Findings" }));
-    const row = (await screen.findByText("Linked finding")).closest("tr");
+    const row = (await within(screen.getByRole("table")).findByText("Linked finding")).closest("tr");
     expect(row).not.toBeNull();
     expect(within(row!).getAllByRole("cell")[4]).toHaveTextContent("1");
   });

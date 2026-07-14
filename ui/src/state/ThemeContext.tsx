@@ -20,6 +20,7 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 const STORAGE_KEY = "nebula.theme";
+const DEFAULT_PREFERENCE: ThemePreference = "zero";
 const preferences: ThemePreference[] = ["system", "light", "dark", "zero", "high-contrast"];
 
 function systemTheme(): ResolvedTheme {
@@ -28,7 +29,7 @@ function systemTheme(): ResolvedTheme {
 
 function initialPreference(): ThemePreference {
   const saved = localStorage.getItem(STORAGE_KEY);
-  return preferences.includes(saved as ThemePreference) ? (saved as ThemePreference) : "system";
+  return preferences.includes(saved as ThemePreference) ? (saved as ThemePreference) : DEFAULT_PREFERENCE;
 }
 
 export function ThemeProvider({ children }: PropsWithChildren) {
