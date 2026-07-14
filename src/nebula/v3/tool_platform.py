@@ -968,22 +968,30 @@ class ToolPlatform:
             )
             if item.enabled
         ]
+        ready_installations = [
+            item
+            for item in self.store.list_entities(ToolPackInstallation, limit=1_000)
+            if item.status == ToolPackInstallationStatus.READY
+        ]
+        ready_by_digest = {
+            item.manifest_digest: item for item in ready_installations
+        }
+        ready_assignments = [
+            item for item in assignments if item.manifest_digest in ready_by_digest
+        ]
+        if assignments and not ready_assignments:
+            raise ToolPlatformError("an assigned Toolbox pack is unavailable")
         selected = list(
             dict.fromkeys(
-                name for item in assignments for name in item.allowed_tool_names
+                name
+                for item in ready_assignments
+                for name in item.allowed_tool_names
             )
         )
         if not selected:
             raise ToolPlatformError("engagement has no enabled Toolbox assignment")
-        digests = sorted({item.manifest_digest for item in assignments})
-        installations = [
-            item
-            for item in self.store.list_entities(ToolPackInstallation, limit=1_000)
-            if item.manifest_digest in digests
-            and item.status == ToolPackInstallationStatus.READY
-        ]
-        if {item.manifest_digest for item in installations} != set(digests):
-            raise ToolPlatformError("an assigned Toolbox pack is unavailable")
+        digests = sorted({item.manifest_digest for item in ready_assignments})
+        installations = [ready_by_digest[digest] for digest in digests]
         interface_digests = sorted(
             {
                 item.interface_catalog_digest

@@ -15,6 +15,7 @@ from nebula.v3.domain import (
     AgentRun,
     Engagement,
     EngagementToolAssignment,
+    RiskClass,
     RunnerIsolation,
     RunnerProfile,
     RunnerRuntime,
@@ -55,7 +56,13 @@ from nebula.v3.toolpacks import (
     fetch_bounded_https,
     manifest_digest,
 )
-from nebula.v3.tools import InvalidToolArguments, build_declared_command
+from nebula.v3.tools import (
+    AnalysisTool,
+    InvalidToolArguments,
+    ToolRegistry,
+    ToolSpec,
+    build_declared_command,
+)
 
 
 DIGEST_A = "a" * 64
@@ -761,6 +768,98 @@ def test_tool_platform_uses_fixed_pack_root_with_test_override(tmp_path, monkeyp
     assert default_tool_pack_root() == (
         tmp_path / "home/Library/Application Support/io.nebula.security/tool-packs"
     )
+
+
+def test_chat_components_ignore_stale_assignment_when_ready_digest_exists(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(Database(tmp_path / "chat-platform.db"))
+    engagement = store.create(Engagement(name="Chat tools"))
+    scope = store.create(ScopePolicy(engagement_id=engagement.id))
+    engagement = store.update(
+        Engagement,
+        engagement.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=engagement.revision,
+    )
+    store.create(
+        RunnerProfile(
+            id="local",
+            name="Local",
+            runtime=RunnerRuntime.DOCKER,
+            executable="/usr/bin/docker",
+            context="rootless",
+            platform="linux/amd64",
+            isolation=RunnerIsolation.ROOTLESS,
+            healthy=True,
+        )
+    )
+    store.create(
+        ToolPackInstallation(
+            publisher="example",
+            name="ready-pack",
+            version="1.0.0",
+            manifest_digest=DIGEST_B,
+            source="test",
+            trust=ToolPackTrust.LOCAL_UNSIGNED,
+            runtime_profile_id="local",
+            status=ToolPackInstallationStatus.READY,
+            manifest_path=str(tmp_path / "ready-pack.json"),
+            installed_at=utc_now(),
+            verified_at=utc_now(),
+        )
+    )
+    for digest in (DIGEST_A, DIGEST_B):
+        store.create(
+            EngagementToolAssignment(
+                engagement_id=engagement.id,
+                manifest_digest=digest,
+                allowed_tool_names=["sample.query"],
+                assigned_by="operator",
+            )
+        )
+
+    async def query(_arguments):
+        return {"result": "ok"}
+
+    registry = ToolRegistry()
+    registry.register(
+        AnalysisTool(
+            ToolSpec(
+                name="sample.query",
+                description="Query the ready pack",
+                input_schema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.LOCAL_READ,
+            ),
+            query,
+        )
+    )
+    monkeypatch.setattr(
+        "nebula.v3.tool_platform.build_tool_registry",
+        lambda *_args, **_kwargs: registry,
+    )
+    platform = ToolPlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "core-data",
+        tool_pack_root=tmp_path / "packs",
+        execution_enabled=True,
+    )
+
+    components = platform.chat_components(
+        engagement_id=engagement.id,
+        turn_id="turn-1",
+        provider=object(),
+        model="model-1",
+    )
+
+    assert components.tool_pack_digests == (DIGEST_B,)
+    assert set(components.specs) == {"sample.query"}
 
 
 def test_human_terminal_runner_prefers_local_and_rejects_ambiguity(tmp_path):
