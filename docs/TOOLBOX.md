@@ -204,11 +204,12 @@ anonymous pulls, and deploys the catalog at:
 
 `https://berylliumsec.github.io/nebula/toolbox/`
 
-The workflow requires the amd64 and arm64 catalogs to be byte-identical. The
-resolved catalog is published by SHA-256, referenced by the signed catalog
-entry, downloaded and verified during installation, and pinned into each
-mission alongside the image and pack manifest digests. A matching copy remains
-inside the image for wrapper-side validation.
+The workflow requires the amd64 and arm64 model-facing interface contracts to
+be identical while allowing architecture-specific raw help evidence and binary
+inventory. The resolved amd64 catalog is published by SHA-256, referenced by
+the signed catalog entry, downloaded and verified during installation, and
+pinned into each mission alongside the image and pack manifest digests. A
+matching copy remains inside the image for wrapper-side validation.
 
 The source manifest contains digest placeholders and intentionally fails the
 candidate-ready gate until the workflow builds the actual images. Never commit

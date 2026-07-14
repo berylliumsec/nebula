@@ -30,7 +30,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/berylliumsec/nebula-toolbox
-  TOOLBOX_VERSION: 0.1.2
+  TOOLBOX_VERSION: 0.1.3
   SOURCE_ROOT: src/nebula/v3/tool_pack_assets/toolbox
   ENVIRONMENT_ROOT: src/nebula/v3/tool_pack_assets/toolbox/environment
 
@@ -352,8 +352,9 @@ jobs:
           done
       - name: Assemble resolved release inputs
         run: |
-          cmp release-input/toolbox-amd64.model-catalog.json \
-            release-input/toolbox-arm64.model-catalog.json
+          poetry run python -m scripts.compare_toolbox_interface_catalogs \
+            --amd64 release-input/toolbox-amd64.model-catalog.json \
+            --arm64 release-input/toolbox-arm64.model-catalog.json
           python - <<'PY'
           import hashlib, json, pathlib
           root = pathlib.Path("release-input")

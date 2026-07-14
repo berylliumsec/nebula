@@ -3,7 +3,7 @@ kind: ToolPack
 metadata:
   publisher: berylliumsec
   name: nebula-toolbox
-  version: 0.1.2
+  version: 0.1.3
   minimum_nebula_version: 3.0.0a1
   description: A lean, extensible security environment with exact-version interfaces and a container-only command-line fallback.
   licenses:

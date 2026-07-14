@@ -28,7 +28,7 @@ def test_toolbox_is_valid_source_but_not_a_release_candidate():
     assert report["candidate_ready_for_offline_signing"] is False
     assert report["publication_ready"] is False
     assert {pack["identity"] for pack in report["packs"]} == {
-        "berylliumsec/nebula-toolbox@0.1.2",
+        "berylliumsec/nebula-toolbox@0.1.3",
     }
     assert all(pack["unresolved_digest_placeholders"] for pack in report["packs"])
     assert all(pack["missing_release_attachments"] for pack in report["packs"])

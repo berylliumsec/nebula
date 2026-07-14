@@ -234,6 +234,16 @@ def test_publication_build_uses_native_architecture_runners():
     assert "docker/setup-qemu-action" not in build
 
 
+def test_publication_compares_architecture_independent_catalog_contract():
+    workflow = (
+        Path(__file__).parents[2] / ".github/workflows/toolbox-publication.yml"
+    ).read_text(encoding="utf-8")
+    catalog = workflow.split("\n  catalog:\n", 1)[1].split("\n  deploy:\n", 1)[0]
+
+    assert "scripts.compare_toolbox_interface_catalogs" in catalog
+    assert "cmp release-input/toolbox-amd64.model-catalog.json" not in catalog
+
+
 def test_toolbox_sources_are_one_reviewed_v2_interface_per_first_class_tool():
     versions, tools = source_catalog()
 
