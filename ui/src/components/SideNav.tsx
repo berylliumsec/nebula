@@ -7,9 +7,10 @@ import { useWorkspace } from "../state/WorkspaceContext";
 interface SideNavProps {
   collapsed: boolean;
   onNavigate: () => void;
+  variant?: "standard" | "zero";
 }
 
-export function SideNav({ collapsed, onNavigate }: SideNavProps) {
+export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNavProps) {
   const {
     coreState,
     createEngagement,
@@ -51,7 +52,7 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
     }
   };
   return (
-    <aside className="side-nav" aria-label="Primary navigation">
+    <aside className={`side-nav${variant === "zero" ? " zero-anchor-dock" : ""}`} data-variant={variant} aria-label="Primary navigation">
       <div className="brand-lockup">
         <span className="brand-mark" aria-hidden="true">
           <Orbit size={24} strokeWidth={1.8} />

@@ -19,6 +19,7 @@ interface TopBarProps {
   onOpenPalette: () => void;
   setToolbarHost: (element: HTMLDivElement | null) => void;
   sidebarCollapsed: boolean;
+  variant?: "standard" | "zero";
 }
 
 export function TopBar({
@@ -29,6 +30,7 @@ export function TopBar({
   onOpenPalette,
   setToolbarHost,
   sidebarCollapsed,
+  variant = "standard",
 }: TopBarProps) {
   const location = useLocation();
   const page = navigationItems.find((item) => item.path === location.pathname) ?? navigationItems[0];
@@ -36,7 +38,7 @@ export function TopBar({
   const canRetry = workspaceState === "failed" || workspaceState === "degraded";
 
   return (
-    <header className="top-bar">
+    <header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-variant={variant}>
       <div className="top-bar-leading">
         <button
           className="icon-button toolbar-button"
