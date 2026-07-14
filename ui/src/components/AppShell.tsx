@@ -1,19 +1,38 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { ReleaseUpdateProvider } from "../state/ReleaseUpdateContext";
+import { useTheme } from "../state/ThemeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { ChromeProvider } from "../state/ChromeContext";
-import { ActivityCenter } from "./ActivityCenter";
+import { ActivityCenter, type ActivityCenterView } from "./ActivityCenter";
 import { CommandPalette } from "./CommandPalette";
 import { SideNav } from "./SideNav";
 import { TopBar } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
+import { ZeroLayerDeck } from "./ZeroLayerDeck";
+import { deriveZeroModules } from "./zeroLayerModules";
 
 export function AppShell() {
   const navigate = useNavigate();
-  const { approvals, coreError, reconnect, workspaceState } = useWorkspace();
+  const location = useLocation();
+  const { resolvedTheme } = useTheme();
+  const {
+    approvals,
+    assets,
+    coreError,
+    engagement,
+    findings,
+    health,
+    reconnect,
+    reports,
+    run,
+    setupStatus,
+    workspaceState,
+  } = useWorkspace();
+  const zero = resolvedTheme === "zero";
   const [activityOpen, setActivityOpen] = useState(false);
+  const [activityView, setActivityView] = useState<ActivityCenterView>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem("nebula.sidebar.collapsed");
@@ -26,6 +45,10 @@ export function AppShell() {
     return !value;
   }), []);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const openActivityView = useCallback((view: ActivityCenterView) => {
+    setActivityView(view);
+    setActivityOpen(true);
+  }, []);
   const closeMobileSidebar = useCallback(() => {
     if (!sidebarCollapsed && window.matchMedia("(max-width: 760px)").matches) toggleSidebar();
   }, [sidebarCollapsed, toggleSidebar]);
@@ -102,14 +125,25 @@ export function AppShell() {
     toggleActivity,
     toggleSidebar,
   }), [activityOpen, openPalette, paletteOpen, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
+  const zeroModules = useMemo(() => deriveZeroModules({
+    approvals,
+    assets,
+    engagementName: engagement?.name,
+    findings,
+    health,
+    reports,
+    run,
+    setupStatus,
+    workspaceState,
+  }), [approvals, assets, engagement?.name, findings, health, reports, run, setupStatus, workspaceState]);
 
   return (
     <ReleaseUpdateProvider>
       <WorkbenchDraftProvider>
         <ChromeProvider value={chrome}>
-          <div className={`app-shell${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+          <div className={`app-shell${zero ? " zero-layer-shell" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
           <a className="skip-link" href="#main-content">Skip to main content</a>
-          <SideNav collapsed={sidebarCollapsed} onNavigate={closeMobileSidebar} />
+          <SideNav collapsed={sidebarCollapsed} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />
           <button className="sidebar-scrim" type="button" aria-label="Close sidebar" onClick={toggleSidebar} />
           <TopBar
             activityOpen={activityOpen}
@@ -119,15 +153,18 @@ export function AppShell() {
             onOpenPalette={openPalette}
             setToolbarHost={setToolbarHost}
             sidebarCollapsed={sidebarCollapsed}
+            variant={zero ? "zero" : "standard"}
           />
+          {zero && <ZeroLayerDeck modules={zeroModules} onOpenActivity={openActivityView} />}
           <main id="main-content" className="main-content" tabIndex={-1}>
+            {zero && <span className="zero-route-flare" aria-hidden="true" key={`${location.pathname}${location.search}`} />}
             {workspaceState === "starting" && <div className="workspace-state-banner starting" role="status">Starting Nebula…</div>}
             {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><span><strong>Nebula is ready with limited features.</strong>{coreError && <small>{coreError}</small>}</span><button className="button quiet" type="button" onClick={reconnect}>Retry</button></div>}
             {workspaceState === "failed" && <div className="workspace-state-banner failed" role="alert"><span><strong>Nebula Core could not start.</strong><small>{coreError ?? "Check the local service and try again."}</small></span><button className="button primary" type="button" onClick={reconnect}>Try again</button></div>}
             <UpdateBanner />
             <Outlet />
           </main>
-          <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} />
+          <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />
           <CommandPalette
             open={paletteOpen}
             onClose={() => setPaletteOpen(false)}

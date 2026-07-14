@@ -439,6 +439,32 @@ for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
         .filter((element) => Number.parseFloat(getComputedStyle(element).fontSize) < 11)
         .map((element) => `${element.tagName.toLowerCase()}.${element.className}:"${element.textContent?.trim().slice(0, 60)}":${getComputedStyle(element).fontSize}`));
       expect(undersizedText, `${theme} ${route} renders text below 11px`).toEqual([]);
+      if (theme === "zero") {
+        const overflow = await page.locator("body").evaluate(() => {
+          const selectors = [
+            ".page",
+            ".metric-grid",
+            ".session-toolbar",
+            ".session-workspace",
+            ".project-tabs",
+            ".settings-tabs",
+            ".finding-summary-grid",
+            ".summary-strip",
+            ".data-toolbar",
+            ".overview-grid",
+          ].join(", ");
+          const clipped = [...document.querySelectorAll<HTMLElement>(selectors)]
+            .filter((element) => {
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              return rect.width > 0 && rect.height > 0 && style.display !== "none" && element.scrollWidth > element.clientWidth + 2;
+            })
+            .map((element) => `${element.tagName.toLowerCase()}.${element.className}: ${element.clientWidth}/${element.scrollWidth}`);
+          if (document.documentElement.scrollWidth > window.innerWidth + 1) clipped.push(`document: ${window.innerWidth}/${document.documentElement.scrollWidth}`);
+          return clipped;
+        });
+        expect(overflow, `Zero ${route} contains unintended horizontal overflow`).toEqual([]);
+      }
     }
   });
 }
@@ -449,13 +475,18 @@ test("Zero materialization respects the reduced-motion preference", async ({ pag
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
 
-  const materialized = await page.locator(".page").evaluate((element) => {
+  const materialized = await page.locator(".zero-route-flare").evaluate((element) => {
     const style = getComputedStyle(element);
     return { name: style.animationName, duration: style.animationDuration };
   });
   expect(materialized.name).toContain("zero-materialize");
   expect(Number.parseFloat(materialized.duration)).toBeGreaterThanOrEqual(.3);
   expect(await page.locator(".app-shell").evaluate((element) => getComputedStyle(element, "::after").animationName)).toBe("none");
+  expect(await page.locator("body").evaluate((element) => ({
+    bodyBefore: getComputedStyle(element, "::before").animationName,
+    bodyAfter: getComputedStyle(element, "::after").animationName,
+    shellBefore: getComputedStyle(document.querySelector(".app-shell")!, "::before").animationName,
+  }))).toEqual({ bodyBefore: "none", bodyAfter: "none", shellBefore: "none" });
 
   await page.getByRole("button", { name: "Search commands" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
@@ -463,29 +494,144 @@ test("Zero materialization respects the reduced-motion preference", async ({ pag
 
   await page.keyboard.press("Escape");
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const reduced = await page.locator(".page").evaluate((element) => {
+  const reduced = await page.locator(".zero-route-flare").evaluate((element) => {
     const style = getComputedStyle(element);
     return { name: style.animationName, transform: style.transform, clipPath: style.clipPath };
   });
   expect(reduced).toEqual({ name: "none", transform: "none", clipPath: "none" });
 });
 
-test("Zero preserves the critical desktop workspace hierarchy", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
+test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ page }, testInfo) => {
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
-  await page.evaluate(() => localStorage.setItem("nebula.theme", "zero"));
-  for (const [name, route, heading] of workspaces) {
-    await openWorkspace(page, route, heading);
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
-    await expect(page).toHaveScreenshot(`${name}-zero.png`, { fullPage: true });
+
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "Primary navigation" })).toHaveCount(1);
+  await expect(page.locator("main#main-content")).toHaveCount(1);
+  for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
+    await expect(page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: label, exact: true })).toBeVisible();
   }
 
+  const geometry = await page.locator(".app-shell").evaluate((shell) => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const bounds = (selector: string) => {
+      const rect = shell.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+      return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height };
+    };
+    return {
+      viewport,
+      shellOverflow: document.documentElement.scrollWidth > viewport.width || document.documentElement.scrollHeight > viewport.height,
+      main: bounds(".main-content"),
+      deck: bounds(".zero-layer-deck"),
+      navigation: bounds(".side-nav"),
+    };
+  });
+  expect(geometry.shellOverflow).toBe(false);
+  for (const surface of [geometry.main, geometry.deck, geometry.navigation]) {
+    expect(surface.left).toBeGreaterThanOrEqual(0);
+    expect(surface.right).toBeLessThanOrEqual(geometry.viewport.width + 1);
+    expect(surface.top).toBeGreaterThanOrEqual(0);
+    expect(surface.bottom).toBeLessThanOrEqual(geometry.viewport.height + 1);
+    expect(surface.width).toBeGreaterThan(0);
+    expect(surface.height).toBeGreaterThan(0);
+  }
+
+  const workbenchLink = page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: "Workbench", exact: true });
+  await workbenchLink.focus();
+  const focusStyle = await workbenchLink.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth), color: style.outlineColor };
+  });
+  expect(focusStyle.style).toBe("solid");
+  expect(focusStyle.width).toBeGreaterThanOrEqual(2);
+  expect(focusStyle.color).not.toBe("rgba(0, 0, 0, 0)");
+  await workbenchLink.evaluate((element) => element.blur());
+
+  if (testInfo.project.name !== "desktop") {
+    await expect(page).toHaveScreenshot("workbench-zero-responsive.png", { fullPage: true });
+  }
+
+  const terminal = page.locator(".persistent-terminal");
+  await expect(terminal).toBeVisible();
+  await terminal.evaluate((element) => { (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal = element; });
+  await page.getByRole("button", { name: "Search commands" }).click();
+  await page.getByRole("textbox", { name: "Search commands" }).fill("dark theme");
+  await page.getByRole("option", { name: /Use dark theme/ }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect(await terminal.evaluate((element) => (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal === element)).toBe(true);
+});
+
+test("Zero contextual modules use existing route actions", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Context actions only need one browser project.");
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await page.route("**/api/v1/approvals**", async (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([{
+      ...entity,
+      id: "approval-zero",
+      engagement_id: "scratch-project",
+      run_id: "run-zero",
+      status: "pending",
+      risk_class: "active_scan",
+      exact_request: { tool_name: "scan.tcp", arguments: { target: "gateway.local", ports: [443] } },
+      policy_rationale: "Confirm the exposed service.",
+      requested_by: "network-analyst",
+      requested_at: entity.created_at,
+      expected_effects: ["Probe one in-scope target"],
+    }]),
+  }));
+  await openWorkspace(page, "/", "Workbench");
+  const context = page.getByRole("region", { name: "Zero Layer context" });
+  await context.getByRole("button", { name: /Review request/ }).click();
+  await expect(page.getByRole("complementary", { name: "Activity inspector" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /Approvals/ })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Close activity center" }).click();
+  await context.getByRole("link", { name: /Connect an assistant model.*Open setup/ }).click();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
+});
+
+for (const [name, route, heading] of workspaces) {
+  test(`Zero preserves the ${name} desktop hierarchy`, async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
+    await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+    await openWorkspace(page, route, heading);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
+    await page.waitForTimeout(360);
+    await expect(page).toHaveScreenshot(`${name}-zero.png`, { fullPage: true });
+  });
+}
+
+test("Zero preserves representative desktop overlays", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("button", { name: "Search commands" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
   await expect(page).toHaveScreenshot("workbench-zero-command-palette.png", { fullPage: true });
 
   await page.keyboard.press("Escape");
+  await page.keyboard.press("Control+Alt+i");
+  await expect(page.getByRole("complementary", { name: "Activity inspector" })).toBeVisible();
+  await expect(page).toHaveScreenshot("workbench-zero-activity-drawer.png", { fullPage: true });
+  await page.getByRole("button", { name: "Close activity center" }).click();
+});
+
+test("Zero preserves a representative resource dialog", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await openWorkspace(page, "/findings", "Findings");
+  await page.waitForTimeout(360);
+  await page.getByRole("button", { name: "New finding" }).click();
+  await expect(page.getByRole("dialog", { name: "Create candidate finding" })).toBeVisible();
+  await expect(page).toHaveScreenshot("findings-zero-dialog.png", { fullPage: true });
+  await page.getByRole("button", { name: "Close candidate finding dialog" }).click();
+});
+
+test("Zero preserves the appearance selector", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
   await expect(page.locator(".appearance-panel")).toBeVisible();

@@ -92,6 +92,20 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: /Zero/ })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("renders the contextual Zero shell only for the restored Zero preference", async () => {
+    localStorage.setItem("nebula.theme", "zero");
+    const firstRender = renderApp();
+    expect(await screen.findByRole("region", { name: "Zero Layer context" })).toBeVisible();
+    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
+    expect(screen.getByRole("link", { name: /Open overview/ })).toHaveAttribute("href", "/project");
+
+    firstRender.unmount();
+    localStorage.setItem("nebula.theme", "dark");
+    renderApp();
+    expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
+    expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
+  });
+
   it("persists the collapsible sidebar and exposes legacy labels through command search", async () => {
     const user = userEvent.setup();
     renderApp();

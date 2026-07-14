@@ -13,7 +13,7 @@ import type { ApprovalDecisionRequest, RunEventKind } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { ModalSurface } from "./DialogSystem";
 
-type CenterTab = "activity" | "approvals";
+export type ActivityCenterView = "activity" | "approvals";
 
 const AssistantMarkdown = lazy(() => import("./AssistantMarkdown").then((module) => ({ default: module.AssistantMarkdown })));
 
@@ -37,10 +37,11 @@ function shortTime(value: string): string {
 interface ActivityCenterProps {
   open: boolean;
   onClose: () => void;
+  view: ActivityCenterView;
+  onViewChange: (view: ActivityCenterView) => void;
 }
 
-export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
-  const [tab, setTab] = useState<CenterTab>("activity");
+export function ActivityCenter({ open, onClose, view, onViewChange }: ActivityCenterProps) {
   const [busyId, setBusyId] = useState<string>();
   const [decisionError, setDecisionError] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
@@ -98,16 +99,16 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
         <button
           type="button"
           role="tab"
-          aria-selected={tab === "activity"}
-          onClick={() => setTab("activity")}
+          aria-selected={view === "activity"}
+          onClick={() => onViewChange("activity")}
         >
           Activity
         </button>
         <button
           type="button"
           role="tab"
-          aria-selected={tab === "approvals"}
-          onClick={() => setTab("approvals")}
+          aria-selected={view === "approvals"}
+          onClick={() => onViewChange("approvals")}
         >
           Approvals
           {approvals.length > 0 && <span className="count-badge">{approvals.length}</span>}
@@ -119,7 +120,7 @@ export function ActivityCenter({ open, onClose }: ActivityCenterProps) {
       )}
 
       <div className="activity-scroll" role="tabpanel">
-        {tab === "activity" ? (
+        {view === "activity" ? (
           <ol className="event-list">
             {events.map((event) => {
               const Icon = eventIcons[event.kind] ?? Activity;
