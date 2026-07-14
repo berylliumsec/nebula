@@ -19,6 +19,29 @@
   transform: translate(-50%, -100%);
 }
 
+.popover.exiting {
+  pointer-events: none;
+  animation: selection-actions-exit-below 150ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.popover.exiting[data-placement="above"] {
+  animation-name: selection-actions-exit-above;
+}
+
+@keyframes selection-actions-exit-below {
+  to {
+    opacity: 0;
+    transform: translate(-50%, 0) scale(0.96);
+  }
+}
+
+@keyframes selection-actions-exit-above {
+  to {
+    opacity: 0;
+    transform: translate(-50%, -100%) scale(0.96);
+  }
+}
+
 .action {
   display: inline-flex;
   align-items: center;
@@ -54,5 +77,12 @@
   .popover {
     max-width: calc(100vw - 1rem);
     overflow-x: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popover.exiting,
+  .popover.exiting[data-placement="above"] {
+    animation-duration: 1ms;
   }
 }

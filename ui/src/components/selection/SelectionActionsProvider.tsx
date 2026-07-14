@@ -63,13 +63,33 @@ export function SelectionActionsProvider({
   resolveSource,
 }: SelectionActionsProviderProps) {
   const [draft, setDraft] = useState<SelectionActionDraft>();
+  const [isExiting, setIsExiting] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const exitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const domOptions = useMemo(() => ({ limit, isSensitive, resolveSource }), [limit, isSensitive, resolveSource]);
 
   const presentSelection = useCallback((selection: PresentSelectionInput) => {
+    if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+    setIsExiting(false);
     setDraft(createSelectionDraft(selection, limit));
   }, [limit]);
-  const dismissSelection = useCallback(() => setDraft(undefined), []);
+  const dismissSelection = useCallback(() => {
+    if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+    exitTimerRef.current = undefined;
+    setIsExiting(false);
+    setDraft(undefined);
+  }, []);
+  const dismissSelectionElegantly = useCallback(() => {
+    if (isExiting) return;
+    setIsExiting(true);
+    // animationend handles normal browsers; the timer also covers interrupted
+    // animations and DOM environments that do not dispatch animation events.
+    exitTimerRef.current = setTimeout(dismissSelection, 180);
+  }, [dismissSelection, isExiting]);
+
+  useEffect(() => () => {
+    if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+  }, []);
 
   useEffect(() => {
     const read = (event: Event) => {
@@ -114,32 +134,36 @@ export function SelectionActionsProvider({
     {children}
     {draft && <div
       ref={popoverRef}
-      className={styles.popover}
+      className={`${styles.popover}${isExiting ? ` ${styles.exiting}` : ""}`}
       style={position}
       role="toolbar"
       aria-label="Selected text actions"
       data-placement={showAbove ? "above" : "below"}
       onPointerDown={preserveSelection}
+      onAnimationEnd={(event) => {
+        if (isExiting && event.target === event.currentTarget) dismissSelection();
+      }}
     >
       {draft.truncated && <span className={styles.notice} title={`${draft.originalLength.toLocaleString()} characters selected`}>
         First {draft.text.length.toLocaleString()} characters
       </span>}
       <button className={styles.action} type="button" onClick={() => {
+        dismissSelectionElegantly();
         void copySelectionText(draft.text).catch((reason: unknown) => {
           onCopyError?.(reason instanceof Error ? reason : new Error("The selected text could not be copied."));
         });
       }}><Clipboard size={14} /> Copy</button>
       {onAddNote && <button className={styles.action} type="button" onClick={() => {
+        dismissSelectionElegantly();
         onAddNote(draft);
-        dismissSelection();
       }}><NotebookPen size={14} /> Add note</button>}
       {onRun && ["terminal", "terminal_command"].includes(draft.source.kind) && <button className={styles.action} type="button" onClick={() => {
+        dismissSelectionElegantly();
         onRun(draft);
-        dismissSelection();
       }}><Play size={14} /> Run</button>}
       <button className={styles.action} type="button" onClick={() => {
+        dismissSelectionElegantly();
         onAsk(draft);
-        dismissSelection();
       }}><MessageSquareText size={14} /> Ask Nebula</button>
     </div>}
   </SelectionActionsContext.Provider>;

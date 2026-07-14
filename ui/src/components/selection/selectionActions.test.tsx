@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SelectionActionsProvider } from "./SelectionActionsProvider";
@@ -95,12 +95,38 @@ describe("selection actions", () => {
       source: { kind: "finding", id: "finding-7", label: "Finding 7" },
     }));
     expect(onAddNote).not.toHaveBeenCalled();
-    expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull();
+    const exitingToolbar = screen.getByRole("toolbar", { name: "Selected text actions" });
+    expect(exitingToolbar.className).toContain("exiting");
+    fireEvent.animationEnd(exitingToolbar);
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull());
 
     selectNodeText(paragraph.firstChild as Text, 0, 5);
     fireEvent.pointerUp(paragraph);
     await user.click(screen.getByRole("button", { name: "Add note" }));
     expect(onAddNote).toHaveBeenCalledWith(expect.objectContaining({ text: "exact" }));
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull());
+  });
+
+  it("dismisses the selection actions after copying", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<SelectionActionsProvider onAsk={vi.fn()}>
+      <p>copy this text</p>
+    </SelectionActionsProvider>);
+    const paragraph = screen.getByText("copy this text");
+    selectNodeText(paragraph.firstChild as Text);
+    fireEvent.pointerUp(paragraph);
+
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+
+    expect(writeText).toHaveBeenCalledWith("copy this text");
+    const toolbar = screen.getByRole("toolbar", { name: "Selected text actions" });
+    expect(toolbar.className).toContain("exiting");
+    fireEvent.animationEnd(toolbar);
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull());
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
   });
 
   it("offers mandatory reviewed Run only for terminal selections", async () => {
