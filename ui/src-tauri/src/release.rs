@@ -116,6 +116,11 @@ pub async fn install_available_update(app: AppHandle) -> Result<bool, String> {
     }
 }
 
+#[tauri::command]
+pub fn restart_application(app: AppHandle) {
+    app.request_restart();
+}
+
 #[cfg(test)]
 mod tests {
     use super::build_release_info;

@@ -1,16 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Check, Contrast, Download, KeyRound, Moon, PackageCheck, Pencil, Plus, RefreshCw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
+import { Check, Contrast, KeyRound, Moon, Pencil, Plus, RefreshCw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
 import type { LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth } from "../api/types";
-import {
-  checkForUpdate,
-  getReleaseInfo,
-  installAvailableUpdate,
-  type AvailableUpdate,
-  type ReleaseInfo,
-} from "../api/updater";
 import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
+import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
 import { EngagementPolicySettings } from "../components/EngagementPolicySettings";
 import { RunnerSettings, ToolPackSettings } from "../components/ToolingSettings";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
@@ -98,29 +92,11 @@ export function SettingsPage() {
   const [operatorBusy, setOperatorBusy] = useState<string>();
   const [operatorError, setOperatorError] = useState<string>();
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(sectionFromHash);
-  const [release, setRelease] = useState<ReleaseInfo>();
-  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
-  const [updateState, setUpdateState] = useState<"idle" | "checking" | "installing" | "current" | "restart" | "error">("idle");
-  const [updateMessage, setUpdateMessage] = useState<string>();
   const [checkingTerminal, setCheckingTerminal] = useState(false);
   const [selectingRuntime, setSelectingRuntime] = useState<string>();
   const [setupError, setSetupError] = useState<string>();
   const [detectedLocalProviders, setDetectedLocalProviders] = useState<LocalProviderDetection[]>([]);
   const [detectingLocalProviders, setDetectingLocalProviders] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    void getReleaseInfo()
-      .then((info) => {
-        if (active) setRelease(info);
-      })
-      .catch(() => {
-        if (active) setRelease(undefined);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (!api || !["ready", "degraded"].includes(workspaceState)) {
@@ -146,32 +122,6 @@ export function SettingsPage() {
     window.addEventListener("hashchange", syncSection);
     return () => window.removeEventListener("hashchange", syncSection);
   }, []);
-
-  const checkUpdates = async () => {
-    setUpdateState("checking");
-    setUpdateMessage(undefined);
-    try {
-      const update = await checkForUpdate();
-      setAvailableUpdate(update);
-      setUpdateState(update ? "idle" : "current");
-    } catch (error) {
-      setUpdateState("error");
-      setUpdateMessage(error instanceof Error ? error.message : "Could not check for updates.");
-    }
-  };
-
-  const installUpdate = async () => {
-    setUpdateState("installing");
-    setUpdateMessage(undefined);
-    try {
-      const installed = await installAvailableUpdate();
-      setUpdateState(installed ? "restart" : "current");
-      if (!installed) setAvailableUpdate(undefined);
-    } catch (error) {
-      setUpdateState("error");
-      setUpdateMessage(error instanceof Error ? error.message : "Could not install the update.");
-    }
-  };
 
   const openProviderDialog = () => {
     const entry = providerCatalog.find((item) => item.flavor === "vllm") ?? providerCatalog[0];
@@ -540,35 +490,7 @@ export function SettingsPage() {
           <header className="panel-header compact"><div><h2>Credential references</h2><p>Secrets never enter agent context</p></div><KeyRound size={19} /></header>
           <div className="empty-state compact"><KeyRound size={23} /><strong>Write-only by design</strong><p>Provider secrets entered here go to the operating-system credential vault; profiles retain only opaque references. Environment and session-only credentials remain available when needed.</p></div>
         </section>
-        <section className="panel release-panel">
-          <header className="panel-header compact"><div><h2>About Nebula</h2><p>Build and update channel</p></div><PackageCheck size={19} /></header>
-          <dl>
-            <div><dt>Desktop version</dt><dd>{release?.version ?? "Detecting…"}</dd></div>
-            <div><dt>Distribution</dt><dd>{release?.distribution ?? "Unknown"}</dd></div>
-            <div><dt>Build</dt><dd title={release?.commit}>{release?.commit.slice(0, 12) ?? "Unknown"}</dd></div>
-            <div><dt>Target</dt><dd>{release?.buildTarget ?? "Unknown"}</dd></div>
-            <div><dt>Built</dt><dd>{release?.builtAt ?? "Unknown"}</dd></div>
-            {release?.updateChannel && <div><dt>Update channel</dt><dd>{release.updateChannel}</dd></div>}
-          </dl>
-          <div className="release-actions">
-            {release?.updaterEnabled ? (
-              availableUpdate ? (
-                <button className="button primary full" type="button" disabled={updateState === "installing"} onClick={() => void installUpdate()}>
-                  <Download size={15} /> {updateState === "installing" ? "Installing…" : `Install ${availableUpdate.version}`}
-                </button>
-              ) : (
-                <button className="button secondary full" type="button" disabled={updateState === "checking" || updateState === "restart"} onClick={() => void checkUpdates()}>
-                  <PackageCheck size={15} /> {updateState === "checking" ? "Checking…" : "Check for updates"}
-                </button>
-              )
-            ) : (
-              <p>Updates are supplied by your package manager.</p>
-            )}
-            {updateState === "current" && <p role="status">Nebula is up to date.</p>}
-            {updateState === "restart" && <p role="status">Update installed. Restart Nebula to finish.</p>}
-            {updateState === "error" && <p className="form-error" role="alert">{updateMessage}</p>}
-          </div>
-        </section>
+        <ReleaseSettingsPanel />
       </div>
       </div>
       </div>

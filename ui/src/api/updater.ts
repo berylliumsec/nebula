@@ -41,3 +41,8 @@ export async function installAvailableUpdate(): Promise<boolean> {
   if (!isTauriRuntime()) return false;
   return invoke<boolean>("install_available_update");
 }
+
+export async function restartApplication(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke<void>("restart_application");
+}
