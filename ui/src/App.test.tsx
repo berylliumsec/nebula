@@ -326,7 +326,7 @@ describe("Nebula workspace", () => {
     if (!assistantSettingsPanel?.hasAttribute("open")) await user.click(assistantSettings);
     expect(assistantSettingsPanel).toHaveAttribute("open");
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/tools"))).toBe(true));
-    expect(screen.queryByText("Toolbox automatic")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Toolbox automatic").length).toBeGreaterThan(0);
     const verificationCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/capabilities/verify") && request?.method === "POST");
     expect(JSON.parse(String(verificationCall?.[1]?.body))).toMatchObject({ model: "model-2", expected_revision: 1 });
     expect(screen.queryByRole("checkbox", { name: /Toolbox/i })).not.toBeInTheDocument();
@@ -434,7 +434,7 @@ describe("Nebula workspace", () => {
     expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/observations") && init?.method === "POST")).toBe(false);
   });
 
-  it("inspects chat working memory and navigates provenance by keyboard", async () => {
+  it("keeps chat working memory in the background", async () => {
     const entity = {
       created_at: "2026-07-12T10:00:00Z",
       updated_at: "2026-07-12T11:00:00Z",
@@ -486,11 +486,10 @@ describe("Nebula workspace", () => {
 
     await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }));
     await user.click((await screen.findByText("Saved context")).closest("button")!);
-    expect(await screen.findByText("The selected service uses port 8443.")).toBeVisible();
-    const source = screen.getByRole("button", { name: "Go to transcript message 1" });
-    source.focus();
-    await user.keyboard("{Enter}");
-    expect(screen.getByText("Use port 8443").closest("article")).toHaveFocus();
+    expect(await screen.findByText("Port retained")).toBeVisible();
+    expect(screen.queryByText("The selected service uses port 8443.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Working memory" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/sessions/session-1/context"))).toBe(false);
     await user.click(screen.getByRole("button", { name: "Save Assistant Response" }));
     expect(await screen.findByRole("tab", { name: "Project notes" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("textbox", { name: "Note title" })).toHaveValue("Note from Assistant response");
@@ -1045,7 +1044,7 @@ describe("Nebula workspace", () => {
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Enter a mission objective.");
     expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/missions") && request?.method === "POST")).toBe(false);
     await user.type(within(dialog).getByRole("textbox", { name: "Objective" }), "Scan the assigned target");
-    expect(within(dialog).queryByText("environment.run_network")).not.toBeInTheDocument();
+    expect(within(dialog).getByText("environment.run_network")).toBeVisible();
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(within(dialog).getByRole("spinbutton", { name: "Maximum tool calls" })).toHaveValue(50);
     expect(within(dialog).getByRole("spinbutton", { name: "Maximum concurrency" })).toHaveValue(2);
@@ -1053,7 +1052,7 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("button", { name: "Automate task" }));
     dialog = screen.getByRole("dialog", { name: "Automate task" });
     await user.click(within(dialog).getByText("Advanced"));
-    expect(within(dialog).queryByText("environment.run_network")).not.toBeInTheDocument();
+    expect(within(dialog).getByText("environment.run_network")).toBeVisible();
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Automate task" }));
 
@@ -1100,7 +1099,7 @@ describe("Nebula workspace", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-collections/install") && request?.method === "POST")).toBe(true));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/tool-assignment") && request?.method === "PUT")).toBe(true));
     await user.click(within(dialog).getByText("Advanced"));
-    expect(within(dialog).queryByText("environment.run_network")).not.toBeInTheDocument();
+    expect(within(dialog).getByText("environment.run_network")).toBeVisible();
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(assignment).toMatchObject({ manifest_digest: digest, tool_names: ["environment.run_network"], enabled: true });
   });

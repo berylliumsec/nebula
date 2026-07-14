@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Play, Square, X } from "lucide-react";
+import { Play, ShieldCheck, Square, Wrench, X } from "lucide-react";
 import { providerModelVerification } from "../api/providerCapabilities";
 import type { ToolSummary } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -302,9 +302,14 @@ export function NewMissionButton({ className = "button primary", children }: New
               <label>Cost limit (USD)<input type="number" min={0} max={100} step="0.01" value={maxCost} onChange={(event) => setMaxCost(Number(event.target.value))} /></label>
               <label>Retries<input type="number" min={0} max={2} value={maxRetries} onChange={(event) => setMaxRetries(Number(event.target.value))} /></label>
             </div>
-            {automaticTools.length > 0 && <div className="resource-form-grid"><label>Maximum tool calls<input type="number" min={1} max={100} value={maxToolCalls} onChange={(event) => setMaxToolCalls(Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
-            {!automaticTools.length && toolSelectionMessage && <p className="provider-dialog-note" role="status">{toolPreparation === "unavailable" ? toolPreparationDetail : toolSelectionMessage}</p>}
-            <p className="provider-dialog-note">Core enforces project scope, container isolation, budgets, evidence capture, and high-risk approvals.</p>
+            <section className="mission-tool-selection">
+              <header><div><Wrench size={15} /><span><strong>Toolbox automatic</strong><small>Verified assigned capabilities are enabled automatically.</small></span></div><span>{automaticTools.length ? `${automaticTools.length} enabled` : "Analysis only"}</span></header>
+              {toolConfigurationAvailable && providerSupportsTools && automaticTools.length
+                ? <fieldset className="resource-checklist automatic-tool-list"><legend>Automatically enabled capabilities</legend>{assignedTools.filter((tool) => tool.available).map((tool) => <div key={tool.name}><ShieldCheck size={15} /><span><strong>{tool.name}</strong><small>{tool.riskClass.replaceAll("_", " ")}{tool.requiresApproval ? " · approval required" : ""}</small></span></div>)}</fieldset>
+                : <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>{toolPreparation === "unavailable" ? toolPreparationDetail : toolSelectionMessage}</p></div>}
+              {automaticTools.length > 0 && <div className="resource-form-grid"><label>Maximum tool calls<input type="number" min={1} max={100} value={maxToolCalls} onChange={(event) => setMaxToolCalls(Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
+            </section>
+            <p className="provider-dialog-note">{automaticTools.length ? "All available assigned capabilities are enabled automatically. Core enforces project scope, container isolation, budgets, evidence capture, and high-risk approvals." : "This task is analysis-only and receives no execution capabilities."}</p>
           </details>
           {error && <p className="form-error" role="alert">{error}</p>}
           <footer><button className="button secondary" type="button" onClick={() => setOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || toolPreparation === "preparing" || toolVerificationBusy}>{toolPreparation === "preparing" ? "Preparing Toolbox…" : toolVerificationBusy ? "Checking model…" : saving ? "Starting…" : "Automate task"}</button></footer>

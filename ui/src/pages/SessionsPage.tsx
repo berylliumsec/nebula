@@ -25,7 +25,6 @@ import type {
   ChatSessionSummary,
   ChatStreamEvent,
   ChatUsage,
-  ContextStatus,
   ExecutionCapabilities,
   ExecutionLanguage,
   PersistedChatMessage,
@@ -165,9 +164,6 @@ export function SessionsPage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [chatError, setChatError] = useState<string>();
   const [discoveringProviderId, setDiscoveringProviderId] = useState<string>();
-  const [contextStatus, setContextStatus] = useState<ContextStatus>();
-  const [contextLoading, setContextLoading] = useState(false);
-  const [contextError, setContextError] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
@@ -302,9 +298,6 @@ export function SessionsPage() {
     setMessages([]);
     setDraft(assistantDraft ? "" : "");
     setChatError(undefined);
-    setContextStatus(undefined);
-    setContextLoading(false);
-    setContextError(undefined);
     setRunCandidate(undefined);
     setToolCards([]);
     setPendingResponse(undefined);
@@ -358,9 +351,6 @@ export function SessionsPage() {
     setMessages([]);
     setDraft("");
     setChatError(undefined);
-    setContextStatus(undefined);
-    setContextLoading(false);
-    setContextError(undefined);
     setView("chat");
     setMobileListOpen(false);
     setToolCards([]);
@@ -413,20 +403,15 @@ export function SessionsPage() {
     }
     if (!api) return;
     setLoadingHistory(true);
-    setContextLoading(true);
     setChatError(undefined);
-    setContextError(undefined);
     try {
       const summary = sessions.find((session) => session.id === id);
-      const [history, contextResult, pendingTurn] = await Promise.all([
+      const [history, pendingTurn] = await Promise.all([
         api.listChatMessages(id),
-        api.getChatContext(id).then((context) => ({ context })).catch(() => ({ context: undefined })),
         api.getPendingChatTurn(id).catch(() => undefined),
       ]);
       setSessionId(id);
       setMessages(history.map(persistedMessage));
-      setContextStatus(contextResult.context);
-      setContextError(contextResult.context ? undefined : "Working memory inspection is temporarily unavailable.");
       if (summary) {
         setProviderId(summary.providerId);
         setModel(summary.model ?? "");
@@ -491,29 +476,23 @@ export function SessionsPage() {
       setChatError(error instanceof Error ? error.message : "Could not load the selected conversation.");
     } finally {
       setLoadingHistory(false);
-      setContextLoading(false);
     }
   };
 
   const openAttachedChat = async (id: string) => {
     if (!api || !engagement) return;
     setLoadingHistory(true);
-    setContextLoading(true);
     setChatError(undefined);
-    setContextError(undefined);
     try {
-      const [page, history, contextResult] = await Promise.all([
+      const [page, history] = await Promise.all([
         api.listChatSessions(engagement.id),
         api.listChatMessages(id),
-        api.getChatContext(id).then((context) => ({ context })).catch(() => ({ context: undefined })),
       ]);
       const ordered = page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
       const summary = ordered.find((session) => session.id === id);
       setSessions(ordered);
       setSessionId(id);
       setMessages(history.map(persistedMessage));
-      setContextStatus(contextResult.context);
-      setContextError(contextResult.context ? undefined : "Working memory inspection is temporarily unavailable.");
       if (summary) {
         setProviderId(summary.providerId);
         setModel(summary.model ?? "");
@@ -524,7 +503,6 @@ export function SessionsPage() {
       setChatError(error instanceof Error ? error.message : "Could not open the execution conversation.");
     } finally {
       setLoadingHistory(false);
-      setContextLoading(false);
     }
   };
 
@@ -697,15 +675,6 @@ export function SessionsPage() {
       returnedSessionId = response?.sessionId ?? returnedSessionId;
       if (response && returnedSessionId) {
         await refreshSessions(returnedSessionId);
-        setContextLoading(true);
-        try {
-          setContextStatus(await api.getChatContext(returnedSessionId));
-          setContextError(undefined);
-        } catch {
-          setContextError("The answer completed, but working memory inspection is temporarily unavailable.");
-        } finally {
-          setContextLoading(false);
-        }
       }
     } catch (error) {
       const cancelled = controller.signal.aborted;
@@ -786,7 +755,6 @@ export function SessionsPage() {
       );
       if (response?.sessionId) {
         await refreshSessions(response.sessionId);
-        setContextStatus(await api.getChatContext(response.sessionId));
       }
     } catch (error) {
       setChatError(error instanceof Error ? error.message : "Could not resume the response.");
@@ -873,6 +841,7 @@ export function SessionsPage() {
                 <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label>
                 <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={sending || Boolean(sessionId) || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{selectedProvider?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
                 <label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? cloudKnowledgeAllowed ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label>
+                <div className="chat-knowledge-toggle" role="status" title={toolboxUnavailableReason}><ShieldCheck size={15} /><span>Toolbox automatic<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"} enabled` : toolboxUnavailableReason}</small></span></div>
                 </div>
               </details>
               <div className="chat-scroll" ref={scrollRef} aria-live="polite">
@@ -901,7 +870,7 @@ export function SessionsPage() {
                 </div>}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <textarea ref={composerRef} id="analyst-message" value={draft} disabled={!engagement || !selectedProvider || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : selectedProvider ? "Ask about this project…" : "Add a model in Settings when you want the assistant…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
-                <footer><span>{includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Assistant ready"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse) void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><span>{canUseTools ? `Toolbox automatic · ${assignedToolCount} assigned` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse) void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
             </div>
           )}
@@ -910,10 +879,9 @@ export function SessionsPage() {
         {view === "chat" && <aside className="session-inspector" aria-label="Session inspector">
           <header><div><span>Context</span><strong>Session details</strong></div></header>
           <dl><div><dt>Active operator</dt><dd>{activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat"}</dd></div><div><dt>Provider</dt><dd>{selectedProvider?.name ?? "Not selected"}</dd></div><div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl>
-          <section><h3>Working memory</h3>{contextLoading ? <p role="status">Loading working memory…</p> : contextError ? <p role="alert">{contextError}</p> : contextStatus?.status ? <><div className="scope-chip-list"><span>Memory: {contextStatus.status.replace("_", " ")}</span><span>{contextStatus.estimatedInputTokens} / {contextStatus.targetInputTokens} estimated tokens</span></div>{contextStatus.snapshot?.memory ? <div className="empty-state mini"><Braces size={19} /><p>{contextStatus.snapshot.memory.summary}</p><small>Derived through sequence {contextStatus.compactedThrough} · {contextStatus.snapshot.providerId}/{contextStatus.snapshot.model} · {contextStatus.snapshot.usage.totalTokens} compaction tokens · ${contextStatus.snapshot.costUsd.toFixed(4)}</small><div className="scope-chip-list">{contextStatus.snapshot.sourceReferences.filter((source) => source.sequence).slice(0, 8).map((source) => <button aria-label={`Go to transcript message ${source.sequence}`} type="button" key={`${source.sourceId}-${source.sequence}`} onClick={() => { const target = document.querySelector<HTMLElement>(`[data-sequence="${source.sequence}"]`); target?.scrollIntoView?.({ behavior: "smooth", block: "center" }); target?.focus(); }}>Message #{source.sequence}</button>)}</div></div> : contextStatus.status === "failed" ? <p role="alert">Context compaction failed. Retry with the configured provider before continuing this conversation.</p> : <p>{contextStatus.status === "stale" ? "Working memory is stale and will refresh before the next answer that requires compaction." : "Compaction has not been needed for this conversation."}</p>}</> : <p>Select a saved conversation to inspect its working memory.</p>}</section>
           <section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"}</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section>
           <section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>{canUseTools ? `${assignedToolCount} assigned capabilities run sequentially through the scoped broker; approvals pause this response.` : toolboxUnavailableReason ?? "Toolbox is unavailable for this session."}</p></div></section>
-          <section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Derived memory is not evidence. Citations still identify canonical ingested chunks and transcript messages.</p></div></section>
+          <section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Citations identify canonical ingested chunks and transcript messages.</p></div></section>
         </aside>}
       </div>
       {runCandidate && api && engagement && <ExecutionReviewDialog api={api} engagementId={engagement.id} candidate={runCandidate} capabilities={executionCapabilities} onClose={() => setRunCandidate(undefined)} onStarted={() => { setExecutionRefresh((value) => value + 1); setView("activity"); }} />}

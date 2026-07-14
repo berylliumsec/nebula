@@ -208,6 +208,10 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
     assert provider.requests[1].tool_results[0].output == {"count": 2}
     assert provider.requests[-1].tool_results[0].output == {"count": 2}
     assert provider.requests[-1].tools == []
+    assert "bounded Toolbox turn" in (provider.requests[-1].instructions or "")
+    assert "no executable tools are available" not in (
+        provider.requests[-1].instructions or ""
+    )
     assert "closed Markdown fence" in (provider.requests[-1].instructions or "")
     assert "separate reviewed Run action" in (
         provider.requests[-1].instructions or ""
