@@ -245,6 +245,10 @@ body {
 .workspace-state-banner small { color: var(--muted); }
 .workspace-state-banner.degraded { border-color: color-mix(in srgb, var(--orange) 38%, var(--border)); }
 .workspace-state-banner.failed { border-color: color-mix(in srgb, var(--red) 38%, var(--border)); }
+.workspace-state-banner.update { border-color: color-mix(in srgb, var(--blue) 38%, var(--border)); background: color-mix(in srgb, var(--blue-muted) 45%, var(--surface-muted)); }
+.workspace-state-banner.update.failed { border-color: color-mix(in srgb, var(--red) 38%, var(--border)); background: color-mix(in srgb, var(--red) 7%, var(--surface-muted)); }
+.update-banner-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.update-banner-actions .button { white-space: nowrap; }
 
 .connection-chip.ready { color: var(--green); }
 .connection-chip.degraded { color: var(--orange); }
@@ -1002,6 +1006,9 @@ kbd { font-size: 11px; }
 
 @media (max-width: 760px) {
   .workspace-state-banner { margin-inline: 12px; }
+  .workspace-state-banner.update { align-items: stretch; flex-direction: column; gap: 9px; }
+  .update-banner-actions { width: 100%; }
+  .update-banner-actions .button { flex: 1; justify-content: center; }
   .project-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; margin: 12px 12px -6px; }
   .project-tabs button { min-width: 0; min-height: 42px; justify-content: center; gap: 4px; padding-inline: 4px; white-space: nowrap; }
   .setup-card-grid { grid-template-columns: 1fr; }

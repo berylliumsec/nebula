@@ -1,7 +1,7 @@
 mod release;
 mod sidecar;
 
-use release::{check_for_update, install_available_update, release_info};
+use release::{check_for_update, install_available_update, release_info, restart_application};
 use sidecar::{BackendState, backend_status, start_local_backend, stop_local_backend};
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager, Wry};
@@ -99,7 +99,8 @@ fn build_app() -> tauri::App<Wry> {
             stop_local_backend,
             release_info,
             check_for_update,
-            install_available_update
+            install_available_update,
+            restart_application
         ]);
 
     #[cfg(feature = "direct-updater")]

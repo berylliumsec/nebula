@@ -118,11 +118,16 @@ active terminal is retained per Project across mode changes and short reconnects
 stops on explicit **Stop**, Core shutdown, 30 minutes without input or output, or
 after a disconnected UI exceeds its 10-minute reconnect grace. Core retains at most
 1 MiB of sequenced output for reconnect replay. Separately, mandatory audit capture
-persists every completed command and its merged PTY result as raw and redacted
-content-addressed artifacts for the Project lifetime. Terminal Audit shows operator,
-directory, timing, exit status, hashes, truncation, and capture health. Raw downloads
-require a sensitive-data acknowledgement, and audit records are included in
-sensitive engagement exports.
+persists metadata for every completed command for the Project lifetime. It retains
+the merged PTY result as raw and redacted content-addressed artifacts only when an
+executed command matches the Project's selected security tools. The default selection
+comes from the verified Kali image; **Workbench → Activity → Recorded security tools**
+can add custom executable basenames, deselect defaults, or reset the selection.
+Changes apply to the next top-level command. Terminal Audit shows the capture
+decision, matched tools, operator, directory, timing, exit status, hashes,
+truncation, and capture health. Classification uncertainty fails closed to metadata
+only. Raw downloads require a sensitive-data acknowledgement, and audit records and
+any retained outputs are included in sensitive engagement exports.
 
 Only `/workspace` persists. Packages installed with `apt` and other system changes
 live in the disposable container layer and disappear when the terminal closes. The
@@ -304,8 +309,9 @@ source metadata are verified.
 
 An engagement `.nebula.zip` export is an integrity-manifested portable record, not a
 full application-data backup or restore mechanism. It can contain unredacted
-evidence, raw execution output, and raw human-terminal audit results. Do not promise
-a restore path that Nebula 3 does not provide.
+evidence, raw execution output, and raw results for selected human-terminal security
+tools; it also contains metadata-only terminal records. Do not promise a restore path
+that Nebula 3 does not provide.
 
 ## release-boundary | Requested feature is not in the initial Nebula 3 release
 

@@ -19,6 +19,7 @@ import type {
   TerminalCommandHistoryStatus,
   TerminalCommandPage,
   TerminalCommandRecord,
+  TerminalRecordingTools,
   ContextMemory,
   ContextSnapshot,
   ContextSourceReference,
@@ -130,6 +131,19 @@ interface WireSetupStatus {
     provider_profile_id?: string | null;
     detail?: string | null;
   };
+}
+
+interface WireTerminalRecordingTools {
+  engagement_id: string;
+  inventory_status: "verified" | "unavailable";
+  runtime_image_digest?: string | null;
+  manifest_sha256?: string | null;
+  default_tools: string[];
+  custom_tools: string[];
+  disabled_tools: string[];
+  effective_tools: string[];
+  revision: number;
+  updated_at?: string | null;
 }
 
 interface WireSetupControlResponse {
@@ -973,6 +987,21 @@ function mapEngagement(value: WireEngagement): EngagementSummary {
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     scopeAssetCount: numberField(value.metadata?.scope_asset_count),
+  };
+}
+
+function mapTerminalRecordingTools(value: WireTerminalRecordingTools): TerminalRecordingTools {
+  return {
+    engagementId: value.engagement_id,
+    inventoryStatus: value.inventory_status,
+    runtimeImageDigest: value.runtime_image_digest ?? undefined,
+    manifestSha256: value.manifest_sha256 ?? undefined,
+    defaultTools: value.default_tools,
+    customTools: value.custom_tools,
+    disabledTools: value.disabled_tools,
+    effectiveTools: value.effective_tools,
+    revision: value.revision,
+    updatedAt: value.updated_at ?? undefined,
   };
 }
 
@@ -3013,6 +3042,39 @@ export class ApiClient {
     }));
   }
 
+  terminalRecordingTools(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<TerminalRecordingTools> {
+    return this.request<WireTerminalRecordingTools>(
+      `engagements/${encodeURIComponent(engagementId)}/terminal/recording-tools`,
+      { signal },
+    ).then(mapTerminalRecordingTools);
+  }
+
+  updateTerminalRecordingTools(
+    engagementId: string,
+    update: {
+      customTools: string[];
+      disabledTools: string[];
+      expectedRevision: number;
+      expectedManifestSha256?: string;
+    },
+  ): Promise<TerminalRecordingTools> {
+    return this.request<WireTerminalRecordingTools>(
+      `engagements/${encodeURIComponent(engagementId)}/terminal/recording-tools`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          custom_tools: update.customTools,
+          disabled_tools: update.disabledTools,
+          expected_revision: update.expectedRevision,
+          expected_manifest_sha256: update.expectedManifestSha256,
+        }),
+      },
+    ).then(mapTerminalRecordingTools);
+  }
+
   terminalCommandHistoryStatus(
     engagementId: string,
     signal?: AbortSignal,
@@ -3020,8 +3082,11 @@ export class ApiClient {
     return this.request<{
       engagement_id: string;
       enabled: boolean;
-      capture_mode: "required";
+      capture_mode: "selected_tools";
       record_count: number;
+      recorded_output_count: number;
+      metadata_only_count: number;
+      classification_failure_count: number;
       degraded_count: number;
       truncated_count: number;
       audit_gap_count: number;
@@ -3036,6 +3101,9 @@ export class ApiClient {
         enabled: value.enabled,
         captureMode: value.capture_mode,
         recordCount: value.record_count,
+        recordedOutputCount: value.recorded_output_count,
+        metadataOnlyCount: value.metadata_only_count,
+        classificationFailureCount: value.classification_failure_count,
         degradedCount: value.degraded_count,
         truncatedCount: value.truncated_count,
         auditGapCount: value.audit_gap_count,
@@ -3079,6 +3147,10 @@ export class ApiClient {
         output_truncated: boolean;
         output_preview: string;
         capture_error?: string | null;
+        capture_decision: TerminalCommandRecord["captureDecision"];
+        matched_tools: string[];
+        recording_policy_revision?: number | null;
+        runtime_image_digest?: string | null;
       }>;
       total: number;
       offset: number;
@@ -3108,6 +3180,10 @@ export class ApiClient {
           outputTruncated: record.output_truncated,
           outputPreview: record.output_preview,
           captureError: record.capture_error ?? undefined,
+          captureDecision: record.capture_decision,
+          matchedTools: record.matched_tools,
+          recordingPolicyRevision: record.recording_policy_revision ?? undefined,
+          runtimeImageDigest: record.runtime_image_digest ?? undefined,
         })),
         total: value.total,
         offset: value.offset,
@@ -3123,8 +3199,11 @@ export class ApiClient {
     return this.request<{
       engagement_id: string;
       enabled: boolean;
-      capture_mode: "required";
+      capture_mode: "selected_tools";
       record_count: number;
+      recorded_output_count: number;
+      metadata_only_count: number;
+      classification_failure_count: number;
       degraded_count: number;
       truncated_count: number;
       audit_gap_count: number;
@@ -3141,6 +3220,9 @@ export class ApiClient {
       enabled: value.enabled,
       captureMode: value.capture_mode,
       recordCount: value.record_count,
+      recordedOutputCount: value.recorded_output_count,
+      metadataOnlyCount: value.metadata_only_count,
+      classificationFailureCount: value.classification_failure_count,
       degradedCount: value.degraded_count,
       truncatedCount: value.truncated_count,
       auditGapCount: value.audit_gap_count,

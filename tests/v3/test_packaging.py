@@ -259,6 +259,7 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
             "PIL",
             "nebula/v3/BUILD_INFO.json",
             "nebula/v3/migrations/script.py.mako",
+            "nebula/v3/kali_tool_inventory.py",
             "nebula/v3/operator_help.md",
             "nebula/v3/report_assets/fonts/NotoSans-Regular.ttf",
             "nebula/v3/report_assets/fonts/NotoSans-Bold.ttf",

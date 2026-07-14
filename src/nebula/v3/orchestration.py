@@ -72,6 +72,21 @@ class BudgetExceeded(MissionError):
     pass
 
 
+class SpecialistApprovalRequired(ApprovalRequired):
+    """Approval checkpoint that retains model spend incurred before the pause."""
+
+    def __init__(
+        self,
+        approval: Approval,
+        *,
+        usage: ChatTokenUsage | None = None,
+        cost_usd: float = 0.0,
+    ) -> None:
+        super().__init__(approval)
+        self.usage = usage or ChatTokenUsage()
+        self.cost_usd = cost_usd
+
+
 class SpecialistRole(str, Enum):
     SCOPE_PLANNING = "scope_planning"
     PASSIVE_RECON = "passive_recon"
@@ -81,6 +96,14 @@ class SpecialistRole(str, Enum):
     CODE_ANALYSIS = "code_analysis"
     EVIDENCE_VERIFICATION = "evidence_verification"
     REPORTING_REMEDIATION = "reporting_remediation"
+
+
+class SpecialistOutcome(str, Enum):
+    """Whether one specialist turn needs more work or ends its task."""
+
+    CONTINUE = "continue"
+    COMPLETE = "complete"
+    BLOCKED = "blocked"
 
 
 class PlannedTask(BaseModel):
@@ -134,6 +157,7 @@ class MissionPlan(BaseModel):
 class SpecialistResult(BaseModel):
     summary: str
     rationale: str = ""
+    outcome: SpecialistOutcome = SpecialistOutcome.COMPLETE
     output: dict[str, Any] = Field(default_factory=dict)
     evidence_ids: list[str] = Field(default_factory=list)
     reproducible_steps: list[str] = Field(default_factory=list)
@@ -183,6 +207,10 @@ class SpecialistContext(BaseModel):
     objective: str
     prior_results: dict[str, SpecialistResult]
     prior_context: str | None = None
+    prior_turns: list[SpecialistResult] = Field(default_factory=list)
+    retry_errors: list[str] = Field(default_factory=list)
+    turn_index: int = Field(default=1, ge=1)
+    remaining_tool_calls: int = Field(default=0, ge=0)
     allowed_tools: frozenset[str]
     approval_response: dict[str, Any] | None = None
 
@@ -294,7 +322,8 @@ class ModelSpecialist:
                         f"Mission objective: {context.objective}\n"
                         f"Task: {context.task.title}\n"
                         f"Instructions: {context.task.instructions}\n"
-                        f"Prior task summaries: {prior}"
+                        f"Prior task summaries: {prior}\n"
+                        f"Prior retry feedback: {context.retry_errors[-5:]}"
                     ),
                 )
             ],
@@ -353,8 +382,13 @@ class MissionState(TypedDict, total=False):
     plan: dict[str, Any]
     task_status: dict[str, str]
     attempts: dict[str, int]
+    retry_counts: dict[str, int]
+    retry_errors: dict[str, list[str]]
+    task_history: dict[str, list[dict[str, Any]]]
     results: dict[str, dict[str, Any]]
     verification: dict[str, dict[str, Any]]
+    verification_tool_calls: dict[str, int]
+    verification_fingerprints: dict[str, str]
     waiting_approvals: dict[str, dict[str, Any]]
     approval_responses: dict[str, dict[str, Any]]
     errors: dict[str, str]
@@ -469,8 +503,13 @@ class MissionRuntime:
             "started_at": (run.started_at or utc_now()).isoformat(),
             "task_status": {},
             "attempts": {},
+            "retry_counts": {},
+            "retry_errors": {},
+            "task_history": {},
             "results": {},
             "verification": {},
+            "verification_tool_calls": {},
+            "verification_fingerprints": {},
             "waiting_approvals": {},
             "approval_responses": {},
             "errors": {},
@@ -590,12 +629,51 @@ class MissionRuntime:
         return {"plan": plan.model_dump(mode="json"), "task_status": statuses}
 
     async def _dispatch(self, state: MissionState) -> MissionState:
-        self._enforce_budget(state)
         plan = MissionPlan.model_validate(state["plan"])
         statuses = dict(state["task_status"])
+        try:
+            self._enforce_budget(state)
+        except BudgetExceeded as exc:
+            errors = dict(state.get("errors", {}))
+            for task in plan.tasks:
+                if statuses.get(task.id) in {
+                    TaskStatus.COMPLETE.value,
+                    TaskStatus.CANCELLED.value,
+                    TaskStatus.FAILED.value,
+                    TaskStatus.BLOCKED.value,
+                }:
+                    continue
+                statuses[task.id] = TaskStatus.BLOCKED.value
+                errors[task.id] = str(exc)
+                current = self.store.get(Task, task.id)
+                self.store.update_with_event(
+                    Task,
+                    task.id,
+                    {"status": TaskStatus.BLOCKED, "completed_at": utc_now()},
+                    expected_revision=current.revision,
+                    run_id=state["run_id"],
+                    event_type="task.blocked",
+                    event_payload={
+                        "task_id": task.id,
+                        "summary": str(exc),
+                        "reason": "mission budget exhausted",
+                    },
+                    idempotency_key=f"task:{task.id}:budget-blocked",
+                )
+            return {"task_status": statuses, "errors": errors}
         results = dict(state.get("results", {}))
         attempts = dict(state.get("attempts", {}))
+        retry_counts = dict(state.get("retry_counts", {}))
+        retry_errors = {
+            task_id: list(items)
+            for task_id, items in state.get("retry_errors", {}).items()
+        }
+        task_history = {
+            task_id: list(items)
+            for task_id, items in state.get("task_history", {}).items()
+        }
         waiting = dict(state.get("waiting_approvals", {}))
+        approval_responses = dict(state.get("approval_responses", {}))
         errors = dict(state.get("errors", {}))
         budget = RunBudget.model_validate(state["budget"])
         context_batch_spend = _ContextBatchSpend()
@@ -620,7 +698,10 @@ class MissionRuntime:
             if len(batch) >= budget.max_concurrency:
                 break
         if not batch:
-            if any(status == TaskStatus.FAILED.value for status in statuses.values()):
+            if any(
+                status in {TaskStatus.FAILED.value, TaskStatus.BLOCKED.value}
+                for status in statuses.values()
+            ):
                 return {}
             unfinished = [
                 task_id
@@ -630,6 +711,14 @@ class MissionRuntime:
             if unfinished and not waiting and not self._needs_verification(state):
                 raise MissionError(f"mission task graph is blocked: {unfinished}")
             return {}
+
+        remaining_batch_tool_calls = max(
+            0, budget.max_tool_calls - state.get("tool_calls", 0)
+        )
+        tool_slots_by_task = {
+            task.id: max(0, remaining_batch_tool_calls - index)
+            for index, task in enumerate(batch)
+        }
 
         async def execute_one(
             task: PlannedTask,
@@ -644,15 +733,6 @@ class MissionRuntime:
             context_usage = ChatTokenUsage()
             context_cost = 0.0
             attempt = attempts.get(task.id, 0) + 1
-            if attempt > budget.max_retries + 1:
-                return (
-                    task,
-                    None,
-                    None,
-                    "maximum retry count exceeded",
-                    context_usage,
-                    context_cost,
-                )
             attempts[task.id] = attempt
             attempt_id = f"{state['run_id']}:{task.id}:{attempt}"
             try:
@@ -726,9 +806,7 @@ class MissionRuntime:
                     budget=budget,
                     batch_spend=context_batch_spend,
                 )
-                remaining_tool_calls = max(
-                    0, budget.max_tool_calls - state.get("tool_calls", 0)
-                )
+                remaining_tool_calls = tool_slots_by_task[task.id]
                 elapsed = (
                     utc_now() - datetime.fromisoformat(state["started_at"])
                 ).total_seconds()
@@ -742,6 +820,13 @@ class MissionRuntime:
                             objective=state["objective"],
                             prior_results=prior_results,
                             prior_context=prior_context,
+                            prior_turns=[
+                                SpecialistResult.model_validate(item)
+                                for item in task_history.get(task.id, [])
+                            ],
+                            retry_errors=retry_errors.get(task.id, []),
+                            turn_index=attempt,
+                            remaining_tool_calls=remaining_tool_calls,
                             allowed_tools=(
                                 specialist.allowed_tools
                                 if remaining_tool_calls > 0
@@ -763,11 +848,32 @@ class MissionRuntime:
                     context_cost,
                 )
             except ApprovalRequired as exc:
+                approval_usage = getattr(exc, "usage", ChatTokenUsage())
+                approval_cost = float(getattr(exc, "cost_usd", 0.0))
+                context_usage = self._add_context_usage(context_usage, approval_usage)
+                context_cost += approval_cost
                 return (
                     task,
                     None,
                     exc.approval,
                     None,
+                    context_usage,
+                    context_cost,
+                )
+            except TimeoutError as exc:
+                elapsed = (
+                    utc_now() - datetime.fromisoformat(state["started_at"])
+                ).total_seconds()
+                error = (
+                    "mission duration budget exceeded while specialist was running"
+                    if elapsed >= budget.max_duration_seconds - 0.001
+                    else f"specialist runtime timed out: {exc}"
+                )
+                return (
+                    task,
+                    None,
+                    None,
+                    error,
                     context_usage,
                     context_cost,
                 )
@@ -814,7 +920,14 @@ class MissionRuntime:
                 self.store.update(
                     Task,
                     task.id,
-                    {"status": TaskStatus.WAITING_APPROVAL},
+                    {
+                        "status": TaskStatus.WAITING_APPROVAL,
+                        "metadata": {
+                            **persisted.metadata,
+                            "agent_turns": attempts[task.id] + 1,
+                            "runtime_retries": retry_counts.get(task.id, 0),
+                        },
+                    },
                     expected_revision=persisted.revision,
                 )
                 attempt_entity = self.store.get(
@@ -824,7 +937,11 @@ class MissionRuntime:
                 self.store.update(
                     AgentAttempt,
                     attempt_entity.id,
-                    {"status": TaskStatus.WAITING_APPROVAL},
+                    {
+                        "status": TaskStatus.WAITING_APPROVAL,
+                        "tokens_used": attempt_entity.tokens_used + context_total,
+                        "cost_usd": attempt_entity.cost_usd + context_cost,
+                    },
                     expected_revision=attempt_entity.revision,
                 )
                 continue
@@ -839,41 +956,70 @@ class MissionRuntime:
                 projected_tools = tool_calls + result.tool_calls
                 if projected_tools > budget.max_tool_calls:
                     error = "mission tool-call budget exceeded"
-                    result = None
                 elif (
                     budget.max_tokens is not None
                     and projected_tokens > budget.max_tokens
                 ):
                     error = "mission token budget exceeded"
-                    result = None
                 elif (
                     budget.max_cost_usd is not None
                     and projected_cost > budget.max_cost_usd
                 ):
                     error = "mission cost budget exceeded"
-                    result = None
             if error:
                 errors[task.id] = error
-                retrying = attempts[task.id] <= budget.max_retries
+                retry_errors.setdefault(task.id, []).append(error[:1_000])
+                budget_blocked = self._is_budget_error(error)
+                if result is not None:
+                    token_input += result.input_tokens
+                    token_output += result.output_tokens
+                    cost += result.cost_usd
+                    tool_calls += result.tool_calls
+                    task_history.setdefault(task.id, []).append(
+                        result.model_dump(mode="json")
+                    )
+                if not budget_blocked:
+                    retry_counts[task.id] = retry_counts.get(task.id, 0) + 1
+                retrying = (
+                    not budget_blocked
+                    and retry_counts.get(task.id, 0) <= budget.max_retries
+                )
+                terminal_status = (
+                    TaskStatus.BLOCKED if budget_blocked else TaskStatus.FAILED
+                )
                 statuses[task.id] = (
-                    TaskStatus.PENDING.value if retrying else TaskStatus.FAILED.value
+                    TaskStatus.PENDING.value if retrying else terminal_status.value
                 )
                 self.store.update_with_event(
                     Task,
                     task.id,
                     {
-                        "status": (
-                            TaskStatus.PENDING if retrying else TaskStatus.FAILED
-                        ),
+                        "status": (TaskStatus.PENDING if retrying else terminal_status),
                         "completed_at": None if retrying else utc_now(),
+                        "metadata": {
+                            **persisted.metadata,
+                            "agent_turns": attempts[task.id],
+                            "runtime_retries": retry_counts.get(task.id, 0),
+                        },
                     },
                     expected_revision=persisted.revision,
                     run_id=state["run_id"],
-                    event_type=("task.retry_scheduled" if retrying else "task.failed"),
-                    event_payload={"task_id": task.id, "error": error},
+                    event_type=(
+                        "task.retry_scheduled"
+                        if retrying
+                        else "task.blocked"
+                        if budget_blocked
+                        else "task.failed"
+                    ),
+                    event_payload={
+                        "task_id": task.id,
+                        "error": error,
+                        "summary": error,
+                        "retry_count": retry_counts.get(task.id, 0),
+                    },
                     idempotency_key=(
                         f"task:{task.id}:attempt:{attempts[task.id]}:"
-                        f"{'retry' if retrying else 'failed'}"
+                        f"{'retry' if retrying else 'blocked' if budget_blocked else 'failed'}"
                     ),
                 )
                 attempt_entity = self.store.get(
@@ -884,36 +1030,41 @@ class MissionRuntime:
                     AgentAttempt,
                     attempt_entity.id,
                     {
-                        "status": TaskStatus.FAILED,
+                        "status": (
+                            TaskStatus.BLOCKED if budget_blocked else TaskStatus.FAILED
+                        ),
                         "error": error,
-                        "tokens_used": context_total,
-                        "cost_usd": context_cost,
+                        "output": (
+                            result.model_dump(mode="json")
+                            if result is not None
+                            else attempt_entity.output
+                        ),
+                        "tokens_used": (
+                            attempt_entity.tokens_used
+                            + context_total
+                            + (
+                                result.input_tokens + result.output_tokens
+                                if result
+                                else 0
+                            )
+                        ),
+                        "cost_usd": (
+                            attempt_entity.cost_usd
+                            + context_cost
+                            + (result.cost_usd if result else 0.0)
+                        ),
                         "completed_at": utc_now(),
                     },
                     expected_revision=attempt_entity.revision,
                 )
                 continue
             assert result is not None
-            statuses[task.id] = TaskStatus.COMPLETE.value
-            results[task.id] = result.model_dump(mode="json")
+            approval_responses.pop(task.id, None)
+            errors.pop(task.id, None)
             token_input += result.input_tokens
             token_output += result.output_tokens
             cost += result.cost_usd
             tool_calls += result.tool_calls
-            self.store.update_with_event(
-                Task,
-                task.id,
-                {"status": TaskStatus.COMPLETE, "completed_at": utc_now()},
-                expected_revision=persisted.revision,
-                run_id=state["run_id"],
-                event_type="task.completed",
-                event_payload={
-                    "task_id": task.id,
-                    "summary": result.summary,
-                    "evidence_ids": result.evidence_ids,
-                },
-                idempotency_key=f"task:{task.id}:attempt:{attempts[task.id]}:completed",
-            )
             attempt_entity = self.store.get(
                 AgentAttempt,
                 f"{state['run_id']}:{task.id}:{attempts[task.id]}",
@@ -922,15 +1073,107 @@ class MissionRuntime:
                 AgentAttempt,
                 attempt_entity.id,
                 {
-                    "status": TaskStatus.COMPLETE,
-                    "output": result.output,
-                    "tokens_used": (
-                        result.input_tokens + result.output_tokens + context_total
+                    "status": (
+                        TaskStatus.BLOCKED
+                        if result.outcome == SpecialistOutcome.BLOCKED
+                        else TaskStatus.COMPLETE
                     ),
-                    "cost_usd": result.cost_usd + context_cost,
+                    "output": result.model_dump(mode="json"),
+                    "tokens_used": (
+                        attempt_entity.tokens_used
+                        + result.input_tokens
+                        + result.output_tokens
+                        + context_total
+                    ),
+                    "cost_usd": (
+                        attempt_entity.cost_usd + result.cost_usd + context_cost
+                    ),
                     "completed_at": utc_now(),
                 },
                 expected_revision=attempt_entity.revision,
+            )
+            task_metadata = {
+                **persisted.metadata,
+                "agent_turns": attempts[task.id],
+                "runtime_retries": retry_counts.get(task.id, 0),
+            }
+            if result.outcome == SpecialistOutcome.CONTINUE:
+                task_history.setdefault(task.id, []).append(
+                    result.model_dump(mode="json")
+                )
+                statuses[task.id] = TaskStatus.PENDING.value
+                self.store.update_with_event(
+                    Task,
+                    task.id,
+                    {
+                        "status": TaskStatus.PENDING,
+                        "completed_at": None,
+                        "metadata": task_metadata,
+                    },
+                    expected_revision=persisted.revision,
+                    run_id=state["run_id"],
+                    event_type="task.turn_completed",
+                    event_payload={
+                        "task_id": task.id,
+                        "turn": attempts[task.id],
+                        "summary": result.summary,
+                        "outcome": result.outcome.value,
+                        "evidence_ids": result.evidence_ids,
+                    },
+                    idempotency_key=(
+                        f"task:{task.id}:attempt:{attempts[task.id]}:turn-completed"
+                    ),
+                )
+                self.store.append_event(
+                    state["run_id"],
+                    "task.continuing",
+                    {
+                        "task_id": task.id,
+                        "turn": attempts[task.id],
+                        "summary": "Specialist scheduled another investigative turn",
+                    },
+                    idempotency_key=(
+                        f"task:{task.id}:attempt:{attempts[task.id]}:continuing"
+                    ),
+                )
+                continue
+            results[task.id] = result.model_dump(mode="json")
+            if result.outcome == SpecialistOutcome.BLOCKED:
+                statuses[task.id] = TaskStatus.BLOCKED.value
+                blocker = result.rationale or result.summary
+                errors[task.id] = blocker
+                task_history.setdefault(task.id, []).append(
+                    result.model_dump(mode="json")
+                )
+                self.store.update_with_event(
+                    Task,
+                    task.id,
+                    {
+                        "status": TaskStatus.BLOCKED,
+                        "completed_at": utc_now(),
+                        "metadata": task_metadata,
+                    },
+                    expected_revision=persisted.revision,
+                    run_id=state["run_id"],
+                    event_type="task.blocked",
+                    event_payload={
+                        "task_id": task.id,
+                        "summary": result.summary,
+                        "reason": blocker,
+                        "evidence_ids": result.evidence_ids,
+                    },
+                    idempotency_key=(
+                        f"task:{task.id}:attempt:{attempts[task.id]}:blocked"
+                    ),
+                )
+                continue
+            # Completion is provisional until the independent verifier accepts it.
+            statuses[task.id] = TaskStatus.RUNNING.value
+            self.store.update(
+                Task,
+                task.id,
+                {"status": TaskStatus.RUNNING, "metadata": task_metadata},
+                expected_revision=persisted.revision,
             )
         run = self.store.get(AgentRun, state["run_id"])
         self.store.update(
@@ -956,7 +1199,11 @@ class MissionRuntime:
             "task_status": statuses,
             "results": results,
             "attempts": attempts,
+            "retry_counts": retry_counts,
+            "retry_errors": retry_errors,
+            "task_history": task_history,
             "waiting_approvals": waiting,
+            "approval_responses": approval_responses,
             "errors": errors,
             "input_tokens": token_input,
             "output_tokens": token_output,
@@ -1275,11 +1522,14 @@ class MissionRuntime:
     def _route_after_dispatch(self, state: MissionState) -> str:
         if state.get("waiting_approvals"):
             return "approval"
+        statuses = state.get("task_status", {}).values()
+        if any(
+            status in {TaskStatus.FAILED.value, TaskStatus.BLOCKED.value}
+            for status in statuses
+        ):
+            return "fail"
         if self._needs_verification(state):
             return "verify"
-        statuses = state.get("task_status", {}).values()
-        if any(status == TaskStatus.FAILED.value for status in statuses):
-            return "fail"
         if statuses and all(
             status in {TaskStatus.COMPLETE.value, TaskStatus.CANCELLED.value}
             for status in statuses
@@ -1289,12 +1539,74 @@ class MissionRuntime:
 
     async def _fail(self, state: MissionState) -> MissionState:
         run = self.store.get(AgentRun, state["run_id"])
-        summary = "mission failed: " + "; ".join(
-            f"{task_id}: {error}" for task_id, error in state.get("errors", {}).items()
-        )
-        statuses = state.get("task_status", {})
+        statuses = dict(state.get("task_status", {}))
+        errors = dict(state.get("errors", {}))
         plan = state.get("plan", {})
         planned_tasks = plan.get("tasks", []) if isinstance(plan, dict) else []
+        for planned in planned_tasks:
+            task_id = planned.get("id") if isinstance(planned, dict) else None
+            if not isinstance(task_id, str) or statuses.get(task_id) in {
+                TaskStatus.COMPLETE.value,
+                TaskStatus.BLOCKED.value,
+                TaskStatus.FAILED.value,
+                TaskStatus.CANCELLED.value,
+            }:
+                continue
+            reason = "mission stopped because another task was blocked or failed"
+            statuses[task_id] = TaskStatus.BLOCKED.value
+            errors.setdefault(task_id, reason)
+            current = self.store.get(Task, task_id)
+            self.store.update_with_event(
+                Task,
+                task_id,
+                {"status": TaskStatus.BLOCKED, "completed_at": utc_now()},
+                expected_revision=current.revision,
+                run_id=state["run_id"],
+                event_type="task.blocked",
+                event_payload={
+                    "task_id": task_id,
+                    "summary": reason,
+                    "reason": reason,
+                },
+                idempotency_key=f"task:{task_id}:run-failed-blocked",
+            )
+
+        summary = "mission failed: " + "; ".join(
+            f"{task_id}: {error}" for task_id, error in errors.items()
+        )
+        partial_observations: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        result_groups: list[tuple[str, list[dict[str, Any]]]] = [
+            (task_id, [raw])
+            for task_id, raw in state.get("results", {}).items()
+            if isinstance(raw, dict)
+        ]
+        result_groups.extend(
+            (task_id, [raw for raw in history if isinstance(raw, dict)])
+            for task_id, history in state.get("task_history", {}).items()
+        )
+        for task_id, raw_results in result_groups:
+            for raw in raw_results:
+                result = SpecialistResult.model_validate(raw)
+                tool = str(result.output.get("tool") or "")
+                key = (task_id, tool, result.summary)
+                if key in seen:
+                    continue
+                seen.add(key)
+                partial_observations.append(
+                    {
+                        "task_id": task_id,
+                        "outcome": result.outcome.value,
+                        "tool": tool or None,
+                        "status": result.output.get("status"),
+                        "summary": result.summary,
+                        "commands": result.reproducible_steps,
+                        "evidence_ids": result.evidence_ids,
+                    }
+                )
+        partial = [item["summary"] for item in partial_observations]
+        if partial:
+            summary += ". Partial results: " + "; ".join(partial)
         self.store.update_with_event(
             AgentRun,
             run.id,
@@ -1313,6 +1625,7 @@ class MissionRuntime:
                     "output_tokens": state.get("output_tokens", 0),
                     "tool_calls": state.get("tool_calls", 0),
                     "final_summary": summary,
+                    "partial_observations": partial_observations,
                 },
             },
             expected_revision=run.revision,
@@ -1320,11 +1633,16 @@ class MissionRuntime:
             event_type="run.failed",
             event_payload={
                 "summary": summary,
-                "errors": state.get("errors", {}),
+                "errors": errors,
+                "partial_observations": partial_observations,
             },
             idempotency_key="run:failed",
         )
-        return {"final_summary": summary}
+        return {
+            "final_summary": summary,
+            "task_status": statuses,
+            "errors": errors,
+        }
 
     async def _approval(self, state: MissionState) -> MissionState:
         waiting = dict(state.get("waiting_approvals", {}))
@@ -1343,7 +1661,11 @@ class MissionRuntime:
         statuses = dict(state["task_status"])
         responses = dict(state.get("approval_responses", {}))
         waiting.pop(task_id, None)
-        if status in {ApprovalStatus.APPROVED, ApprovalStatus.EDITED}:
+        if status in {
+            ApprovalStatus.APPROVED,
+            ApprovalStatus.EDITED,
+            ApprovalStatus.REJECTED,
+        }:
             statuses[task_id] = TaskStatus.PENDING.value
             responses[task_id] = response
         else:
@@ -1359,7 +1681,11 @@ class MissionRuntime:
             event_payload={"task_id": task_id, "status": status.value},
             idempotency_key=f"approval:{card.get('id', task_id)}:{status.value}",
         )
-        if status not in {ApprovalStatus.APPROVED, ApprovalStatus.EDITED}:
+        if status not in {
+            ApprovalStatus.APPROVED,
+            ApprovalStatus.EDITED,
+            ApprovalStatus.REJECTED,
+        }:
             plan = MissionPlan.model_validate(state["plan"])
             changed = True
             while changed:
@@ -1401,27 +1727,156 @@ class MissionRuntime:
         plan = MissionPlan.model_validate(state["plan"])
         verification = dict(state.get("verification", {}))
         errors = dict(state.get("errors", {}))
+        statuses = dict(state.get("task_status", {}))
+        results = dict(state.get("results", {}))
+        task_history = {
+            task_id: list(items)
+            for task_id, items in state.get("task_history", {}).items()
+        }
+        retry_errors = {
+            task_id: list(items)
+            for task_id, items in state.get("retry_errors", {}).items()
+        }
+        verification_tool_calls = dict(state.get("verification_tool_calls", {}))
+        verification_fingerprints = dict(state.get("verification_fingerprints", {}))
+        budget = RunBudget.model_validate(state["budget"])
         tasks = {task.id: task for task in plan.tasks}
-        for task_id, raw in state.get("results", {}).items():
+        for task_id, raw in list(results.items()):
             if task_id in verification:
                 continue
             result = SpecialistResult.model_validate(raw)
-            verdict = await self.verifier.verify(tasks[task_id], result)
-            verification[task_id] = verdict.model_dump(mode="json")
-            if not verdict.accepted:
-                errors[task_id] = verdict.rationale
+            evidence_fingerprint = json.dumps(
+                {
+                    "candidate_finding_ids": sorted(result.candidate_finding_ids),
+                    "evidence_ids": sorted(result.evidence_ids),
+                    "reproducible_steps": sorted(result.reproducible_steps),
+                },
+                sort_keys=True,
+            )
+            if verification_fingerprints.get(task_id) == evidence_fingerprint:
+                verdict = VerificationResult(
+                    accepted=False,
+                    rationale=(
+                        "verification requires new evidence or reproducible steps; "
+                        "the submitted evidence package is unchanged"
+                    ),
+                    evidence_ids=result.evidence_ids,
+                )
+            else:
+                verdict = await self.verifier.verify(tasks[task_id], result)
+            verification_event = {
+                "task_id": task_id,
+                "accepted": verdict.accepted,
+                "rationale": verdict.rationale,
+                "evidence_ids": verdict.evidence_ids,
+            }
+            verification_key = (
+                f"task:{task_id}:attempt:{state.get('attempts', {}).get(task_id, 0)}:"
+                "verification"
+            )
+            current = self.store.get(Task, task_id)
+            if verdict.accepted:
+                statuses[task_id] = TaskStatus.COMPLETE.value
+                errors.pop(task_id, None)
+                verification[task_id] = verdict.model_dump(mode="json")
+                self.store.update_with_event(
+                    Task,
+                    task_id,
+                    {"status": TaskStatus.COMPLETE, "completed_at": utc_now()},
+                    expected_revision=current.revision,
+                    run_id=state["run_id"],
+                    event_type="task.completed",
+                    event_payload={
+                        "task_id": task_id,
+                        "summary": result.summary,
+                        "evidence_ids": result.evidence_ids,
+                    },
+                    idempotency_key=(
+                        f"task:{task_id}:attempt:"
+                        f"{state.get('attempts', {}).get(task_id, 0)}:completed"
+                    ),
+                )
+                self.store.append_event(
+                    state["run_id"],
+                    "task.verified",
+                    verification_event,
+                    idempotency_key=verification_key,
+                )
+                continue
+
+            current_tool_calls = state.get("tool_calls", 0)
+            previous_rejection = verification_tool_calls.get(task_id)
+            can_investigate = current_tool_calls < budget.max_tool_calls and (
+                previous_rejection is None or current_tool_calls > previous_rejection
+            )
+            errors[task_id] = verdict.rationale
+            verification_fingerprints[task_id] = evidence_fingerprint
+            if can_investigate:
+                verification_tool_calls[task_id] = current_tool_calls
+                task_history.setdefault(task_id, []).append(raw)
+                retry_errors.setdefault(task_id, []).append(
+                    f"Verification rejected the result: {verdict.rationale}"[:1_000]
+                )
+                results.pop(task_id, None)
+                verification.pop(task_id, None)
+                statuses[task_id] = TaskStatus.PENDING.value
+                self.store.update_with_event(
+                    Task,
+                    task_id,
+                    {"status": TaskStatus.PENDING, "completed_at": None},
+                    expected_revision=current.revision,
+                    run_id=state["run_id"],
+                    event_type="task.verification_failed",
+                    event_payload=verification_event,
+                    idempotency_key=verification_key,
+                )
+                self.store.append_event(
+                    state["run_id"],
+                    "task.continuing",
+                    {
+                        "task_id": task_id,
+                        "summary": (
+                            "Verification requested additional evidence: "
+                            f"{verdict.rationale}"
+                        ),
+                        "reason": "verification feedback",
+                    },
+                    idempotency_key=f"{verification_key}:continuing",
+                )
+                continue
+
+            statuses[task_id] = TaskStatus.BLOCKED.value
             self.store.append_event(
                 state["run_id"],
-                "task.verified" if verdict.accepted else "task.verification_failed",
-                {
-                    "task_id": task_id,
-                    "accepted": verdict.accepted,
-                    "rationale": verdict.rationale,
-                    "evidence_ids": verdict.evidence_ids,
-                },
-                idempotency_key=f"task:{task_id}:verification",
+                "task.verification_failed",
+                verification_event,
+                idempotency_key=verification_key,
             )
-        return {"verification": verification, "errors": errors}
+            current = self.store.get(Task, task_id)
+            self.store.update_with_event(
+                Task,
+                task_id,
+                {"status": TaskStatus.BLOCKED, "completed_at": utc_now()},
+                expected_revision=current.revision,
+                run_id=state["run_id"],
+                event_type="task.blocked",
+                event_payload={
+                    "task_id": task_id,
+                    "summary": verdict.rationale,
+                    "reason": "verification could not be satisfied within budget",
+                },
+                idempotency_key=f"{verification_key}:blocked",
+            )
+        return {
+            "verification": verification,
+            "verification_tool_calls": verification_tool_calls,
+            "verification_fingerprints": verification_fingerprints,
+            "errors": errors,
+            "task_status": statuses,
+            "results": results,
+            "task_history": task_history,
+            "retry_errors": retry_errors,
+        }
 
     async def _synthesize(self, state: MissionState) -> MissionState:
         plan = MissionPlan.model_validate(state["plan"])
@@ -1477,10 +1932,10 @@ class MissionRuntime:
         budget = RunBudget.model_validate(state["budget"])
         started = datetime.fromisoformat(state["started_at"])
         elapsed = (utc_now() - started).total_seconds()
-        if elapsed > budget.max_duration_seconds:
+        if elapsed >= budget.max_duration_seconds:
             raise BudgetExceeded("mission duration budget exceeded")
         total_tokens = state.get("input_tokens", 0) + state.get("output_tokens", 0)
-        if budget.max_tokens is not None and total_tokens > budget.max_tokens:
+        if budget.max_tokens is not None and total_tokens >= budget.max_tokens:
             raise BudgetExceeded("mission token budget exceeded")
         if (
             budget.max_cost_usd is not None
@@ -1489,6 +1944,22 @@ class MissionRuntime:
             raise BudgetExceeded("mission cost budget exceeded")
         if state.get("tool_calls", 0) > budget.max_tool_calls:
             raise BudgetExceeded("mission tool-call budget exceeded")
+
+    @staticmethod
+    def _is_budget_error(error: str) -> bool:
+        normalized = error.lower()
+        return any(
+            marker in normalized
+            for marker in (
+                "mission duration budget",
+                "mission token budget",
+                "mission cost budget",
+                "mission tool-call budget",
+                "insufficient mission token budget",
+                "insufficient mission cost budget",
+                "exhausted its tool-call budget",
+            )
+        )
 
 
 @asynccontextmanager
@@ -1525,6 +1996,8 @@ __all__ = [
     "ModelSpecialist",
     "PlannedTask",
     "SpecialistContext",
+    "SpecialistApprovalRequired",
+    "SpecialistOutcome",
     "SpecialistResult",
     "SpecialistRole",
     "StaticSpecialist",

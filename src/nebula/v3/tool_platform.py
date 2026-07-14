@@ -71,6 +71,7 @@ from .toolpacks import (
     fetch_bounded_https,
     manifest_digest,
 )
+from .kali_tool_inventory import TOOL_NAME_PATTERN
 from .toolparsers import SandboxParserExecutor
 from .tool_interfaces import (
     MAX_INTERFACE_CATALOG_BYTES,
@@ -96,7 +97,7 @@ DEFAULT_CATALOG_SIGNATURE_URL = (
 )
 DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE = "docker.io/kalilinux/kali-rolling:latest"
 DEFAULT_HUMAN_TERMINAL_REPOSITORY = "docker.io/kalilinux/kali-rolling"
-HUMAN_TERMINAL_IMAGE_METADATA_SCHEMA = "nebula.human-terminal-image/v1"
+HUMAN_TERMINAL_IMAGE_METADATA_SCHEMA = "nebula.human-terminal-image/v2"
 MAX_REMOTE_MANIFEST_BYTES = 2_000_000
 MAX_LOCAL_BUNDLE_BYTES = 100_000_000
 DEFAULT_EVENT_RETENTION = 256
@@ -1234,6 +1235,13 @@ class ToolPlatform:
             "image_digest": image.digest,
             "platform": image.platform,
             "installed_packages": list(image.installed_packages),
+            "security_tools": list(image.security_tools),
+            "security_tool_packages": list(image.security_tool_packages),
+            "security_tool_provenance": {
+                tool: list(packages)
+                for tool, packages in image.security_tool_provenance
+            },
+            "security_tool_manifest_sha256": image.security_tool_manifest_sha256,
             "registry_refreshed": image.refreshed,
         }
         temporary: Path | None = None
@@ -1259,6 +1267,43 @@ class ToolPlatform:
             raise ToolPlatformError(
                 "verified human-workstation image metadata could not be persisted"
             ) from exc
+
+    def last_human_terminal_security_inventory(
+        self,
+    ) -> tuple[str, str, tuple[str, ...]] | None:
+        """Return the last verified image catalog without preparing an image."""
+
+        try:
+            payload = json.loads(
+                self.human_terminal_image_metadata_path.read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+        image_digest = (
+            payload.get("image_digest") if isinstance(payload, dict) else None
+        )
+        manifest_sha256 = (
+            payload.get("security_tool_manifest_sha256")
+            if isinstance(payload, dict)
+            else None
+        )
+        tools = payload.get("security_tools") if isinstance(payload, dict) else None
+        if (
+            payload.get("schema") != HUMAN_TERMINAL_IMAGE_METADATA_SCHEMA
+            or not isinstance(image_digest, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is None
+            or not isinstance(manifest_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
+            or not isinstance(tools, list)
+            or not tools
+            or tools != sorted(set(tools))
+            or any(
+                not isinstance(tool, str) or TOOL_NAME_PATTERN.fullmatch(tool) is None
+                for tool in tools
+            )
+        ):
+            return None
+        return image_digest, manifest_sha256, tuple(tools)
 
     def resolve_human_terminal_profile(self, engagement_id: str) -> StoredRunnerProfile:
         """Select the one configured runner eligible for the human terminal."""

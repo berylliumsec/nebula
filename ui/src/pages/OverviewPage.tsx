@@ -19,9 +19,10 @@ import { useChrome } from "../state/ChromeContext";
 type EventStepState = "complete" | "running" | "waiting" | "failed" | "stopped" | "queued";
 
 function eventStepState(kind: string): EventStepState {
-  if (kind.includes("failed")) return "failed";
+  if (kind.includes("failed") || kind.includes("blocked")) return "failed";
   if (kind.includes("cancelled") || kind === "run.stop_requested") return "stopped";
   if (kind.includes("waiting") || kind === "approval.requested" || kind === "tool.requested") return "waiting";
+  if (kind === "task.turn_completed" || kind === "task.continuing" || kind === "task.retry_scheduled") return "running";
   if (kind.includes("completed") || kind.includes("verified") || kind.includes("resolved") || kind.includes("created") || kind === "finding.updated") return "complete";
   if (kind.includes("started") || kind.includes("status_changed") || kind === "agent.message") return "running";
   return "queued";

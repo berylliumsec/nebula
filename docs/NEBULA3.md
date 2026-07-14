@@ -16,8 +16,9 @@ application remains a separately versioned maintenance distribution.
 - Explicit catalog profiles for commercial gateways and local runtimes,
   including Ollama, **vLLM**, llama.cpp, SGLang, LM Studio, Hugging Face
   endpoints, and NVIDIA NIM.
-- LangGraph supervisor/specialist missions with durable checkpoints, approval
-  pauses, independent evidence verification, retries, and hard budgets.
+- LangGraph supervisor/specialist missions with durable investigative tool
+  turns, approval pauses, independent evidence verification, exception retries,
+  explicit blocked outcomes, and hard budgets.
 - Typed tool plugins, strict JSON schemas, engagement-owned workspaces,
   broker-owned DNS resolution, scope enforcement, and rootless OCI execution.
 - React/TypeScript workspace and Tauri shell with a loopback-only sidecar token
@@ -152,9 +153,10 @@ An external Chroma directory is skipped unless the operator supplies
 The report workspace exports a saved report revision as a server-rendered PDF.
 The separate **Export engagement bundle (.nebula.zip)** action produces bundle
 format v3 with entity records, run and operation events, execution streams,
-human-terminal audit records and transcripts, generated drafts, report
+human-terminal audit records and any selected-tool transcripts, generated drafts, report
 snapshots/PDFs, and their content-addressed artifacts. Bundles may contain
-unredacted evidence, raw execution output, and raw terminal results. Treat them
+unredacted evidence, raw execution output, and recorded security-tool terminal
+results. Treat them
 as sensitive data. They are not described as backups because Nebula 3 does not
 yet provide a restore path. Scratch workspace files are excluded unless an
 operator promoted them to an artifact.
@@ -245,22 +247,43 @@ One active terminal is retained per Project across Workbench mode changes and
 short webview reconnects. It stops on explicit **Stop**, Core shutdown, or 30
 minutes with no input and no output; a disconnected UI has a 10-minute
 reconnect grace. Core keeps at most 1 MiB of sequenced output for reconnect
-replay. Separately, mandatory shell framing records every completed command and
-its merged PTY result as a Project-lifetime audit. Raw and redacted transcripts
-are content-addressed artifacts; each command records operator, session,
-directory, timing, status, exit code, byte counts, and hashes. Capture is capped
-at 10 MiB per command while the full observed stream is still counted and
-hashed. Interrupted, truncated, recovered, framing-loss, and persistence-gap
-conditions remain visible in audit health. Existing pre-audit records are
-clearly marked as metadata-only.
+replay. Separately, mandatory shell framing records metadata for every completed
+command as a Project-lifetime audit. The derived image contains a verified,
+schema-versioned catalog of security executables from the installed Kali
+baseline. Image preparation resolves the installed direct dependencies of
+`kali-linux-headless`, removes Kali core plus the checked-in deployment/system
+package denylist, and inventories package-owned executables in standard `PATH`
+directories. Core reads that manifest back from the immutable image with
+networking disabled and persists its hash, image digest, package provenance, and
+sorted tool list; a missing or unsafe manifest rejects terminal preparation.
+Workbench Activity lets each Project add custom executable names or
+deselect image defaults. If an executed simple command matches the snapshotted
+Project selection, the top-level command's merged PTY result is stored as raw and
+redacted content-addressed artifacts; otherwise provisional result bytes are
+discarded. Each record includes the capture decision, matched tools, policy
+revision, image digest, operator, session, directory, timing, status, and exit
+code. Selected capture is capped at 10 MiB while the full observed stream is
+still counted and hashed. Classification uncertainty fails closed to metadata
+only. Interrupted, truncated, recovered, framing-loss, classification, and
+persistence-gap conditions remain visible in audit health. Existing records and
+artifacts remain unchanged and are labeled as legacy full-output or metadata-only.
 
-Audit records cannot be disabled or cleared independently of Project deletion
-and are included in sensitive bundle v3 exports. Raw result downloads require a
-sensitive-data acknowledgement. Inline secrets and output may therefore enter
-the raw audit artifacts, while interactive password responses are not recorded
-as shell commands. Terminal commands and results are not sent to an AI provider
-or promoted to evidence without an explicit operator action. Highlight terminal
-text and press Ctrl+C on Linux or Windows, or Command+C on macOS, to copy it;
+Authenticated clients read the catalog and Project overlay from
+`GET /api/v1/engagements/{id}/terminal/recording-tools` and replace the overlay
+with `PUT` using the displayed manifest digest and policy revision. A stale image
+catalog or revision returns `409`; executable names containing paths, whitespace,
+control characters, or shell syntax are rejected. The existing history status
+update and delete routes remain immutable `409` responses.
+
+Command metadata cannot be disabled or cleared independently of Project deletion
+and is included in sensitive bundle v3 exports. Tool selection controls only
+future result retention and never deletes historical artifacts. Raw result
+downloads require a sensitive-data acknowledgement. Inline secrets and selected
+tool output may therefore enter raw audit artifacts, while interactive password
+responses are not recorded as shell commands. Terminal commands and results are
+not sent to an AI provider or promoted to evidence without an explicit operator
+action. Highlight terminal text and press Ctrl+C on Linux or Windows, or
+Command+C on macOS, to copy it;
 with no selection, Ctrl+C remains a terminal interrupt. Because an operator
 controls an unrestricted root shell, the audit supplies durable attribution and
 integrity checking rather than protection from a deliberately malicious root
@@ -335,7 +358,9 @@ Kali pull/digest resolution, root and writable ephemeral state, outbound bridge
 connectivity, no added capabilities or published ports, terminal
 disconnect/Core-restart cleanup, an offline run, a scoped single-target run,
 cancellation cleanup, Core-restart interruption, workspace promotion/reset,
-terminal audit recovery/truncation warnings, acknowledged raw-output download,
+terminal catalog validation, harmless `nmap --version` selected recording beside
+an unselected shell command with no artifacts, recovery/truncation warnings,
+acknowledged raw-output download,
 Draft note/Discuss in chat, cached PDF export, and sensitive bundle v3 export.
 The release is blocked if Run appears without both reviewed-execution modes,
 non-human execution can request unrestricted/root/writable settings, a runtime

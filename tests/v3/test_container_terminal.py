@@ -45,7 +45,11 @@ from nebula.v3.sandbox import (
     SandboxWorkspaceAccess,
 )
 from nebula.v3.storage import NebulaStore
-from nebula.v3.terminal_history import Osc633CommandParser, TerminalCommandHistory
+from nebula.v3.terminal_history import (
+    Osc633CommandParser,
+    TerminalCommandHistory,
+    TerminalRecordingPolicy,
+)
 from nebula.v3.tool_platform import (
     HumanTerminalRuntimeResolution,
     ToolPlatformError,
@@ -211,6 +215,14 @@ class StubTerminalPlatform:
             installed_packages=("kali-linux-headless", "iputils-ping"),
             refreshed=True,
             detail="pulled and verified the latest official Kali image",
+            security_tools=("hashcat", "nmap", "printf"),
+            security_tool_packages=("hashcat", "nmap"),
+            security_tool_provenance=(
+                ("hashcat", ("hashcat",)),
+                ("nmap", ("nmap",)),
+                ("printf", ("hashcat",)),
+            ),
+            security_tool_manifest_sha256="d" * 64,
         )
 
     async def cleanup_operator_terminals(self) -> None:
@@ -778,9 +790,10 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
             content=b"available immediately\n",
         )
         assert uploaded.status_code == 201
-        assert uploaded.json()["sha256"] == hashlib.sha256(
-            b"available immediately\n"
-        ).hexdigest()
+        assert (
+            uploaded.json()["sha256"]
+            == hashlib.sha256(b"available immediately\n").hexdigest()
+        )
         blocked_reset = client.post(
             f"/api/v1/engagements/{engagement.id}/workspace/reset",
             headers=headers,
@@ -871,12 +884,8 @@ def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):
         assert recovery["active"] is True
         assert recovery["session"]["session_id"] == session["session_id"]
         assert recovery["session"]["last_sequence"] == 0
-        assert recovery["session"]["websocket_ticket"] != (
-            original_reconnect_ticket
-        )
-        assert recovery["runtime"]["image_digest"] == (
-            "sha256:" + "c" * 64
-        )
+        assert recovery["session"]["websocket_ticket"] != (original_reconnect_ticket)
+        assert recovery["runtime"]["image_digest"] == ("sha256:" + "c" * 64)
         runner.processes[0].emit_from_thread(b"missed while view changed\r\n")
         reconnect_protocols = [
             "nebula.container-terminal.v1",
@@ -937,10 +946,13 @@ def _command_markers(
         + base64.b64encode(command.encode())
         + b"\x07"
     )
-    end = (
-        f"\x1b]633;NebulaCommandEnd;{nonce};{sequence};{exit_code}\x07".encode()
+    executed = (
+        f"\x1b]633;NebulaCommandExec;{nonce};{sequence};".encode()
+        + base64.b64encode(command.encode())
+        + b"\x07"
     )
-    return start, end
+    end = f"\x1b]633;NebulaCommandEnd;{nonce};{sequence};{exit_code}\x07".encode()
+    return start + executed, end
 
 
 @async_test
@@ -966,9 +978,7 @@ async def test_command_parser_and_history_span_websocket_reconnects(tmp_path):
     started, first = await start_controllable_terminal(service, engagement)
     process = runner.processes[0]
     nonce = service._sessions[started.session_id].audit_nonce
-    start_marker, end_marker = _command_markers(
-        "printf reconnect", nonce, exit_code=4
-    )
+    start_marker, end_marker = _command_markers("printf reconnect", nonce, exit_code=4)
     output_secret = b"password=continuity-output-is-audited"
 
     await process.emit(start_marker + output_secret + end_marker[:19])
@@ -995,7 +1005,9 @@ async def test_command_parser_and_history_span_websocket_reconnects(tmp_path):
     assert [(item.command, item.cwd, item.exit_code) for item in records] == [
         ("printf reconnect", "/workspace", 4)
     ]
-    assert history.output_bytes(engagement.id, records[0].id, raw=True)[0] == output_secret
+    assert (
+        history.output_bytes(engagement.id, records[0].id, raw=True)[0] == output_secret
+    )
     assert all(
         output_secret not in path.read_bytes()
         for path in database.parent.glob(database.name + "*")
@@ -1045,14 +1057,12 @@ async def test_terminal_audit_persistence_failure_emits_gap_and_retains_spool(
         await asyncio.sleep(0.01)
 
     gaps = [
-        event
-        for event in events
-        if event.event_type == "container_terminal.audit_gap"
+        event for event in events if event.event_type == "container_terminal.audit_gap"
     ]
     assert len(gaps) == 1
-    assert gaps[0].payload["command_sha256"] == hashlib.sha256(
-        b"printf gap"
-    ).hexdigest()
+    assert (
+        gaps[0].payload["command_sha256"] == hashlib.sha256(b"printf gap").hexdigest()
+    )
     assert history.status(engagement.id).audit_gap_count == 1
     assert history.spool_root is not None
     assert sorted(path.suffix for path in history.spool_root.iterdir()) == [
@@ -1198,3 +1208,55 @@ def test_fixed_bash_prompt_hook_emits_completed_command_markers_only():
         ("false", 1),
     ]
     assert b"NebulaCommand" not in parsed.passthrough + tail.passthrough
+
+
+@pytest.mark.skipif(
+    any(shutil.which(program) is None for program in ("bash", "base64", "tr")),
+    reason="bash, base64, and tr are required for shell integration coverage",
+)
+def test_bash_debug_frames_cover_aliases_functions_and_executed_branches_only():
+    environment = {
+        **os.environ,
+        "HISTFILE": "/dev/null",
+        "PS0": TERMINAL_PS0,
+        "PROMPT_COMMAND": TERMINAL_PROMPT_COMMAND,
+        "PS1": "",
+    }
+    completed = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-i"],
+        input=(
+            b"alias scan=printf\n"
+            b"false && scan skipped\n"
+            b"scan 'alias-hit\\n'\n"
+            b"scanfn() { printf 'function-hit\\n'; }\n"
+            b"scanfn\n"
+            b"exit\n"
+        ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=environment,
+        check=False,
+        timeout=10,
+    )
+    parser = Osc633CommandParser(
+        nonce=TERMINAL_AUDIT_PREVIEW_NONCE,
+        policy_provider=lambda: TerminalRecordingPolicy(
+            revision=7,
+            effective_tools=frozenset({"printf"}),
+            runtime_image_digest="sha256:" + "a" * 64,
+            manifest_sha256="b" * 64,
+        ),
+    )
+    captures = parser.feed(completed.stdout).captures
+
+    decisions = {
+        capture.command: (capture.capture_decision, capture.matched_tools)
+        for capture in captures
+    }
+    assert decisions["false && scan skipped"] == ("not_selected", ())
+    assert decisions["scan 'alias-hit\\n'"] == ("selected_tool", ("printf",))
+    assert decisions["scanfn"] == ("selected_tool", ("printf",))
+    assert decisions["scanfn() { printf 'function-hit\\n'; }"] == (
+        "not_selected",
+        (),
+    )

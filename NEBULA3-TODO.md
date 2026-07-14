@@ -29,9 +29,10 @@ The release is blocked until all of these gates pass:
 - [ ] A terminal survives Workbench mode changes and reconnects, obeys idle and
       disconnect grace periods, and completes 100 lifecycle cycles without a
       leaked container or workspace lock.
-- [ ] Tests prove raw terminal output is persisted only as immutable audit
-      artifacts and sensitive exports, never in SQLite, ordinary logs, browser
-      storage, evidence, or model requests without an explicit operator action.
+- [ ] Tests prove raw output from selected terminal security tools is persisted
+      only as immutable audit artifacts and sensitive exports, while unselected
+      commands retain metadata only; neither enters SQLite, ordinary logs,
+      browser storage, evidence, or model requests without an explicit action.
 - [ ] Credential tests scan databases, logs, exports, process arguments, and
       browser storage and verify OS-vault restart and session-only fallback.
 - [ ] Selection, terminal capture, image annotation/redaction, workspace upload,
@@ -61,9 +62,10 @@ than hidden behind separate top-level destinations:
   annotation, blur, solid redaction, undo/redo, and immutable derived lineage.
 - Streamed atomic workspace uploads, Markdown observations, evidence promotion,
   and explicit “Use with Assistant” actions.
-- Mandatory shell-integration terminal audit that stores exact commands,
-  attribution, metadata, and raw/redacted result artifacts for the Project
-  lifetime; it is included in sensitive exports but excluded from evidence and
+- Mandatory shell-integration terminal audit that stores exact command metadata
+  and attribution for the Project lifetime. Raw/redacted merged results are
+  stored only when an image-default or Project-selected security tool executes;
+  the audit is included in sensitive exports but excluded from evidence and
   model context by default.
 - In-place finding actions and revision-aware report sign-off.
 
@@ -93,10 +95,10 @@ and deliver each as a separate, tested project:
   lineage, source context, verified hashes, and a bounded versioned recipe.
 - Secrets are write-only and referenced as `vault:`, `env:`, or `session:`;
   plaintext persistence is forbidden.
-- Terminal result bytes are retained only by the mandatory Project audit and
-  sensitive exports. Selection drafts remain in memory unless the operator
-  explicitly sends, captures, or promotes them; neither enters model context or
-  evidence automatically.
+- Selected security-tool result bytes are retained only by the mandatory Project
+  audit and sensitive exports; other commands retain metadata only. Selection
+  drafts remain in memory unless the operator explicitly sends, captures, or
+  promotes them; neither enters model context or evidence automatically.
 
 ## Version and command contract
 

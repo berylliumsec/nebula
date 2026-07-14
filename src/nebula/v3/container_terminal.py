@@ -79,17 +79,17 @@ def terminal_ps0(nonce: str) -> str:
     """Emit a nonce-bound marker after input echo and before command output."""
 
     return (
-        '$(HISTCONTROL= HISTIGNORE=; shopt -s cmdhist lithist; '
-        '__nebula_line="$(HISTTIMEFORMAT=$\'\\036\' builtin history 1 2>/dev/null)"; '
-        '__nebula_command="${__nebula_line#*$\'\\036\'}"; '
+        "${__nebula_in_ps0:=}$(HISTCONTROL= HISTIGNORE=; shopt -s cmdhist lithist; "
+        "__nebula_line=\"$(HISTTIMEFORMAT=$'\\036' builtin history 1 2>/dev/null)\"; "
+        "__nebula_command=\"${__nebula_line#*$'\\036'}\"; "
         '__nebula_cwd_b64="$(printf \'%s\' "$PWD" '
-        '| base64 2>/dev/null | tr -d \'\\n\')"; '
+        "| base64 2>/dev/null | tr -d '\\n')\"; "
         '__nebula_command_b64="$(printf \'%s\' "$__nebula_command" '
-        '| base64 2>/dev/null | tr -d \'\\n\')"; '
+        "| base64 2>/dev/null | tr -d '\\n')\"; "
         'if [ -n "$__nebula_command" ] && [ -n "$__nebula_cwd_b64" ] '
         '&& [ -n "$__nebula_command_b64" ]; then '
         "printf '\\033]633;NebulaCommandStart;%s;%s;%s;%s\\007' "
-        f"'{nonce}' \"${{HISTCMD:-0}}\" \"$__nebula_cwd_b64\" "
+        f'\'{nonce}\' "${{HISTCMD:-0}}" "$__nebula_cwd_b64" '
         '"$__nebula_command_b64"; fi)'
     )
 
@@ -98,16 +98,36 @@ def terminal_prompt_command(nonce: str) -> str:
     """Emit the matching command completion marker before drawing the prompt."""
 
     return (
-        "__nebula_exit=$?; "
+        "__nebula_exit=$?; __nebula_in_prompt=1; "
         "HISTCONTROL=; HISTIGNORE=; "
         "shopt -s cmdhist lithist; "
+        '__nebula_classifier_ok=0; case "$(trap -p DEBUG 2>/dev/null)" in '
+        "*__nebula_debug*) __nebula_classifier_ok=1;; esac; "
         'if [ "${__nebula_history_ready:-0}" = 1 ] '
         '&& [ "${HISTCMD:-0}" != "${__nebula_last_histcmd:-0}" ]; then '
-        "printf '\\033]633;NebulaCommandEnd;%s;%s;%s\\007' "
-        f"'{nonce}' \"${{HISTCMD:-0}}\" \"$__nebula_exit\"; fi; "
+        "printf '\\033]633;NebulaCommandEnd;%s;%s;%s;%s\\007' "
+        f'\'{nonce}\' "${{HISTCMD:-0}}" "$__nebula_exit" '
+        '"$__nebula_classifier_ok"; fi; '
         '__nebula_last_histcmd="${HISTCMD:-0}"; '
         "__nebula_history_ready=1; "
-        "unset __nebula_exit"
+        "__nebula_debug() { "
+        'local __nebula_status=$? __nebula_seen="$BASH_COMMAND"; '
+        'if [ "${__nebula_in_ps0+x}" = x ] '
+        '&& [ "${BASH_SUBSHELL:-0}" -gt 0 ]; then '
+        'return "$__nebula_status"; fi; '
+        'if [ "${__nebula_in_ps0+x}" = x ]; then unset __nebula_in_ps0; fi; '
+        'if [ "${__nebula_in_prompt:-0}" != 1 ] '
+        '&& [ "${__nebula_in_debug:-0}" != 1 ]; then '
+        "__nebula_in_debug=1; "
+        '__nebula_seen_b64="$(printf \'%s\' "$__nebula_seen" '
+        "| base64 2>/dev/null | tr -d '\\n')\"; "
+        'if [ -n "$__nebula_seen_b64" ]; then '
+        "printf '\\033]633;NebulaCommandExec;%s;%s;%s\\007' "
+        f'\'{nonce}\' "${{HISTCMD:-0}}" "$__nebula_seen_b64"; fi; '
+        "unset __nebula_in_debug __nebula_seen_b64; fi; "
+        'return "$__nebula_status"; }; '
+        "trap '__nebula_debug' DEBUG; set -o functrace; "
+        "unset __nebula_exit __nebula_classifier_ok __nebula_in_prompt"
     )
 
 
@@ -373,7 +393,9 @@ class ContainerTerminalService:
         if self.command_history is not None:
             recovered = await asyncio.to_thread(self.command_history.recover_spools)
             if recovered:
-                LOGGER.warning("recovered %d interrupted terminal audit spool(s)", recovered)
+                LOGGER.warning(
+                    "recovered %d interrupted terminal audit spool(s)", recovered
+                )
         if self.tool_platform is not None:
             await self.tool_platform.cleanup_operator_terminals()
         self._recover_interrupted_events()
@@ -580,6 +602,11 @@ class ContainerTerminalService:
                         engagement_id=base.engagement_id,
                         session_id=session_id,
                         operator_id=operator_id,
+                        runtime_image_digest=prepared.resolution.image.digest,
+                        manifest_sha256=(
+                            prepared.resolution.image.security_tool_manifest_sha256
+                        ),
+                        default_tools=prepared.resolution.image.security_tools,
                     )
                     if self.command_history is not None
                     else Osc633CommandParser(nonce=audit_nonce)
@@ -912,9 +939,7 @@ class ContainerTerminalService:
                 )
         process.resize(columns, rows)
 
-    async def close_attachment(
-        self, attachment: ContainerTerminalAttachment
-    ) -> None:
+    async def close_attachment(self, attachment: ContainerTerminalAttachment) -> None:
         async with self._lock:
             self._require_attachment_locked(attachment)
         await self.finish(attachment.session_id, outcome="closed")
@@ -1136,7 +1161,9 @@ class ContainerTerminalService:
                 session = current
         if interrupted:
             await process.close()
-            raise ContainerTerminalError("interrupted", "terminal launch was interrupted")
+            raise ContainerTerminalError(
+                "interrupted", "terminal launch was interrupted"
+            )
         self._event(
             session,
             "container_terminal.running",
@@ -1381,9 +1408,7 @@ class ContainerTerminalService:
         return session
 
     @staticmethod
-    def _validate_ticket_locked(
-        session: _TerminalReservation, ticket: str
-    ) -> None:
+    def _validate_ticket_locked(session: _TerminalReservation, ticket: str) -> None:
         if session.ticket_expires_at is None:
             raise ContainerTerminalError(
                 "ticket_used", "terminal WebSocket ticket has already been used"
@@ -1478,6 +1503,16 @@ class ContainerTerminalService:
             raise ContainerTerminalError(
                 "image_unavailable", str(exc), status_code=503
             ) from exc
+        if (
+            self.command_history is not None
+            and resolution.image.security_tools
+            and resolution.image.security_tool_manifest_sha256 is not None
+        ):
+            self.command_history.register_tool_inventory(
+                runtime_image_digest=resolution.image.digest,
+                manifest_sha256=resolution.image.security_tool_manifest_sha256,
+                default_tools=resolution.image.security_tools,
+            )
         runtime = _runtime_snapshot(resolution)
         network = ContainerTerminalNetworkSnapshot()
         security = ContainerTerminalSecuritySnapshot()

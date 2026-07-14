@@ -1160,6 +1160,10 @@ export interface TerminalCommandRecord {
   outputTruncated: boolean;
   outputPreview: string;
   captureError?: string;
+  captureDecision: "selected_tool" | "not_selected" | "classification_failed" | "capture_failed" | "legacy_all_commands" | "legacy_metadata_only";
+  matchedTools: string[];
+  recordingPolicyRevision?: number;
+  runtimeImageDigest?: string;
 }
 
 export interface TerminalCommandPage {
@@ -1173,8 +1177,11 @@ export interface TerminalCommandPage {
 export interface TerminalCommandHistoryStatus {
   engagementId: Identifier;
   enabled: boolean;
-  captureMode: "required";
+  captureMode: "selected_tools";
   recordCount: number;
+  recordedOutputCount: number;
+  metadataOnlyCount: number;
+  classificationFailureCount: number;
   degradedCount: number;
   truncatedCount: number;
   auditGapCount: number;
@@ -1183,6 +1190,19 @@ export interface TerminalCommandHistoryStatus {
   maxRecords?: number;
   oldestRecordedAt?: string;
   newestRecordedAt?: string;
+}
+
+export interface TerminalRecordingTools {
+  engagementId: Identifier;
+  inventoryStatus: "verified" | "unavailable";
+  runtimeImageDigest?: string;
+  manifestSha256?: string;
+  defaultTools: string[];
+  customTools: string[];
+  disabledTools: string[];
+  effectiveTools: string[];
+  revision: number;
+  updatedAt?: string;
 }
 
 export interface WorkspaceChange {
@@ -1275,8 +1295,13 @@ export type RunEventKind =
   | "run.status_changed"
   | "task.created"
   | "task.started"
+  | "task.turn_completed"
+  | "task.continuing"
   | "task.completed"
   | "task.verified"
+  | "task.verification_failed"
+  | "task.blocked"
+  | "task.retry_scheduled"
   | "task.failed"
   | "task.cancelled"
   | "task.status_changed"
