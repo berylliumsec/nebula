@@ -40,8 +40,7 @@
 
 :root[data-theme="zero"] body::before,
 :root[data-theme="zero"] body::after,
-:root[data-theme="zero"] .app-shell::before,
-:root[data-theme="zero"] .app-shell::after {
+:root[data-theme="zero"] .app-shell::before {
   position: fixed;
   pointer-events: none;
   content: "";
@@ -91,17 +90,6 @@
   box-shadow: 0 0 70px rgb(0 162 255 / 16%), inset 0 0 70px rgb(0 139 255 / 10%);
   transform: perspective(520px) rotateX(64deg);
   animation: zero-horizon 12s ease-in-out infinite alternate;
-}
-
-:root[data-theme="zero"] .app-shell::after {
-  z-index: 90;
-  top: -20vh;
-  right: 0;
-  left: 0;
-  height: 18vh;
-  background: linear-gradient(to bottom, transparent, rgb(60 203 255 / 7%) 68%, rgb(112 225 255 / 19%) 98%, transparent);
-  mix-blend-mode: screen;
-  animation: zero-scan 9s linear infinite;
 }
 
 /* Shell chrome */
@@ -546,12 +534,6 @@
   to { opacity: .88; filter: hue-rotate(10deg); }
 }
 
-@keyframes zero-scan {
-  0%, 8% { transform: translateY(-22vh); opacity: 0; }
-  15% { opacity: .85; }
-  62%, 100% { transform: translateY(122vh); opacity: 0; }
-}
-
 @media (max-width: 1040px) {
   :root[data-theme="zero"] .app-shell::before { right: -18%; left: 8%; opacity: .68; }
   :root[data-theme="zero"] .theme-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -572,7 +554,6 @@
   :root[data-theme="zero"] body::before,
   :root[data-theme="zero"] body::after,
   :root[data-theme="zero"] .app-shell::before,
-  :root[data-theme="zero"] .app-shell::after,
   :root[data-theme="zero"] .page,
   :root[data-theme="zero"] .session-workspace > *,
   :root[data-theme="zero"] .project-workspace > .page,
@@ -595,6 +576,5 @@
   :root[data-theme="zero"] body::before,
   :root[data-theme="zero"] body::after,
   :root[data-theme="zero"] .app-shell::before,
-  :root[data-theme="zero"] .app-shell::after,
   :root[data-theme="zero"] .panel::before { display: none; }
 }

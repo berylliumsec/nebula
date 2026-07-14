@@ -455,6 +455,7 @@ test("Zero materialization respects the reduced-motion preference", async ({ pag
   });
   expect(materialized.name).toContain("zero-materialize");
   expect(Number.parseFloat(materialized.duration)).toBeGreaterThanOrEqual(.3);
+  expect(await page.locator(".app-shell").evaluate((element) => getComputedStyle(element, "::after").animationName)).toBe("none");
 
   await page.getByRole("button", { name: "Search commands" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
