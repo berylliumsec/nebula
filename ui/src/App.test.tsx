@@ -76,6 +76,22 @@ describe("Nebula workspace", () => {
     expect(localStorage.getItem("nebula.theme")).toBe("high-contrast");
   });
 
+  it("selects Zero from command search and restores the saved preference", async () => {
+    const user = userEvent.setup();
+    const firstRender = renderApp();
+    await user.keyboard("{Control>}k{/Control}");
+    await user.type(screen.getByRole("textbox", { name: "Search commands" }), "zero theme");
+    await user.click(screen.getByRole("option", { name: /Use Zero theme/ }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "zero");
+    expect(localStorage.getItem("nebula.theme")).toBe("zero");
+
+    firstRender.unmount();
+    renderApp("/settings");
+    await screen.findByRole("heading", { name: "Settings" });
+    await user.click(screen.getByRole("link", { name: "Advanced settings" }));
+    expect(screen.getByRole("button", { name: /Zero/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("persists the collapsible sidebar and exposes legacy labels through command search", async () => {
     const user = userEvent.setup();
     renderApp();

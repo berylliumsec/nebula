@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 
-export type ThemePreference = "system" | "light" | "dark" | "high-contrast";
+export type ThemePreference = "system" | "light" | "dark" | "zero" | "high-contrast";
 type ResolvedTheme = Exclude<ThemePreference, "system">;
 
 interface ThemeContextValue {
@@ -20,7 +20,7 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 const STORAGE_KEY = "nebula.theme";
-const preferences: ThemePreference[] = ["system", "light", "dark", "high-contrast"];
+const preferences: ThemePreference[] = ["system", "light", "dark", "zero", "high-contrast"];
 
 function systemTheme(): ResolvedTheme {
   return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
@@ -54,7 +54,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   }, []);
 
   const cycleTheme = useCallback(() => {
-    setPreference(preference === "light" ? "dark" : preference === "dark" ? "high-contrast" : "light");
+    setPreference(preference === "light" ? "dark" : preference === "dark" ? "zero" : preference === "zero" ? "high-contrast" : "light");
   }, [preference, setPreference]);
 
   const value = useMemo(
