@@ -424,7 +424,7 @@ test("top toolbar controls do not collide at compact breakpoint edges", async ({
   }
 });
 
-for (const theme of ["light", "dark", "high-contrast"] as const) {
+for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
   test(`critical workspaces meet automated accessibility checks in ${theme} mode`, async ({ page }) => {
     await openWorkspace(page, "/", "Workbench");
     await page.evaluate((value) => localStorage.setItem("nebula.theme", value), theme);
@@ -442,6 +442,54 @@ for (const theme of ["light", "dark", "high-contrast"] as const) {
     }
   });
 }
+
+test("Zero materialization respects the reduced-motion preference", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Motion behavior only needs one browser project.");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await openWorkspace(page, "/", "Workbench");
+
+  const materialized = await page.locator(".page").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { name: style.animationName, duration: style.animationDuration };
+  });
+  expect(materialized.name).toContain("zero-materialize");
+  expect(Number.parseFloat(materialized.duration)).toBeGreaterThanOrEqual(.3);
+
+  await page.getByRole("button", { name: "Search commands" }).click();
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+  expect(await page.locator(".command-palette").evaluate((element) => getComputedStyle(element).animationName)).toContain("zero-dialog-materialize");
+
+  await page.keyboard.press("Escape");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const reduced = await page.locator(".page").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { name: style.animationName, transform: style.transform, clipPath: style.clipPath };
+  });
+  expect(reduced).toEqual({ name: "none", transform: "none", clipPath: "none" });
+});
+
+test("Zero preserves the critical desktop workspace hierarchy", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
+  await openWorkspace(page, "/", "Workbench");
+  await page.evaluate(() => localStorage.setItem("nebula.theme", "zero"));
+  for (const [name, route, heading] of workspaces) {
+    await openWorkspace(page, route, heading);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
+    await expect(page).toHaveScreenshot(`${name}-zero.png`, { fullPage: true });
+  }
+
+  await openWorkspace(page, "/", "Workbench");
+  await page.getByRole("button", { name: "Search commands" }).click();
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+  await expect(page).toHaveScreenshot("workbench-zero-command-palette.png", { fullPage: true });
+
+  await page.keyboard.press("Escape");
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings" }).click();
+  await expect(page.locator(".appearance-panel")).toBeVisible();
+  await expect(page.locator(".appearance-panel")).toHaveScreenshot("settings-zero-appearance.png");
+});
 
 test("appearance variants preserve each critical workspace hierarchy", async ({ page }) => {
   for (const theme of ["light", "high-contrast"] as const) {

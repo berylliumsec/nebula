@@ -8,6 +8,7 @@ import { WorkspaceProvider } from "./state/WorkspaceContext";
 import "./styles.css";
 import "./workspace.css";
 import "./refinement.css";
+import "./zero-theme.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

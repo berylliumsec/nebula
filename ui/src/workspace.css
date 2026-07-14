@@ -275,7 +275,7 @@
 .security-note span { display: flex; flex-direction: column; }
 .security-note strong { font-size: 11px; }
 .security-note small { margin-top: 3px; color: var(--muted-strong); font-size: 11px; line-height: 1.4; }
-.theme-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 14px; }
+.theme-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; padding: 14px; }
 .theme-options button { display: flex; min-width: 0; align-items: center; flex-direction: column; gap: 6px; padding: 9px 3px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); background: var(--surface-muted); cursor: pointer; }
 .theme-options button[aria-pressed="true"] { color: var(--blue); border-color: var(--blue); background: var(--blue-muted); }
 .theme-options button > span { display: grid; height: 23px; place-items: center; }

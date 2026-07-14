@@ -1,0 +1,600 @@
+/* Zero — a deliberately cinematic HUD skin. Everything in this file is
+   scoped to data-theme="zero" so the established themes remain unchanged. */
+
+:root[data-theme="zero"] {
+  --canvas: #01060d;
+  --surface: rgb(3 14 27 / 88%);
+  --surface-raised: rgb(5 20 37 / 94%);
+  --surface-muted: rgb(2 11 22 / 84%);
+  --surface-hover: rgb(7 38 61 / 88%);
+  --border: rgb(30 169 255 / 48%);
+  --border-soft: rgb(17 118 188 / 27%);
+  --text: #c9e7ff;
+  --text-strong: #f2f9ff;
+  --muted: #7398bb;
+  --muted-strong: #9fc3e2;
+  --blue: #1ebcff;
+  --blue-bright: #72dcff;
+  --blue-muted: rgb(0 137 255 / 18%);
+  --violet: #9d6cff;
+  --green: #20f3a3;
+  --green-muted: rgb(0 221 143 / 12%);
+  --yellow: #ffd45e;
+  --orange: #ff8d4c;
+  --red: #ff5478;
+  --red-muted: rgb(255 44 91 / 14%);
+  --focus: #9beaff;
+  --shadow: 0 24px 70px rgb(0 0 0 / 58%), 0 0 34px rgb(0 148 255 / 8%);
+  --radius: 3px;
+  --zero-line: rgb(34 184 255 / 42%);
+  --zero-line-hot: rgb(83 217 255 / 82%);
+  --zero-panel-glow: 0 0 0 1px rgb(0 185 255 / 4%), inset 0 0 34px rgb(0 117 255 / 3%);
+}
+
+:root[data-theme="zero"] body {
+  background:
+    radial-gradient(ellipse at 52% 115%, rgb(0 132 255 / 22%), transparent 38%),
+    radial-gradient(circle at 54% 8%, rgb(74 49 255 / 12%), transparent 27%),
+    linear-gradient(145deg, #01040a 0%, #020a15 44%, #01050b 100%);
+}
+
+:root[data-theme="zero"] body::before,
+:root[data-theme="zero"] body::after,
+:root[data-theme="zero"] .app-shell::before,
+:root[data-theme="zero"] .app-shell::after {
+  position: fixed;
+  pointer-events: none;
+  content: "";
+}
+
+:root[data-theme="zero"] body::before {
+  z-index: 0;
+  inset: 0;
+  background-image:
+    linear-gradient(rgb(26 154 229 / 5%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(26 154 229 / 5%) 1px, transparent 1px),
+    radial-gradient(circle at 15% 22%, rgb(91 210 255 / 55%) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 82% 31%, rgb(91 210 255 / 45%) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 64% 76%, rgb(157 108 255 / 42%) 0 1px, transparent 1.5px);
+  background-size: 52px 52px, 52px 52px, 211px 193px, 257px 229px, 293px 271px;
+  mask-image: linear-gradient(to bottom, transparent, #000 13%, #000 84%, transparent);
+  opacity: .56;
+}
+
+:root[data-theme="zero"] body::after {
+  z-index: 1000;
+  inset: 0;
+  background: repeating-linear-gradient(to bottom, transparent 0 3px, rgb(102 213 255 / 2.5%) 3px 4px);
+  mix-blend-mode: screen;
+}
+
+:root[data-theme="zero"] #root { position: relative; z-index: 1; }
+
+:root[data-theme="zero"] .app-shell {
+  isolation: isolate;
+  background:
+    linear-gradient(90deg, rgb(0 106 190 / 4%) 1px, transparent 1px) 0 0 / 104px 100%,
+    radial-gradient(ellipse at 53% 100%, rgb(0 179 255 / 12%), transparent 38%);
+}
+
+:root[data-theme="zero"] .app-shell::before {
+  z-index: -1;
+  right: 8%;
+  bottom: -180px;
+  left: 26%;
+  height: 370px;
+  border: 1px solid rgb(31 190 255 / 22%);
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(ellipse at center, transparent 0 17px, rgb(32 188 255 / 18%) 18px 19px, transparent 20px 31px),
+    conic-gradient(from 90deg at 50% 50%, transparent 0 8%, rgb(31 179 255 / 16%) 9%, transparent 10% 24%, rgb(149 81 255 / 14%) 25%, transparent 26% 100%);
+  box-shadow: 0 0 70px rgb(0 162 255 / 16%), inset 0 0 70px rgb(0 139 255 / 10%);
+  transform: perspective(520px) rotateX(64deg);
+  animation: zero-horizon 12s ease-in-out infinite alternate;
+}
+
+:root[data-theme="zero"] .app-shell::after {
+  z-index: 90;
+  top: -20vh;
+  right: 0;
+  left: 0;
+  height: 18vh;
+  background: linear-gradient(to bottom, transparent, rgb(60 203 255 / 7%) 68%, rgb(112 225 255 / 19%) 98%, transparent);
+  mix-blend-mode: screen;
+  animation: zero-scan 9s linear infinite;
+}
+
+/* Shell chrome */
+:root[data-theme="zero"] .side-nav {
+  border-right-color: rgb(24 163 244 / 40%);
+  background:
+    linear-gradient(90deg, rgb(0 14 27 / 97%), rgb(1 15 29 / 91%)),
+    var(--surface-muted);
+  box-shadow: 8px 0 34px rgb(0 0 0 / 35%), inset -1px 0 rgb(75 205 255 / 8%);
+  backdrop-filter: blur(24px) saturate(145%);
+}
+
+:root[data-theme="zero"] .top-bar {
+  border-bottom-color: rgb(25 161 241 / 36%);
+  background:
+    linear-gradient(90deg, rgb(2 12 23 / 94%), rgb(1 9 19 / 82%)),
+    var(--surface-muted);
+  box-shadow: 0 10px 38px rgb(0 0 0 / 24%), inset 0 -1px rgb(73 211 255 / 8%);
+}
+
+:root[data-theme="zero"] .brand-lockup {
+  border-bottom: 1px solid rgb(31 177 255 / 20%);
+  background: linear-gradient(115deg, rgb(4 32 55 / 58%), transparent 62%);
+}
+
+:root[data-theme="zero"] .brand-lockup strong,
+:root[data-theme="zero"] .top-bar-title strong,
+:root[data-theme="zero"] .page-header h1 {
+  text-shadow: 0 0 18px rgb(64 198 255 / 22%);
+}
+
+:root[data-theme="zero"] .brand-mark {
+  border: 1px solid rgb(54 200 255 / 76%);
+  border-radius: 1px;
+  color: #8be8ff;
+  background:
+    radial-gradient(circle, rgb(62 164 255 / 30%), transparent 60%),
+    rgb(0 24 45 / 92%);
+  box-shadow: 0 0 22px rgb(0 151 255 / 28%), inset 0 0 13px rgb(91 203 255 / 18%);
+  clip-path: polygon(24% 0, 76% 0, 100% 24%, 100% 76%, 76% 100%, 24% 100%, 0 76%, 0 24%);
+}
+
+:root[data-theme="zero"] .alpha-label,
+:root[data-theme="zero"] .preview-pill,
+:root[data-theme="zero"] .count-badge {
+  border: 1px solid rgb(43 175 245 / 38%);
+  border-radius: 2px;
+  background: rgb(2 31 51 / 78%);
+}
+
+:root[data-theme="zero"] .engagement-switcher,
+:root[data-theme="zero"] .operator-row {
+  border: 1px solid rgb(24 132 207 / 23%);
+  border-radius: 2px;
+  background: linear-gradient(100deg, rgb(4 29 49 / 83%), rgb(2 17 31 / 64%));
+}
+
+:root[data-theme="zero"] .engagement-switcher:hover {
+  border-color: var(--zero-line);
+  background: rgb(3 36 59 / 88%);
+  box-shadow: inset 0 0 24px rgb(0 158 255 / 7%);
+}
+
+:root[data-theme="zero"] .engagement-avatar,
+:root[data-theme="zero"] .operator-avatar {
+  border: 1px solid rgb(40 186 255 / 44%);
+  border-radius: 1px;
+  background: linear-gradient(145deg, rgb(0 119 210 / 42%), rgb(90 54 207 / 34%));
+  box-shadow: inset 0 0 13px rgb(66 201 255 / 15%);
+  clip-path: polygon(18% 0, 82% 0, 100% 18%, 100% 82%, 82% 100%, 18% 100%, 0 82%, 0 18%);
+}
+
+:root[data-theme="zero"] .nav-group > h2,
+:root[data-theme="zero"] .eyebrow,
+:root[data-theme="zero"] .section-kicker,
+:root[data-theme="zero"] .panel-header small {
+  color: #5fbce9;
+  letter-spacing: .11em;
+}
+
+:root[data-theme="zero"] .nav-item {
+  border: 1px solid transparent;
+  border-radius: 2px;
+}
+
+:root[data-theme="zero"] .nav-item:hover {
+  color: #dff6ff;
+  border-color: rgb(27 148 223 / 28%);
+  background: linear-gradient(90deg, rgb(0 126 219 / 14%), transparent);
+}
+
+:root[data-theme="zero"] .nav-item.active {
+  color: #74ddff;
+  border-color: rgb(29 171 250 / 48%);
+  background: linear-gradient(90deg, rgb(0 131 238 / 24%), rgb(0 96 183 / 7%));
+  box-shadow: inset 3px 0 #36c7ff, inset 0 0 24px rgb(0 152 255 / 8%), 0 0 18px rgb(0 132 255 / 5%);
+}
+
+:root[data-theme="zero"] .nav-item.active::before { display: none; }
+
+/* Content surfaces */
+:root[data-theme="zero"] .main-content {
+  position: relative;
+  background: linear-gradient(135deg, rgb(0 8 17 / 48%), rgb(0 12 24 / 18%));
+}
+
+:root[data-theme="zero"] .page {
+  position: relative;
+  z-index: 1;
+  animation: zero-materialize 430ms cubic-bezier(.16, .78, .2, 1) both;
+}
+
+:root[data-theme="zero"] .page-header {
+  padding-bottom: 17px;
+  border-bottom: 1px solid rgb(27 134 205 / 18%);
+}
+
+:root[data-theme="zero"] .page-header::after {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: min(180px, 28vw);
+  height: 1px;
+  background: linear-gradient(90deg, #4ed4ff, transparent);
+  box-shadow: 0 0 12px #28bfff;
+  content: "";
+}
+
+:root[data-theme="zero"] .page-header { position: relative; }
+
+:root[data-theme="zero"] .panel,
+:root[data-theme="zero"] .summary-strip,
+:root[data-theme="zero"] .finding-summary-grid article,
+:root[data-theme="zero"] .callout,
+:root[data-theme="zero"] .session-toolbar,
+:root[data-theme="zero"] .session-layout,
+:root[data-theme="zero"] .container-terminal-panel,
+:root[data-theme="zero"] .container-terminal-live,
+:root[data-theme="zero"] .tool-progress,
+:root[data-theme="zero"] .tool-pack-card,
+:root[data-theme="zero"] .developer-pack {
+  border-color: rgb(24 137 210 / 34%);
+  border-radius: 3px;
+  background:
+    linear-gradient(135deg, rgb(7 28 47 / 84%), rgb(2 13 26 / 91%) 58%),
+    var(--surface);
+  box-shadow: var(--zero-panel-glow);
+}
+
+:root[data-theme="zero"] .panel {
+  position: relative;
+}
+
+:root[data-theme="zero"] .panel::before {
+  position: absolute;
+  z-index: 2;
+  top: -1px;
+  left: 15px;
+  width: 38px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #54d9ff, transparent);
+  box-shadow: 0 0 10px rgb(38 196 255 / 62%);
+  pointer-events: none;
+  content: "";
+}
+
+:root[data-theme="zero"] .panel:hover {
+  border-color: rgb(38 165 236 / 45%);
+}
+
+:root[data-theme="zero"] .panel-header,
+:root[data-theme="zero"] .data-toolbar,
+:root[data-theme="zero"] .table-footer,
+:root[data-theme="zero"] .data-table td,
+:root[data-theme="zero"] .event-list > li,
+:root[data-theme="zero"] .summary-strip > div,
+:root[data-theme="zero"] .session-inspector > header,
+:root[data-theme="zero"] .session-inspector section {
+  border-color: rgb(23 123 191 / 25%);
+}
+
+:root[data-theme="zero"] .data-table th {
+  color: #77bde5;
+  background: rgb(2 23 40 / 89%);
+  letter-spacing: .08em;
+}
+
+:root[data-theme="zero"] .data-table tbody tr:hover {
+  background: linear-gradient(90deg, rgb(0 132 226 / 11%), transparent);
+  box-shadow: inset 2px 0 #2ac4ff;
+}
+
+:root[data-theme="zero"] .summary-icon,
+:root[data-theme="zero"] .source-icon,
+:root[data-theme="zero"] .event-icon,
+:root[data-theme="zero"] .terminal-hero-icon,
+:root[data-theme="zero"] .empty-state:not(.mini) > svg:first-child:not(.spin) {
+  border-color: rgb(36 172 245 / 40%);
+  border-radius: 2px;
+  background: rgb(0 85 151 / 14%);
+  box-shadow: 0 0 18px rgb(0 149 255 / 9%), inset 0 0 14px rgb(0 153 255 / 7%);
+}
+
+:root[data-theme="zero"] .progress-track {
+  overflow: visible;
+  border-radius: 1px;
+  background: rgb(8 50 79 / 72%);
+  box-shadow: inset 0 0 8px rgb(0 0 0 / 45%);
+}
+
+:root[data-theme="zero"] .progress-track span {
+  border-radius: 1px;
+  background: linear-gradient(90deg, #078cff, #34d3ff 62%, #a369ff);
+  box-shadow: 0 0 10px rgb(32 179 255 / 42%);
+}
+
+:root[data-theme="zero"] input,
+:root[data-theme="zero"] textarea,
+:root[data-theme="zero"] select,
+:root[data-theme="zero"] .search-field,
+:root[data-theme="zero"] .chat-composer {
+  border-color: rgb(24 139 211 / 35%);
+  border-radius: 2px;
+  background-color: rgb(1 13 25 / 78%);
+}
+
+:root[data-theme="zero"] input:focus,
+:root[data-theme="zero"] textarea:focus,
+:root[data-theme="zero"] select:focus,
+:root[data-theme="zero"] .search-field:focus-within,
+:root[data-theme="zero"] .chat-composer:focus-within {
+  border-color: #46d2ff;
+  box-shadow: 0 0 0 1px rgb(70 210 255 / 24%), 0 0 20px rgb(0 163 255 / 13%);
+}
+
+:root[data-theme="zero"] code,
+:root[data-theme="zero"] kbd {
+  color: #86ddff;
+}
+
+:root[data-theme="zero"] kbd {
+  border-color: rgb(37 149 218 / 39%);
+  border-radius: 2px;
+  background: rgb(2 23 39 / 88%);
+}
+
+/* Buttons and selected states materialize without delaying their handlers. */
+:root[data-theme="zero"] :where(.button, .icon-button, .command-trigger, .connection-chip, .project-tabs button, .session-tabs button, .settings-tabs a) {
+  position: relative;
+  overflow: hidden;
+  border-radius: 2px;
+  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease, box-shadow 180ms ease, transform 120ms ease, filter 150ms ease;
+}
+
+:root[data-theme="zero"] :where(.button, .icon-button, .command-trigger, .connection-chip, .project-tabs button, .session-tabs button, .settings-tabs a)::after {
+  position: absolute;
+  inset: -2px auto -2px -48%;
+  width: 38%;
+  background: linear-gradient(90deg, transparent, rgb(133 227 255 / 34%), transparent);
+  opacity: 0;
+  pointer-events: none;
+  transform: skewX(-19deg);
+  transition: left 260ms cubic-bezier(.2, .78, .2, 1), opacity 100ms ease;
+  content: "";
+}
+
+:root[data-theme="zero"] :where(.button, .icon-button, .command-trigger, .project-tabs button, .session-tabs button, .settings-tabs a):hover {
+  border-color: rgb(62 194 255 / 58%);
+  box-shadow: 0 0 18px rgb(0 158 255 / 12%), inset 0 0 16px rgb(0 137 255 / 7%);
+}
+
+:root[data-theme="zero"] :where(.button, .icon-button, .command-trigger, .project-tabs button, .session-tabs button, .settings-tabs a):hover::after {
+  left: 112%;
+  opacity: 1;
+}
+
+:root[data-theme="zero"] :where(button, .button, .nav-item, .settings-tabs a):active {
+  filter: brightness(1.22) saturate(1.18);
+  transform: scale(.985);
+}
+
+:root[data-theme="zero"] .button.primary {
+  border-color: #31c7ff;
+  color: #eafaff;
+  background: linear-gradient(135deg, rgb(0 137 227 / 88%), rgb(25 99 196 / 87%) 58%, rgb(92 54 197 / 82%));
+  box-shadow: 0 0 22px rgb(0 156 255 / 16%), inset 0 0 15px rgb(106 220 255 / 12%);
+}
+
+:root[data-theme="zero"] .button.secondary,
+:root[data-theme="zero"] .connection-chip,
+:root[data-theme="zero"] .command-trigger,
+:root[data-theme="zero"] .icon-button {
+  border-color: rgb(31 137 205 / 36%);
+  background: rgb(2 21 37 / 82%);
+}
+
+:root[data-theme="zero"] .project-tabs,
+:root[data-theme="zero"] .settings-tabs,
+:root[data-theme="zero"] .segmented-control {
+  border-color: rgb(26 139 211 / 28%);
+  border-radius: 2px;
+  background: rgb(1 13 25 / 72%);
+}
+
+:root[data-theme="zero"] .project-tabs button.active,
+:root[data-theme="zero"] .settings-tabs a.active,
+:root[data-theme="zero"] .session-tabs button[aria-selected="true"],
+:root[data-theme="zero"] .segmented-control button[aria-selected="true"] {
+  color: #83e4ff;
+  border-color: rgb(43 188 255 / 44%);
+  background: linear-gradient(110deg, rgb(0 139 235 / 22%), rgb(78 53 194 / 12%));
+  box-shadow: inset 0 -2px #32caff, 0 0 17px rgb(0 166 255 / 8%);
+}
+
+/* Overlays */
+:root[data-theme="zero"] .palette-backdrop,
+:root[data-theme="zero"] .dialog-backdrop,
+:root[data-theme="zero"] .refined-dialog-backdrop {
+  background: rgb(0 4 10 / 73%);
+  backdrop-filter: blur(14px) saturate(130%);
+  animation: zero-veil 180ms ease-out both;
+}
+
+:root[data-theme="zero"] .command-palette,
+:root[data-theme="zero"] .modal-surface,
+:root[data-theme="zero"] .provider-dialog,
+:root[data-theme="zero"] .engagement-menu {
+  border-color: rgb(51 190 255 / 58%);
+  border-radius: 3px;
+  background:
+    linear-gradient(145deg, rgb(5 25 43 / 97%), rgb(1 11 23 / 98%)),
+    var(--surface-raised);
+  box-shadow: 0 30px 100px rgb(0 0 0 / 70%), 0 0 38px rgb(0 160 255 / 12%), inset 0 0 42px rgb(0 112 255 / 5%);
+  animation: zero-dialog-materialize 300ms cubic-bezier(.16, .82, .18, 1) both;
+}
+
+:root[data-theme="zero"] .engagement-menu {
+  animation-duration: 220ms;
+  transform-origin: top left;
+}
+
+:root[data-theme="zero"] .activity-center.open {
+  border-left-color: rgb(41 177 248 / 48%);
+  background: rgb(2 12 24 / 94%);
+  box-shadow: -20px 0 70px rgb(0 0 0 / 44%), -1px 0 18px rgb(0 160 255 / 10%);
+  animation: zero-drawer-materialize 310ms cubic-bezier(.18, .8, .2, 1) both;
+}
+
+:root[data-theme="zero"] .provider-dialog > header,
+:root[data-theme="zero"] .provider-dialog > footer {
+  background: rgb(3 18 32 / 96%);
+}
+
+/* Workbench and terminal */
+:root[data-theme="zero"] .session-workspace {
+  background:
+    linear-gradient(rgb(0 141 232 / 3%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(0 141 232 / 3%) 1px, transparent 1px),
+    rgb(0 7 14 / 92%);
+  background-size: 28px 28px;
+}
+
+:root[data-theme="zero"] .session-workspace > :not(.persistent-terminal),
+:root[data-theme="zero"] .persistent-terminal:not([hidden]),
+:root[data-theme="zero"] .project-workspace > .page,
+:root[data-theme="zero"] .settings-detail[data-section="advanced-settings"] > :not(#setup-settings) {
+  animation: zero-content-melt 350ms cubic-bezier(.18, .78, .2, 1) both;
+}
+
+:root[data-theme="zero"] .container-terminal-live,
+:root[data-theme="zero"] .xterm-shell {
+  background: #010a12;
+}
+
+:root[data-theme="zero"] .container-terminal-live > header,
+:root[data-theme="zero"] .container-terminal-live > footer,
+:root[data-theme="zero"] .terminal-live-notices > p:not(.terminal-network-warning) {
+  border-color: rgb(24 131 193 / 35%);
+  background: #031522;
+}
+
+:root[data-theme="zero"] .xterm-shell {
+  box-shadow: inset 0 0 45px rgb(0 135 222 / 5%);
+}
+
+:root[data-theme="zero"] .chat-message.assistant {
+  border-color: rgb(30 146 217 / 28%);
+  background: linear-gradient(110deg, rgb(0 97 170 / 9%), transparent 46%);
+}
+
+:root[data-theme="zero"] .chat-message.operator {
+  border-color: rgb(133 83 231 / 28%);
+  background: linear-gradient(110deg, rgb(119 58 216 / 9%), transparent 46%);
+}
+
+:root[data-theme="zero"] .status-dot.healthy,
+:root[data-theme="zero"] .pulse-dot,
+:root[data-theme="zero"] .live-dot.open {
+  box-shadow: 0 0 9px currentColor;
+}
+
+:root[data-theme="zero"] .theme-options button {
+  border-radius: 2px;
+}
+
+:root[data-theme="zero"] .theme-options button[aria-pressed="true"] {
+  color: #74ddff;
+  border-color: #32c9ff;
+  background: linear-gradient(145deg, rgb(0 131 224 / 24%), rgb(96 56 207 / 15%));
+  box-shadow: 0 0 20px rgb(0 161 255 / 12%), inset 0 0 17px rgb(0 147 255 / 7%);
+}
+
+@keyframes zero-materialize {
+  0% { opacity: 0; filter: blur(12px) brightness(1.7); transform: translateY(9px) scale(.995); clip-path: inset(0 0 96% 0); }
+  42% { opacity: .86; filter: blur(2px) brightness(1.18); clip-path: inset(0 0 0 0); }
+  100% { opacity: 1; filter: none; transform: none; clip-path: inset(0); }
+}
+
+@keyframes zero-content-melt {
+  0% { opacity: 0; filter: blur(9px) saturate(1.8); transform: translateY(5px) scaleY(.985); clip-path: inset(0 0 88% 0); }
+  55% { opacity: .92; filter: blur(1px) saturate(1.2); clip-path: inset(0); }
+  100% { opacity: 1; filter: none; transform: none; clip-path: inset(0); }
+}
+
+@keyframes zero-dialog-materialize {
+  0% { opacity: 0; filter: blur(16px) brightness(1.8); transform: translateY(14px) scale(.97, .9); clip-path: polygon(0 48%, 100% 48%, 100% 52%, 0 52%); }
+  48% { opacity: .9; filter: blur(2px) brightness(1.15); clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
+  100% { opacity: 1; filter: none; transform: none; clip-path: inset(0); }
+}
+
+@keyframes zero-drawer-materialize {
+  0% { opacity: 0; filter: blur(10px) brightness(1.45); transform: translateX(34px) scaleX(.94); clip-path: inset(0 0 0 96%); }
+  100% { opacity: 1; filter: none; transform: none; clip-path: inset(0); }
+}
+
+@keyframes zero-veil {
+  from { opacity: 0; backdrop-filter: blur(0); }
+}
+
+@keyframes zero-horizon {
+  from { opacity: .5; filter: hue-rotate(-8deg); }
+  to { opacity: .88; filter: hue-rotate(10deg); }
+}
+
+@keyframes zero-scan {
+  0%, 8% { transform: translateY(-22vh); opacity: 0; }
+  15% { opacity: .85; }
+  62%, 100% { transform: translateY(122vh); opacity: 0; }
+}
+
+@media (max-width: 1040px) {
+  :root[data-theme="zero"] .app-shell::before { right: -18%; left: 8%; opacity: .68; }
+  :root[data-theme="zero"] .theme-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  :root[data-theme="zero"] .app-shell::before { right: -70%; bottom: -215px; left: -55%; }
+  :root[data-theme="zero"] .page-header { padding-bottom: 13px; }
+  :root[data-theme="zero"] .side-nav { box-shadow: 24px 0 80px rgb(0 0 0 / 74%), 1px 0 22px rgb(0 160 255 / 12%); }
+}
+
+@media (max-width: 480px) {
+  :root[data-theme="zero"] .theme-options { grid-template-columns: 1fr 1fr; }
+  :root[data-theme="zero"] body::before { background-size: 42px 42px, 42px 42px, 173px 157px, 199px 181px, 229px 211px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="zero"] body::before,
+  :root[data-theme="zero"] body::after,
+  :root[data-theme="zero"] .app-shell::before,
+  :root[data-theme="zero"] .app-shell::after,
+  :root[data-theme="zero"] .page,
+  :root[data-theme="zero"] .session-workspace > *,
+  :root[data-theme="zero"] .project-workspace > .page,
+  :root[data-theme="zero"] .settings-detail > *,
+  :root[data-theme="zero"] .palette-backdrop,
+  :root[data-theme="zero"] .dialog-backdrop,
+  :root[data-theme="zero"] .command-palette,
+  :root[data-theme="zero"] .modal-surface,
+  :root[data-theme="zero"] .provider-dialog,
+  :root[data-theme="zero"] .engagement-menu,
+  :root[data-theme="zero"] .activity-center.open {
+    animation: none !important;
+    filter: none !important;
+    transform: none !important;
+    clip-path: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :root[data-theme="zero"] body::before,
+  :root[data-theme="zero"] body::after,
+  :root[data-theme="zero"] .app-shell::before,
+  :root[data-theme="zero"] .app-shell::after,
+  :root[data-theme="zero"] .panel::before { display: none; }
+}

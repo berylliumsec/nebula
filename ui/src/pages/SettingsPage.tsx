@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Check, Contrast, KeyRound, Moon, Pencil, Plus, RefreshCw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
+import { Check, Contrast, KeyRound, Moon, Orbit, Pencil, Plus, RefreshCw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
 import type { LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth } from "../api/types";
 import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
@@ -15,6 +15,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
   { value: "system", label: "System", icon: Contrast },
   { value: "light", label: "Light", icon: Sun },
   { value: "dark", label: "Dark", icon: Moon },
+  { value: "zero", label: "Zero", icon: Orbit },
   { value: "high-contrast", label: "High contrast", icon: Contrast },
 ];
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Command, Contrast, Moon, PanelLeft, PanelRight, Search, Sun } from "lucide-react";
+import { Command, Contrast, Moon, Orbit, PanelLeft, PanelRight, Search, Sun } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { navigationItems } from "../navigation";
 import { useTheme } from "../state/ThemeContext";
@@ -61,6 +61,14 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
         icon: Moon,
         keywords: "appearance theme dark",
         run: () => setPreference("dark"),
+      },
+      {
+        id: "theme-zero",
+        label: "Use Zero theme",
+        description: "Materialize the futuristic security workspace",
+        icon: Orbit,
+        keywords: "appearance theme zero futuristic hud neon cyber",
+        run: () => setPreference("zero"),
       },
       {
         id: "theme-contrast",
