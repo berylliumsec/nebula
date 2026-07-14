@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -28,7 +29,7 @@ from nebula.v3.providers import (
     ProviderKind,
     ToolCall,
 )
-from nebula.v3.tool_interfaces import load_interface_catalog
+from nebula.v3.tool_interfaces import ToolInterfaceError, load_interface_catalog
 from nebula.v3.tools import ToolExecutionResult, ToolSpec
 
 
@@ -392,6 +393,35 @@ def test_core_loader_rejects_ambiguous_or_mutable_interfaces(tmp_path):
         load_interface_catalog(json.dumps(payload).encode())
 
 
+def test_catalog_canonicalizes_model_command_paths_without_ambiguous_guessing(
+    tmp_path,
+):
+    catalog_path = tmp_path / "tool-catalog.json"
+    write_test_catalog(catalog_path)
+    catalog = load_interface_catalog(catalog_path.read_bytes())
+
+    # Every fixture tool exposes one root command. Models commonly repeat the
+    # executable name even though command_path represents subcommands only.
+    for tool_name in catalog.tools:
+        assert catalog.canonical_command_path(tool_name, [tool_name]) == []
+
+    gobuster = catalog.tools["gobuster"]
+    directory_command = copy.deepcopy(gobuster["commands"][0])
+    directory_command["path"] = ["dir"]
+    for document in directory_command["help_documents"]:
+        document["command_path"] = ["dir"]
+    gobuster["commands"].append(directory_command)
+
+    assert catalog.canonical_command_path("gobuster", ["dir"]) == ["dir"]
+    assert catalog.canonical_command_path("gobuster", ["gobuster", "dir"]) == [
+        "dir"
+    ]
+    with pytest.raises(ToolInterfaceError, match="no command path 'invented'"):
+        catalog.canonical_command_path("gobuster", ["invented"])
+    with pytest.raises(ToolInterfaceError, match="invalid command path"):
+        catalog.canonical_command_path("gobuster", [{"not": "a subcommand"}])
+
+
 def test_toolbox_mission_groups_structured_and_shell_capabilities():
     names = (
         "environment.search",
@@ -578,7 +608,7 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
                     arguments={
                         "mode": "structured",
                         "tool": "jq",
-                        "command_path": [],
+                        "command_path": ["jq"],
                         "rationale": "Use the exact jq interface.",
                     },
                 )
@@ -592,7 +622,7 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
                     arguments={
                         "tool": "jq",
                         "invocation": {
-                            "command_path": [],
+                            "command_path": ["jq"],
                             "options": [],
                             "positionals": [{"id": "filter", "value": "."}],
                         },

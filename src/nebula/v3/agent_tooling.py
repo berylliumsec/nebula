@@ -232,6 +232,11 @@ class BrokeredToolSpecialist:
             interface_context: str
             if mode == "structured":
                 try:
+                    selection["command_path"] = (
+                        self.interface_catalog.canonical_command_path(
+                            selection["tool"], selection["command_path"]
+                        )
+                    )
                     selected_interface = self.interface_catalog.command(
                         selection["tool"], selection["command_path"]
                     )
@@ -283,14 +288,31 @@ class BrokeredToolSpecialist:
                 raise MissionError(
                     "model changed the catalogued tool after interface selection"
                 )
-            if (
-                not isinstance(invocation_payload, dict)
-                or invocation_payload.get("command_path")
-                != selected_interface["command"]["path"]
+            if not isinstance(invocation_payload, dict) or not isinstance(
+                invocation_payload.get("command_path"), list
             ):
                 raise MissionError(
                     "model changed the command path after interface selection"
                 )
+            try:
+                execution_path = self.interface_catalog.canonical_command_path(
+                    requested_tool, invocation_payload["command_path"]
+                )
+            except ToolInterfaceError as exc:
+                raise MissionError(str(exc)) from exc
+            if execution_path != selected_interface["command"]["path"]:
+                raise MissionError(
+                    "model changed the command path after interface selection"
+                )
+            invocation_payload = {**invocation_payload, "command_path": execution_path}
+            call = call.model_copy(
+                update={
+                    "arguments": {
+                        **call.arguments,
+                        "invocation": invocation_payload,
+                    }
+                }
+            )
 
         invocation_id = str(
             uuid5(
@@ -388,15 +410,15 @@ class BrokeredToolSpecialist:
         if invocation.tool_name == "environment.help" and self.interface_catalog:
             tool_name = arguments.get("tool")
             command_path = arguments.get("command_path")
-            tool = (
-                self.interface_catalog.tools.get(tool_name)
-                if isinstance(tool_name, str)
-                else None
-            )
-            if tool is not None and isinstance(command_path, list):
-                command_paths = [command["path"] for command in tool["commands"]]
-                if command_path not in command_paths and len(command_paths) == 1:
-                    arguments["command_path"] = command_paths[0]
+            if isinstance(tool_name, str) and isinstance(command_path, list):
+                try:
+                    arguments["command_path"] = (
+                        self.interface_catalog.canonical_command_path(
+                            tool_name, command_path
+                        )
+                    )
+                except ToolInterfaceError as exc:
+                    raise MissionError(str(exc)) from exc
         invocation = invocation.model_copy(update={"arguments": arguments})
         self._reject_unchanged_failed_invocation(
             context, invocation.tool_name, invocation.arguments

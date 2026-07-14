@@ -271,6 +271,40 @@ class ToolInterfaceCatalog:
             "uncatalogued_executables": uncatalogued,
         }
 
+    def canonical_command_path(
+        self, tool_name: str, command_path: list[str]
+    ) -> list[str]:
+        """Resolve common model path forms without guessing between commands."""
+
+        tool = self.tools.get(tool_name)
+        if tool is None:
+            raise ToolInterfaceError(f"unknown catalogued tool: {tool_name}")
+        if len(command_path) > 17 or any(
+            not isinstance(part, str) for part in command_path
+        ):
+            raise ToolInterfaceError(f"{tool_name} has an invalid command path")
+        command_paths = [command["path"] for command in tool["commands"]]
+        if command_path in command_paths:
+            return list(command_path)
+
+        prefixes = {
+            tool["name"],
+            tool["executable"],
+            Path(tool["executable"]).name,
+            *tool["aliases"],
+        }
+        if command_path and command_path[0] in prefixes:
+            without_executable = command_path[1:]
+            if without_executable in command_paths:
+                return list(without_executable)
+
+        if len(command_paths) == 1:
+            return list(command_paths[0])
+
+        raise ToolInterfaceError(
+            f"{tool_name} has no command path {' '.join(command_path)!r}"
+        )
+
     def command(self, tool_name: str, command_path: list[str]) -> dict[str, Any]:
         tool = self.tools.get(tool_name)
         if tool is None:
