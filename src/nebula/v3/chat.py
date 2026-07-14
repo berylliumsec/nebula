@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from copy import deepcopy
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -203,6 +204,20 @@ Toolbox. For each routing step, call exactly one supplied function and return no
 prose. Call a real capability only when it advances the operator's request. Call
 finish_response when you have enough information to answer. Never invent a tool,
 target, argument, observation, or result."""
+
+
+def _routing_input_schema(spec: Any) -> dict[str, Any]:
+    """Constrain Core-owned routing arguments instead of asking the model to guess."""
+
+    schema = deepcopy(spec.input_schema)
+    properties = schema.get("properties")
+    if "cwd" in spec.path_arguments and isinstance(properties, dict):
+        properties["cwd"] = {
+            "type": "string",
+            "const": ".",
+            "description": "Engagement workspace root; supplied by Nebula Core.",
+        }
+    return schema
 
 
 class ChatService:
@@ -571,7 +586,7 @@ class ChatService:
                             ToolDefinition(
                                 name=spec.name,
                                 description=spec.description,
-                                input_schema=spec.input_schema,
+                                input_schema=_routing_input_schema(spec),
                                 strict=True,
                             )
                             for spec in sorted(
@@ -602,6 +617,11 @@ class ChatService:
                 if call.name not in components.specs:
                     raise ChatError(
                         f"provider requested unavailable tool {call.name!r}"
+                    )
+                spec = components.specs[call.name]
+                if "cwd" in spec.path_arguments:
+                    call = call.model_copy(
+                        update={"arguments": {**call.arguments, "cwd": "."}}
                     )
                 step = turn.next_step
                 idempotency_key = f"chat:{turn.id}:step:{step}"
