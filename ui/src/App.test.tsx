@@ -385,7 +385,7 @@ describe("Nebula workspace", () => {
     expect(await screen.findByRole("tab", { name: "Analyst chat" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("group", { name: "Selected context attachment" })).toHaveTextContent("Selection review");
     const composer = screen.getByRole("textbox", { name: "Message the analyst assistant" });
-    expect(composer).toHaveValue("Help me understand this selection.");
+    expect(composer).toHaveValue("");
     expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/completions"))).toBe(false);
 
     await user.clear(composer);

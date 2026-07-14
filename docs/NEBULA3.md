@@ -212,7 +212,10 @@ The cached baseline supplies Kali's command-line default toolset and `ping`.
 Operators may install additional packages for that session with `apt`; the
 derived image config keeps APT usable despite the empty runtime capability set.
 Tools that require raw-packet or network-administration capabilities remain
-limited by design.
+limited by design. The derived workstation removes Nmap's packaged file
+capabilities so it can start under the terminal's empty capability set and use
+its unprivileged connect-scan modes instead of failing during executable
+startup.
 
 One active terminal is retained per Project across Workbench mode changes and
 short webview reconnects. It stops on explicit **Stop**, Core shutdown, or 30
@@ -220,7 +223,9 @@ minutes with no input and no output; a disconnected UI has a 10-minute
 reconnect grace. Core keeps at most 1 MiB of sequenced output for reconnect
 replay and never persists terminal output automatically. Interactive
 input/output is not sent to an AI provider or promoted to evidence without an
-explicit operator action.
+explicit operator action. Highlight terminal text and press Ctrl+C on Linux or
+Windows, or Command+C on macOS, to copy it; with no selection, Ctrl+C remains a
+terminal interrupt.
 
 A supported completed assistant fence (`bash`/`shell`, `sh`, or
 `python`/`python3`/`py`) can also be copied or sent through an exact one-shot

@@ -208,6 +208,10 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
     assert provider.requests[1].tool_results[0].output == {"count": 2}
     assert provider.requests[-1].tool_results[0].output == {"count": 2}
     assert provider.requests[-1].tools == []
+    assert "closed Markdown fence" in (provider.requests[-1].instructions or "")
+    assert "separate reviewed Run action" in (
+        provider.requests[-1].instructions or ""
+    )
 
 
 def test_oversized_tool_results_remain_bounded_valid_json():

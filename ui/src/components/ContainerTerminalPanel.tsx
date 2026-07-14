@@ -22,6 +22,7 @@ import type {
 } from "../api/types";
 import {
   bindXtermSelectionActions,
+  copySelectionText,
   useOptionalSelectionActions,
 } from "./selection";
 import { TerminalScreenshotAction } from "./TerminalScreenshotAction";
@@ -121,6 +122,19 @@ function LiveContainerTerminal({
     terminal.open(host);
     terminalRef.current = terminal;
     host.querySelector("textarea")?.setAttribute("aria-label", "Terminal input");
+    terminal.attachCustomKeyEventHandler((event) => {
+      const copyShortcut = event.type === "keydown"
+        && (event.ctrlKey || event.metaKey)
+        && !event.altKey
+        && event.key.toLowerCase() === "c";
+      if (!copyShortcut || !terminal.hasSelection()) return true;
+      event.preventDefault();
+      event.stopPropagation();
+      void copySelectionText(terminal.getSelection()).catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : "The selected terminal text could not be copied.");
+      });
+      return false;
+    });
     const selectionBinding = selectionActions
       ? bindXtermSelectionActions(terminal, selectionActions.presentSelection, {
           source: {

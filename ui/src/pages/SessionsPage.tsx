@@ -201,7 +201,7 @@ export function SessionsPage() {
 
   useEffect(() => {
     if (!assistantDraft) return;
-    setDraft((current) => current.trim() ? current : "Help me understand this selection.");
+    setDraft((current) => current.trim() ? current : "");
     globalThis.requestAnimationFrame?.(() => composerRef.current?.focus());
   }, [assistantDraft]);
 
@@ -315,7 +315,7 @@ export function SessionsPage() {
     setSessions([]);
     setSessionId("");
     setMessages([]);
-    setDraft(assistantDraft ? "Help me understand this selection." : "");
+    setDraft(assistantDraft ? "" : "");
     setChatError(undefined);
     setContextStatus(undefined);
     setContextLoading(false);

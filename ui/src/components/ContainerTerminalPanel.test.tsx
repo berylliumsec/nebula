@@ -10,6 +10,11 @@ const socketSpies = vi.hoisted(() => ({
   dispose: vi.fn(),
 }));
 
+const terminalSpies = vi.hoisted(() => ({
+  keyHandler: undefined as ((event: KeyboardEvent) => boolean) | undefined,
+  selection: "",
+}));
+
 vi.mock("../api/containerTerminal", () => ({
   ContainerTerminalSocket: class {
     constructor(options: { session: unknown }) {
@@ -38,6 +43,18 @@ vi.mock("@xterm/xterm", () => ({
     loadAddon(): void {}
     open(): void {}
     write(): void {}
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
+      terminalSpies.keyHandler = handler;
+    }
+    getSelection(): string {
+      return terminalSpies.selection;
+    }
+    hasSelection(): boolean {
+      return terminalSpies.selection.length > 0;
+    }
+    onSelectionChange(): { dispose: () => void } {
+      return { dispose: vi.fn() };
+    }
     onData(): { dispose: () => void } {
       return { dispose: vi.fn() };
     }
@@ -52,6 +69,66 @@ describe("ContainerTerminalPanel", () => {
     socketSpies.connect.mockClear();
     socketSpies.constructed.mockClear();
     socketSpies.dispose.mockClear();
+    terminalSpies.keyHandler = undefined;
+    terminalSpies.selection = "";
+  });
+
+  it("copies a highlighted terminal selection while preserving Ctrl-C as interrupt without one", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const runtime = {
+      sourceImage: "docker.io/kalilinux/kali-rolling:latest",
+      baseImage: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
+      baseImageDigest: `sha256:${"b".repeat(64)}`,
+      image: `sha256:${"c".repeat(64)}`,
+      imageDigest: `sha256:${"c".repeat(64)}`,
+      installedPackages: ["kali-linux-headless", "iputils-ping"],
+      interpreter: "/bin/bash",
+      arguments: ["--noprofile", "--norc", "-i"],
+      runnerProfileId: "local",
+      runnerProfileRevision: 1,
+      runnerRuntime: "podman" as const,
+      runnerIsolation: "rootless",
+      runnerExecutable: "/usr/bin/podman",
+      runnerPlatform: "linux/amd64",
+    };
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminal: vi.fn().mockResolvedValue({
+        active: true,
+        session: {
+          sessionId: "terminal-active",
+          websocketTicket: "ticket",
+          ticketExpiresAt: "2026-07-13T18:00:00Z",
+          websocketPath: "/api/v1/container-terminals/terminal-active/ws",
+          reconnectGraceSeconds: 600,
+          replayMaxBytes: 1_048_576,
+          lastSequence: 0,
+        },
+        runtime,
+      }),
+    } as unknown as ApiClient;
+
+    render(<ContainerTerminalPanel
+      api={api}
+      engagementId="engagement-1"
+      engagementName="Lab"
+      setupTerminalStatus="ready"
+    />);
+    await waitFor(() => expect(terminalSpies.keyHandler).toBeTypeOf("function"));
+
+    const interrupt = new KeyboardEvent("keydown", { key: "c", ctrlKey: true });
+    expect(terminalSpies.keyHandler?.(interrupt)).toBe(true);
+
+    terminalSpies.selection = "nmap output";
+    const copy = new KeyboardEvent("keydown", { key: "c", ctrlKey: true, cancelable: true });
+    expect(terminalSpies.keyHandler?.(copy)).toBe(false);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("nmap output"));
+    expect(copy.defaultPrevented).toBe(true);
   });
 
   it("waits for runner detection and does not duplicate launch during the StrictMode probe", async () => {

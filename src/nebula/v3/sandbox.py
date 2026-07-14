@@ -1459,7 +1459,7 @@ class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
     _derived_repository = "localhost/nebula-kali-headless"
-    _recipe_version = "v1"
+    _recipe_version = "v2"
     _installed_packages = ("kali-linux-headless", "iputils-ping")
     _base_label = "org.nebula.human-terminal.base"
     _profile_label = "org.nebula.human-terminal.profile"
@@ -1802,9 +1802,12 @@ class ContainerImagePreparer:
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \\
  && apt-get install -y {" ".join(self._installed_packages)} \\
+ && if getcap /usr/lib/nmap/nmap | grep -q .; then setcap -r /usr/lib/nmap/nmap; fi \\
+ && test -z "$(getcap /usr/lib/nmap/nmap)" \\
  && printf '%s\\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-nebula-terminal \\
  && apt-get clean \\
  && rm -rf /var/lib/apt/lists/*
+ENV NMAP_UNPRIVILEGED=1
 LABEL {self._base_label}={base_resolved_reference}
 LABEL {self._profile_label}=kali-linux-headless
 LABEL {self._recipe_label}={self._recipe_version}
