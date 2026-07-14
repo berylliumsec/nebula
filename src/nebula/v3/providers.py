@@ -428,6 +428,24 @@ def _arguments(value: Any) -> dict[str, Any]:
     return parsed
 
 
+def _vllm_grammar_schema(value: Any) -> Any:
+    """Remove validation-only keywords unsupported by vLLM's grammar compiler.
+
+    Nebula retains and validates the original schema at the broker boundary; this
+    copy is only the provider-facing grammar used to constrain model output.
+    """
+
+    if isinstance(value, dict):
+        return {
+            key: _vllm_grammar_schema(item)
+            for key, item in value.items()
+            if key != "uniqueItems"
+        }
+    if isinstance(value, list):
+        return [_vllm_grammar_schema(item) for item in value]
+    return value
+
+
 class OpenAIResponsesProvider(ModelProvider):
     """OpenAI Responses API adapter.
 
@@ -562,6 +580,7 @@ class OpenAICompatibleProvider(ModelProvider):
         return self._bearer_or_key_headers()
 
     def _payload(self, request: ModelRequest, model: str) -> dict[str, Any]:
+        vllm_grammar = self.config.flavor == ProviderFlavor.VLLM
         payload: dict[str, Any] = {
             "model": model,
             "messages": [message.model_dump() for message in request.messages],
@@ -612,7 +631,11 @@ class OpenAICompatibleProvider(ModelProvider):
                     "function": {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": tool.input_schema,
+                        "parameters": (
+                            _vllm_grammar_schema(tool.input_schema)
+                            if vllm_grammar
+                            else tool.input_schema
+                        ),
                         "strict": tool.strict,
                     },
                 }
@@ -626,7 +649,11 @@ class OpenAICompatibleProvider(ModelProvider):
                 "json_schema": {
                     "name": "nebula_response",
                     "strict": True,
-                    "schema": request.response_schema,
+                    "schema": (
+                        _vllm_grammar_schema(request.response_schema)
+                        if vllm_grammar
+                        else request.response_schema
+                    ),
                 },
             }
         return payload

@@ -182,6 +182,46 @@ def test_compatible_required_tool_choice_and_paired_history_wire_contract():
     }
 
 
+def test_vllm_payload_removes_unsupported_unique_items_without_mutating_schema():
+    provider = OpenAICompatibleProvider(
+        ProviderConfig(
+            id="vllm",
+            kind=ProviderKind.OPENAI_COMPATIBLE,
+            flavor=ProviderFlavor.VLLM,
+            base_url="http://127.0.0.1:8001/v1",
+            default_model="model-a",
+            local=True,
+        )
+    )
+    schema = {
+        "type": "object",
+        "properties": {
+            "ports": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "uniqueItems": True,
+            }
+        },
+        "additionalProperties": False,
+    }
+    request = ModelRequest(
+        messages=[ModelMessage(role="user", content="route")],
+        tools=[
+            ToolDefinition(
+                name="network_probe",
+                description="Probe ports",
+                input_schema=schema,
+            )
+        ],
+    )
+
+    payload = provider._payload(request, "model-a")
+
+    parameters = payload["tools"][0]["function"]["parameters"]
+    assert "uniqueItems" not in parameters["properties"]["ports"]
+    assert schema["properties"]["ports"]["uniqueItems"] is True
+
+
 def test_responses_required_tool_choice_and_paired_history_wire_contract():
     provider = OpenAIResponsesProvider(
         ProviderConfig(
