@@ -216,6 +216,101 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
     assert "separate reviewed Run action" in (
         provider.requests[-1].instructions or ""
     )
+    assert "report the exact" in (provider.requests[-1].instructions or "")
+    assert "invent configuration" in (provider.requests[-1].instructions or "")
+
+
+def test_tool_final_synthesis_retrieves_help_from_the_observed_failure(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "chat-tool-help.db")
+    scope = store.create(ScopePolicy(engagement_id="eng-a"))
+    engagement = store.create(
+        Engagement(id="eng-a", name="Tool recovery", scope_policy_id=scope.id)
+    )
+    profile = store.create(
+        ProviderProfile(
+            id="provider-a",
+            name="Local verified model",
+            provider_type="vllm",
+            endpoint="http://127.0.0.1:8001/v1",
+            is_local=True,
+            model_allowlist=["model-a"],
+            capabilities={"tool_calling": True, "strict_structured_output": True},
+            capability_verifications={
+                "model-a": ProviderCapabilityVerification(
+                    model="model-a",
+                    status=ProviderVerificationStatus.VERIFIED,
+                )
+            },
+            metadata={"default_model": "model-a"},
+        )
+    )
+    provider = RoutingProvider(profile.id)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    spec = ToolSpec(
+        name="parse.scan",
+        description="Attempt a bounded parser",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "items": {"type": "string"}},
+                "cwd": {"type": "string"},
+            },
+            "required": ["items", "cwd"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {"count": {"type": "integer"}},
+            "required": ["count"],
+            "additionalProperties": False,
+        },
+        risk_class=RiskClass.LOCAL_READ,
+        path_arguments=["cwd"],
+    )
+
+    class FailedBroker:
+        async def execute(self, *_args, **_kwargs):
+            raise RuntimeError("container runner is unavailable")
+
+    class Platform:
+        def chat_components(self, **_kwargs):
+            return SimpleNamespace(
+                broker=FailedBroker(),
+                scope=scope,
+                workspace=tmp_path,
+                specs={spec.name: spec},
+                tool_pack_digests=(),
+                interface_catalog_digests=(),
+            )
+
+    service = ChatService(store, tool_platform=Platform())
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            model="model-a",
+            messages=[{"role": "user", "content": "Count these items"}],
+            tools_enabled=True,
+        )
+    )
+
+    events = asyncio.run(_collect_stream(service, prepared))
+    final_request = provider.requests[-1]
+    done = next(payload for event, payload in events if event == "done")
+
+    assert final_request.tool_results[0].is_error is True
+    assert "container runner is unavailable" in str(final_request.tool_results[0].output)
+    assert "BEGIN TRUSTED NEBULA OPERATOR HELP (JSON)" in (
+        final_request.instructions or ""
+    )
+    assert "supported fixed executable paths" in (final_request.instructions or "")
+    assert done["citations"][0]["source_id"] == "nebula-help:runner-setup"
+
+
+async def _collect_stream(service, prepared):
+    return [item async for item in service.stream(prepared)]
 
 
 def test_oversized_tool_results_remain_bounded_valid_json():
@@ -256,3 +351,23 @@ def test_provider_tool_history_rehydrates_json_objects_and_preserves_legacy_text
     assert history[0].is_error is False
     assert history[1].output == "legacy non-JSON output"
     assert history[1].is_error is True
+
+
+def test_nonzero_toolbox_result_is_failed_and_summarizes_observed_error():
+    result = SimpleNamespace(
+        exit_code=127,
+        execution={"timed_out": False},
+        output={
+            "protocol": "nebula.toolbox/v1",
+            "exit_code": 127,
+            "stdout": "",
+            "stderr": "/bin/bash: missing-tool: command not found\n",
+            "timed_out": False,
+        },
+    )
+
+    assert ChatService._tool_result_failed(result) is True
+    assert ChatService._result_summary(result.output) == (
+        "Toolbox command failed with exit code 127: "
+        "/bin/bash: missing-tool: command not found"
+    )

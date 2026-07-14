@@ -47,7 +47,12 @@ from .sandbox import (
     SandboxWorkspaceAccess,
 )
 from .storage import NebulaStore
-from .terminal_history import Osc633CommandParser, TerminalCommandHistory
+from .terminal_history import (
+    CapturedTerminalCommand,
+    Osc633CommandParser,
+    TerminalCommandHistory,
+    TerminalCommandParseResult,
+)
 from .tool_platform import (
     DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE,
     HumanTerminalRuntimeResolution,
@@ -68,33 +73,49 @@ TERMINAL_MAX_DURATION_SECONDS = 24 * 60 * 60
 TERMINAL_IDLE_TIMEOUT_SECONDS = 30 * 60
 TERMINAL_COMMAND = ("--noprofile", "--norc", "-i")
 LOGGER = logging.getLogger(__name__)
-# Bash runs this fixed hook after each completed command and before drawing the
-# next prompt. It reads Bash's own completed history entry rather than terminal
-# keystrokes, preserving command boundaries without retaining terminal output.
-# A private HISTTIMEFORMAT delimiter separates Bash's line number from the
-# original command, including intentional leading whitespace.
-TERMINAL_PROMPT_COMMAND = (
-    "__nebula_exit=$?; "
-    "HISTCONTROL=; HISTIGNORE=; "
-    "shopt -s cmdhist lithist; "
-    'if [ "${__nebula_history_ready:-0}" = 1 ] '
-    '&& [ "${HISTCMD:-0}" != "${__nebula_last_histcmd:-0}" ]; then '
-    '__nebula_line="$(HISTTIMEFORMAT=$\'\\036\' builtin history 1 2>/dev/null)"; '
-    '__nebula_command="${__nebula_line#*$\'\\036\'}"; '
-    'if [ -n "$__nebula_command" ]; then '
-    '__nebula_cwd_b64="$(printf \'%s\' "$PWD" '
-    '| base64 2>/dev/null | tr -d \'\\n\')"; '
-    '__nebula_command_b64="$(printf \'%s\' "$__nebula_command" '
-    '| base64 2>/dev/null | tr -d \'\\n\')"; '
-    'if [ -n "$__nebula_cwd_b64" ] && [ -n "$__nebula_command_b64" ]; then '
-    "printf '\\033]633;NebulaCommand;%s;%s;%s\\007' "
-    '"$__nebula_exit" "$__nebula_cwd_b64" "$__nebula_command_b64"; '
-    "fi; fi; fi; "
-    '__nebula_last_histcmd="${HISTCMD:-0}"; '
-    "__nebula_history_ready=1; "
-    "unset __nebula_exit __nebula_line __nebula_command "
-    "__nebula_cwd_b64 __nebula_command_b64"
-)
+
+
+def terminal_ps0(nonce: str) -> str:
+    """Emit a nonce-bound marker after input echo and before command output."""
+
+    return (
+        '$(HISTCONTROL= HISTIGNORE=; shopt -s cmdhist lithist; '
+        '__nebula_line="$(HISTTIMEFORMAT=$\'\\036\' builtin history 1 2>/dev/null)"; '
+        '__nebula_command="${__nebula_line#*$\'\\036\'}"; '
+        '__nebula_cwd_b64="$(printf \'%s\' "$PWD" '
+        '| base64 2>/dev/null | tr -d \'\\n\')"; '
+        '__nebula_command_b64="$(printf \'%s\' "$__nebula_command" '
+        '| base64 2>/dev/null | tr -d \'\\n\')"; '
+        'if [ -n "$__nebula_command" ] && [ -n "$__nebula_cwd_b64" ] '
+        '&& [ -n "$__nebula_command_b64" ]; then '
+        "printf '\\033]633;NebulaCommandStart;%s;%s;%s;%s\\007' "
+        f"'{nonce}' \"${{HISTCMD:-0}}\" \"$__nebula_cwd_b64\" "
+        '"$__nebula_command_b64"; fi)'
+    )
+
+
+def terminal_prompt_command(nonce: str) -> str:
+    """Emit the matching command completion marker before drawing the prompt."""
+
+    return (
+        "__nebula_exit=$?; "
+        "HISTCONTROL=; HISTIGNORE=; "
+        "shopt -s cmdhist lithist; "
+        'if [ "${__nebula_history_ready:-0}" = 1 ] '
+        '&& [ "${HISTCMD:-0}" != "${__nebula_last_histcmd:-0}" ]; then '
+        "printf '\\033]633;NebulaCommandEnd;%s;%s;%s\\007' "
+        f"'{nonce}' \"${{HISTCMD:-0}}\" \"$__nebula_exit\"; fi; "
+        '__nebula_last_histcmd="${HISTCMD:-0}"; '
+        "__nebula_history_ready=1; "
+        "unset __nebula_exit"
+    )
+
+
+# Stable examples retained for documentation and shell-integration tests. Live
+# sessions replace the nonce immediately before the sandbox process is opened.
+TERMINAL_AUDIT_PREVIEW_NONCE = "nebulaauditpreview"
+TERMINAL_PS0 = terminal_ps0(TERMINAL_AUDIT_PREVIEW_NONCE)
+TERMINAL_PROMPT_COMMAND = terminal_prompt_command(TERMINAL_AUDIT_PREVIEW_NONCE)
 
 
 class ContainerTerminalError(RuntimeError):
@@ -242,6 +263,7 @@ class _TerminalReservation:
     start_websocket_ticket: str
     start_ticket_expires_at: datetime
     created_at: datetime
+    audit_nonce: str
     state: Literal["pending", "claimed", "launching", "running"] = "pending"
     process: SandboxTerminalProcess | None = None
     expiry_task: asyncio.Task[None] | None = None
@@ -249,8 +271,13 @@ class _TerminalReservation:
     reader_task: asyncio.Task[None] | None = None
     monitor_task: asyncio.Task[None] | None = None
     watchdog_task: asyncio.Task[None] | None = None
+    audit_task: asyncio.Task[None] | None = None
+    audit_queue: asyncio.Queue[CapturedTerminalCommand | None] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=64)
+    )
     last_activity: float = 0.0
     parser: Osc633CommandParser = field(default_factory=Osc633CommandParser)
+    parser_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     replay: deque["ContainerTerminalOutput"] = field(default_factory=deque)
     replay_bytes: int = 0
     next_sequence: int = 1
@@ -287,6 +314,7 @@ class ContainerTerminalAttachment:
     wakeup: asyncio.Event = field(default_factory=asyncio.Event)
     terminal_event: ContainerTerminalExit | None = None
     terminal_event_delivered: bool = False
+    terminal_finishing: bool = False
     detached: bool = False
 
 
@@ -301,6 +329,7 @@ class ContainerTerminalService:
         execution_service: ExecutionService | None = None,
         command_history: TerminalCommandHistory | None = None,
         operator_id: Callable[[], str] | None = None,
+        audit_nonce_factory: Callable[[], str] | None = None,
         max_active: int = 2,
         reconnect_grace_seconds: float = TERMINAL_RECONNECT_GRACE_SECONDS,
         idle_timeout_seconds: float = TERMINAL_IDLE_TIMEOUT_SECONDS,
@@ -324,6 +353,9 @@ class ContainerTerminalService:
         self.execution_service = execution_service
         self.command_history = command_history
         self.operator_id = operator_id or (lambda: "system")
+        self.audit_nonce_factory = audit_nonce_factory or (
+            lambda: secrets.token_urlsafe(24)
+        )
         self.max_active = max_active
         self.reconnect_grace_seconds = reconnect_grace_seconds
         self.idle_timeout_seconds = idle_timeout_seconds
@@ -338,6 +370,10 @@ class ContainerTerminalService:
         self._shutting_down = False
 
     async def startup(self) -> None:
+        if self.command_history is not None:
+            recovered = await asyncio.to_thread(self.command_history.recover_spools)
+            if recovered:
+                LOGGER.warning("recovered %d interrupted terminal audit spool(s)", recovered)
         if self.tool_platform is not None:
             await self.tool_platform.cleanup_operator_terminals()
         self._recover_interrupted_events()
@@ -535,20 +571,34 @@ class ContainerTerminalService:
                     )
                 session_id = str(uuid4())
                 ticket = secrets.token_urlsafe(32)
+                audit_nonce = self.audit_nonce_factory()
+                operator_id = self.operator_id()
                 expires = utc_now() + timedelta(seconds=TICKET_TTL_SECONDS)
+                parser = (
+                    self.command_history.new_parser(
+                        nonce=audit_nonce,
+                        engagement_id=base.engagement_id,
+                        session_id=session_id,
+                        operator_id=operator_id,
+                    )
+                    if self.command_history is not None
+                    else Osc633CommandParser(nonce=audit_nonce)
+                )
                 reservation = _TerminalReservation(
                     id=session_id,
                     request=base,
                     request_fingerprint=request_fingerprint,
                     preview_fingerprint=request.preview_fingerprint,
                     runtime=prepared.runtime,
-                    operator_id=self.operator_id(),
+                    operator_id=operator_id,
                     websocket_ticket=ticket,
                     ticket_expires_at=expires,
                     start_websocket_ticket=ticket,
                     start_ticket_expires_at=expires,
                     created_at=utc_now(),
+                    audit_nonce=audit_nonce,
                     last_activity=monotonic(),
+                    parser=parser,
                 )
                 self._sessions[session_id] = reservation
                 self._idempotency[key] = (request_fingerprint, session_id)
@@ -801,11 +851,14 @@ class ContainerTerminalService:
                 ):
                     attachment.terminal_event_delivered = True
                     return attachment.terminal_event
-                if session is None or session.attachment is not attachment:
+                if session is None and attachment.terminal_finishing:
+                    attachment.wakeup.clear()
+                elif session is None or session.attachment is not attachment:
                     raise ContainerTerminalError(
                         "terminal_detached", "terminal attachment is closed"
                     )
-                attachment.wakeup.clear()
+                else:
+                    attachment.wakeup.clear()
             await attachment.wakeup.wait()
 
     async def detach(self, attachment: ContainerTerminalAttachment) -> None:
@@ -907,6 +960,7 @@ class ContainerTerminalService:
         error_code: str | None = None,
     ) -> None:
         tasks: list[asyncio.Task[None]] = []
+        unfinished_capture = None
         async with self._lock:
             session = self._sessions.pop(session_id, None)
             if session is None:
@@ -924,20 +978,25 @@ class ContainerTerminalService:
                     task.cancel()
                     tasks.append(task)
             if session.attachment is not None:
-                session.attachment.terminal_replay.extend(
-                    output
-                    for output in session.replay
-                    if output.sequence >= session.attachment.next_sequence
-                )
-                session.attachment.terminal_event = ContainerTerminalExit(
-                    outcome=outcome,
-                    exit_code=exit_code,
-                    error_code=error_code,
-                    detail=detail,
-                )
-                session.attachment.wakeup.set()
+                session.attachment.terminal_finishing = True
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        async with session.parser_lock:
+            tail, unfinished_capture = await asyncio.to_thread(
+                _finish_terminal_parser,
+                session.parser,
+                exit_code,
+                outcome,
+                detail,
+            )
+        if tail.passthrough:
+            self._publish_output_locked(session, tail.passthrough)
+        if session.attachment is not None:
+            session.attachment.terminal_replay.extend(
+                output
+                for output in session.replay
+                if output.sequence >= session.attachment.next_sequence
+            )
         cleanup_error: Exception | None = None
         try:
             if session.process is not None:
@@ -947,6 +1006,23 @@ class ContainerTerminalService:
         if cleanup_error is not None and detail is None:
             detail = f"terminal cleanup reported: {type(cleanup_error).__name__}"
             error_code = error_code or "cleanup_failed"
+        if session.audit_task is not None:
+            if unfinished_capture is not None:
+                await session.audit_queue.put(unfinished_capture)
+            await session.audit_queue.put(None)
+            await asyncio.gather(session.audit_task, return_exceptions=True)
+            session.audit_task = None
+        elif unfinished_capture is not None:
+            await self._persist_capture(session, unfinished_capture)
+        if session.attachment is not None:
+            session.attachment.terminal_event = ContainerTerminalExit(
+                outcome=outcome,
+                exit_code=exit_code,
+                error_code=error_code,
+                detail=detail,
+            )
+            session.attachment.terminal_finishing = False
+            session.attachment.wakeup.set()
         duration = max(0.0, (utc_now() - session.created_at).total_seconds())
         payload: dict[str, object] = {
             "status": outcome,
@@ -987,8 +1063,16 @@ class ContainerTerminalService:
                     "preview_stale",
                     "runner, policy, DNS, or limits changed before container launch",
                 )
+            audit_environment = {
+                **prepared.sandbox_request.environment,
+                "PS0": terminal_ps0(session.audit_nonce),
+                "PROMPT_COMMAND": terminal_prompt_command(session.audit_nonce),
+            }
+            sandbox_request = prepared.sandbox_request.model_copy(
+                update={"environment": audit_environment}
+            )
             process = await prepared.resolution.runner.open_terminal(
-                prepared.sandbox_request,
+                sandbox_request,
                 container_name="nebula-terminal-" + session.id.replace("-", "")[:40],
                 columns=session.request.columns,
                 rows=session.request.rows,
@@ -1037,6 +1121,10 @@ class ContainerTerminalService:
                     self._read_process_output(current.id, process),
                     name=f"container-terminal-reader-{current.id}",
                 )
+                current.audit_task = asyncio.create_task(
+                    self._audit_writer(current),
+                    name=f"container-terminal-audit-{current.id}",
+                )
                 current.monitor_task = asyncio.create_task(
                     self._monitor_process(current.id, process),
                     name=f"container-terminal-monitor-{current.id}",
@@ -1072,19 +1160,31 @@ class ContainerTerminalService:
                         session = self._sessions.get(session_id)
                         if session is None or session.process is not process:
                             return
+                    async with session.parser_lock:
                         tail = session.parser.flush()
-                        if tail.passthrough:
-                            self._publish_output_locked(session, tail.passthrough)
+                    if tail.passthrough:
+                        self._publish_output_locked(session, tail.passthrough)
                     return
                 async with self._lock:
                     session = self._sessions.get(session_id)
                     if session is None or session.process is not process:
                         return
                     session.last_activity = monotonic()
-                    parsed = session.parser.feed(data)
+                async with session.parser_lock:
+                    parsed = await _feed_terminal_parser(session.parser, data)
+                async with self._lock:
+                    still_active = (
+                        self._sessions.get(session_id) is session
+                        and session.process is process
+                    )
                     if parsed.passthrough:
                         self._publish_output_locked(session, parsed.passthrough)
                 if self.command_history is not None:
+                    for capture in parsed.captures:
+                        if session.audit_task is not None:
+                            await session.audit_queue.put(capture)
+                        else:
+                            await self._persist_capture(session, capture)
                     for command_record in parsed.records:
                         try:
                             await asyncio.to_thread(
@@ -1100,6 +1200,8 @@ class ContainerTerminalService:
                                 "terminal command history write failed (%s)",
                                 type(exc).__name__,
                             )
+                if not still_active:
+                    return
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1109,6 +1211,55 @@ class ContainerTerminalService:
                 error_code="terminal_io",
                 detail=f"terminal output reader failed ({type(exc).__name__})",
             )
+
+    async def _audit_writer(self, session: _TerminalReservation) -> None:
+        while True:
+            capture = await session.audit_queue.get()
+            try:
+                if capture is None:
+                    return
+                await self._persist_capture(session, capture)
+            finally:
+                session.audit_queue.task_done()
+
+    async def _persist_capture(
+        self,
+        session: _TerminalReservation,
+        capture: CapturedTerminalCommand,
+    ) -> None:
+        if self.command_history is None:
+            return
+        try:
+            await asyncio.to_thread(
+                self.command_history.record_capture,
+                engagement_id=session.request.engagement_id,
+                session_id=session.id,
+                operator_id=session.operator_id,
+                capture=capture,
+            )
+        except Exception as exc:
+            LOGGER.error(
+                "terminal audit persistence failed for session %s (%s)",
+                session.id,
+                type(exc).__name__,
+            )
+            try:
+                self._event(
+                    session,
+                    "container_terminal.audit_gap",
+                    {
+                        "status": "capture_failed",
+                        "shell_sequence": capture.shell_sequence,
+                        "command_sha256": hashlib.sha256(
+                            capture.command.encode("utf-8")
+                        ).hexdigest(),
+                        "output_sha256": capture.output_sha256,
+                        "error": type(exc).__name__,
+                    },
+                    key=f"audit-gap-{capture.shell_sequence}",
+                )
+            except Exception:
+                LOGGER.exception("terminal audit-gap event persistence also failed")
 
     def _publish_output_locked(
         self,
@@ -1338,6 +1489,7 @@ class ContainerTerminalService:
             environment={
                 "HISTFILE": "/dev/null",
                 "LANG": "C.UTF-8",
+                "PS0": TERMINAL_PS0,
                 "PROMPT_COMMAND": TERMINAL_PROMPT_COMMAND,
                 "TERM": "xterm-256color",
             },
@@ -1484,6 +1636,36 @@ class ContainerTerminalService:
             replay_max_bytes=self.replay_max_bytes,
             last_sequence=session.next_sequence - 1,
         )
+
+
+async def _feed_terminal_parser(
+    parser: Osc633CommandParser,
+    data: bytes,
+) -> TerminalCommandParseResult:
+    """Finish an in-flight durable spool write before honoring cancellation."""
+
+    worker = asyncio.create_task(asyncio.to_thread(parser.feed, data))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # ``to_thread`` cannot stop the underlying filesystem operation. Wait
+        # for it so the parser is never mutated after its session lock is freed.
+        return await worker
+
+
+def _finish_terminal_parser(
+    parser: Osc633CommandParser,
+    exit_code: int | None,
+    outcome: str,
+    detail: str | None,
+) -> tuple[TerminalCommandParseResult, CapturedTerminalCommand | None]:
+    tail = parser.flush()
+    capture = parser.finish_active(
+        exit_code=exit_code,
+        status="interrupted",
+        detail=(detail or f"terminal session ended with status {outcome}")[:1_000],
+    )
+    return tail, capture
 
 
 def _runtime_snapshot(

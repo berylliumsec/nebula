@@ -1,10 +1,12 @@
 import hashlib
 import json
+from datetime import datetime, timezone
 
 import httpx
 from click import unstyle
 from typer.testing import CliRunner
 
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.cli import _is_loopback, app
 from nebula.v3.domain import AgentRun, Artifact, Engagement, ProviderProfile
 from nebula.v3.providers import (
@@ -14,6 +16,7 @@ from nebula.v3.providers import (
     config_from_catalog,
 )
 from nebula.v3.storage import NebulaStore
+from nebula.v3.terminal_history import CapturedTerminalCommand, TerminalCommandHistory
 from nebula.v3.version import __version__
 
 
@@ -100,6 +103,62 @@ def test_doctor_reports_corrupt_persisted_artifacts(tmp_path, monkeypatch):
     assert report["artifacts"]["checked"] == 1
     assert report["artifacts"]["corrupt"] == 1
     assert report["artifacts"]["corrupt_ids"] == [artifact.id]
+
+
+def test_doctor_verifies_terminal_audit_hashes_artifacts_and_events(tmp_path, monkeypatch):
+    async def unavailable(_self):
+        return False, "not configured"
+
+    monkeypatch.setattr("nebula.v3.cli.ContainerSandboxRunner.available", unavailable)
+    data_dir = tmp_path / "terminal-doctor-data"
+    store = NebulaStore(data_dir / "nebula.db")
+    artifacts = ArtifactStore(data_dir / "artifacts")
+    project = store.create(Engagement(name="Terminal doctor"))
+    now = datetime.now(timezone.utc)
+    output = b"verified terminal result"
+    TerminalCommandHistory(
+        store.database, store=store, artifact_store=artifacts
+    ).record_capture(
+        engagement_id=project.id,
+        session_id="doctor-terminal-session",
+        operator_id="operator-1",
+        capture=CapturedTerminalCommand(
+            shell_sequence="1",
+            command="printf verified",
+            cwd="/workspace",
+            status="completed",
+            exit_code=0,
+            started_at=now,
+            completed_at=now,
+            output=output,
+            observed_output_bytes=len(output),
+            output_sha256=hashlib.sha256(output).hexdigest(),
+            output_truncated=False,
+        ),
+    )
+
+    healthy = CliRunner().invoke(
+        app, ["doctor", "--json", "--data-dir", str(data_dir)]
+    )
+    assert healthy.exit_code == 0, healthy.stdout
+    assert json.loads(healthy.stdout)["terminal_audit"] == {
+        "checked": 1,
+        "errors": 0,
+        "error_records": [],
+    }
+
+    with store.database.engine.begin() as connection:
+        connection.exec_driver_sql(
+            "UPDATE terminal_command_records SET command_sha256 = ?",
+            ("0" * 64,),
+        )
+    corrupted = CliRunner().invoke(
+        app, ["doctor", "--json", "--data-dir", str(data_dir)]
+    )
+    assert corrupted.exit_code == 1
+    audit = json.loads(corrupted.stdout)["terminal_audit"]
+    assert audit["errors"] >= 1
+    assert any("command_hash" in item for item in audit["error_records"])
 
 
 def test_worker_rejects_unimplemented_daemon_mode():

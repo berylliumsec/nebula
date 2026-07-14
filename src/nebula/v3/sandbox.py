@@ -726,7 +726,7 @@ class ContainerSandboxRunner(SandboxRunner):
         "AZURE",
         "AWS_",
     )
-    _human_terminal_only_environment = {"HISTFILE", "PROMPT_COMMAND"}
+    _human_terminal_only_environment = {"HISTFILE", "PROMPT_COMMAND", "PS0"}
     # Desktop applications do not reliably inherit a login shell's PATH. More
     # importantly, resolving an executable from an operator-controlled PATH is
     # the wrong trust boundary for the mandatory sandbox. Keep automatic
@@ -779,6 +779,7 @@ class ContainerSandboxRunner(SandboxRunner):
             "TZ",
             "TERM",
             "NO_COLOR",
+            "PS0",
             "PROMPT_COMMAND",
         }
         self.workspace_roots = (

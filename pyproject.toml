@@ -13,7 +13,7 @@ license = "BSD"
 homepage = "https://github.com/berylliumsec/nebula"
 keywords = [ "AI", "ethical hacking", "nmap", "zap", "crackmapexec",]
 classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Developers", "License :: OSI Approved :: BSD License", "Programming Language :: Python :: 3",]
-include = [ "src/nebula/images/*", "src/nebula/v3/tool_pack_assets/**/*", "src/nebula/v3/report_assets/**/*",]
+include = [ "src/nebula/images/*", "src/nebula/v3/operator_help.md", "src/nebula/v3/tool_pack_assets/**/*", "src/nebula/v3/report_assets/**/*",]
 [[tool.poetry.packages]]
 include = "nebula"
 from = "src"

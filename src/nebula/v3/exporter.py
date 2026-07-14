@@ -39,6 +39,7 @@ from .domain import (
     utc_now,
 )
 from .storage import NebulaStore, NotFoundError
+from .terminal_history import TerminalCommandHistory
 
 
 class ExportError(RuntimeError):
@@ -47,13 +48,14 @@ class ExportError(RuntimeError):
 
 class ExportManifest(BaseModel):
     format: str = "nebula-engagement-bundle"
-    format_version: int = 2
+    format_version: int = 3
     engagement_id: str
     exported_at: str
     entity_counts: dict[str, int] = Field(default_factory=dict)
     event_count: int = 0
     run_event_count: int = 0
     operation_event_count: int = 0
+    terminal_command_count: int = 0
     files: dict[str, str] = Field(default_factory=dict)
 
 
@@ -311,6 +313,22 @@ def export_engagement(
             break
         offset += len(operation_page)
 
+    terminal_records, terminal_artifact_ids = TerminalCommandHistory(
+        store.database,
+        store=store,
+        artifact_store=artifact_store,
+    ).export_payload(engagement_id)
+    for artifact_id in sorted(terminal_artifact_ids):
+        _add_entity(
+            entities_by_model,
+            _get_reference(
+                store,
+                Artifact,
+                artifact_id,
+                source="terminal audit record",
+            ),
+        )
+
     _include_referenced_globals(
         store=store,
         entities=entities_by_model,
@@ -338,6 +356,7 @@ def export_engagement(
     payloads["operation_events.json"] = _json_bytes(
         [event.model_dump(mode="json") for event in operation_events]
     )
+    payloads["terminal_commands.json"] = _json_bytes(terminal_records)
 
     manifest = ExportManifest(
         engagement_id=engagement_id,
@@ -346,6 +365,7 @@ def export_engagement(
         event_count=len(run_events) + len(operation_events),
         run_event_count=len(run_events),
         operation_event_count=len(operation_events),
+        terminal_command_count=len(terminal_records),
         files={
             name: hashlib.sha256(content).hexdigest()
             for name, content in payloads.items()

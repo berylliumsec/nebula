@@ -18,6 +18,7 @@ import type {
   ContainerTerminalSession,
   TerminalCommandHistoryStatus,
   TerminalCommandPage,
+  TerminalCommandRecord,
   ContextMemory,
   ContextSnapshot,
   ContextSourceReference,
@@ -2757,18 +2758,28 @@ export class ApiClient {
     return this.request<{
       engagement_id: string;
       enabled: boolean;
+      capture_mode: "required";
       record_count: number;
-      retention_days: number;
-      max_records: number;
+      degraded_count: number;
+      truncated_count: number;
+      audit_gap_count: number;
+      captured_output_bytes: number;
+      retention_days?: number | null;
+      max_records?: number | null;
       oldest_recorded_at?: string | null;
       newest_recorded_at?: string | null;
     }>(`engagements/${encodeURIComponent(engagementId)}/terminal/commands/status`, { signal })
       .then((value) => ({
         engagementId: value.engagement_id,
         enabled: value.enabled,
+        captureMode: value.capture_mode,
         recordCount: value.record_count,
-        retentionDays: value.retention_days,
-        maxRecords: value.max_records,
+        degradedCount: value.degraded_count,
+        truncatedCount: value.truncated_count,
+        auditGapCount: value.audit_gap_count,
+        capturedOutputBytes: value.captured_output_bytes,
+        retentionDays: value.retention_days ?? undefined,
+        maxRecords: value.max_records ?? undefined,
         oldestRecordedAt: value.oldest_recorded_at ?? undefined,
         newestRecordedAt: value.newest_recorded_at ?? undefined,
       }));
@@ -2788,10 +2799,24 @@ export class ApiClient {
         id: string;
         engagement_id: string;
         session_id: string;
+        operator_id?: string | null;
+        shell_sequence?: string | null;
         command: string;
+        command_sha256?: string | null;
         cwd: string;
-        exit_code: number;
+        status: TerminalCommandRecord["status"];
+        exit_code?: number | null;
+        started_at?: string | null;
+        completed_at?: string | null;
         occurred_at: string;
+        raw_output_available: boolean;
+        redacted_output_available: boolean;
+        observed_output_bytes: number;
+        captured_output_bytes: number;
+        output_sha256?: string | null;
+        output_truncated: boolean;
+        output_preview: string;
+        capture_error?: string | null;
       }>;
       total: number;
       offset: number;
@@ -2803,10 +2828,24 @@ export class ApiClient {
           id: record.id,
           engagementId: record.engagement_id,
           sessionId: record.session_id,
+          operatorId: record.operator_id ?? undefined,
+          shellSequence: record.shell_sequence ?? undefined,
           command: record.command,
+          commandSha256: record.command_sha256 ?? undefined,
           cwd: record.cwd,
-          exitCode: record.exit_code,
+          status: record.status,
+          exitCode: record.exit_code ?? undefined,
+          startedAt: record.started_at ?? undefined,
+          completedAt: record.completed_at ?? undefined,
           occurredAt: record.occurred_at,
+          rawOutputAvailable: record.raw_output_available,
+          redactedOutputAvailable: record.redacted_output_available,
+          observedOutputBytes: record.observed_output_bytes,
+          capturedOutputBytes: record.captured_output_bytes,
+          outputSha256: record.output_sha256 ?? undefined,
+          outputTruncated: record.output_truncated,
+          outputPreview: record.output_preview,
+          captureError: record.capture_error ?? undefined,
         })),
         total: value.total,
         offset: value.offset,
@@ -2822,9 +2861,14 @@ export class ApiClient {
     return this.request<{
       engagement_id: string;
       enabled: boolean;
+      capture_mode: "required";
       record_count: number;
-      retention_days: number;
-      max_records: number;
+      degraded_count: number;
+      truncated_count: number;
+      audit_gap_count: number;
+      captured_output_bytes: number;
+      retention_days?: number | null;
+      max_records?: number | null;
       oldest_recorded_at?: string | null;
       newest_recorded_at?: string | null;
     }>(`engagements/${encodeURIComponent(engagementId)}/terminal/commands/status`, {
@@ -2833,9 +2877,14 @@ export class ApiClient {
     }).then((value) => ({
       engagementId: value.engagement_id,
       enabled: value.enabled,
+      captureMode: value.capture_mode,
       recordCount: value.record_count,
-      retentionDays: value.retention_days,
-      maxRecords: value.max_records,
+      degradedCount: value.degraded_count,
+      truncatedCount: value.truncated_count,
+      auditGapCount: value.audit_gap_count,
+      capturedOutputBytes: value.captured_output_bytes,
+      retentionDays: value.retention_days ?? undefined,
+      maxRecords: value.max_records ?? undefined,
       oldestRecordedAt: value.oldest_recorded_at ?? undefined,
       newestRecordedAt: value.newest_recorded_at ?? undefined,
     }));
@@ -2847,6 +2896,33 @@ export class ApiClient {
       { method: "DELETE" },
     );
     return result.cleared;
+  }
+
+  async terminalCommandOutput(
+    engagementId: string,
+    commandId: string,
+    raw = false,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const headers = new Headers({ Accept: raw ? "application/octet-stream" : "text/plain" });
+    if (raw) headers.set("X-Nebula-Sensitive-Data-Acknowledged", "true");
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const chunks: ArrayBuffer[] = [];
+    let offset = 0;
+    while (true) {
+      const response = await this.fetchImpl(
+        `${this.baseUrl}/engagements/${encodeURIComponent(engagementId)}/terminal/commands/${encodeURIComponent(commandId)}/output?raw=${raw ? "true" : "false"}&offset=${offset}&limit=262144`,
+        { headers, signal, credentials: "same-origin" },
+      );
+      if (!response.ok) throw await responseError(response);
+      chunks.push(await response.arrayBuffer());
+      const total = Number(response.headers.get("X-Nebula-Output-Total"));
+      const next = Number(response.headers.get("X-Nebula-Output-Next"));
+      if (!Number.isFinite(total) || !Number.isFinite(next) || next >= total || next <= offset) break;
+      offset = next;
+    }
+    return new Blob(chunks, { type: raw ? "application/octet-stream" : "text/plain;charset=utf-8" });
   }
 
   preflightContainerTerminal(

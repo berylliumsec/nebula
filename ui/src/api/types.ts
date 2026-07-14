@@ -1061,10 +1061,24 @@ export interface TerminalCommandRecord {
   id: Identifier;
   engagementId: Identifier;
   sessionId: Identifier;
+  operatorId?: Identifier;
+  shellSequence?: string;
   command: string;
+  commandSha256?: string;
   cwd: string;
-  exitCode: number;
+  status: "completed" | "interrupted" | "framing_lost" | "capture_failed" | "legacy_metadata_only";
+  exitCode?: number;
+  startedAt?: string;
+  completedAt?: string;
   occurredAt: string;
+  rawOutputAvailable: boolean;
+  redactedOutputAvailable: boolean;
+  observedOutputBytes: number;
+  capturedOutputBytes: number;
+  outputSha256?: string;
+  outputTruncated: boolean;
+  outputPreview: string;
+  captureError?: string;
 }
 
 export interface TerminalCommandPage {
@@ -1078,9 +1092,14 @@ export interface TerminalCommandPage {
 export interface TerminalCommandHistoryStatus {
   engagementId: Identifier;
   enabled: boolean;
+  captureMode: "required";
   recordCount: number;
-  retentionDays: number;
-  maxRecords: number;
+  degradedCount: number;
+  truncatedCount: number;
+  auditGapCount: number;
+  capturedOutputBytes: number;
+  retentionDays?: number;
+  maxRecords?: number;
   oldestRecordedAt?: string;
   newestRecordedAt?: string;
 }

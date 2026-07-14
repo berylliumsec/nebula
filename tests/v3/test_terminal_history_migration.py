@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 
 def _config(connection) -> Config:
@@ -34,6 +35,37 @@ def test_terminal_history_migrates_forward_and_back_from_bootstrap_v4(tmp_path):
             tables = set(inspect(connection).get_table_names())
             assert "terminal_command_records" in tables
             assert "terminal_command_preferences" in tables
+            connection.execute(
+                text(
+                    "INSERT INTO terminal_command_records "
+                    "(id, engagement_id, session_id, command, cwd, exit_code, occurred_at) "
+                    "VALUES ('legacy-command', 'legacy-project', 'legacy-session', "
+                    "'whoami', '/workspace', 0, '2026-01-01 00:00:00')"
+                )
+            )
+            connection.commit()
+
+            command.upgrade(config, "0006_terminal_command_audit")
+            migrated = connection.execute(
+                text(
+                    "SELECT operator_id, command_sha256, status, "
+                    "raw_output_artifact_id, capture_error "
+                    "FROM terminal_command_records WHERE id = 'legacy-command'"
+                )
+            ).mappings().one()
+            assert migrated["operator_id"] is None
+            assert migrated["command_sha256"] == hashlib.sha256(b"whoami").hexdigest()
+            assert migrated["status"] == "legacy_metadata_only"
+            assert migrated["raw_output_artifact_id"] is None
+            assert "not captured" in migrated["capture_error"]
+
+            command.downgrade(config, "0005_terminal_command_history")
+            assert connection.execute(
+                text(
+                    "SELECT command FROM terminal_command_records "
+                    "WHERE id = 'legacy-command'"
+                )
+            ).scalar_one() == "whoami"
             command.downgrade(config, "0004_zero_setup_bootstrap")
             tables = set(inspect(connection).get_table_names())
             assert "terminal_command_records" not in tables

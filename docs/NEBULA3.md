@@ -26,7 +26,7 @@ application remains a separately versioned maintenance distribution.
   human terminal has an explicit root/writable/unrestricted boundary; reviewed
   and agent execution remains offline or single-target scoped.
 - Deterministic server-rendered PDF reports, operator-triggered AI execution
-  notes, and integrity-manifested engagement bundle v2 export.
+  notes, and integrity-manifested engagement bundle v3 export.
 
 ## Run from a source checkout
 
@@ -151,12 +151,13 @@ An external Chroma directory is skipped unless the operator supplies
 
 The report workspace exports a saved report revision as a server-rendered PDF.
 The separate **Export engagement bundle (.nebula.zip)** action produces bundle
-format v2 with entity records, run and operation events, execution streams,
-generated drafts, report snapshots/PDFs, and their content-addressed artifacts.
-Bundles may contain unredacted evidence and raw execution output and are not
-described as backups because Nebula 3 does not yet provide a restore path.
-Scratch workspace files are excluded unless an operator promoted them to an
-artifact.
+format v3 with entity records, run and operation events, execution streams,
+human-terminal audit records and transcripts, generated drafts, report
+snapshots/PDFs, and their content-addressed artifacts. Bundles may contain
+unredacted evidence, raw execution output, and raw terminal results. Treat them
+as sensitive data. They are not described as backups because Nebula 3 does not
+yet provide a restore path. Scratch workspace files are excluded unless an
+operator promoted them to an artifact.
 
 ## Context compaction
 
@@ -183,6 +184,29 @@ LangGraph checkpoint remains unchanged. Derived working-memory snapshots cite
 their canonical message sequences or task/result identifiers, are included in
 engagement exports, and are never treated as evidence. Memory is isolated to a
 single chat session or mission run; it is not shared across an engagement.
+
+## Built-in operator help
+
+Analyst chat deterministically retrieves a small number of matching articles from
+the release-bundled [Nebula 3 Operator Help Knowledge Base](../src/nebula/v3/operator_help.md).
+This product corpus is separate from Project knowledge uploads: it is available even
+when a Project has no documents, contains no engagement data, and does not require a
+cloud-knowledge transfer confirmation. Product-help citations use stable
+`nebula-help:<article>` source IDs and a content-derived chunk ID.
+
+The corpus covers startup and diagnostics, runner and workstation setup, Terminal,
+Toolbox, policy/approval states, providers, reviewed execution, workspace limits,
+context compaction, migration/import/export, and the current release boundary. If no
+article matches an observed Nebula failure, the assistant is instructed to report
+the exact error and say that no verified recovery procedure is available instead of
+inventing a step. Toolbox final synthesis also searches the observed failed result,
+so recovery guidance can match an error that was not known when the turn began.
+
+Treat the bundled Markdown as release material: update implementation references and
+recovery steps in the same change as behavior, keep every command and UI label
+verifiable, and never add host-execution, policy-bypass, destructive-data, mutable
+image, example-digest, or guessed-log-path advice. The frozen-Core package audit
+requires the corpus so installed agents cannot silently lose it.
 
 ## Workbench terminal, reviewed execution, and workspace limits
 
@@ -221,11 +245,26 @@ One active terminal is retained per Project across Workbench mode changes and
 short webview reconnects. It stops on explicit **Stop**, Core shutdown, or 30
 minutes with no input and no output; a disconnected UI has a 10-minute
 reconnect grace. Core keeps at most 1 MiB of sequenced output for reconnect
-replay and never persists terminal output automatically. Interactive
-input/output is not sent to an AI provider or promoted to evidence without an
-explicit operator action. Highlight terminal text and press Ctrl+C on Linux or
-Windows, or Command+C on macOS, to copy it; with no selection, Ctrl+C remains a
-terminal interrupt.
+replay. Separately, mandatory shell framing records every completed command and
+its merged PTY result as a Project-lifetime audit. Raw and redacted transcripts
+are content-addressed artifacts; each command records operator, session,
+directory, timing, status, exit code, byte counts, and hashes. Capture is capped
+at 10 MiB per command while the full observed stream is still counted and
+hashed. Interrupted, truncated, recovered, framing-loss, and persistence-gap
+conditions remain visible in audit health. Existing pre-audit records are
+clearly marked as metadata-only.
+
+Audit records cannot be disabled or cleared independently of Project deletion
+and are included in sensitive bundle v3 exports. Raw result downloads require a
+sensitive-data acknowledgement. Inline secrets and output may therefore enter
+the raw audit artifacts, while interactive password responses are not recorded
+as shell commands. Terminal commands and results are not sent to an AI provider
+or promoted to evidence without an explicit operator action. Highlight terminal
+text and press Ctrl+C on Linux or Windows, or Command+C on macOS, to copy it;
+with no selection, Ctrl+C remains a terminal interrupt. Because an operator
+controls an unrestricted root shell, the audit supplies durable attribution and
+integrity checking rather than protection from a deliberately malicious root
+operator.
 
 A supported completed assistant fence (`bash`/`shell`, `sh`, or
 `python`/`python3`/`py`) can also be copied or sent through an exact one-shot
@@ -295,8 +334,9 @@ official Kali terminal on Docker Desktop or a rootless Podman Machine. Confirm
 Kali pull/digest resolution, root and writable ephemeral state, outbound bridge
 connectivity, no added capabilities or published ports, terminal
 disconnect/Core-restart cleanup, an offline run, a scoped single-target run,
-cancellation cleanup, Core-restart interruption, workspace promotion/reset, raw-output warning,
-Draft note/Discuss in chat, cached PDF export, and sensitive bundle v2 export.
+cancellation cleanup, Core-restart interruption, workspace promotion/reset,
+terminal audit recovery/truncation warnings, acknowledged raw-output download,
+Draft note/Discuss in chat, cached PDF export, and sensitive bundle v3 export.
 The release is blocked if Run appears without both reviewed-execution modes,
 non-human execution can request unrestricted/root/writable settings, a runtime
 socket or host terminal reaches the webview, or any runner failure falls back

@@ -111,6 +111,16 @@ describe("ContainerTerminalPanel", () => {
         },
         runtime,
       }),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({
+        engagementId: "engagement-1",
+        enabled: true,
+        captureMode: "required",
+        recordCount: 1,
+        degradedCount: 0,
+        truncatedCount: 0,
+        auditGapCount: 1,
+        capturedOutputBytes: 0,
+      }),
     } as unknown as ApiClient;
 
     render(<ContainerTerminalPanel
@@ -120,6 +130,7 @@ describe("ContainerTerminalPanel", () => {
       setupTerminalStatus="ready"
     />);
     await waitFor(() => expect(terminalSpies.keyHandler).toBeTypeOf("function"));
+    expect(await screen.findByText(/1 terminal audit warning detected/)).toBeVisible();
 
     const interrupt = new KeyboardEvent("keydown", { key: "c", ctrlKey: true });
     expect(terminalSpies.keyHandler?.(interrupt)).toBe(true);

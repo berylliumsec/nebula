@@ -23,7 +23,11 @@ from nebula.v3.container_terminal import (
     ContainerTerminalPreflightRequest,
     ContainerTerminalService,
     ContainerTerminalStartRequest,
+    TERMINAL_AUDIT_PREVIEW_NONCE,
+    TERMINAL_PS0,
     TERMINAL_PROMPT_COMMAND,
+    terminal_prompt_command,
+    terminal_ps0,
 )
 from nebula.v3.domain import (
     Engagement,
@@ -235,7 +239,11 @@ class StubTerminalPlatform:
 
 
 def fixture(
-    tmp_path, *, fail_image: bool = False, chunks: list[bytes] | None = None
+    tmp_path,
+    *,
+    fail_image: bool = False,
+    chunks: list[bytes] | None = None,
+    audit_nonce: str | None = None,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
     engagement = store.create(Engagement(name="Container Terminal Lab"))
@@ -247,6 +255,7 @@ def fixture(
         store=store,
         tool_platform=platform,  # type: ignore[arg-type]
         operator_id=lambda: "operator-1",
+        audit_nonce_factory=(lambda: audit_nonce) if audit_nonce else None,
     )
     return store, engagement, None, runner, platform, service
 
@@ -376,10 +385,12 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     assert sandbox_request.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL
     assert sandbox_request.container_user == SandboxContainerUser.ROOT
     assert sandbox_request.root_filesystem == SandboxRootFilesystem.WRITABLE
+    audit_nonce = service._sessions[created.session_id].audit_nonce
     assert sandbox_request.environment == {
         "HISTFILE": "/dev/null",
         "LANG": "C.UTF-8",
-        "PROMPT_COMMAND": TERMINAL_PROMPT_COMMAND,
+        "PS0": terminal_ps0(audit_nonce),
+        "PROMPT_COMMAND": terminal_prompt_command(audit_nonce),
         "TERM": "xterm-256color",
     }
     assert sandbox_request.limits.cpu_count == 1
@@ -911,18 +922,25 @@ def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):
     assert runner.processes[0].closed == 1
 
 
-def _command_marker(
-    command: str, *, cwd: str = "/workspace", exit_code: int = 0
-) -> bytes:
-    return (
-        b"\x1b]633;NebulaCommand;"
-        + str(exit_code).encode()
-        + b";"
+def _command_markers(
+    command: str,
+    nonce: str,
+    *,
+    sequence: str = "2",
+    cwd: str = "/workspace",
+    exit_code: int = 0,
+) -> tuple[bytes, bytes]:
+    start = (
+        f"\x1b]633;NebulaCommandStart;{nonce};{sequence};".encode()
         + base64.b64encode(cwd.encode())
         + b";"
         + base64.b64encode(command.encode())
         + b"\x07"
     )
+    end = (
+        f"\x1b]633;NebulaCommandEnd;{nonce};{sequence};{exit_code}\x07".encode()
+    )
+    return start, end
 
 
 @async_test
@@ -935,7 +953,10 @@ async def test_command_parser_and_history_span_websocket_reconnects(tmp_path):
         tmp_path / "continuity-workspace",
         runner,  # type: ignore[arg-type]
     )
-    history = TerminalCommandHistory(history_store.database)
+    artifacts = ArtifactStore(tmp_path / "continuity-artifacts")
+    history = TerminalCommandHistory(
+        history_store.database, store=history_store, artifact_store=artifacts
+    )
     service = ContainerTerminalService(
         store=history_store,
         tool_platform=platform,  # type: ignore[arg-type]
@@ -944,10 +965,13 @@ async def test_command_parser_and_history_span_websocket_reconnects(tmp_path):
     )
     started, first = await start_controllable_terminal(service, engagement)
     process = runner.processes[0]
-    marker = _command_marker("printf reconnect", exit_code=4)
-    output_secret = b"continuity-output-must-stay-in-memory"
+    nonce = service._sessions[started.session_id].audit_nonce
+    start_marker, end_marker = _command_markers(
+        "printf reconnect", nonce, exit_code=4
+    )
+    output_secret = b"password=continuity-output-is-audited"
 
-    await process.emit(output_secret + marker[:19])
+    await process.emit(start_marker + output_secret + end_marker[:19])
     assert await asyncio.wait_for(service.next_event(first), timeout=1) == (
         ContainerTerminalOutput(1, output_secret)
     )
@@ -958,7 +982,7 @@ async def test_command_parser_and_history_span_websocket_reconnects(tmp_path):
         reconnect_ticket,
         after_sequence=1,
     )
-    await process.emit(marker[19:] + b"prompt$ ")
+    await process.emit(end_marker[19:] + b"prompt$ ")
     assert await asyncio.wait_for(service.next_event(second), timeout=1) == (
         ContainerTerminalOutput(2, b"prompt$ ")
     )
@@ -971,6 +995,7 @@ async def test_command_parser_and_history_span_websocket_reconnects(tmp_path):
     assert [(item.command, item.cwd, item.exit_code) for item in records] == [
         ("printf reconnect", "/workspace", 4)
     ]
+    assert history.output_bytes(engagement.id, records[0].id, raw=True)[0] == output_secret
     assert all(
         output_secret not in path.read_bytes()
         for path in database.parent.glob(database.name + "*")
@@ -979,15 +1004,75 @@ async def test_command_parser_and_history_span_websocket_reconnects(tmp_path):
     await service.close_attachment(second)
 
 
-def test_terminal_stream_strips_split_markers_and_persists_only_command_metadata(
+@async_test
+async def test_terminal_audit_persistence_failure_emits_gap_and_retains_spool(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "audit-gap.db")
+    engagement = store.create(Engagement(name="Audit gap lab"))
+    runner = ControllableTerminalRunner()
+    platform = StubTerminalPlatform(
+        tmp_path / "audit-gap-workspace",
+        runner,  # type: ignore[arg-type]
+    )
+    artifacts = ArtifactStore(tmp_path / "audit-gap-artifacts")
+    history = TerminalCommandHistory(
+        store.database, store=store, artifact_store=artifacts
+    )
+    service = ContainerTerminalService(
+        store=store,
+        tool_platform=platform,  # type: ignore[arg-type]
+        command_history=history,
+        operator_id=lambda: "operator-1",
+    )
+    started, attachment = await start_controllable_terminal(service, engagement)
+    process = runner.processes[0]
+    nonce = service._sessions[started.session_id].audit_nonce
+    start_marker, end_marker = _command_markers("printf gap", nonce)
+
+    def fail_persistence(**_kwargs):
+        raise OSError("simulated durable storage failure")
+
+    monkeypatch.setattr(history, "record_capture", fail_persistence)
+    await process.emit(start_marker + b"result awaiting persistence" + end_marker)
+    assert await asyncio.wait_for(service.next_event(attachment), timeout=1) == (
+        ContainerTerminalOutput(1, b"result awaiting persistence")
+    )
+    for _attempt in range(50):
+        events = store.replay_operation_events(started.session_id)
+        if any(event.event_type == "container_terminal.audit_gap" for event in events):
+            break
+        await asyncio.sleep(0.01)
+
+    gaps = [
+        event
+        for event in events
+        if event.event_type == "container_terminal.audit_gap"
+    ]
+    assert len(gaps) == 1
+    assert gaps[0].payload["command_sha256"] == hashlib.sha256(
+        b"printf gap"
+    ).hexdigest()
+    assert history.status(engagement.id).audit_gap_count == 1
+    assert history.spool_root is not None
+    assert sorted(path.suffix for path in history.spool_root.iterdir()) == [
+        ".json",
+        ".raw",
+    ]
+    await service.close_attachment(attachment)
+
+
+def test_terminal_stream_strips_split_markers_and_persists_audited_result(
     tmp_path,
 ):
+    nonce = "terminalstreamnonce123"
     command = "  printf 'history only'"
-    marker = _command_marker(command, exit_code=9)
+    start_marker, end_marker = _command_markers(command, nonce, exit_code=9)
+    marker = start_marker + b"terminal-output-is-persisted" + end_marker
     malformed = b"\x1b]633;NebulaCommand;invalid;@@@;@@@\x07"
-    output_secret = b"terminal-output-must-not-persist"
+    output_secret = b"terminal-output-is-persisted"
     chunks = [
-        output_secret + b"\r\n" + marker[:8],
+        marker[:8],
         marker[8:31],
         marker[31:] + malformed[:12],
         malformed[12:] + b"\r\nprompt$ ",
@@ -996,6 +1081,7 @@ def test_terminal_stream_strips_split_markers_and_persists_only_command_metadata
     store, engagement, _policy, _runner, platform, service = fixture(
         tmp_path,
         chunks=chunks,
+        audit_nonce=nonce,
     )
     artifacts = ArtifactStore(tmp_path / "artifacts")
     workspace = WorkspaceService(
@@ -1052,24 +1138,22 @@ def test_terminal_stream_strips_split_markers_and_persists_only_command_metadata
                 }
                 break
 
-        assert bytes(displayed) == (
-            output_secret + b"\r\n" + malformed + b"\r\nprompt$ "
-        )
+        assert bytes(displayed) == output_secret + malformed + b"\r\nprompt$ "
         history = client.get(
             f"/api/v1/engagements/{engagement.id}/terminal/commands",
             headers=headers,
         )
         assert history.status_code == 200
         assert history.json()["total"] == 1
-        assert history.json()["records"][0] == {
-            "id": history.json()["records"][0]["id"],
-            "engagement_id": engagement.id,
-            "session_id": started["session_id"],
-            "command": command,
-            "cwd": "/workspace",
-            "exit_code": 9,
-            "occurred_at": history.json()["records"][0]["occurred_at"],
-        }
+        record = history.json()["records"][0]
+        assert record["engagement_id"] == engagement.id
+        assert record["session_id"] == started["session_id"]
+        assert record["operator_id"] == "operator-1"
+        assert record["command"] == command
+        assert record["cwd"] == "/workspace"
+        assert record["exit_code"] == 9
+        assert record["status"] == "completed"
+        assert record["raw_output_available"] is True
 
     destination = tmp_path / "stream-project.nebula.zip"
     export_engagement(
@@ -1080,8 +1164,8 @@ def test_terminal_stream_strips_split_markers_and_persists_only_command_metadata
     )
     with zipfile.ZipFile(destination) as archive:
         archived_payloads = [archive.read(name) for name in archive.namelist()]
-    assert all(output_secret not in payload for payload in archived_payloads)
-    assert all(command.encode() not in payload for payload in archived_payloads)
+    assert output_secret in archived_payloads
+    assert any(command.encode() in payload for payload in archived_payloads)
 
 
 @pytest.mark.skipif(
@@ -1092,6 +1176,7 @@ def test_fixed_bash_prompt_hook_emits_completed_command_markers_only():
     environment = {
         **os.environ,
         "HISTFILE": "/dev/null",
+        "PS0": TERMINAL_PS0,
         "PROMPT_COMMAND": TERMINAL_PROMPT_COMMAND,
         "PS1": "",
     }
@@ -1104,11 +1189,11 @@ def test_fixed_bash_prompt_hook_emits_completed_command_markers_only():
         check=False,
         timeout=10,
     )
-    parser = Osc633CommandParser()
+    parser = Osc633CommandParser(nonce=TERMINAL_AUDIT_PREVIEW_NONCE)
     parsed = parser.feed(completed.stdout)
     tail = parser.flush()
 
-    assert [(record.command, record.exit_code) for record in parsed.records] == [
+    assert [(record.command, record.exit_code) for record in parsed.captures] == [
         ("  printf 'shell-hook\\n'", 0),
         ("false", 1),
     ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import json
 import os
@@ -20,6 +21,7 @@ import typer
 import uvicorn
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
 from .api import create_app
@@ -54,6 +56,7 @@ from .toolpack_sdk import (
 )
 from .toolpacks import manifest_digest
 from .tool_platform import ToolPlatform, default_tool_platform
+from .terminal_history import TerminalCommandRow
 from .version import build_metadata
 
 app = typer.Typer(
@@ -867,8 +870,99 @@ def doctor(
             break
         offset += len(page)
     orphan_digests = sorted(set(artifacts.iter_digests()) - referenced_digests)
+    terminal_audit_errors: list[str] = []
+    terminal_audit_checked = 0
+    command_events: dict[str, dict[str, Any]] = {}
+    terminal_spool_root = artifacts.root.parent / "terminal-audit-spool"
+    if terminal_spool_root.exists():
+        terminal_audit_errors.extend(
+            f"spool:{path.name}"
+            for path in sorted(terminal_spool_root.iterdir())
+            if path.is_file()
+        )
+    with store.database.session() as session:
+        terminal_rows = session.scalars(select(TerminalCommandRow)).all()
+    for row in terminal_rows:
+        terminal_audit_checked += 1
+        expected_command_hash = hashlib.sha256(row.command.encode("utf-8")).hexdigest()
+        if row.command_sha256 != expected_command_hash:
+            terminal_audit_errors.append(f"{row.id}:command_hash")
+        if row.observed_output_bytes < row.captured_output_bytes:
+            terminal_audit_errors.append(f"{row.id}:output_byte_count")
+        if row.output_truncated != (
+            row.observed_output_bytes > row.captured_output_bytes
+        ):
+            terminal_audit_errors.append(f"{row.id}:truncation_state")
+        output_artifacts: dict[str, Artifact] = {}
+        for field_name, artifact_id in (
+            ("raw_output", row.raw_output_artifact_id),
+            ("redacted_output", row.redacted_output_artifact_id),
+        ):
+            if artifact_id is None:
+                continue
+            try:
+                artifact = store.get(Artifact, artifact_id)
+                output_artifacts[field_name] = artifact
+                if not artifacts.verify(artifact):
+                    terminal_audit_errors.append(f"{row.id}:{field_name}_integrity")
+                if artifact.engagement_id != row.engagement_id:
+                    terminal_audit_errors.append(f"{row.id}:{field_name}_project")
+                if artifact.metadata.get("terminal_command_id") != row.id:
+                    terminal_audit_errors.append(f"{row.id}:{field_name}_metadata")
+            except Exception:
+                terminal_audit_errors.append(f"{row.id}:{field_name}_missing")
+        if row.status == "legacy_metadata_only":
+            continue
+        raw_artifact = output_artifacts.get("raw_output")
+        if raw_artifact is None:
+            terminal_audit_errors.append(f"{row.id}:raw_output_reference")
+        else:
+            if raw_artifact.size != row.captured_output_bytes:
+                terminal_audit_errors.append(f"{row.id}:captured_output_bytes")
+            if not row.output_truncated and raw_artifact.sha256 != row.output_sha256:
+                terminal_audit_errors.append(f"{row.id}:output_hash")
+        if output_artifacts.get("redacted_output") is None:
+            terminal_audit_errors.append(f"{row.id}:redacted_output_reference")
+        if row.output_sha256 is None:
+            terminal_audit_errors.append(f"{row.id}:output_hash_missing")
+        if row.session_id not in command_events:
+            events: list[Any] = []
+            after_sequence = 0
+            while True:
+                page = store.replay_operation_events(
+                    row.session_id, after_sequence=after_sequence, limit=10_000
+                )
+                events.extend(page)
+                if len(page) < 10_000:
+                    break
+                after_sequence = page[-1].sequence
+            command_events[row.session_id] = {
+                str(event.payload.get("record_id")): event
+                for event in events
+                if event.event_type == "container_terminal.command"
+            }
+        event = command_events[row.session_id].get(row.id)
+        if event is None:
+            terminal_audit_errors.append(f"{row.id}:command_event_missing")
+            continue
+        expected_event_values = {
+            "status": row.status,
+            "exit_code": row.exit_code,
+            "command_sha256": row.command_sha256,
+            "output_sha256": row.output_sha256,
+            "raw_output_artifact_id": row.raw_output_artifact_id,
+            "redacted_output_artifact_id": row.redacted_output_artifact_id,
+            "observed_output_bytes": row.observed_output_bytes,
+            "captured_output_bytes": row.captured_output_bytes,
+            "output_truncated": row.output_truncated,
+        }
+        if event.actor_id != row.operator_id or any(
+            event.payload.get(key) != value
+            for key, value in expected_event_values.items()
+        ):
+            terminal_audit_errors.append(f"{row.id}:command_event_mismatch")
     api = create_app(store, artifact_store=artifacts, auth_token="doctor")
-    healthy = artifact_ok and not corrupt_artifacts
+    healthy = artifact_ok and not corrupt_artifacts and not terminal_audit_errors
     report = {
         "status": "ok" if healthy else "error",
         **build_metadata(),
@@ -884,6 +978,11 @@ def doctor(
             "orphan_digests": orphan_digests[:100],
         },
         "api": {"openapi_version": api.openapi().get("openapi"), "version": "v1"},
+        "terminal_audit": {
+            "checked": terminal_audit_checked,
+            "errors": len(terminal_audit_errors),
+            "error_records": terminal_audit_errors[:100],
+        },
         "sandbox": {
             "available": sandbox_available,
             "detail": sandbox_detail,

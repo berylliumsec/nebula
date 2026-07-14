@@ -1104,4 +1104,31 @@ describe("ApiClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ tool_names: [], max_tool_calls: 0, max_concurrency: 1 });
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({ tool_names: ["nmap.connect_scan"], max_tool_calls: 20, max_concurrency: 2 });
   });
+
+  it("assembles every paginated terminal result byte and acknowledges raw access", async () => {
+    const pages = [new Uint8Array([0, 1, 2]), new Uint8Array([3, 4])];
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(pages[0], {
+        headers: { "X-Nebula-Output-Total": "5", "X-Nebula-Output-Next": "3" },
+      }))
+      .mockResolvedValueOnce(new Response(pages[1], {
+        headers: { "X-Nebula-Output-Total": "5", "X-Nebula-Output-Next": "5" },
+      }));
+    const client = new ApiClient({
+      baseUrl: "http://127.0.0.1:8765",
+      token: "terminal-token",
+      fetch: fetchMock,
+    });
+
+    const result = await client.terminalCommandOutput("project/one", "command/one", true);
+
+    expect(Array.from(new Uint8Array(await result.arrayBuffer()))).toEqual([0, 1, 2, 3, 4]);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("offset=0");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("offset=3");
+    for (const call of fetchMock.mock.calls) {
+      const headers = new Headers(call[1]?.headers);
+      expect(headers.get("X-Nebula-Sensitive-Data-Acknowledged")).toBe("true");
+      expect(headers.get("Authorization")).toBe("Bearer terminal-token");
+    }
+  });
 });

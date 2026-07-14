@@ -199,6 +199,7 @@ from .setup import (
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .terminal_history import (
+    TerminalAuditImmutableError,
     TerminalCommandHistory,
     TerminalCommandHistoryClearResult,
     TerminalCommandHistoryPreferenceUpdate,
@@ -559,7 +560,11 @@ def create_app(
         )
     if executions is not None and executions.store is not store:
         raise ValueError("execution_service must use the API store")
-    terminal_commands = TerminalCommandHistory(store.database)
+    terminal_commands = TerminalCommandHistory(
+        store.database,
+        store=store,
+        artifact_store=artifact_store,
+    )
     container_terminals = container_terminal_service
     if container_terminals is None and tool_platform is not None:
         container_terminals = ContainerTerminalService(
@@ -1036,14 +1041,83 @@ def create_app(
     async def list_terminal_commands(
         engagement_id: str,
         search: str | None = Query(default=None, max_length=4096),
+        operator_id: str | None = Query(default=None, max_length=200),
+        session_id: str | None = Query(default=None, max_length=200),
+        command_status: str | None = Query(default=None, alias="status", max_length=40),
+        exit_code: int | None = Query(default=None),
+        date_from: datetime | None = Query(default=None),
+        date_to: datetime | None = Query(default=None),
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=1_000),
     ) -> TerminalCommandPage:
         return terminal_commands.list(
             engagement_id,
             search=search,
+            operator_id=operator_id,
+            session_id=session_id,
+            status=command_status,
+            exit_code=exit_code,
+            date_from=date_from,
+            date_to=date_to,
             offset=offset,
             limit=limit,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/commands/{{command_id}}/output",
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def terminal_command_output(
+        engagement_id: str,
+        command_id: str,
+        raw: bool = Query(default=False),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=256 * 1024, ge=1, le=256 * 1024),
+        sensitive_acknowledged: str | None = Header(
+            default=None, alias="X-Nebula-Sensitive-Data-Acknowledged"
+        ),
+    ) -> Response:
+        if raw and sensitive_acknowledged != "true":
+            raise ContainerTerminalError(
+                "sensitive_data_acknowledgement_required",
+                "raw terminal output may contain unredacted secrets; acknowledge the warning to download it",
+                status_code=428,
+            )
+        data, media_type = terminal_commands.output_bytes(
+            engagement_id, command_id, raw=raw
+        )
+        if offset > len(data):
+            raise ContainerTerminalError(
+                "output_offset_invalid",
+                "output offset is beyond the available terminal result",
+                status_code=416,
+            )
+        page_end = min(len(data), offset + limit)
+        if not raw:
+            if offset < len(data) and data[offset] & 0xC0 == 0x80:
+                raise ContainerTerminalError(
+                    "output_offset_invalid",
+                    "output offset is not a UTF-8 boundary",
+                    status_code=416,
+                )
+            while page_end < len(data) and data[page_end] & 0xC0 == 0x80:
+                page_end -= 1
+        headers = {
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Nebula-Output-Total": str(len(data)),
+            "X-Nebula-Output-Next": str(page_end),
+        }
+        if raw:
+            headers.update(
+                {
+                    "Content-Disposition": f'attachment; filename="terminal-command-{command_id}.raw"',
+                    "X-Nebula-Sensitive-Data": "unredacted",
+                }
+            )
+        return Response(
+            content=data[offset:page_end], media_type=media_type, headers=headers
         )
 
     @app.put(
@@ -1056,7 +1130,10 @@ def create_app(
         engagement_id: str,
         request: TerminalCommandHistoryPreferenceUpdate,
     ) -> TerminalCommandHistoryStatus:
-        return terminal_commands.set_enabled(engagement_id, enabled=request.enabled)
+        try:
+            return terminal_commands.set_enabled(engagement_id, enabled=request.enabled)
+        except TerminalAuditImmutableError as exc:
+            raise ContainerTerminalError(exc.code, str(exc)) from exc
 
     @app.delete(
         f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/commands",
@@ -1067,9 +1144,12 @@ def create_app(
     async def clear_terminal_commands(
         engagement_id: str,
     ) -> TerminalCommandHistoryClearResult:
+        try:
+            cleared = terminal_commands.clear(engagement_id)
+        except TerminalAuditImmutableError as exc:
+            raise ContainerTerminalError(exc.code, str(exc)) from exc
         return TerminalCommandHistoryClearResult(
-            engagement_id=engagement_id,
-            cleared=terminal_commands.clear(engagement_id),
+            engagement_id=engagement_id, cleared=cleared
         )
 
     @app.post(
@@ -1373,6 +1453,11 @@ def create_app(
                         )
                     except (asyncio.TimeoutError, WebSocketDisconnect, RuntimeError):
                         return
+        except asyncio.CancelledError:
+            # ASGI servers may cancel the endpoint task as the peer closes the
+            # WebSocket. Treat that as a disconnect so attachment cleanup is
+            # completed and reconnect grace is established deterministically.
+            pass
         except WebSocketDisconnect:
             pass
         except RuntimeError:

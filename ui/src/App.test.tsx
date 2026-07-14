@@ -610,7 +610,7 @@ describe("Nebula workspace", () => {
     expect(JSON.parse(String(startCall?.[1]?.body))).toMatchObject({ engagement_id: "engagement-1", preview_token: "signed.preview", preview_fingerprint: "c".repeat(64) });
     expect(startCall?.[1]?.signal?.aborted).toBe(false);
     await user.click(screen.getByRole("tab", { name: "Activity history" }));
-    expect(screen.getByRole("heading", { name: "Terminal commands" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Terminal audit" })).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "Analyst chat" }));
     await user.click(screen.getByRole("tab", { name: "Project notes" }));
     await user.click(screen.getByRole("tab", { name: "Terminal" }));

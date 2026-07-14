@@ -2,21 +2,34 @@
 .terminal-command-history > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px; border-bottom: 1px solid var(--border); }
 .terminal-command-history > header h2 { display: flex; align-items: center; gap: 8px; margin: 3px 0 5px; font-size: 1rem; }
 .terminal-command-history > header p { margin: 0; color: var(--muted); max-width: 720px; }
-.terminal-command-history > header > div:last-child { display: flex; align-items: center; gap: 10px; }
-.history-toggle { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.audit-health { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 6px 9px; border-radius: 999px; font-size: .78rem; font-weight: 700; white-space: nowrap; }
+.audit-health.active { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.audit-health.degraded { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .history-search { display: flex; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
 .history-search label { flex: 1; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); }
 .history-search input { width: 100%; border: 0; background: transparent; }
 .terminal-command-list { display: grid; max-height: 420px; overflow: auto; }
-.terminal-command-list article { padding: 12px 18px; border-bottom: 1px solid var(--border); }
-.terminal-command-list article > code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.terminal-audit-record { border-bottom: 1px solid var(--border); }
+.terminal-session-heading { display: flex; justify-content: space-between; gap: 12px; padding: 7px 18px; color: var(--muted); background: var(--surface-raised); font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.terminal-command-list article { padding: 12px 18px; }
+.terminal-command-summary { display: grid; grid-template-columns: 18px minmax(0, 1fr); width: 100%; padding: 0; border: 0; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.terminal-command-summary code { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .terminal-command-list article footer { display: flex; gap: 14px; margin-top: 7px; color: var(--muted); font-size: .78rem; }
 .terminal-command-list article footer span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .terminal-command-list article footer .success { color: var(--green); }
 .terminal-command-list article footer .failure { color: var(--red); }
+.terminal-command-list article footer .warning { color: var(--orange); }
+.audit-warning { display: flex; align-items: center; gap: 7px; margin: 12px 18px 0; }
+.terminal-audit-output { margin: 12px 0 0 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); overflow: hidden; }
+.terminal-audit-output-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: .75rem; }
+.terminal-audit-output-toolbar > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.terminal-audit-output pre { max-height: 320px; margin: 0; padding: 12px; overflow: auto; color: var(--text); background: transparent; white-space: pre-wrap; overflow-wrap: anywhere; }
+.terminal-output-warning, .empty-output { display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 11px; border-bottom: 1px solid var(--border); color: var(--orange); font-size: .78rem; }
+.empty-output { color: var(--muted); }
 .history-retention { padding: 10px 18px; color: var(--muted); font-size: .78rem; }
 @media (max-width: 760px) {
   .terminal-command-history > header { flex-direction: column; }
-  .terminal-command-history > header > div:last-child { width: 100%; justify-content: space-between; }
+  .audit-health { align-self: flex-start; }
   .terminal-command-list article footer { flex-wrap: wrap; }
+  .terminal-audit-output-toolbar { align-items: flex-start; flex-direction: column; }
 }

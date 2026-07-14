@@ -19,6 +19,7 @@ import type {
   EvidenceSummary,
   EvidenceUploadRequest,
   SetupImagePreparation,
+  TerminalCommandHistoryStatus,
 } from "../api/types";
 import {
   bindXtermSelectionActions,
@@ -89,6 +90,8 @@ function LiveContainerTerminal({
   const [state, setState] = useState<ContainerTerminalSocketState>("connecting");
   const [error, setError] = useState<string>();
   const [exit, setExit] = useState<{ outcome: string; exitCode?: number }>();
+  const [auditHealth, setAuditHealth] = useState<TerminalCommandHistoryStatus>();
+  const [auditHealthUnavailable, setAuditHealthUnavailable] = useState(false);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -197,6 +200,29 @@ function LiveContainerTerminal({
     if (active && state === "ready") terminalRef.current?.focus();
   }, [active, state]);
 
+  useEffect(() => {
+    if (typeof api.terminalCommandHistoryStatus !== "function") return;
+    const controller = new AbortController();
+    const refresh = async () => {
+      try {
+        setAuditHealth(await api.terminalCommandHistoryStatus(engagementId, controller.signal));
+        setAuditHealthUnavailable(false);
+      } catch {
+        if (!controller.signal.aborted) setAuditHealthUnavailable(true);
+      }
+    };
+    void refresh();
+    const interval = globalThis.setInterval(() => void refresh(), 3_000);
+    return () => {
+      controller.abort();
+      globalThis.clearInterval(interval);
+    };
+  }, [api, engagementId]);
+
+  const auditWarningCount = (auditHealth?.degradedCount ?? 0)
+    + (auditHealth?.truncatedCount ?? 0)
+    + (auditHealth?.auditGapCount ?? 0);
+
   const statusLabel = exit
     ? exit.outcome.replaceAll("_", " ")
     : state === "ready"
@@ -222,6 +248,8 @@ function LiveContainerTerminal({
     </header>
     <div className="terminal-live-notices">
       {error && <p className="terminal-error" role="alert">{error}</p>}
+      {(auditWarningCount > 0 || auditHealthUnavailable) && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {auditHealthUnavailable ? "Terminal audit health is unavailable. Capture failures cannot be ruled out." : `${auditWarningCount} terminal audit warning${auditWarningCount === 1 ? "" : "s"} detected. Review Terminal Audit for truncation, interruption, recovery, or persistence gaps.`}</p>}
+      <p className="terminal-audit-active"><ShieldCheck size={14} /> Audit capture active · commands and merged PTY results are retained for this Project.</p>
       <p>Installed baseline: <code>kali-linux-headless</code> and <code>iputils-ping</code>. The official base is <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code>.</p>
       <p className="terminal-network-warning"><AlertTriangle size={14} /> Bridge networking can reach the public Internet and any host-addressable service. No ports, raw-packet capabilities, host shell, or runtime socket are granted.</p>
     </div>

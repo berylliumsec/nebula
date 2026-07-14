@@ -77,7 +77,7 @@ def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
         artifact_store=artifacts,
     )
 
-    assert manifest.format_version == 2
+    assert manifest.format_version == 3
     assert manifest.entity_counts["engagements"] == 1
     assert manifest.entity_counts["artifacts"] == 2
     assert manifest.entity_counts["evidence"] == 1
@@ -85,6 +85,7 @@ def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
     assert manifest.event_count == 1
     assert manifest.run_event_count == 1
     assert manifest.operation_event_count == 0
+    assert manifest.terminal_command_count == 0
     blob_name = f"blobs/sha256/{first.sha256}"
     with zipfile.ZipFile(destination) as archive:
         assert archive.namelist().count(blob_name) == 1
@@ -97,9 +98,10 @@ def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
         assert archived_events[0]["run_id"] == run.id
         assert archived_events[0]["sequence"] == 1
         assert json.loads(archive.read("operation_events.json")) == []
+        assert json.loads(archive.read("terminal_commands.json")) == []
 
 
-def test_bundle_v2_includes_append_only_operation_events(tmp_path):
+def test_bundle_v3_includes_append_only_operation_events(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     engagement = store.create(Engagement(name="Operation event export"))
@@ -121,7 +123,7 @@ def test_bundle_v2_includes_append_only_operation_events(tmp_path):
         artifact_store=artifacts,
     )
 
-    assert manifest.format_version == 2
+    assert manifest.format_version == 3
     assert manifest.event_count == 1
     assert manifest.run_event_count == 0
     assert manifest.operation_event_count == 1
