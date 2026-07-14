@@ -104,7 +104,7 @@ interface WorkspaceContextValue {
   previewMode: boolean;
   resolveApproval: (id: string, request: ApprovalDecisionRequest) => Promise<void>;
   refreshProvider: (id: string) => Promise<void>;
-  reverifyProvider: (id: string) => Promise<void>;
+  reverifyProvider: (id: string, model?: string) => Promise<void>;
   addProvider: (request: ProviderCreateRequest) => Promise<void>;
   updateProvider: (id: string, request: ProviderUpdateRequest) => Promise<ProviderHealth>;
   setProviderEnabled: (id: string, enabled: boolean, expectedRevision: number) => Promise<ProviderHealth>;
@@ -391,12 +391,12 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return updated;
   }, [api, coreState]);
 
-  const reverifyProvider = useCallback(async (id: string) => {
+  const reverifyProvider = useCallback(async (id: string, requestedModel?: string) => {
     if (coreState !== "online" || !api) {
       throw new Error("Nebula Core must be online to verify a provider.");
     }
     const current = providers.find((provider) => provider.id === id);
-    const model = providerVerificationModel(current);
+    const model = requestedModel?.trim() || providerVerificationModel(current);
     if (!current || !model) throw new Error("Configure an exact model before verification.");
     const updated = await api.verifyProviderCapabilities(id, model, current.revision);
     setProviders((items) => items.map((provider) => provider.id === id ? updated : provider));

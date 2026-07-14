@@ -256,6 +256,47 @@ describe("Nebula workspace", () => {
     });
   });
 
+  it("uses verified assigned Toolbox capabilities in chat without an opt-in control", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const encoder = new TextEncoder();
+    let verified = false;
+    const providerPayload = () => ({ ...entity, revision: verified ? 2 : 1, id: "provider-1", name: "Local tools", provider_type: "vllm", enabled: true, is_local: true, model_allowlist: ["model-1"], capabilities: { streaming: true, tool_calling: verified }, capability_verifications: verified ? { "model-1": { model: "model-1", status: "verified", checked_at: entity.updated_at, contract_version: "required-tool-v1" } } : {}, privacy: { local_only: true, residency: [] }, metadata: { default_model: "model-1" } });
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health") && path.includes("/providers/")) return new Response(JSON.stringify({ provider_id: "provider-1", healthy: true, models: ["model-1"] }), { status: 200 });
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Automatic tools", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/providers")) return new Response(JSON.stringify([providerPayload()]), { status: 200 });
+      if (path.endsWith("/capabilities/verify") && init?.method === "POST") { verified = true; return new Response(JSON.stringify({ status: "verified" }), { status: 200 }); }
+      if (path.endsWith("/providers/provider-1")) return new Response(JSON.stringify(providerPayload()), { status: 200 });
+      if (path.endsWith("/tool-assignment")) return new Response(JSON.stringify([{ id: "assignment-1", engagement_id: "engagement-1", manifest_digest: "sha256:toolbox", tool_names: ["environment.run_network"], enabled: true, revision: 1 }]), { status: 200 });
+      if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([{ id: "toolbox", publisher: "berylliumsec", name: "nebula-toolbox", version: "0.1.0", manifest_digest: "sha256:toolbox", source: "catalog", trust_state: "trusted", runtime_profile_id: "runner-1", image_locks: {}, status: "ready", tool_names: ["environment.run_network"], permissions: ["network"] }]), { status: 200 });
+      if (path.endsWith("/tools")) return new Response(JSON.stringify([{ name: "environment.run_network", pack_id: "toolbox", pack_manifest_digest: "sha256:toolbox", description: "Run a network command", risk_class: "active_scan", requires_network: true, requires_approval: false, available: true }]), { status: 200 });
+      if (path.endsWith("/chat/completions") && init?.method === "POST") {
+        const stream = new ReadableStream<Uint8Array>({ start(controller) {
+          controller.enqueue(encoder.encode('event: done\ndata: {"type":"done","session_id":"session-1","provider_id":"provider-1","model":"model-1","message":{"role":"assistant","content":"Tool-ready answer"},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"finish_reason":"stop","citations":[]}\n\n'));
+          controller.close();
+        } });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions");
+
+    expect(await screen.findByText("Toolbox automatic")).toBeVisible();
+    expect(await screen.findByText("1 assigned capability enabled")).toBeVisible();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/capabilities/verify") && request?.method === "POST")).toBe(true));
+    expect(screen.queryByRole("checkbox", { name: /Toolbox/i })).not.toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Message the analyst assistant" }), "Use the assigned capability");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("Tool-ready answer")).toBeVisible();
+
+    const call = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/chat/completions") && request?.method === "POST");
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ provider_id: "provider-1", model: "model-1", tools_enabled: true });
+  });
+
   it("inspects chat working memory and navigates provenance by keyboard", async () => {
     const entity = {
       created_at: "2026-07-12T10:00:00Z",
@@ -861,7 +902,7 @@ describe("Nebula workspace", () => {
     });
   });
 
-  it("selects assigned Toolbox capabilities by default with bounded budgets", async () => {
+  it("enables every assigned Toolbox capability automatically with bounded budgets", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
@@ -885,18 +926,20 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("button", { name: "New mission" }));
     let dialog = screen.getByRole("dialog", { name: "New mission" });
     expect(dialog.parentElement?.parentElement).toBe(document.body);
-    expect(within(dialog).getByText(/ordinary in-scope commands run without per-command approval/i)).toBeVisible();
+    expect(within(dialog).getByText(/all available assigned capabilities are enabled automatically/i)).toBeVisible();
     await user.click(within(dialog).getByRole("button", { name: "Start mission" }));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Enter a mission objective.");
     expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/missions") && request?.method === "POST")).toBe(false);
     await user.type(within(dialog).getByRole("textbox", { name: "Objective" }), "Scan the assigned target");
-    expect(await within(dialog).findByRole("checkbox", { name: /environment\.run_network/i })).toBeChecked();
+    expect(await within(dialog).findByText("environment.run_network")).toBeVisible();
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(within(dialog).getByRole("spinbutton", { name: "Maximum tool calls" })).toHaveValue(50);
     expect(within(dialog).getByRole("spinbutton", { name: "Maximum concurrency" })).toHaveValue(2);
     await user.click(within(dialog).getByRole("button", { name: "Close mission dialog" }));
     await user.click(screen.getByRole("button", { name: "New mission" }));
     dialog = screen.getByRole("dialog", { name: "New mission" });
-    expect(within(dialog).getByRole("checkbox", { name: /environment\.run_network/i })).toBeChecked();
+    expect(within(dialog).getByText("environment.run_network")).toBeVisible();
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Start mission" }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/missions") && request?.method === "POST")).toBe(true));

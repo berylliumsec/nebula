@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { providerModelVerification } from "../api/providerCapabilities";
 import type {
   ChatCitation,
   ChatCompletionRequest,
@@ -104,6 +105,7 @@ export function SessionsPage() {
     previewMode,
     providers,
     refreshProvider,
+    reverifyProvider,
     resolveApproval,
   } = useWorkspace();
   const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
@@ -115,7 +117,6 @@ export function SessionsPage() {
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
   const [includeKnowledge, setIncludeKnowledge] = useState(true);
-  const [toolsEnabled, setToolsEnabled] = useState(true);
   const [assignedToolCount, setAssignedToolCount] = useState(0);
   const [toolRuntimeReason, setToolRuntimeReason] = useState<string>();
   const [toolCards, setToolCards] = useState<ToolLifecycleCard[]>([]);
@@ -131,19 +132,29 @@ export function SessionsPage() {
   const [contextError, setContextError] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
+  const attemptedToolVerificationRef = useRef(new Set<string>());
   const scrollRef = useRef<HTMLDivElement>(null);
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const selectedProvider = enabledProviders.find((provider) => provider.id === providerId);
   const providerIsLocal = selectedProvider?.kind === "local" || selectedProvider?.privacy === "local_only";
   const cloudKnowledgeAllowed = providerIsLocal || selectedProvider?.permitsSensitiveData === true;
   const canUseKnowledge = knowledgeSources.length > 0 && cloudKnowledgeAllowed;
-  const modelVerified = selectedProvider?.capabilityVerifications?.[model]?.status === "verified";
+  const modelVerification = providerModelVerification(selectedProvider, model);
+  const modelVerified = modelVerification?.status === "verified";
   const toolboxAvailable = Boolean(modelVerified && assignedToolCount > 0 && !toolRuntimeReason);
   const toolboxReason = !modelVerified
     ? model ? `Tool calling is unverified for ${model}.` : "Select a model to verify tool calling."
     : toolRuntimeReason ?? (assignedToolCount === 0 ? "No Toolbox capabilities are assigned to this engagement." : undefined);
   const canUseTools = toolboxAvailable;
   const toolboxUnavailableReason = toolboxReason;
+
+  useEffect(() => {
+    if (coreState !== "online" || previewMode || !selectedProvider || !model.trim() || modelVerification) return;
+    const key = `${selectedProvider.id}:${model.trim()}`;
+    if (attemptedToolVerificationRef.current.has(key)) return;
+    attemptedToolVerificationRef.current.add(key);
+    void reverifyProvider(selectedProvider.id, model).catch(() => undefined);
+  }, [coreState, model, modelVerification, previewMode, reverifyProvider, selectedProvider]);
 
   useEffect(() => {
     if (!api || coreState !== "online" || !engagement) {
@@ -238,7 +249,6 @@ export function SessionsPage() {
     setContextLoading(false);
     setContextError(undefined);
     setRunCandidate(undefined);
-    setToolsEnabled(true);
     setToolCards([]);
     setPendingResponse(undefined);
   }, [engagement?.id]);
@@ -296,7 +306,6 @@ export function SessionsPage() {
     setContextError(undefined);
     setView("chat");
     setMobileListOpen(false);
-    setToolsEnabled(true);
     setToolCards([]);
     setPendingResponse(undefined);
   };
@@ -364,7 +373,6 @@ export function SessionsPage() {
       if (summary) {
         setProviderId(summary.providerId);
         setModel(summary.model ?? "");
-        setToolsEnabled(summary.toolsEnabled ?? false);
       }
       if (pendingTurn && summary) {
         const assistantId = makeId("assistant-pending");
@@ -452,7 +460,6 @@ export function SessionsPage() {
       if (summary) {
         setProviderId(summary.providerId);
         setModel(summary.model ?? "");
-        setToolsEnabled(summary.toolsEnabled ?? false);
       }
       setView("chat");
       setMobileListOpen(false);
@@ -550,7 +557,7 @@ export function SessionsPage() {
       }
     }
 
-    const wantsTools = toolsEnabled && canUseTools;
+    const wantsTools = canUseTools;
     let allowCloudToolResults = false;
     if (wantsTools && !providerIsLocal) {
       if (!selectedProvider.permitsSensitiveData) {
@@ -776,7 +783,7 @@ export function SessionsPage() {
                 <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label>
                 <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={sending || Boolean(sessionId) || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{selectedProvider?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
                 <label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? cloudKnowledgeAllowed ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label>
-                <label className="chat-knowledge-toggle" title={toolboxUnavailableReason}><input type="checkbox" checked={toolsEnabled && canUseTools} disabled={!canUseTools || sending || Boolean(pendingResponse)} onChange={(event) => setToolsEnabled(event.target.checked)} /><span>Toolbox enabled<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"}` : toolboxUnavailableReason}</small></span></label>
+                <div className="chat-knowledge-toggle" role="status" title={toolboxUnavailableReason}><ShieldCheck size={15} /><span>Toolbox automatic<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"} enabled` : toolboxUnavailableReason}</small></span></div>
               </div>}
               <div className="chat-scroll" ref={scrollRef} aria-live="polite">
                 {previewMode ? <>
@@ -794,7 +801,7 @@ export function SessionsPage() {
               <form className="chat-composer" onSubmit={(event) => void submit(event)}>
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <textarea id="analyst-message" value={draft} disabled={previewMode || !engagement || !selectedProvider || loadingHistory} placeholder={previewMode ? "Connect Nebula Core to chat…" : !engagement ? "Create or select an engagement to chat…" : selectedProvider ? "Ask about this engagement…" : "Add and select a provider in Settings…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
-                <footer><span>{toolsEnabled && canUseTools ? `Toolbox enabled · ${assignedToolCount} assigned` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse) void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><span>{canUseTools ? `Toolbox automatic · ${assignedToolCount} assigned` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse) void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
             </div>
           )}
@@ -805,7 +812,7 @@ export function SessionsPage() {
           <dl><div><dt>Active operator</dt><dd>{previewMode ? "Jordan Diaz" : activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat"}</dd></div><div><dt>Provider</dt><dd>{selectedProvider?.name ?? "Not selected"}</dd></div><div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl>
           <section><h3>Working memory</h3>{contextLoading ? <p role="status">Loading working memory…</p> : contextError ? <p role="alert">{contextError}</p> : contextStatus?.status ? <><div className="scope-chip-list"><span>Memory: {contextStatus.status.replace("_", " ")}</span><span>{contextStatus.estimatedInputTokens} / {contextStatus.targetInputTokens} estimated tokens</span></div>{contextStatus.snapshot?.memory ? <div className="empty-state mini"><Braces size={19} /><p>{contextStatus.snapshot.memory.summary}</p><small>Derived through sequence {contextStatus.compactedThrough} · {contextStatus.snapshot.providerId}/{contextStatus.snapshot.model} · {contextStatus.snapshot.usage.totalTokens} compaction tokens · ${contextStatus.snapshot.costUsd.toFixed(4)}</small><div className="scope-chip-list">{contextStatus.snapshot.sourceReferences.filter((source) => source.sequence).slice(0, 8).map((source) => <button aria-label={`Go to transcript message ${source.sequence}`} type="button" key={`${source.sourceId}-${source.sequence}`} onClick={() => { const target = document.querySelector<HTMLElement>(`[data-sequence="${source.sequence}"]`); target?.scrollIntoView?.({ behavior: "smooth", block: "center" }); target?.focus(); }}>Message #{source.sequence}</button>)}</div></div> : contextStatus.status === "failed" ? <p role="alert">Context compaction failed. Retry with the configured provider before continuing this conversation.</p> : <p>{contextStatus.status === "stale" ? "Working memory is stale and will refresh before the next answer that requires compaction." : "Compaction has not been needed for this conversation."}</p>}</> : <p>Select a saved conversation to inspect its working memory.</p>}</section>
           <section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"}</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section>
-          <section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>{toolsEnabled && canUseTools ? `${assignedToolCount} assigned capabilities run sequentially through the scoped broker; approvals pause this response.` : toolboxUnavailableReason ?? "Toolbox is disabled for this session."}</p></div></section>
+          <section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>{canUseTools ? `${assignedToolCount} assigned capabilities are enabled automatically and run sequentially through the scoped broker; approvals pause this response.` : toolboxUnavailableReason ?? "Toolbox is unavailable for this session."}</p></div></section>
           <section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Derived memory is not evidence. Citations still identify canonical ingested chunks and transcript messages.</p></div></section>
         </aside>}
       </div>
