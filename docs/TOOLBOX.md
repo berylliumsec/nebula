@@ -40,6 +40,23 @@ container isolation, concurrency and call budgets, evidence recording, and
 mission cancellation. Credential use, exploitation, persistence, destructive
 actions, scope changes, and external filesystem writes remain approval-gated.
 
+Each specialist receives its role-compatible capabilities from the immutable
+mission tool lock and works in durable sequential turns. A turn may search the
+catalog, read exact help, select a structured interface, use the shell fallback,
+or explicitly finish the task; at most one brokered capability executes in a
+turn. Nonzero exits, timeouts, parser failures, output truncation, policy denials,
+and rejected approvals are returned to the next turn as error observations. The
+specialist must change a failed invocation, find a permitted alternative, or
+finish as blocked. It cannot report completion while its latest failure is
+unresolved.
+
+Tool calls, model tokens, cost, duration, and concurrency remain bounded by the
+existing mission controls. Investigative turns do not consume `max_retries`;
+that setting is reserved for provider, validation, compaction, and runtime
+exceptions. Exhausting a budget or failing independent evidence verification
+without room for new evidence produces a blocked task and a failed mission with
+the partial commands, observations, and evidence retained.
+
 Network execution uses the environment's embedded digest-pinned egress helper;
 a runner profile may explicitly override it with another compatible pinned
 helper. If the runner or egress boundary is unavailable, local/offline analysis

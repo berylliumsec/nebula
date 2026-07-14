@@ -114,8 +114,11 @@ describe("ContainerTerminalPanel", () => {
       terminalCommandHistoryStatus: vi.fn().mockResolvedValue({
         engagementId: "engagement-1",
         enabled: true,
-        captureMode: "required",
+        captureMode: "selected_tools",
         recordCount: 1,
+        recordedOutputCount: 1,
+        metadataOnlyCount: 0,
+        classificationFailureCount: 0,
         degradedCount: 0,
         truncatedCount: 0,
         auditGapCount: 1,

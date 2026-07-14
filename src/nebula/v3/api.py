@@ -205,6 +205,9 @@ from .terminal_history import (
     TerminalCommandHistoryPreferenceUpdate,
     TerminalCommandHistoryStatus,
     TerminalCommandPage,
+    TerminalRecordingTools,
+    TerminalRecordingToolsConflict,
+    TerminalRecordingToolsUpdate,
 )
 from .tool_platform import ToolPlatform, ToolPlatformError
 from .version import __version__, build_metadata
@@ -565,6 +568,20 @@ def create_app(
         store=store,
         artifact_store=artifact_store,
     )
+    inventory_loader = (
+        getattr(tool_platform, "last_human_terminal_security_inventory", None)
+        if tool_platform is not None
+        else None
+    )
+    if callable(inventory_loader):
+        cached_inventory = inventory_loader()
+        if cached_inventory is not None:
+            image_digest, manifest_sha256, default_tools = cached_inventory
+            terminal_commands.register_tool_inventory(
+                runtime_image_digest=image_digest,
+                manifest_sha256=manifest_sha256,
+                default_tools=default_tools,
+            )
     container_terminals = container_terminal_service
     if container_terminals is None and tool_platform is not None:
         container_terminals = ContainerTerminalService(
@@ -1020,6 +1037,36 @@ def create_app(
         engagement_id: str,
     ) -> ContainerTerminalCapabilities:
         return require_container_terminal_service().capabilities(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/recording-tools",
+        response_model=TerminalRecordingTools,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def terminal_recording_tools(
+        engagement_id: str,
+    ) -> TerminalRecordingTools:
+        return terminal_commands.recording_tools(engagement_id)
+
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/recording-tools",
+        response_model=TerminalRecordingTools,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_terminal_recording_tools(
+        engagement_id: str,
+        request: TerminalRecordingToolsUpdate,
+    ) -> TerminalRecordingTools:
+        try:
+            return terminal_commands.update_recording_tools(
+                engagement_id,
+                request,
+                actor_id=active_operator_id(),
+            )
+        except TerminalRecordingToolsConflict as exc:
+            raise ContainerTerminalError(exc.code, str(exc)) from exc
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/commands/status",

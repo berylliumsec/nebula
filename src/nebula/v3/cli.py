@@ -911,20 +911,36 @@ def doctor(
                     terminal_audit_errors.append(f"{row.id}:{field_name}_metadata")
             except Exception:
                 terminal_audit_errors.append(f"{row.id}:{field_name}_missing")
-        if row.status == "legacy_metadata_only":
+        if row.capture_decision == "legacy_metadata_only":
             continue
-        raw_artifact = output_artifacts.get("raw_output")
-        if raw_artifact is None:
-            terminal_audit_errors.append(f"{row.id}:raw_output_reference")
-        else:
-            if raw_artifact.size != row.captured_output_bytes:
-                terminal_audit_errors.append(f"{row.id}:captured_output_bytes")
-            if not row.output_truncated and raw_artifact.sha256 != row.output_sha256:
-                terminal_audit_errors.append(f"{row.id}:output_hash")
-        if output_artifacts.get("redacted_output") is None:
-            terminal_audit_errors.append(f"{row.id}:redacted_output_reference")
-        if row.output_sha256 is None:
-            terminal_audit_errors.append(f"{row.id}:output_hash_missing")
+        output_expected = row.capture_decision in {
+            "selected_tool",
+            "capture_failed",
+            "legacy_all_commands",
+        }
+        if output_expected:
+            raw_artifact = output_artifacts.get("raw_output")
+            if raw_artifact is None:
+                terminal_audit_errors.append(f"{row.id}:raw_output_reference")
+            else:
+                if raw_artifact.size != row.captured_output_bytes:
+                    terminal_audit_errors.append(f"{row.id}:captured_output_bytes")
+                if not row.output_truncated and raw_artifact.sha256 != row.output_sha256:
+                    terminal_audit_errors.append(f"{row.id}:output_hash")
+            if output_artifacts.get("redacted_output") is None:
+                terminal_audit_errors.append(f"{row.id}:redacted_output_reference")
+            if row.output_sha256 is None:
+                terminal_audit_errors.append(f"{row.id}:output_hash_missing")
+        elif (
+            output_artifacts
+            or row.output_sha256 is not None
+            or row.observed_output_bytes
+            or row.captured_output_bytes
+            or row.output_truncated
+        ):
+            terminal_audit_errors.append(f"{row.id}:unexpected_output_capture")
+        if row.capture_decision == "classification_failed":
+            terminal_audit_errors.append(f"{row.id}:classification_failed")
         if row.session_id not in command_events:
             events: list[Any] = []
             after_sequence = 0
@@ -956,6 +972,15 @@ def doctor(
             "captured_output_bytes": row.captured_output_bytes,
             "output_truncated": row.output_truncated,
         }
+        if row.capture_decision != "legacy_all_commands":
+            expected_event_values.update(
+                {
+                    "capture_decision": row.capture_decision,
+                    "matched_tools": json.loads(row.matched_tools),
+                    "recording_policy_revision": row.recording_policy_revision,
+                    "runtime_image_digest": row.runtime_image_digest,
+                }
+            )
         if event.actor_id != row.operator_id or any(
             event.payload.get(key) != value
             for key, value in expected_event_values.items()

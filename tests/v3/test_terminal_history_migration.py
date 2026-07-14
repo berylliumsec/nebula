@@ -59,6 +59,33 @@ def test_terminal_history_migrates_forward_and_back_from_bootstrap_v4(tmp_path):
             assert migrated["raw_output_artifact_id"] is None
             assert "not captured" in migrated["capture_error"]
 
+            command.upgrade(config, "0007_selective_terminal_output")
+            selective = connection.execute(
+                text(
+                    "SELECT capture_decision, matched_tools, "
+                    "recording_policy_revision, runtime_image_digest "
+                    "FROM terminal_command_records WHERE id = 'legacy-command'"
+                )
+            ).mappings().one()
+            assert selective == {
+                "capture_decision": "legacy_metadata_only",
+                "matched_tools": "[]",
+                "recording_policy_revision": None,
+                "runtime_image_digest": None,
+            }
+            preference_columns = {
+                item["name"]
+                for item in inspect(connection).get_columns(
+                    "terminal_command_preferences"
+                )
+            }
+            assert {"custom_tools", "disabled_tools", "revision"} <= preference_columns
+
+            command.downgrade(config, "0006_terminal_command_audit")
+            assert "capture_decision" not in {
+                item["name"]
+                for item in inspect(connection).get_columns("terminal_command_records")
+            }
             command.downgrade(config, "0005_terminal_command_history")
             assert connection.execute(
                 text(

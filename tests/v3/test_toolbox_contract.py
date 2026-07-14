@@ -10,6 +10,7 @@ import yaml
 from nebula.v3.agent_tooling import BrokeredToolSpecialist, ToolMissionSupervisor
 from nebula.v3.domain import RiskClass, RunBudget, ScopePolicy
 from nebula.v3.orchestration import (
+    MissionError,
     MissionPlan,
     PlannedTask,
     SpecialistContext,
@@ -434,19 +435,8 @@ def test_toolbox_mission_groups_structured_and_shell_capabilities():
         )
     )
 
-    assert [task.allowed_tools for task in plan.tasks] == [
-        frozenset({"environment.search"}),
-        frozenset({"environment.help"}),
-        frozenset(
-            {
-                "environment.run_local",
-                "environment.run_network",
-                "environment.run_invasive",
-                "environment.shell_local",
-                "environment.shell_network",
-            }
-        ),
-    ]
+    assert [task.allowed_tools for task in plan.tasks] == [frozenset(names)]
+    assert "Investigate iteratively" in plan.tasks[0].instructions
 
 
 def test_toolbox_mission_summary_is_structured_markdown_with_commands():
@@ -671,12 +661,14 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
                 objective="Transform evidence",
                 prior_results={},
                 allowed_tools=frozenset({spec.name}),
+                remaining_tool_calls=1,
             )
         )
     )
 
     assert result.tool_calls == 1
-    assert len(provider.requests) == 3
+    assert result.outcome.value == "continue"
+    assert len(provider.requests) == 2
     assert "do not invent option IDs" in (provider.requests[1].instructions or "")
     assert '"name": "jq"' in (provider.requests[1].instructions or "")
     assert [tool.name for tool in provider.requests[1].tools] == [
@@ -780,11 +772,402 @@ def test_specialist_corrects_single_catalogued_help_path(tmp_path):
                 objective="Read jq help",
                 prior_results={},
                 allowed_tools=frozenset({spec.name}),
+                remaining_tool_calls=1,
             )
         )
     )
 
     assert result.tool_calls == 1
+    assert result.outcome.value == "continue"
+    assert result.output["status"] == "complete"
+
+
+def test_specialist_investigates_failed_result_then_finishes(tmp_path):
+    class IteratingProvider(ModelProvider):
+        def __init__(self):
+            super().__init__(
+                ProviderConfig(
+                    id="iterate",
+                    kind=ProviderKind.OPENAI_COMPATIBLE,
+                    flavor=ProviderFlavor.VLLM,
+                    base_url="http://127.0.0.1:8000/v1",
+                    local=True,
+                    enabled=True,
+                    capabilities=ModelCapabilities(tools=True, strict_tools=True),
+                )
+            )
+            self.requests: list[ModelRequest] = []
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                call = ToolCall(
+                    id="bad-help",
+                    name="environment.help",
+                    arguments={"tool": "missing", "command_path": []},
+                )
+            elif len(self.requests) == 2:
+                call = ToolCall(
+                    id="search-fix",
+                    name="environment.search",
+                    arguments={"query": "available replacement"},
+                )
+            elif len(self.requests) == 3:
+                call = ToolCall(
+                    id="corrected-help",
+                    name="environment.help",
+                    arguments={"tool": "replacement", "command_path": []},
+                )
+            else:
+                call = ToolCall(
+                    id="finish",
+                    name="nebula.finish_task",
+                    arguments={
+                        "status": "complete",
+                        "summary": "Located the available replacement.",
+                        "rationale": "The corrected search succeeded.",
+                    },
+                )
+            return ModelResponse(
+                provider_id=self.config.id, model="test", tool_calls=[call]
+            )
+
+        async def health(self) -> ProviderHealth:
+            return ProviderHealth(provider_id=self.config.id, healthy=True)
+
+    class Broker:
+        async def execute(self, invocation, scope):
+            del scope
+            if (
+                invocation.tool_name == "environment.help"
+                and invocation.arguments["tool"] == "missing"
+            ):
+                return ToolExecutionResult(
+                    output={"stderr": "unknown tool", "exit_code": 2},
+                    exit_code=0,
+                    execution={"command": ["help", "missing"]},
+                )
+            return ToolExecutionResult(
+                output={"matches": ["replacement"], "exit_code": 0},
+                exit_code=0,
+                execution={"command": ["search", "available replacement"]},
+                evidence_ids=["evidence-1"],
+            )
+
+    specs = {
+        "environment.help": ToolSpec(
+            name="environment.help",
+            description="Read help",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "tool": {"type": "string"},
+                    "command_path": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["tool", "command_path"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ,
+        ),
+        "environment.search": ToolSpec(
+            name="environment.search",
+            description="Search tools",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ,
+        ),
+    }
+    provider = IteratingProvider()
+    specialist = BrokeredToolSpecialist(
+        provider,
+        role=SpecialistRole.NETWORK_SERVICE,
+        broker=Broker(),
+        scope=ScopePolicy(engagement_id="engagement"),
+        workspace=tmp_path,
+        specs=specs,
+    )
+    task = PlannedTask(
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Recover from help failure",
+        instructions="Find a working replacement",
+        allowed_tools=frozenset(specs),
+    )
+
+    first = asyncio.run(
+        specialist.run(
+            SpecialistContext(
+                engagement_id="engagement",
+                run_id="run",
+                task=task,
+                objective="Find a replacement",
+                prior_results={},
+                allowed_tools=frozenset(specs),
+                remaining_tool_calls=3,
+            )
+        )
+    )
+    second = asyncio.run(
+        specialist.run(
+            SpecialistContext(
+                engagement_id="engagement",
+                run_id="run",
+                task=task,
+                objective="Find a replacement",
+                prior_results={},
+                prior_turns=[first],
+                turn_index=2,
+                allowed_tools=frozenset(specs),
+                remaining_tool_calls=2,
+            )
+        )
+    )
+    corrected = asyncio.run(
+        specialist.run(
+            SpecialistContext(
+                engagement_id="engagement",
+                run_id="run",
+                task=task,
+                objective="Find a replacement",
+                prior_results={},
+                prior_turns=[first, second],
+                turn_index=3,
+                allowed_tools=frozenset(specs),
+                remaining_tool_calls=1,
+            )
+        )
+    )
+    finished = asyncio.run(
+        specialist.run(
+            SpecialistContext(
+                engagement_id="engagement",
+                run_id="run",
+                task=task,
+                objective="Find a replacement",
+                prior_results={},
+                prior_turns=[first, second, corrected],
+                turn_index=4,
+                allowed_tools=frozenset(),
+                remaining_tool_calls=0,
+            )
+        )
+    )
+
+    assert first.output["status"] == "failed"
+    assert provider.requests[1].tool_results[0].is_error is True
+    assert second.output["status"] == "complete"
+    assert corrected.output["status"] == "complete"
+    assert finished.outcome.value == "complete"
+    assert finished.evidence_ids == ["evidence-1"]
+    assert [item["status"] for item in finished.output["observations"]] == [
+        "failed",
+        "complete",
+        "complete",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("execution_result", "expected_status", "expected_detail"),
+    [
+        (
+            ToolExecutionResult(output={}, parser_error="invalid parser output"),
+            "failed",
+            "invalid parser output",
+        ),
+        (
+            ToolExecutionResult(output={}, execution={"timed_out": True}),
+            "failed",
+            '"timed_out": true',
+        ),
+        (
+            ToolExecutionResult(output={}, output_truncated=True),
+            "incomplete",
+            '"output_truncated": true',
+        ),
+        (
+            ToolExecutionResult(output={"data": "x" * 10_000}),
+            "incomplete",
+            '"truncated": true',
+        ),
+    ],
+)
+def test_specialist_marks_broker_failures_as_error_observations(
+    tmp_path, execution_result, expected_status, expected_detail
+):
+    class Provider(ModelProvider):
+        def __init__(self):
+            super().__init__(
+                ProviderConfig(
+                    id="failures",
+                    kind=ProviderKind.OPENAI_COMPATIBLE,
+                    flavor=ProviderFlavor.VLLM,
+                    base_url="http://127.0.0.1:8000/v1",
+                    local=True,
+                    enabled=True,
+                    capabilities=ModelCapabilities(tools=True, strict_tools=True),
+                )
+            )
+
+        async def complete(self, request):
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="test",
+                tool_calls=[
+                    ToolCall(
+                        id="failure",
+                        name="environment.help",
+                        arguments={"tool": "jq", "command_path": []},
+                    )
+                ],
+            )
+
+        async def health(self):
+            return ProviderHealth(provider_id=self.config.id, healthy=True)
+
+    class Broker:
+        async def execute(self, invocation, scope):
+            del invocation, scope
+            return execution_result
+
+    spec = ToolSpec(
+        name="environment.help",
+        description="Read help",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string"},
+                "command_path": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["tool", "command_path"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.LOCAL_READ,
+    )
+    specialist = BrokeredToolSpecialist(
+        Provider(),
+        role=SpecialistRole.NETWORK_SERVICE,
+        broker=Broker(),
+        scope=ScopePolicy(engagement_id="engagement"),
+        workspace=tmp_path,
+        specs={spec.name: spec},
+    )
+    task = PlannedTask(
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Observe a failure",
+        instructions="Retain exact failure details",
+    )
+    observed = asyncio.run(
+        specialist.run(
+            SpecialistContext(
+                engagement_id="engagement",
+                run_id="run",
+                task=task,
+                objective="Observe a failure",
+                prior_results={},
+                allowed_tools=frozenset({spec.name}),
+                remaining_tool_calls=1,
+            )
+        )
+    )
+
+    assert observed.output["status"] == expected_status
+    assert expected_detail in observed.output["provider_result"]
+    history = specialist._provider_tool_history(
+        SpecialistContext(
+            engagement_id="engagement",
+            run_id="run",
+            task=task,
+            objective="Observe a failure",
+            prior_results={},
+            prior_turns=[observed],
+            allowed_tools=frozenset({spec.name}),
+        )
+    )
+    assert history[0].is_error is True
+
+
+def test_specialist_rejects_an_unchanged_failed_invocation():
+    task = PlannedTask(
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Correct a failure",
+        instructions="Change the failed invocation",
+    )
+    context = SpecialistContext(
+        engagement_id="engagement",
+        run_id="run",
+        task=task,
+        objective="Correct a failure",
+        prior_results={},
+        prior_turns=[
+            SpecialistResult(
+                summary="failed",
+                output={
+                    "status": "failed",
+                    "tool": "environment.help",
+                    "arguments": {"tool": "missing", "command_path": []},
+                },
+            )
+        ],
+        allowed_tools=frozenset({"environment.help"}),
+    )
+
+    with pytest.raises(MissionError, match="repeated a failed invocation unchanged"):
+        BrokeredToolSpecialist._reject_unchanged_failed_invocation(
+            context,
+            "environment.help",
+            {"tool": "missing", "command_path": []},
+        )
+
+
+def test_specialist_history_keeps_latest_failure_exact_when_bounding_turns():
+    task = PlannedTask(
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Bound history",
+        instructions="Keep the latest failure exact",
+    )
+    turns = [
+        SpecialistResult(
+            summary=f"turn {index}",
+            output={
+                "model_call_id": f"call-{index}",
+                "tool": "environment.help",
+                "arguments": {"tool": f"tool-{index}"},
+                "provider_result": {"turn": index},
+                "status": "failed" if index == 0 else "complete",
+            },
+        )
+        for index in range(10)
+    ]
+    context = SpecialistContext(
+        engagement_id="engagement",
+        run_id="run",
+        task=task,
+        objective="Bound history",
+        prior_results={},
+        prior_turns=turns,
+        allowed_tools=frozenset({"environment.help"}),
+    )
+
+    history = BrokeredToolSpecialist._provider_tool_history(context)
+
+    assert [item.call_id for item in history] == [
+        "call-0",
+        "call-2",
+        "call-3",
+        "call-4",
+        "call-5",
+        "call-6",
+        "call-7",
+        "call-8",
+        "call-9",
+    ]
+    assert history[0].is_error is True
 
 
 def test_toolbox_shell_supports_full_pipeline_and_records_script_hash(tmp_path, capsys):

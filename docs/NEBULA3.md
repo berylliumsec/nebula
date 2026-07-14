@@ -16,8 +16,9 @@ application remains a separately versioned maintenance distribution.
 - Explicit catalog profiles for commercial gateways and local runtimes,
   including Ollama, **vLLM**, llama.cpp, SGLang, LM Studio, Hugging Face
   endpoints, and NVIDIA NIM.
-- LangGraph supervisor/specialist missions with durable checkpoints, approval
-  pauses, independent evidence verification, retries, and hard budgets.
+- LangGraph supervisor/specialist missions with durable investigative tool
+  turns, approval pauses, independent evidence verification, exception retries,
+  explicit blocked outcomes, and hard budgets.
 - Typed tool plugins, strict JSON schemas, engagement-owned workspaces,
   broker-owned DNS resolution, scope enforcement, and rootless OCI execution.
 - React/TypeScript workspace and Tauri shell with a loopback-only sidecar token

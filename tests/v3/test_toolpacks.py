@@ -1107,6 +1107,9 @@ def test_human_terminal_image_is_prepared_once_per_runner_revision(
                 installed_packages=("kali-linux-headless", "iputils-ping"),
                 refreshed=True,
                 detail="pulled",
+                security_tools=("hashcat", "nmap"),
+                security_tool_packages=("hashcat", "nmap"),
+                security_tool_manifest_sha256=DIGEST_C,
             )
 
     monkeypatch.setattr("nebula.v3.tool_platform.ContainerImagePreparer", FakePreparer)
@@ -1126,7 +1129,7 @@ def test_human_terminal_image_is_prepared_once_per_runner_revision(
         platform.human_terminal_image_metadata_path.read_text(encoding="utf-8")
     )
     assert metadata == {
-        "schema": "nebula.human-terminal-image/v1",
+        "schema": "nebula.human-terminal-image/v2",
         "verified_at": metadata["verified_at"],
         "runner_profile_id": "local",
         "runner_profile_revision": 1,
@@ -1140,8 +1143,16 @@ def test_human_terminal_image_is_prepared_once_per_runner_revision(
         "image_digest": "sha256:" + DIGEST_B,
         "platform": "linux/amd64",
         "installed_packages": ["kali-linux-headless", "iputils-ping"],
+        "security_tools": ["hashcat", "nmap"],
+        "security_tool_packages": ["hashcat", "nmap"],
+        "security_tool_manifest_sha256": DIGEST_C,
         "registry_refreshed": True,
     }
+    assert platform.last_human_terminal_security_inventory() == (
+        "sha256:" + DIGEST_B,
+        DIGEST_C,
+        ("hashcat", "nmap"),
+    )
     assert platform.human_terminal_image_metadata_path.stat().st_mode & 0o777 == 0o600
 
 

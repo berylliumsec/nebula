@@ -22,6 +22,9 @@ from nebula.v3.terminal_history import (
     Osc633CommandParser,
     TerminalAuditImmutableError,
     TerminalCommandHistory,
+    TerminalRecordingPolicy,
+    TerminalRecordingToolsConflict,
+    TerminalRecordingToolsUpdate,
 )
 
 
@@ -75,7 +78,7 @@ def test_history_is_default_on_exact_searchable_and_paginated(command_history):
     assert first.cwd == "/workspace/first dir"
     status = history.status(project.id)
     assert status.enabled is True
-    assert status.capture_mode == "required"
+    assert status.capture_mode == "selected_tools"
     assert status.record_count == 2
     assert status.retention_days is None
     assert status.max_records is None
@@ -108,6 +111,96 @@ def test_audit_cannot_be_disabled_or_cleared(command_history):
         history.clear(project.id)
     assert [record.command for record in history.list(project.id).records] == ["pwd"]
     assert history.set_enabled(project.id, enabled=True).enabled is True
+
+
+def test_recording_tool_preferences_overlay_verified_image_defaults(command_history):
+    history, project = command_history
+    image = "sha256:" + "a" * 64
+    manifest = "b" * 64
+    history.register_tool_inventory(
+        runtime_image_digest=image,
+        manifest_sha256=manifest,
+        default_tools=["hashcat", "nmap"],
+    )
+
+    initial = history.recording_tools(project.id)
+    assert initial.default_tools == ["hashcat", "nmap"]
+    assert initial.effective_tools == ["hashcat", "nmap"]
+    updated = history.update_recording_tools(
+        project.id,
+        TerminalRecordingToolsUpdate(
+            custom_tools=["custom-scanner"],
+            disabled_tools=["nmap"],
+            expected_revision=0,
+            expected_manifest_sha256=manifest,
+        ),
+        actor_id="operator-1",
+    )
+    assert updated.revision == 1
+    assert updated.effective_tools == ["custom-scanner", "hashcat"]
+    policy = history.recording_policy(
+        project.id,
+        runtime_image_digest=image,
+        manifest_sha256=manifest,
+        default_tools=["hashcat", "nmap", "new-kali-tool"],
+    )
+    assert policy.effective_tools == frozenset(
+        {"custom-scanner", "hashcat", "new-kali-tool"}
+    )
+    with pytest.raises(TerminalRecordingToolsConflict):
+        history.update_recording_tools(
+            project.id,
+            TerminalRecordingToolsUpdate(
+                custom_tools=[],
+                disabled_tools=[],
+                expected_revision=0,
+                expected_manifest_sha256=manifest,
+            ),
+            actor_id="operator-1",
+        )
+
+
+def test_unselected_command_retains_metadata_without_output_artifacts(tmp_path):
+    database = Database(tmp_path / "selective.db")
+    store = NebulaStore(database)
+    project = store.create(Engagement(name="Selective terminal audit"))
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    history = TerminalCommandHistory(
+        database, store=store, artifact_store=artifacts
+    )
+    now = datetime.now(timezone.utc)
+    output = b"must not become durable"
+    record = history.record_capture(
+        engagement_id=project.id,
+        session_id="terminal-selective",
+        operator_id="operator-1",
+        capture=CapturedTerminalCommand(
+            shell_sequence="2",
+            command="ls -la",
+            cwd="/workspace",
+            status="completed",
+            exit_code=0,
+            started_at=now,
+            completed_at=now,
+            output=output,
+            observed_output_bytes=len(output),
+            output_sha256=hashlib.sha256(output).hexdigest(),
+            output_truncated=False,
+            capture_decision="not_selected",
+            recording_policy_revision=3,
+            runtime_image_digest="sha256:" + "c" * 64,
+        ),
+    )
+
+    assert record.capture_decision == "not_selected"
+    assert record.raw_output_available is False
+    assert record.output_sha256 is None
+    assert record.observed_output_bytes == 0
+    assert store.list_entities(Artifact) == []
+    events = store.replay_operation_events("terminal-selective")
+    assert events[-1].payload["capture_decision"] == "not_selected"
+    assert history.status(project.id).metadata_only_count == 1
+    database.dispose()
 
 
 def test_audit_records_have_project_lifetime_without_age_or_count_pruning(tmp_path):
@@ -279,6 +372,42 @@ def test_nonce_bound_frames_capture_only_command_result_and_detect_truncation():
     assert capture.completed_at - capture.started_at == timedelta(seconds=2)
     assert first.passthrough.startswith(b"prompt$ printf result")
     assert spoofed in second.passthrough
+
+
+def test_exec_frames_select_only_tools_that_actually_run():
+    nonce = "terminalselective123"
+    parser = Osc633CommandParser(
+        nonce=nonce,
+        policy_provider=lambda: TerminalRecordingPolicy(
+            revision=4,
+            effective_tools=frozenset({"nmap"}),
+            runtime_image_digest="sha256:" + "a" * 64,
+            manifest_sha256="b" * 64,
+        ),
+    )
+    start = _audit_frame(
+        "Start",
+        nonce,
+        "12",
+        base64.b64encode(b"/workspace"),
+        base64.b64encode(b"printf before; false && nmap; /usr/bin/nmap --version"),
+    )
+    printf_exec = _audit_frame(
+        "Exec", nonce, "11", base64.b64encode(b"printf before")
+    )
+    nmap_exec = _audit_frame(
+        "Exec", nonce, "11", base64.b64encode(b"/usr/bin/nmap --version")
+    )
+    end = _audit_frame("End", nonce, "12", b"0", b"1")
+
+    result = parser.feed(start + printf_exec + b"before\n" + nmap_exec + b"Nmap 7" + end)
+
+    assert len(result.captures) == 1
+    capture = result.captures[0]
+    assert capture.capture_decision == "selected_tool"
+    assert capture.matched_tools == ("nmap",)
+    assert capture.output == b"before\nNmap 7"
+    assert capture.recording_policy_revision == 4
 
 
 def test_audit_parser_preserves_multiline_binary_results_and_async_output_boundaries():
@@ -627,6 +756,11 @@ def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(t
     artifacts = ArtifactStore(tmp_path / "artifacts")
     app = create_app(store, artifact_store=artifacts, auth_token="history-token")
     history = app.state.terminal_command_history
+    history.register_tool_inventory(
+        runtime_image_digest="sha256:" + "c" * 64,
+        manifest_sha256="d" * 64,
+        default_tools=["hashcat", "nmap"],
+    )
     output = "password=super-secret-value\n☃\n".encode()
     now = datetime.now(timezone.utc)
     record = history.record_capture(
@@ -648,12 +782,37 @@ def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(t
         assert client.get(base).status_code == 401
         assert client.put(f"{base}/status", json={"enabled": False}).status_code == 401
         assert client.delete(base).status_code == 401
+        assert client.get(
+            f"/api/v1/engagements/{project.id}/terminal/recording-tools"
+        ).status_code == 401
+
+        recording_tools_url = (
+            f"/api/v1/engagements/{project.id}/terminal/recording-tools"
+        )
+        catalog = client.get(recording_tools_url, headers=headers)
+        assert catalog.status_code == 200
+        assert catalog.json()["effective_tools"] == ["hashcat", "nmap"]
+        updated_catalog = client.put(
+            recording_tools_url,
+            headers=headers,
+            json={
+                "custom_tools": ["custom-scanner"],
+                "disabled_tools": ["nmap"],
+                "expected_revision": 0,
+                "expected_manifest_sha256": "d" * 64,
+            },
+        )
+        assert updated_catalog.status_code == 200
+        assert updated_catalog.json()["effective_tools"] == [
+            "custom-scanner",
+            "hashcat",
+        ]
 
         status = client.get(f"{base}/status", headers=headers)
         assert status.status_code == 200
         assert status.json()["enabled"] is True
         assert status.json()["record_count"] == 1
-        assert status.json()["capture_mode"] == "required"
+        assert status.json()["capture_mode"] == "selected_tools"
         assert status.json()["truncated_count"] == 0
         assert status.json()["audit_gap_count"] == 0
 

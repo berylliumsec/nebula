@@ -24,8 +24,10 @@ from nebula.v3.orchestration import (
     MissionRuntime,
     ModelSpecialist,
     PlannedTask,
+    SpecialistOutcome,
     SpecialistResult,
     SpecialistRole,
+    VerificationResult,
 )
 from nebula.v3.providers import (
     ModelCapabilities,
@@ -66,6 +68,22 @@ class RecordingSpecialist:
     async def run(self, context):
         self.contexts.append(context)
         return self.result
+
+
+class InvestigatingSpecialist:
+    role = SpecialistRole.NETWORK_SERVICE
+    allowed_tools = frozenset({"scan.tcp"})
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.contexts = []
+
+    async def run(self, context):
+        self.contexts.append(context)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class ApprovalSpecialist:
@@ -134,13 +152,14 @@ class CompactingMissionProvider(ModelProvider):
         return ProviderHealth(provider_id=self.config.id, healthy=True)
 
 
-def _runtime(tmp_path, supervisor, specialists):
+def _runtime(tmp_path, supervisor, specialists, verifier=None):
     store = NebulaStore(tmp_path / "nebula.db")
     runtime = MissionRuntime(
         store=store,
         checkpointer=InMemorySaver(),
         supervisor=supervisor,
         specialists=specialists,
+        verifier=verifier,
     )
     return runtime, store
 
@@ -219,6 +238,250 @@ def test_in_memory_mission_respects_dependencies_and_verifies_evidence(tmp_path)
         "task.verified",
         "run.completed",
     ]
+
+
+def test_investigative_turns_continue_without_consuming_retry_budget(tmp_path):
+    task = PlannedTask(
+        id="investigate",
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Investigate service",
+        instructions="Correct failures before finishing",
+    )
+    specialist = InvestigatingSpecialist(
+        [
+            SpecialistResult(
+                summary="scan failed with exit code 2",
+                outcome=SpecialistOutcome.CONTINUE,
+                output={"tool": "scan.tcp", "status": "failed"},
+                tool_calls=1,
+            ),
+            SpecialistResult(summary="corrected scan completed"),
+        ]
+    )
+    runtime, store = _runtime(
+        tmp_path,
+        PlannedSupervisor(
+            MissionPlan(summary="Investigate", rationale="Iterate", tasks=[task])
+        ),
+        {SpecialistRole.NETWORK_SERVICE: specialist},
+    )
+
+    state = asyncio.run(
+        runtime.start(
+            engagement_id="engagement-turns",
+            objective="Inspect the service",
+            budget=RunBudget(max_tool_calls=2, max_retries=0),
+        )
+    )
+
+    assert state["task_status"] == {task.id: TaskStatus.COMPLETE.value}
+    assert state["attempts"] == {task.id: 2}
+    assert state["retry_counts"] == {}
+    assert state["tool_calls"] == 1
+    assert specialist.contexts[1].prior_turns[0].summary.startswith("scan failed")
+    assert [event.event_type for event in store.replay_events(state["run_id"])] == [
+        "run.started",
+        "run.planned",
+        "task.started",
+        "task.turn_completed",
+        "task.continuing",
+        "task.started",
+        "task.completed",
+        "task.verified",
+        "run.completed",
+    ]
+
+
+def test_exact_token_exhaustion_blocks_before_another_turn(tmp_path):
+    task = PlannedTask(
+        id="token-exhausted",
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Bounded investigation",
+        instructions="Do not exceed the token budget",
+    )
+    specialist = InvestigatingSpecialist(
+        [
+            SpecialistResult(
+                summary="partial observation",
+                outcome=SpecialistOutcome.CONTINUE,
+                input_tokens=1,
+            )
+        ]
+    )
+    runtime, store = _runtime(
+        tmp_path,
+        PlannedSupervisor(
+            MissionPlan(summary="Bounded", rationale="Hard cap", tasks=[task])
+        ),
+        {SpecialistRole.NETWORK_SERVICE: specialist},
+    )
+
+    state = asyncio.run(
+        runtime.start(
+            engagement_id="engagement-token-exhausted",
+            objective="Stop at the exact token cap",
+            budget=RunBudget(max_tokens=1, max_retries=0),
+        )
+    )
+
+    assert state["task_status"] == {task.id: TaskStatus.BLOCKED.value}
+    assert state["retry_counts"] == {}
+    assert len(specialist.contexts) == 1
+    assert (
+        store.get(AgentRun, state["run_id"]).metadata["partial_observations"][0][
+            "summary"
+        ]
+        == "partial observation"
+    )
+
+
+def test_runtime_retry_receives_prior_error_separately_from_turns(tmp_path):
+    task = PlannedTask(
+        id="retry",
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Retry provider",
+        instructions="Recover from a transient provider error",
+    )
+    specialist = InvestigatingSpecialist(
+        [
+            RuntimeError("provider temporarily unavailable"),
+            SpecialistResult(summary="ok"),
+        ]
+    )
+    runtime, _ = _runtime(
+        tmp_path,
+        PlannedSupervisor(
+            MissionPlan(summary="Retry", rationale="Transient", tasks=[task])
+        ),
+        {SpecialistRole.NETWORK_SERVICE: specialist},
+    )
+
+    state = asyncio.run(
+        runtime.start(
+            engagement_id="engagement-retry",
+            objective="Recover",
+            budget=RunBudget(max_tool_calls=1, max_retries=1),
+        )
+    )
+
+    assert state["task_status"] == {task.id: TaskStatus.COMPLETE.value}
+    assert state["retry_counts"] == {task.id: 1}
+    assert specialist.contexts[1].prior_turns == []
+    assert specialist.contexts[1].retry_errors == ["provider temporarily unavailable"]
+
+
+def test_verification_rejection_requests_new_evidence_before_completion(tmp_path):
+    task = PlannedTask(
+        id="verify-more",
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Verify candidate",
+        instructions="Gather reproducible evidence",
+    )
+    specialist = InvestigatingSpecialist(
+        [
+            SpecialistResult(
+                summary="candidate without evidence",
+                candidate_finding_ids=["finding-1"],
+            ),
+            SpecialistResult(
+                summary="candidate verified",
+                candidate_finding_ids=["finding-1"],
+                evidence_ids=["evidence-1"],
+                reproducible_steps=["scan --safe target"],
+                tool_calls=1,
+            ),
+        ]
+    )
+    runtime, store = _runtime(
+        tmp_path,
+        PlannedSupervisor(
+            MissionPlan(summary="Verify", rationale="Evidence gate", tasks=[task])
+        ),
+        {SpecialistRole.NETWORK_SERVICE: specialist},
+    )
+
+    state = asyncio.run(
+        runtime.start(
+            engagement_id="engagement-verify",
+            objective="Verify the candidate",
+            budget=RunBudget(max_tool_calls=1, max_retries=0),
+        )
+    )
+
+    assert state["task_status"] == {task.id: TaskStatus.COMPLETE.value}
+    assert "Verification rejected" in specialist.contexts[1].retry_errors[0]
+    assert specialist.contexts[1].prior_turns[0].summary == (
+        "candidate without evidence"
+    )
+    event_types = [event.event_type for event in store.replay_events(state["run_id"])]
+    assert event_types.count("task.verification_failed") == 1
+    assert "task.continuing" in event_types
+    assert event_types[-1] == "run.completed"
+
+
+def test_unchanged_evidence_is_not_reverified(tmp_path):
+    class RecordingVerifier:
+        def __init__(self):
+            self.evidence = []
+
+        async def verify(self, task, result):
+            del task
+            self.evidence.append(list(result.evidence_ids))
+            accepted = result.evidence_ids == ["evidence-2"]
+            return VerificationResult(
+                accepted=accepted,
+                rationale="accepted" if accepted else "new evidence required",
+                evidence_ids=result.evidence_ids,
+            )
+
+    task = PlannedTask(
+        id="verify-changed",
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Add evidence",
+        instructions="Do not resubmit unchanged evidence",
+    )
+    specialist = InvestigatingSpecialist(
+        [
+            SpecialistResult(
+                summary="first package",
+                evidence_ids=["evidence-1"],
+                reproducible_steps=["scan target"],
+            ),
+            SpecialistResult(
+                summary="unchanged package",
+                evidence_ids=["evidence-1"],
+                reproducible_steps=["scan target"],
+                tool_calls=1,
+            ),
+            SpecialistResult(
+                summary="new package",
+                evidence_ids=["evidence-2"],
+                reproducible_steps=["scan target --detail"],
+                tool_calls=1,
+            ),
+        ]
+    )
+    verifier = RecordingVerifier()
+    runtime, _ = _runtime(
+        tmp_path,
+        PlannedSupervisor(
+            MissionPlan(summary="Verify", rationale="Evidence gate", tasks=[task])
+        ),
+        {SpecialistRole.NETWORK_SERVICE: specialist},
+        verifier,
+    )
+
+    state = asyncio.run(
+        runtime.start(
+            engagement_id="engagement-verify-changed",
+            objective="Produce new evidence",
+            budget=RunBudget(max_tool_calls=2, max_retries=0),
+        )
+    )
+
+    assert state["task_status"] == {task.id: TaskStatus.COMPLETE.value}
+    assert verifier.evidence == [["evidence-1"], ["evidence-2"]]
+    assert "unchanged" in specialist.contexts[2].retry_errors[-1]
 
 
 def test_mission_compacts_only_model_facing_dependency_context_and_charges_usage(
@@ -393,7 +656,7 @@ def test_mission_rejects_compaction_before_call_when_budget_is_insufficient(
         for request in provider.requests
         if request.metadata.get("operation") == "context_compaction"
     ]
-    assert state["task_status"][reporting.id] == TaskStatus.FAILED.value
+    assert state["task_status"][reporting.id] == TaskStatus.BLOCKED.value
     assert "insufficient mission token budget" in state["errors"][reporting.id]
     assert state["input_tokens"] + state["output_tokens"] == 15
     event_types = [event.event_type for event in store.replay_events(state["run_id"])]
@@ -452,6 +715,88 @@ def test_approval_checkpoint_resumes_same_attempt_with_zero_retries(tmp_path):
     ]
 
 
+def test_rejected_approval_becomes_an_observation_and_allows_an_alternative(
+    tmp_path,
+):
+    class RejectionAwareSpecialist:
+        role = SpecialistRole.NETWORK_SERVICE
+        allowed_tools = frozenset({"scan.tcp", "scan.passive"})
+
+        def __init__(self):
+            self.requested = False
+            self.contexts = []
+
+        async def run(self, context):
+            self.contexts.append(context)
+            if not self.requested:
+                self.requested = True
+                raise ApprovalRequired(
+                    Approval(
+                        id="approval-rejected",
+                        engagement_id=context.engagement_id,
+                        run_id=context.run_id,
+                        task_id=context.task.id,
+                        risk_class=RiskClass.ACTIVE_SCAN,
+                        exact_request={
+                            "tool_name": "scan.tcp",
+                            "arguments": {"ports": [443]},
+                        },
+                        target="10.0.0.8",
+                        policy_rationale="active scanning requires approval",
+                        requested_by="network-specialist",
+                    )
+                )
+            if context.approval_response is not None:
+                return SpecialistResult(
+                    summary="The active scan was denied; try passive analysis.",
+                    outcome=SpecialistOutcome.CONTINUE,
+                )
+            return SpecialistResult(summary="Passive analysis completed.")
+
+    task = PlannedTask(
+        id="scan-rejected",
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Investigate service safely",
+        instructions="Use a permitted alternative after denial",
+    )
+    specialist = RejectionAwareSpecialist()
+    runtime, store = _runtime(
+        tmp_path,
+        PlannedSupervisor(
+            MissionPlan(
+                summary="Approval mission", rationale="Operator gate", tasks=[task]
+            )
+        ),
+        {SpecialistRole.NETWORK_SERVICE: specialist},
+    )
+
+    waiting = asyncio.run(
+        runtime.start(
+            engagement_id="engagement-rejection",
+            objective="Investigate without bypassing approval",
+            budget=RunBudget(max_retries=0),
+        )
+    )
+    completed = asyncio.run(
+        runtime.resume(
+            waiting["run_id"],
+            {"status": "rejected", "operator": "alice"},
+        )
+    )
+
+    assert completed["task_status"] == {task.id: TaskStatus.COMPLETE.value}
+    assert completed["attempts"] == {task.id: 2}
+    assert completed["retry_counts"] == {}
+    assert specialist.contexts[1].approval_response == {
+        "status": "rejected",
+        "operator": "alice",
+    }
+    assert specialist.contexts[2].approval_response is None
+    assert "task.continuing" in [
+        event.event_type for event in store.replay_events(waiting["run_id"])
+    ]
+
+
 def test_projected_budget_overrun_fails_run_durably(tmp_path):
     task = PlannedTask(
         id="budgeted",
@@ -480,15 +825,20 @@ def test_projected_budget_overrun_fails_run_durably(tmp_path):
         )
     )
 
-    assert state["task_status"] == {task.id: TaskStatus.FAILED.value}
+    assert state["task_status"] == {task.id: TaskStatus.BLOCKED.value}
     assert state["errors"] == {task.id: "mission tool-call budget exceeded"}
+    assert state["tool_calls"] == 1
     assert state["final_summary"].startswith("mission failed:")
-    assert store.get(AgentRun, state["run_id"]).status == RunStatus.FAILED
+    persisted_run = store.get(AgentRun, state["run_id"])
+    assert persisted_run.status == RunStatus.FAILED
+    assert persisted_run.metadata["partial_observations"][0]["summary"] == (
+        "invalid usage"
+    )
     assert [event.event_type for event in store.replay_events(state["run_id"])] == [
         "run.started",
         "run.planned",
         "task.started",
-        "task.failed",
+        "task.blocked",
         "run.failed",
     ]
 

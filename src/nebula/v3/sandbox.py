@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import fcntl
+import hashlib
 import ipaddress
 import json
 import logging
@@ -29,6 +30,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .domain import utc_now
+from .kali_tool_inventory import MANIFEST_SCHEMA, TOOL_NAME_PATTERN
 
 
 LOGGER = logging.getLogger(__name__)
@@ -1442,6 +1444,9 @@ class PreparedContainerImage:
     installed_packages: tuple[str, ...]
     refreshed: bool
     detail: str
+    security_tools: tuple[str, ...] = ()
+    security_tool_packages: tuple[str, ...] = ()
+    security_tool_manifest_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1454,14 +1459,18 @@ class _VerifiedBaseImage:
 class _VerifiedDerivedImage:
     image_id: str
     configured_user: str
+    security_tools: tuple[str, ...]
+    security_tool_packages: tuple[str, ...]
+    security_tool_manifest_sha256: str
 
 
 class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
     _derived_repository = "localhost/nebula-kali-headless"
-    _recipe_version = "v2"
+    _recipe_version = "v3"
     _installed_packages = ("kali-linux-headless", "iputils-ping")
+    _security_tool_manifest_path = "/usr/local/share/nebula/security-tools.json"
     _base_label = "org.nebula.human-terminal.base"
     _profile_label = "org.nebula.human-terminal.profile"
     _recipe_label = "org.nebula.human-terminal.recipe"
@@ -1692,10 +1701,95 @@ class ContainerImagePreparer:
                 "runtime did not prove the human-workstation image build recipe"
             )
         user = _mapping_get(config, "User", "user")
+        tools, packages, manifest_sha256 = await self._security_tool_manifest(image_id)
         return _VerifiedDerivedImage(
             image_id=image_id,
             configured_user=user if isinstance(user, str) else "",
+            security_tools=tools,
+            security_tool_packages=packages,
+            security_tool_manifest_sha256=manifest_sha256,
         )
+
+    async def _security_tool_manifest(
+        self, image_id: str
+    ) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+        stdout, stderr, return_code = await self._runtime_command(
+            "run",
+            "--rm",
+            "--network=none",
+            "--entrypoint=/bin/cat",
+            image_id,
+            self._security_tool_manifest_path,
+            timeout_seconds=30,
+        )
+        if return_code != 0:
+            detail = (stderr.strip() or stdout.strip() or str(return_code))[:1000]
+            raise SandboxUnavailable(
+                "prepared human-workstation security-tool manifest is unavailable: "
+                + detail
+            )
+        raw = stdout.encode("utf-8")
+        if not raw or len(raw) > 2_000_000:
+            raise SandboxUnavailable(
+                "prepared human-workstation security-tool manifest has an invalid size"
+            )
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise SandboxUnavailable(
+                "prepared human-workstation security-tool manifest is invalid JSON"
+            ) from exc
+        if not isinstance(payload, dict) or payload.get("schema") != MANIFEST_SCHEMA:
+            raise SandboxUnavailable(
+                "prepared human-workstation security-tool manifest has an unsupported schema"
+            )
+        tools = payload.get("tools")
+        packages = payload.get("packages")
+        provenance = payload.get("provenance")
+        if (
+            not isinstance(tools, list)
+            or not tools
+            or len(tools) > 10_000
+            or not isinstance(packages, list)
+            or not packages
+            or len(packages) > 2_000
+            or not isinstance(provenance, dict)
+        ):
+            raise SandboxUnavailable(
+                "prepared human-workstation security-tool manifest is malformed"
+            )
+        if tools != sorted(set(tools)) or any(
+            not isinstance(item, str) or TOOL_NAME_PATTERN.fullmatch(item) is None
+            for item in tools
+        ):
+            raise SandboxUnavailable(
+                "prepared human-workstation security-tool names are invalid"
+            )
+        package_pattern = re.compile(r"[a-z0-9][a-z0-9+.-]{0,127}\Z")
+        if packages != sorted(set(packages)) or any(
+            not isinstance(item, str) or package_pattern.fullmatch(item) is None
+            for item in packages
+        ):
+            raise SandboxUnavailable(
+                "prepared human-workstation security-tool package names are invalid"
+            )
+        package_set = set(packages)
+        for tool in tools:
+            owners = provenance.get(tool)
+            if (
+                not isinstance(owners, list)
+                or not owners
+                or owners != sorted(set(owners))
+                or any(owner not in package_set for owner in owners)
+            ):
+                raise SandboxUnavailable(
+                    "prepared human-workstation security-tool provenance is invalid"
+                )
+        if set(provenance) != set(tools):
+            raise SandboxUnavailable(
+                "prepared human-workstation security-tool provenance is incomplete"
+            )
+        return tuple(tools), tuple(packages), hashlib.sha256(raw).hexdigest()
 
     async def _inspect_image(self, reference: str) -> tuple[dict[str, Any] | None, str]:
         stdout, stderr, return_code = await self._runtime_command(
@@ -1786,6 +1880,9 @@ class ContainerImagePreparer:
             installed_packages=self._installed_packages,
             refreshed=refreshed,
             detail=detail,
+            security_tools=derived.security_tools,
+            security_tool_packages=derived.security_tool_packages,
+            security_tool_manifest_sha256=derived.security_tool_manifest_sha256,
         )
 
     def _derived_tag(self, digest: str) -> str:
@@ -1801,10 +1898,13 @@ class ContainerImagePreparer:
     ) -> tuple[str, str, int]:
         dockerfile = f"""FROM {base_resolved_reference}
 ARG DEBIAN_FRONTEND=noninteractive
+COPY kali_tool_inventory.py /usr/local/lib/nebula-kali-tool-inventory.py
 RUN apt-get update \\
  && apt-get install -y {" ".join(self._installed_packages)} \\
  && if getcap /usr/lib/nmap/nmap | grep -q .; then setcap -r /usr/lib/nmap/nmap; fi \\
  && test -z "$(getcap /usr/lib/nmap/nmap)" \\
+ && python3 /usr/local/lib/nebula-kali-tool-inventory.py --output {self._security_tool_manifest_path} \\
+ && rm -f /usr/local/lib/nebula-kali-tool-inventory.py \\
  && printf '%s\\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-nebula-terminal \\
  && apt-get clean \\
  && rm -rf /var/lib/apt/lists/*
@@ -1817,6 +1917,9 @@ CMD ["/bin/bash"]
         with tempfile.TemporaryDirectory(prefix="nebula-kali-") as directory:
             context = Path(directory)
             (context / "Dockerfile").write_text(dockerfile, encoding="utf-8")
+            (context / "kali_tool_inventory.py").write_bytes(
+                Path(__file__).with_name("kali_tool_inventory.py").read_bytes()
+            )
             return await self._runtime_command(
                 "build",
                 f"--platform={self.platform}",

@@ -31,6 +31,19 @@ from nebula.v3.sandbox import (
 DIGEST_IMAGE = "registry.invalid/nebula-tool@sha256:" + "a" * 64
 
 
+def _security_tool_manifest():
+    return json.dumps(
+        {
+            "schema": "nebula.kali-security-tools/v1",
+            "packages": ["hashcat", "nmap"],
+            "tools": ["hashcat", "nmap"],
+            "provenance": {"hashcat": ["hashcat"], "nmap": ["nmap"]},
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ) + "\n"
+
+
 def _request(tmp_path, **changes):
     values = {
         "image": DIGEST_IMAGE,
@@ -695,6 +708,8 @@ def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkey
 
     async def runtime_command(*arguments, timeout_seconds):
         calls.append((arguments, timeout_seconds))
+        if arguments[0] == "run":
+            return _security_tool_manifest(), "", 0
         if arguments[2] == "docker.io/kalilinux/kali-rolling:latest":
             return (
                 '{"RepoDigests":["kalilinux/kali-rolling@sha256:'
@@ -710,7 +725,7 @@ def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkey
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v2"}}}',
+            + '"org.nebula.human-terminal.recipe":"v3"}}}',
             "",
             0,
         )
@@ -719,7 +734,7 @@ def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkey
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
     image = asyncio.run(preparer.prepare())
 
-    assert [call[0][0] for call in calls] == ["image", "image"]
+    assert [call[0][0] for call in calls] == ["image", "image", "run"]
     assert all("pull" not in call[0] and "build" not in call[0] for call in calls)
     assert image.base_resolved_reference == (
         "docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64
@@ -728,6 +743,7 @@ def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkey
     assert image.resolved_reference == "sha256:" + "d" * 64
     assert image.digest == "sha256:" + "d" * 64
     assert image.installed_packages == ("kali-linux-headless", "iputils-ping")
+    assert image.security_tools == ("hashcat", "nmap")
     assert image.refreshed is False
     assert image.configured_user == ""
     assert "no registry request" in image.detail
@@ -761,6 +777,8 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
             )
             derived_present = True
             return "built", "", 0
+        if arguments[0] == "run":
+            return _security_tool_manifest(), "", 0
         if arguments[2] == "docker.io/kalilinux/kali-rolling:latest":
             if not base_present:
                 return "", "not found", 1
@@ -780,7 +798,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v2"}}}',
+            + '"org.nebula.human-terminal.recipe":"v3"}}}',
             "",
             0,
         )
@@ -796,6 +814,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
         "image",
         "build",
         "image",
+        "run",
     ]
     assert image.refreshed is True
     assert image.base_digest == "sha256:" + "e" * 64
@@ -804,13 +823,14 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
     assert build[0][1] == "--platform=linux/amd64"
     assert build[0][2] == "--pull=false"
     assert build[0][3] == "--quiet"
-    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v2-")
+    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v3-")
     assert "FROM docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64 in dockerfiles[0]
     assert "apt-get install -y kali-linux-headless iputils-ping" in dockerfiles[0]
     assert "setcap -r /usr/lib/nmap/nmap" in dockerfiles[0]
     assert 'test -z "$(getcap /usr/lib/nmap/nmap)"' in dockerfiles[0]
     assert "ENV NMAP_UNPRIVILEGED=1" in dockerfiles[0]
     assert 'APT::Sandbox::User "root";' in dockerfiles[0]
+    assert "nebula-kali-tool-inventory.py" in dockerfiles[0]
 
 
 def test_human_terminal_cold_pull_failure_can_be_retried(monkeypatch):
@@ -840,6 +860,8 @@ def test_human_terminal_cold_pull_failure_can_be_retried(monkeypatch):
         if arguments[0] == "build":
             derived_present = True
             return "built", "", 0
+        if arguments[0] == "run":
+            return _security_tool_manifest(), "", 0
         if arguments[2] == "docker.io/kalilinux/kali-rolling:latest":
             if not base_present:
                 return "", "not found", 1
@@ -859,7 +881,7 @@ def test_human_terminal_cold_pull_failure_can_be_retried(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v2"}}}',
+            + '"org.nebula.human-terminal.recipe":"v3"}}}',
             "",
             0,
         )

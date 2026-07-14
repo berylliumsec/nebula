@@ -22,6 +22,11 @@ const eventIcons: Partial<Record<RunEventKind, typeof Activity>> = {
   "finding.updated": FileCheck2,
   "tool.completed": TerminalSquare,
   "tool.failed": X,
+  "task.blocked": ShieldAlert,
+  "task.turn_completed": Bot,
+  "task.continuing": Bot,
+  "task.retry_scheduled": Clock3,
+  "task.verification_failed": X,
   "agent.message": Bot,
 };
 

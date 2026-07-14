@@ -54,6 +54,7 @@ _TERMINAL_RUN_STATUSES = {
 }
 _TERMINAL_TASK_STATUSES = {
     TaskStatus.COMPLETE,
+    TaskStatus.BLOCKED,
     TaskStatus.FAILED,
     TaskStatus.CANCELLED,
 }
