@@ -46,7 +46,14 @@ describe("Nebula workspace", () => {
     }
     expect(await screen.findByRole("heading", { name: "Workbench" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Autonomous missions" })).toBeVisible();
     expect(screen.queryByText(/Acme|Jordan/i)).not.toBeInTheDocument();
+  });
+
+  it("restores legacy mission links to the Workbench mission view", async () => {
+    renderApp("/missions");
+    expect(await screen.findByRole("heading", { name: "Workbench" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Autonomous missions" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("navigates with the keyboard command palette", async () => {

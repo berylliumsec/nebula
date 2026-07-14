@@ -288,7 +288,7 @@ export function NewMissionButton({ className = "button primary", children }: New
       <div className="dialog-backdrop">
         <form noValidate className="provider-dialog resource-dialog mission-dialog" role="dialog" aria-modal="true" aria-labelledby="mission-dialog-title" onSubmit={(event) => void submit(event)}>
           <header>
-            <div><small>{automaticTools.length ? "Supervised Toolbox automation" : "Analysis-only automation"}</small><h2 id="mission-dialog-title">Automate task</h2></div>
+            <div><small>{automaticTools.length ? "Supervised automation" : "Analysis-only automation"}</small><h2 id="mission-dialog-title">Automate task</h2></div>
             <button className="icon-button subtle" type="button" aria-label="Close automation dialog" onClick={() => setOpen(false)}><X size={17} /></button>
           </header>
           <label>Objective<textarea required autoFocus rows={5} value={objective} placeholder="Describe the outcome you want Nebula to produce…" onChange={(event) => { setObjective(event.target.value); setError(undefined); }} /></label>
