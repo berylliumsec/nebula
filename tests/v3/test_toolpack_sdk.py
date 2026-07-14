@@ -95,7 +95,7 @@ def test_toolbox_source_is_structurally_valid_but_unresolved():
         for path in assets.glob("*/nebula-tool-pack.yaml")
     }
     assert identities == {
-        "berylliumsec/nebula-toolbox@0.1.1",
+        "berylliumsec/nebula-toolbox@0.1.2",
     }
     for path in assets.glob("*/nebula-tool-pack.yaml"):
         with pytest.raises(ToolPackSDKError, match="unresolved"):

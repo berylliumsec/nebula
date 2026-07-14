@@ -27,7 +27,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/berylliumsec/nebula-toolbox-staging
-  TOOLBOX_VERSION: 0.1.1
+  TOOLBOX_VERSION: 0.1.2
   ENVIRONMENT_ROOT: src/nebula/v3/tool_pack_assets/toolbox/environment
 
 jobs:

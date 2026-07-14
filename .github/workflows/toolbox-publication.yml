@@ -30,13 +30,13 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/berylliumsec/nebula-toolbox
-  TOOLBOX_VERSION: 0.1.1
+  TOOLBOX_VERSION: 0.1.2
   SOURCE_ROOT: src/nebula/v3/tool_pack_assets/toolbox
   ENVIRONMENT_ROOT: src/nebula/v3/tool_pack_assets/toolbox/environment
 
 jobs:
   prepare:
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-22.04
     outputs:
       publish: ${{ steps.release.outputs.publish }}
       release_ref: ${{ steps.release.outputs.release_ref }}
@@ -99,7 +99,7 @@ jobs:
   build:
     if: needs.prepare.outputs.publish == 'true'
     needs: prepare
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
     environment: tool-pack-release
     strategy:
       fail-fast: false

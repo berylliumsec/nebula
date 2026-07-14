@@ -219,6 +219,21 @@ def test_toolbox_catalog_has_pinned_unique_absolute_executables(tmp_path):
     assert all(Path(item["executable"]).is_absolute() for item in index.values())
 
 
+def test_publication_build_uses_native_architecture_runners():
+    workflow = (
+        Path(__file__).parents[2] / ".github/workflows/toolbox-publication.yml"
+    ).read_text(encoding="utf-8")
+
+    prepare = workflow.split("  prepare:\n", 1)[1].split("\n  build:\n", 1)[0]
+    build = workflow.split("\n  build:\n", 1)[1].split("\n  catalog:\n", 1)[0]
+
+    assert "runs-on: ubuntu-22.04" in prepare
+    assert "matrix.runner" not in prepare
+    assert "runs-on: ${{ matrix.runner }}" in build
+    assert "runner: ubuntu-22.04-arm" in build
+    assert "docker/setup-qemu-action" not in build
+
+
 def test_toolbox_sources_are_one_reviewed_v2_interface_per_first_class_tool():
     versions, tools = source_catalog()
 
