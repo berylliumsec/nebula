@@ -10,6 +10,7 @@ import {
 } from "react";
 import { ApiClient } from "../api/client";
 import { NebulaEventStream, type StreamState } from "../api/events";
+import { providerVerificationModel } from "../api/providerCapabilities";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
 import type {
   AgentRunSummary,
@@ -395,7 +396,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       throw new Error("Nebula Core must be online to verify a provider.");
     }
     const current = providers.find((provider) => provider.id === id);
-    const model = current?.defaultModel ?? current?.modelAllowlist[0];
+    const model = providerVerificationModel(current);
     if (!current || !model) throw new Error("Configure an exact model before verification.");
     const updated = await api.verifyProviderCapabilities(id, model, current.revision);
     setProviders((items) => items.map((provider) => provider.id === id ? updated : provider));

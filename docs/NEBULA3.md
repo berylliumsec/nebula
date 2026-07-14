@@ -38,12 +38,15 @@ the installation is incomplete.
 poetry install --without legacy,legacy-dev --with dev
 poetry run nebula3 doctor
 poetry run nebula3 migrate
-poetry run nebula3 serve --host 127.0.0.1 --port 8000
+poetry run nebula3 serve --host 127.0.0.1 --port 8765
 ```
 
 The server prints a generated bearer token. Remote binding requires an explicit
 `--allow-remote` acknowledgement and should be placed behind a properly
 authenticated deployment boundary. Local mode never exposes a runner socket.
+Keep the Core port distinct from local model runtimes; vLLM commonly listens on
+8000 or 8001. When developing the Vite workspace against another Core port, set
+`NEBULA_DEV_BACKEND=http://127.0.0.1:PORT` before `npm --prefix ui run dev`.
 
 Build and launch the browser workspace:
 
@@ -52,6 +55,11 @@ npm --prefix ui ci
 npm --prefix ui run build
 poetry run nebula3 ui
 ```
+
+`nebula3 ui` is the recommended source-checkout launch path. It chooses an
+available loopback port, starts Core, serves the built workspace, and transfers
+the generated bearer token through the URL fragment. Running Vite alone starts
+only the frontend and leaves all durable and Toolbox controls offline.
 
 The browser token is carried in the URL fragment, consumed into memory, and
 removed immediately. Tauri sends its 256-bit one-time token through the Core
