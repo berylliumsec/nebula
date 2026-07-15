@@ -70,6 +70,9 @@ interface PanGesture {
 
 type EditorGesture = DrawGesture | PanGesture;
 
+const MIN_EDITOR_ZOOM = 0.1;
+const MAX_EDITOR_ZOOM = 4;
+
 function operationId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `image-edit-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -225,6 +228,7 @@ export function ImageEditor({
   const [thickness, setThickness] = useState(4);
   const [text, setText] = useState("");
   const [zoom, setZoom] = useState(1);
+  const [fitToViewport, setFitToViewport] = useState(true);
   const [gesture, setGesture] = useState<EditorGesture>();
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -236,6 +240,8 @@ export function ImageEditor({
     setError(undefined);
     setGesture(undefined);
     setHistory(createImageEditHistory(initialOperations));
+    setZoom(1);
+    setFitToViewport(true);
     let resource: ReturnType<typeof loadImage>;
     try {
       resource = loadImage(source, maxDecodedPixels, maxDimension);
@@ -272,6 +278,30 @@ export function ImageEditor({
   }, [dimensionResult.error]);
 
   useEffect(() => onOperationsChange?.(history.operations), [history.operations, onOperationsChange]);
+
+  const fitImageToViewport = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !dimensions || viewport.clientWidth < 1 || viewport.clientHeight < 1) return;
+    const computed = globalThis.getComputedStyle(viewport);
+    const horizontalPadding = (Number.parseFloat(computed.paddingLeft) || 0) + (Number.parseFloat(computed.paddingRight) || 0);
+    const verticalPadding = (Number.parseFloat(computed.paddingTop) || 0) + (Number.parseFloat(computed.paddingBottom) || 0);
+    const availableWidth = Math.max(1, viewport.clientWidth - horizontalPadding);
+    const availableHeight = Math.max(1, viewport.clientHeight - verticalPadding);
+    const nextZoom = Math.min(1, availableWidth / dimensions.width, availableHeight / dimensions.height);
+    setZoom(Math.max(MIN_EDITOR_ZOOM, nextZoom));
+  }, [dimensions]);
+
+  useEffect(() => {
+    if (!fitToViewport || !dimensions) return;
+    const frame = globalThis.requestAnimationFrame?.(fitImageToViewport);
+    const viewport = viewportRef.current;
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(fitImageToViewport);
+    if (viewport) observer?.observe(viewport);
+    return () => {
+      if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame);
+      observer?.disconnect();
+    };
+  }, [dimensions, fitImageToViewport, fitToViewport]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -439,9 +469,19 @@ export function ImageEditor({
         }}>Redo</button>
       </div>
       <div className={styles.group}>
-        <button className={styles.button} type="button" aria-label="Zoom out" disabled={zoom <= 0.25} onClick={() => setZoom((value) => Math.max(0.25, value - 0.25))}>−</button>
+        <button className={styles.button} type="button" aria-label="Fit image to editor" aria-pressed={fitToViewport} onClick={() => {
+          setFitToViewport(true);
+          fitImageToViewport();
+        }}>Fit</button>
+        <button className={styles.button} type="button" aria-label="Zoom out" disabled={zoom <= MIN_EDITOR_ZOOM} onClick={() => {
+          setFitToViewport(false);
+          setZoom((value) => Math.max(MIN_EDITOR_ZOOM, value / 1.25));
+        }}>−</button>
         <span className={styles.status}>{Math.round(zoom * 100)}%</span>
-        <button className={styles.button} type="button" aria-label="Zoom in" disabled={zoom >= 4} onClick={() => setZoom((value) => Math.min(4, value + 0.25))}>+</button>
+        <button className={styles.button} type="button" aria-label="Zoom in" disabled={zoom >= MAX_EDITOR_ZOOM} onClick={() => {
+          setFitToViewport(false);
+          setZoom((value) => Math.min(MAX_EDITOR_ZOOM, value * 1.25));
+        }}>+</button>
       </div>
     </div>
     <div ref={viewportRef} className={styles.viewport}>

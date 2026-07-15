@@ -233,8 +233,12 @@ async function installTruthfulCore(page: Page) {
         idle_timeout_seconds: 1800,
         fresh_container: true,
       };
+    } else if (path.endsWith("/container-terminals/recover") && request.method() === "POST") {
+      body = { sessions: [] };
     } else if (path.endsWith("/container-terminal/recover") && request.method() === "POST") {
       body = { active: false };
+    } else if (path.endsWith("/container-terminal/capacity")) {
+      body = { active_sessions: 1, available_sessions: 31, max_active_sessions: 32 };
     } else if (path.endsWith("/container-terminal/sessions") && request.method() === "POST") {
       body = {
         session_id: "terminal-preview",
@@ -244,6 +248,25 @@ async function installTruthfulCore(page: Page) {
         reconnect_grace_seconds: 600,
         replay_max_bytes: 1_048_576,
         last_sequence: 0,
+      };
+    } else if (path.endsWith("/evidence/upload") && request.method() === "POST") {
+      const upload = request.postDataJSON() as { title?: string; evidence_type?: string; metadata?: Record<string, unknown> };
+      body = {
+        ...entity,
+        id: "terminal-screenshot-evidence",
+        engagement_id: "scratch-project",
+        evidence_type: upload.evidence_type ?? "terminal-screenshot",
+        title: upload.title ?? "Terminal screenshot",
+        description: "Immutable capture of the visible Nebula terminal viewport.",
+        artifact_id: "terminal-screenshot-artifact",
+        finding_id: null,
+        execution_id: null,
+        asset_ids: [],
+        sha256: "e".repeat(64),
+        captured_at: "2026-07-13T20:00:00Z",
+        captured_by: null,
+        source_version: "terminal-viewport-v1",
+        metadata: upload.metadata ?? {},
       };
     } else if (path.endsWith("/providers/discover-local")) {
       body = [];
@@ -332,6 +355,52 @@ test.beforeEach(async ({ page }, testInfo) => {
       if (localStorage.getItem("nebula.theme") === null) localStorage.setItem("nebula.theme", "dark");
     });
   }
+});
+
+test("terminal screenshot capture opens a full-height integrated editor", async ({ page }) => {
+  await openWorkspace(page, "/", "Workbench");
+  const uploadRequest = page.waitForRequest((request) => request.url().endsWith("/evidence/upload") && request.method() === "POST");
+  await page.getByRole("button", { name: "Screenshot" }).click();
+  const upload = (await uploadRequest).postDataJSON() as {
+    content_base64: string;
+    media_type: string;
+    metadata: { pixel_width: number; pixel_height: number };
+  };
+  expect(upload.media_type).toBe("image/png");
+  expect(upload.content_base64.startsWith("iVBOR")).toBe(true);
+  expect(upload.metadata.pixel_width).toBeGreaterThan(0);
+  expect(upload.metadata.pixel_height).toBeGreaterThan(0);
+
+  const dialog = page.getByRole("dialog", { name: "Edit terminal screenshot" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("img", { name: /Editable image/ })).toBeVisible();
+  await expect(dialog).toContainText("Original preserved");
+
+  const dimensions = await dialog.evaluate((element) => {
+    const editor = element.querySelector<HTMLElement>('[aria-label="Image editor"]');
+    const viewport = editor?.querySelector<HTMLElement>("div[class*='viewport']");
+    const canvas = viewport?.querySelector<HTMLCanvasElement>("canvas");
+    const viewportStyle = viewport ? getComputedStyle(viewport) : undefined;
+    return {
+      dialogHeight: element.getBoundingClientRect().height,
+      editorHeight: editor?.getBoundingClientRect().height ?? 0,
+      viewportHeight: viewport?.getBoundingClientRect().height ?? 0,
+      viewportContentWidth: (viewport?.clientWidth ?? 0)
+        - Number.parseFloat(viewportStyle?.paddingLeft ?? "0")
+        - Number.parseFloat(viewportStyle?.paddingRight ?? "0"),
+      viewportContentHeight: (viewport?.clientHeight ?? 0)
+        - Number.parseFloat(viewportStyle?.paddingTop ?? "0")
+        - Number.parseFloat(viewportStyle?.paddingBottom ?? "0"),
+      canvasWidth: canvas?.getBoundingClientRect().width ?? 0,
+      canvasHeight: canvas?.getBoundingClientRect().height ?? 0,
+    };
+  });
+  const viewportHeight = page.viewportSize()?.height ?? 900;
+  expect(dimensions.dialogHeight).toBeGreaterThan(Math.min(760, viewportHeight - 80));
+  expect(dimensions.editorHeight).toBeGreaterThan(Math.min(650, viewportHeight - 160));
+  expect(dimensions.viewportHeight).toBeGreaterThan(Math.min(440, viewportHeight - 290));
+  expect(dimensions.canvasWidth).toBeLessThanOrEqual(dimensions.viewportContentWidth + 1);
+  expect(dimensions.canvasHeight).toBeLessThanOrEqual(dimensions.viewportContentHeight + 1);
 });
 
 test(firstRunThemeTest, async ({ page }) => {

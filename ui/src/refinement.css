@@ -667,12 +667,13 @@ kbd { font-size: 11px; }
 .xterm-shell .xterm { height: 100%; }
 .xterm-shell .xterm-viewport { scrollbar-color: #40535d #071017; }
 .container-terminal-live > footer { display: flex; min-height: 32px; align-items: center; gap: 6px; padding: 6px 13px; border-top: 1px solid #20303a; color: #84979f; background: #0c171e; font-size: 11px; }
-.modal-surface.terminal-screenshot-dialog:not(.confirmation-dialog) { width: min(1200px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
-.terminal-screenshot-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--border-soft); }
+.modal-surface.terminal-screenshot-dialog:not(.confirmation-dialog) { display: grid; width: min(1280px, calc(100vw - 48px)); height: min(840px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.terminal-screenshot-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--border-soft); background: color-mix(in srgb, var(--surface-raised) 94%, transparent); }
 .terminal-screenshot-dialog-header h2 { margin: 3px 0 5px; font-size: 17px; }
 .terminal-screenshot-dialog-header small { color: var(--green); font-size: 11px; font-weight: 700; }
 .terminal-screenshot-dialog-header p { margin: 0; color: var(--muted); font-size: 11px; }
-.terminal-screenshot-dialog-body { padding: 16px; }
+.terminal-screenshot-dialog-body { display: grid; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
+.terminal-screenshot-dialog-body > section { height: 100%; min-height: 0; border: 0; border-radius: 0; }
 .workbench-activity-stack { display: grid; gap: 18px; }
 .workbench-activity-stack .terminal-command-history { margin-top: 0; }
 
@@ -1070,7 +1071,7 @@ kbd { font-size: 11px; }
 .palette-results small, .command-palette footer { font-size: 11px; }
 
 .modal-surface { overflow: hidden; }
-.modal-surface:not(.approval-review-dialog):not(.execution-review-dialog) { width: min(480px, calc(100vw - 32px)); }
+.modal-surface:not(.approval-review-dialog):not(.execution-review-dialog):not(.terminal-screenshot-dialog) { width: min(480px, calc(100vw - 32px)); }
 .confirmation-dialog > header { display: grid; grid-template-columns: 38px 1fr 32px; gap: 12px; align-items: start; padding: 22px; }
 .confirmation-dialog h2 { margin: 1px 0 8px; font-size: 17px; }
 .confirmation-message { color: var(--muted); font-size: 13px; line-height: 1.5; }

@@ -43,7 +43,22 @@ async function encodeBlobBase64(blob: Blob): Promise<string> {
   if (blob.size > MAX_EVIDENCE_BYTES) {
     throw new Error("The screenshot exceeds the 25 MB evidence limit.");
   }
-  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let buffer: ArrayBuffer;
+  try {
+    if (typeof blob.arrayBuffer !== "function") throw new Error("Blob.arrayBuffer is unavailable.");
+    buffer = await blob.arrayBuffer();
+  } catch (reason) {
+    if (typeof FileReader === "undefined") throw reason;
+    buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error("The screenshot could not be read for upload."));
+      reader.onload = () => reader.result instanceof ArrayBuffer
+        ? resolve(reader.result)
+        : reject(new Error("The screenshot could not be read for upload."));
+      reader.readAsArrayBuffer(blob);
+    });
+  }
+  const bytes = new Uint8Array(buffer);
   let binary = "";
   for (let offset = 0; offset < bytes.length; offset += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
@@ -81,7 +96,12 @@ export function TerminalScreenshotAction({
 
   const capture = async () => {
     const terminal = getTerminal();
-    if (!terminal || busy) return;
+    if (busy) return;
+    if (!terminal) {
+      setMessage(undefined);
+      setError("The terminal view is still initializing. Wait for it to connect, then try the screenshot again.");
+      return;
+    }
     setBusy(true);
     setError(undefined);
     setMessage(undefined);
@@ -185,6 +205,7 @@ export function TerminalScreenshotAction({
       className="button secondary terminal-screenshot-button"
       type="button"
       disabled={busy}
+      aria-busy={busy}
       title="Capture the visible terminal viewport as immutable evidence"
       onClick={() => void capture()}
     ><Camera size={15} /> {busy ? "Preserving…" : "Screenshot"}</button>

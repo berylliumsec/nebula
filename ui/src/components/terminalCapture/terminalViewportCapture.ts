@@ -10,6 +10,14 @@ const DEFAULT_ANSI = [
   "#53656d", "#ff9da3", "#7ce9bd", "#f0d990", "#a1d1f7", "#e8b3f2", "#8ce4ec", "#ffffff",
 ] as const;
 
+// Keep captures inside the same decoded-image envelope enforced by Core. A
+// browser zoom or high-DPI display can otherwise turn an ordinary viewport into
+// a canvas that WebKit cannot encode or Core must reject.
+const MAX_CAPTURE_DIMENSION = 16_384;
+const MAX_CAPTURE_PIXELS = 50_000_000;
+const MAX_CAPTURE_SCALE = 2;
+const MIN_CAPTURE_SCALE = 0.25;
+
 export interface XtermViewportTerminal {
   readonly cols: number;
   readonly rows: number;
@@ -197,6 +205,10 @@ export function snapshotTerminalViewport(
   terminal: XtermViewportTerminal,
   options: CaptureTerminalViewportOptions = {},
 ): TerminalViewportSnapshot {
+  if (!Number.isInteger(terminal.cols) || terminal.cols < 1
+    || !Number.isInteger(terminal.rows) || terminal.rows < 1) {
+    throw new Error("The terminal viewport is not ready to capture yet.");
+  }
   const buffer = terminal.buffer.active;
   const theme = captureTheme({ ...terminal.options.theme, ...options.theme });
   const cells: TerminalViewportCell[] = [];
@@ -335,13 +347,49 @@ export function renderTerminalViewport(
   return canvas;
 }
 
+function pngDataUrlBlob(canvas: HTMLCanvasElement): Blob {
+  const dataUrl = canvas.toDataURL("image/png");
+  const separator = dataUrl.indexOf(",");
+  if (separator < 0 || !dataUrl.slice(0, separator).includes(";base64")) {
+    throw new Error("The terminal viewport could not be encoded as PNG.");
+  }
+  const binary = atob(dataUrl.slice(separator + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: "image/png" });
+}
+
 function pngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) resolve(blob);
-      else reject(new Error("The terminal viewport could not be encoded as PNG."));
-    }, "image/png");
+  if (typeof canvas.toBlob !== "function") {
+    return Promise.resolve().then(() => pngDataUrlBlob(canvas));
+  }
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => blob
+      ? resolve(blob)
+      : reject(new Error("The terminal viewport could not be encoded with canvas.toBlob.")), "image/png");
+  }).catch(() => {
+    // diagnostic-expected: WebKit variants without working toBlob use the
+    // equivalent data-URL encoder; the caller records only if both paths fail.
+    return pngDataUrlBlob(canvas);
   });
+}
+
+function positiveMeasurement(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function boundedCaptureScale(logicalWidth: number, logicalHeight: number, requestedScale: number): number {
+  const maxSafeScale = Math.min(
+    MAX_CAPTURE_SCALE,
+    MAX_CAPTURE_DIMENSION / logicalWidth,
+    MAX_CAPTURE_DIMENSION / logicalHeight,
+    Math.sqrt(MAX_CAPTURE_PIXELS / (logicalWidth * logicalHeight)),
+  );
+  if (!Number.isFinite(maxSafeScale) || maxSafeScale < MIN_CAPTURE_SCALE) {
+    throw new Error("The terminal viewport is too large to capture safely. Resize the terminal and try again.");
+  }
+  const requested = Number.isFinite(requestedScale) && requestedScale > 0 ? requestedScale : 1;
+  return Math.max(MIN_CAPTURE_SCALE, Math.min(requested, maxSafeScale));
 }
 
 /** Captures the public xterm buffer and encodes it as a scaled PNG. */
@@ -352,14 +400,28 @@ export async function captureTerminalViewportPng(
 ): Promise<TerminalPngCapture> {
   const snapshot = snapshotTerminalViewport(terminal, captureOptions);
   await document.fonts?.ready;
-  const elementRect = terminal.element?.getBoundingClientRect();
+  const screen = terminal.element?.querySelector<HTMLElement>(".xterm-screen");
+  const elementRect = (screen ?? terminal.element)?.getBoundingClientRect();
+  const cellWidth = renderOptions.cellWidth
+    ?? (positiveMeasurement(elementRect?.width) ? elementRect!.width / terminal.cols : Math.ceil(snapshot.fontSize * 0.62));
+  const cellHeight = renderOptions.cellHeight
+    ?? (positiveMeasurement(elementRect?.height) ? elementRect!.height / terminal.rows : Math.ceil(snapshot.fontSize * snapshot.lineHeight));
+  const padding = Math.max(0, renderOptions.padding ?? 0);
+  const logicalWidth = (snapshot.cols * Math.max(1, cellWidth)) + (padding * 2);
+  const logicalHeight = (snapshot.rows * Math.max(1, cellHeight)) + (padding * 2);
+  const scale = boundedCaptureScale(
+    logicalWidth,
+    logicalHeight,
+    renderOptions.scale ?? globalThis.devicePixelRatio ?? 1,
+  );
   const effectiveRenderOptions = {
-    cellWidth: renderOptions.cellWidth ?? (elementRect?.width ? elementRect.width / terminal.cols : undefined),
-    cellHeight: renderOptions.cellHeight ?? (elementRect?.height ? elementRect.height / terminal.rows : undefined),
     ...renderOptions,
+    cellWidth,
+    cellHeight,
+    padding,
+    scale,
   };
   const canvas = renderTerminalViewport(snapshot, effectiveRenderOptions);
-  const scale = Math.max(0.25, effectiveRenderOptions.scale ?? globalThis.devicePixelRatio ?? 1);
   return {
     blob: await pngBlob(canvas),
     width: canvas.width,

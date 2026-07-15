@@ -59,6 +59,51 @@ function evidence(id: string, artifactId: string): EvidenceSummary {
 describe("TerminalScreenshotAction", () => {
   beforeEach(() => captureSpies.capture.mockReset());
 
+  it("explains when the terminal renderer is not ready instead of ignoring the action", async () => {
+    const uploadEvidence = vi.fn();
+    const user = userEvent.setup();
+
+    render(<TerminalScreenshotAction
+      engagementId="project-1"
+      getTerminal={() => undefined}
+      runtime={{} as ContainerTerminalRuntimeSnapshot}
+      session={{ sessionId: "terminal-1" } as ContainerTerminalSession}
+      uploadEvidence={uploadEvidence}
+    />);
+
+    await user.click(screen.getByRole("button", { name: "Screenshot" }));
+    expect(screen.getByText(/terminal view is still initializing/i)).toBeVisible();
+    expect(captureSpies.capture).not.toHaveBeenCalled();
+    expect(uploadEvidence).not.toHaveBeenCalled();
+  });
+
+  it("uploads captures in WebViews that require FileReader for Blob bytes", async () => {
+    const legacyBlob = new Blob([new TextEncoder().encode("original")], { type: "image/png" });
+    Object.defineProperty(legacyBlob, "arrayBuffer", { value: undefined });
+    captureSpies.capture.mockResolvedValue({
+      blob: legacyBlob,
+      width: 640,
+      height: 320,
+      logicalWidth: 640,
+      logicalHeight: 320,
+      snapshot: { cols: 80, rows: 24, viewportY: 0, bufferType: "normal" },
+    });
+    const uploadEvidence = vi.fn().mockResolvedValue(evidence("evidence-original", "artifact-original"));
+    const user = userEvent.setup();
+
+    render(<TerminalScreenshotAction
+      engagementId="project-1"
+      getTerminal={() => ({ cols: 80, rows: 24 }) as XtermViewportTerminal}
+      runtime={{ image: "image", imageDigest: "digest", baseImageDigest: "base" } as ContainerTerminalRuntimeSnapshot}
+      session={{ sessionId: "terminal-1" } as ContainerTerminalSession}
+      uploadEvidence={uploadEvidence}
+    />);
+
+    await user.click(screen.getByRole("button", { name: "Screenshot" }));
+    await waitFor(() => expect(uploadEvidence).toHaveBeenCalled());
+    expect(uploadEvidence.mock.calls[0][0].contentBase64).toBe(btoa("original"));
+  });
+
   it("preserves the original viewport before saving a separately linked derived artifact", async () => {
     const terminal = { cols: 80, rows: 24 } as XtermViewportTerminal;
     captureSpies.capture.mockResolvedValue({

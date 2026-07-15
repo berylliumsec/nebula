@@ -1,6 +1,7 @@
 import type { IBufferCell, IBufferLine, IBufferNamespace } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vitest";
 import {
+  captureTerminalViewportPng,
   renderTerminalViewport,
   snapshotTerminalViewport,
   type XtermViewportTerminal,
@@ -137,5 +138,50 @@ describe("terminal viewport capture", () => {
     expect(context.scale).toHaveBeenCalledWith(2, 2);
     expect(fillText).toHaveBeenCalledWith("界", 12, expect.any(Number), 16);
     expect(fillRect).toHaveBeenCalledWith(12, 4, 16, 16);
+  });
+
+  it("uses the rendered screen bounds, caps high-DPI output, and falls back when canvas.toBlob is unavailable", async () => {
+    const terminal = terminalFixture();
+    const root = document.createElement("div");
+    const screen = document.createElement("div");
+    screen.className = "xterm-screen";
+    root.append(screen);
+    Object.defineProperty(root, "getBoundingClientRect", {
+      value: () => ({ width: 900, height: 400, x: 0, y: 0, top: 0, right: 900, bottom: 400, left: 0, toJSON: () => ({}) }),
+    });
+    Object.defineProperty(screen, "getBoundingClientRect", {
+      value: () => ({ width: 800, height: 320, x: 0, y: 0, top: 0, right: 800, bottom: 320, left: 0, toJSON: () => ({}) }),
+    });
+    Object.defineProperty(terminal, "element", { value: root });
+
+    const context = {
+      scale: vi.fn(),
+      fillRect: vi.fn(),
+      fillText: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const canvas = document.createElement("canvas");
+    Object.defineProperty(canvas, "getContext", { value: () => context });
+    Object.defineProperty(canvas, "toBlob", { value: undefined });
+    Object.defineProperty(canvas, "toDataURL", {
+      value: () => "data:image/png;base64,iVBORw0KGgo=",
+    });
+
+    const capture = await captureTerminalViewportPng(terminal, {}, {
+      scale: 10,
+      createCanvas: () => canvas,
+    });
+
+    expect(context.scale).toHaveBeenCalledWith(2, 2);
+    expect(capture.width).toBe(1_600);
+    expect(capture.height).toBe(640);
+    expect(capture.logicalWidth).toBe(800);
+    expect(capture.logicalHeight).toBe(320);
+    expect(capture.blob).toMatchObject({ type: "image/png" });
+  });
+
+  it("reports a terminal that has not established its grid yet", () => {
+    const terminal = terminalFixture();
+    Object.defineProperty(terminal, "cols", { value: 0 });
+    expect(() => snapshotTerminalViewport(terminal)).toThrow("not ready to capture");
   });
 });
