@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
@@ -62,10 +63,16 @@ describe("NotesPanel", () => {
     await waitFor(() => expect(createObservation).toHaveBeenCalledWith(expect.objectContaining({ engagementId: "eng-1", observationType: "note", title: "New", body: "# Body" })));
   });
 
-  it("opens selected text as an editable unsent note draft", async () => {
-    const createObservation = vi.fn();
+  it("saves selected text immediately as an editable project note", async () => {
+    const createObservation = vi.fn().mockResolvedValue({
+      ...note,
+      id: "selection-note",
+      title: "Note from Terminal selection",
+      body: "whoami\n",
+      source: "selection-note",
+    });
     const consumed = vi.fn();
-    render(<DialogProvider><NotesPanel
+    render(<StrictMode><DialogProvider><NotesPanel
       api={{
         listObservations: vi.fn().mockResolvedValue({ items: [], total: 0 }),
         createObservation,
@@ -79,11 +86,19 @@ describe("NotesPanel", () => {
         anchor: { left: 0, top: 0, right: 0, bottom: 0 },
       }}
       onInitialDraftConsumed={consumed}
-    /></DialogProvider>);
+    /></DialogProvider></StrictMode>);
 
     expect(await screen.findByRole("textbox", { name: "Note title" })).toHaveValue("Note from Terminal selection");
     expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("whoami\n");
     expect(consumed).toHaveBeenCalledOnce();
-    expect(createObservation).not.toHaveBeenCalled();
+    await waitFor(() => expect(createObservation).toHaveBeenCalledWith(expect.objectContaining({
+      engagementId: "eng-1",
+      observationType: "note",
+      title: "Note from Terminal selection",
+      body: "whoami\n",
+      source: "selection-note",
+      metadata: expect.objectContaining({ selection_source: expect.objectContaining({ kind: "terminal", id: "terminal-1" }) }),
+    })));
+    expect(createObservation).toHaveBeenCalledOnce();
   });
 });

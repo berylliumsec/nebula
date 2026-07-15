@@ -235,6 +235,12 @@ from .setup import (
     SetupStatus,
     bootstrap_scratch_project,
 )
+from .writing_ai import (
+    WritingAIError,
+    WritingAIService,
+    WritingTransformRequest,
+    WritingTransformResponse,
+)
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .terminal_history import (
     TerminalAuditImmutableError,
@@ -699,6 +705,7 @@ def create_app(
     workspace_service: WorkspaceService | None = None,
     report_render_service: ReportRenderService | None = None,
     execution_ai_service: ExecutionAIService | None = None,
+    writing_ai_service: WritingAIService | None = None,
     credential_store: CredentialStore | None = None,
     bootstrap_workspace: bool = False,
     diagnostic_manager: DiagnosticManager | None = None,
@@ -955,10 +962,17 @@ def create_app(
         execution_ai = ExecutionAIService(
             store=store,
             artifact_store=artifact_store,
+            provider_factory=provider_factory,
             operator_id=active_operator_id,
         )
     if execution_ai is not None and execution_ai.store is not store:
         raise ValueError("execution_ai_service must use the API store")
+    writing_ai = writing_ai_service or WritingAIService(
+        store=store,
+        provider_factory=provider_factory,
+    )
+    if writing_ai.store is not store:
+        raise ValueError("writing_ai_service must use the API store")
     setup = SetupService(store, tool_platform)
 
     @asynccontextmanager
@@ -1104,6 +1118,7 @@ def create_app(
     app.state.workspace_service = workspaces
     app.state.report_render_service = report_renders
     app.state.execution_ai_service = execution_ai
+    app.state.writing_ai_service = writing_ai
     app.state.setup_service = setup
     app.state.terminal_command_history = terminal_commands
     app.state.executable_missions_enabled = executable_missions_enabled
@@ -1162,6 +1177,7 @@ def create_app(
         "providers": "providers",
         "report-renders": "reports",
         "reports": "reports",
+        "writing-ai": "reports",
         "runner-profiles": "sandbox",
         "runners": "sandbox",
         "runs": "missions",
@@ -1659,6 +1675,19 @@ def create_app(
             retryable=exc.status_code >= 500,
         )
 
+    @app.exception_handler(WritingAIError)
+    async def writing_ai_error_handler(
+        request: Request, exc: WritingAIError
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            retryable=exc.status_code >= 500,
+        )
+
     @app.exception_handler(ExportError)
     async def export_error_handler(request: Request, exc: ExportError) -> JSONResponse:
         return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
@@ -2139,6 +2168,9 @@ def create_app(
                 status_code=503,
             )
         return execution_ai
+
+    def require_writing_ai_service() -> WritingAIService:
+        return writing_ai
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminal/capabilities",
@@ -3555,6 +3587,17 @@ def create_app(
             return workspace.reset(engagement_id, request)
         async with container_terminals.guard_workspace_operation(engagement_id):
             return workspace.reset(engagement_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/writing/transform",
+        response_model=WritingTransformResponse,
+        tags=["writing-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def transform_writing(
+        request: WritingTransformRequest,
+    ) -> WritingTransformResponse:
+        return await require_writing_ai_service().transform(request)
 
     @app.post(
         f"{API_PREFIX}/reports/{{report_id}}/sign-off",

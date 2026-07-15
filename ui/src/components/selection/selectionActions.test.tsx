@@ -76,7 +76,7 @@ describe("selection actions", () => {
     sensitive.remove();
   });
 
-  it("opens draft-only Ask and Add note actions with source metadata", async () => {
+  it("opens draft-only Ask and Take note actions with source metadata", async () => {
     const user = userEvent.setup();
     const onAsk = vi.fn();
     const onAddNote = vi.fn();
@@ -102,9 +102,22 @@ describe("selection actions", () => {
 
     selectNodeText(paragraph.firstChild as Text, 0, 5);
     fireEvent.pointerUp(paragraph);
-    await user.click(screen.getByRole("button", { name: "Add note" }));
+    await user.click(screen.getByRole("button", { name: "Take note" }));
     expect(onAddNote).toHaveBeenCalledWith(expect.objectContaining({ text: "exact" }));
     await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull());
+  });
+
+  it("keeps actions available while the selected surface scrolls", () => {
+    render(<SelectionActionsProvider onAsk={vi.fn()}>
+      <p>selection that remains actionable</p>
+    </SelectionActionsProvider>);
+    const paragraph = screen.getByText("selection that remains actionable");
+    selectNodeText(paragraph.firstChild as Text);
+    fireEvent.pointerUp(paragraph);
+
+    fireEvent.scroll(document);
+
+    expect(screen.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
   });
 
   it("dismisses the selection actions after copying", async () => {

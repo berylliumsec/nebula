@@ -262,6 +262,15 @@ class ApiEntityValidator:
                     target_id=target_id,
                     expected_engagement=owner_id if rule.same_engagement else None,
                 )
+        if isinstance(entity, Report):
+            for transform in entity.note_transforms:
+                self._referenced_entity(
+                    entity,
+                    field="note_transforms.observation_id",
+                    target_model=Observation,
+                    target_id=transform.observation_id,
+                    expected_engagement=owner_id,
+                )
         if isinstance(entity, ProviderProfile):
             self._validate_provider(entity)
         if isinstance(entity, Report) and (

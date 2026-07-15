@@ -31,6 +31,8 @@ import type {
   KnowledgeSource,
   MissionCreateRequest,
   ObservationSummary,
+  ObservationCreateRequest,
+  ObservationUpdateRequest,
   OperatorProfile,
   OperatorProfileCreateRequest,
   OperatorProfileUpdateRequest,
@@ -115,6 +117,9 @@ interface WorkspaceContextValue {
   createFinding: (request: FindingCreateRequest) => Promise<FindingSummary>;
   updateFinding: (id: string, request: FindingUpdateRequest) => Promise<FindingSummary>;
   uploadEvidence: (request: EvidenceUploadRequest) => Promise<EvidenceSummary>;
+  createObservation: (request: ObservationCreateRequest) => Promise<ObservationSummary>;
+  updateObservation: (id: string, request: ObservationUpdateRequest) => Promise<ObservationSummary>;
+  deleteObservation: (id: string, expectedRevision: number) => Promise<void>;
   startMission: (request: MissionCreateRequest) => Promise<AgentRunSummary>;
   stopMission: (id: string, request?: RunStopRequest) => Promise<AgentRunSummary>;
   createOperatorProfile: (request: OperatorProfileCreateRequest) => Promise<OperatorProfile>;
@@ -563,6 +568,32 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return created;
   }, [api, coreState]);
 
+  const createObservation = useCallback(async (request: ObservationCreateRequest) => {
+    if (coreState !== "online" || !api) {
+      throw new Error("Nebula Core must be online to create a note.");
+    }
+    const created = await api.createObservation(request);
+    setObservations((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+    return created;
+  }, [api, coreState]);
+
+  const updateObservation = useCallback(async (id: string, request: ObservationUpdateRequest) => {
+    if (coreState !== "online" || !api) {
+      throw new Error("Nebula Core must be online to update a note.");
+    }
+    const updated = await api.updateObservation(id, request);
+    setObservations((current) => current.map((item) => item.id === id ? updated : item));
+    return updated;
+  }, [api, coreState]);
+
+  const deleteObservation = useCallback(async (id: string, expectedRevision: number) => {
+    if (coreState !== "online" || !api) {
+      throw new Error("Nebula Core must be online to delete a note.");
+    }
+    await api.deleteObservation(id, expectedRevision);
+    setObservations((current) => current.filter((item) => item.id !== id));
+  }, [api, coreState]);
+
   const startMission = useCallback(async (request: MissionCreateRequest) => {
     if (coreState !== "online" || !api) {
       throw new Error("Nebula Core must be online to start a mission.");
@@ -716,6 +747,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       createFinding,
       updateFinding,
       uploadEvidence,
+      createObservation,
+      updateObservation,
+      deleteObservation,
       startMission,
       stopMission,
       createOperatorProfile,
@@ -762,6 +796,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       createFinding,
       updateFinding,
       uploadEvidence,
+      createObservation,
+      updateObservation,
+      deleteObservation,
       startMission,
       stopMission,
       createOperatorProfile,

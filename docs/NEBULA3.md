@@ -31,7 +31,8 @@ and redacted support bundles are documented in the
   human terminal has an explicit root/writable/unrestricted boundary; reviewed
   and agent execution remains offline or single-target scoped.
 - Deterministic server-rendered PDF reports, operator-triggered AI execution
-  notes, and integrity-manifested engagement bundle v3 export.
+  notes, review-first AI report drafting and note transforms, and
+  integrity-manifested engagement bundle v3 export.
 
 ## Run from a source checkout
 
@@ -154,7 +155,12 @@ Import records before/after checksums and does not write to the source folder.
 An external Chroma directory is skipped unless the operator supplies
 `--allow-external-knowledge` explicitly.
 
-The report workspace exports a saved report revision as a server-rendered PDF.
+The report workspace can draft an executive summary from selected findings and
+notes, or transform a linked note into an editable report-local section. AI
+output records provider, model, prompt, source hash, and operator instruction;
+it is not persisted until the operator applies and saves it. Cloud transforms
+require an eligible provider profile and per-request confirmation. PDF export
+always renders the saved report revision.
 The separate **Export engagement bundle (.nebula.zip)** action produces bundle
 format v3 with entity records, run and operation events, execution streams,
 human-terminal audit records and any selected-tool transcripts, generated drafts, report

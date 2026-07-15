@@ -140,6 +140,14 @@
 .report-form fieldset p { margin: 5px; color: var(--muted); font-size: 11px; }
 .report-form > footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
 .report-form > footer > span { color: var(--muted); font-size: 11px; }
+.report-field-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.report-field-heading > span { color: var(--muted); font-size: 11px; font-weight: 650; }
+.report-note-option { align-items: center !important; }
+.report-note-option > span { min-width: 0; flex: 1; }
+.report-note-transform { display: grid; gap: 7px; margin: 0 6px 6px 28px; padding: 9px; border: 1px solid color-mix(in srgb, var(--blue-bright) 28%, var(--border)); border-radius: 7px; background: var(--blue-muted); }
+.report-note-transform > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.report-note-transform > header span { color: var(--muted); font-size: 11px; }
+.report-note-transform textarea { min-height: 100px; }
 .report-document { max-width: 700px; min-height: 650px; margin: 0 auto; padding: 48px 56px; outline: 0; background: var(--surface-raised); }
 .document-kicker { color: var(--blue); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
 .report-document h1 { margin: 10px 0 24px; font-size: 25px; line-height: 1.2; }
@@ -232,6 +240,16 @@
 .provider-capability-policy .provider-consent span { display: flex; flex-direction: column; gap: 2px; }
 .provider-dialog-note, .form-error { margin: 0; font-size: .82rem; line-height: 1.45; }
 .provider-dialog-note { color: var(--muted); }
+.ai-writing-dialog { width: min(680px, calc(100vw - 32px)); }
+.ai-writing-source { display: flex; align-items: flex-start; flex-direction: column; gap: 3px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-muted); }
+.ai-writing-source strong { font-size: 12px; }
+.ai-writing-source span, .ai-writing-dialog label small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.ai-writing-runtime { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ai-writing-dialog label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 650; }
+.ai-writing-dialog select, .ai-writing-dialog textarea { width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface); font: inherit; }
+.ai-writing-dialog textarea { resize: vertical; line-height: 1.5; }
+.ai-writing-confirm { display: flex !important; align-items: flex-start; grid-template-columns: auto 1fr; flex-direction: row; gap: 8px !important; padding: 9px; border: 1px solid color-mix(in srgb, var(--yellow) 35%, var(--border)); border-radius: 7px; background: color-mix(in srgb, var(--yellow) 7%, var(--surface)); }
+.ai-writing-confirm input { width: auto; margin-top: 2px; }
 .form-error { color: var(--red); }
 .provider-dialog footer { justify-content: flex-end; }
 .resource-dialog { max-height: min(760px, calc(100vh - 40px)); overflow-y: auto; }

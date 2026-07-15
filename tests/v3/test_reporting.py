@@ -12,9 +12,11 @@ from pypdf import PdfReader
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
+    AIWritingProvenance,
     Engagement,
     Observation,
     Report,
+    ReportNoteTransform,
     ReportRender,
     ReportRenderStatus,
 )
@@ -95,6 +97,53 @@ async def test_pdf_requires_exact_saved_revision_and_valid_artifacts(tmp_path):
         await service.request_render(report.id, report_revision=report.revision + 1)
     with pytest.raises(ReportRenderError, match="missing artifacts"):
         await service.request_render(report.id, report_revision=report.revision)
+
+
+@async_test
+async def test_pdf_uses_saved_report_local_note_transform(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Transformed notes"))
+    observation = store.create(
+        Observation(
+            engagement_id=engagement.id,
+            observation_type="note",
+            title="Working note",
+            body="Raw shorthand that should not be rendered.",
+        )
+    )
+    report = store.create(
+        Report(
+            engagement_id=engagement.id,
+            title="Transformed report",
+            observation_ids=[observation.id],
+            note_transforms=[
+                ReportNoteTransform(
+                    observation_id=observation.id,
+                    source_revision=observation.revision,
+                    title="Reviewed note section",
+                    body="Polished operator-reviewed report prose.",
+                    provenance=AIWritingProvenance(
+                        provider_profile_id="provider-1",
+                        model="model-1",
+                        prompt_version="writing-transform/v1",
+                        source_sha256="a" * 64,
+                        instruction="Rewrite for the report.",
+                    ),
+                )
+            ],
+        )
+    )
+    service = ReportRenderService(store=store, artifact_store=artifacts)
+
+    queued = await service.request_render(report.id, report_revision=report.revision)
+    await service._tasks[queued.id]
+    _artifact, path = service.pdf(queued.id)
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
+
+    assert "Reviewed note section" in text
+    assert "Polished operator-reviewed report prose." in text
+    assert "Raw shorthand that should not be rendered." not in text
 
 
 def test_report_and_bundle_api_are_authenticated_and_sensitive_export_is_explicit(

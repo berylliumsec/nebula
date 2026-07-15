@@ -507,6 +507,9 @@ class ReportRenderService:
         scope = snapshot["scope_policy"]
         findings = snapshot["findings"]
         observations = snapshot["observations"]
+        note_transforms = {
+            item["observation_id"]: item for item in report.get("note_transforms", [])
+        }
         assets = {item["id"]: item for item in snapshot["assets"]}
         remediations = {item["id"]: item for item in snapshot["remediations"]}
         evidence = snapshot["evidence"]
@@ -657,10 +660,21 @@ class ReportRenderService:
         if not observations:
             story.append(Paragraph("No notes selected for this revision.", body))
         for observation in observations:
+            transform = note_transforms.get(observation["id"])
             story.extend(
                 [
-                    Paragraph(markup(observation["title"]), subheading),
-                    Paragraph(markup(observation.get("body") or ""), body),
+                    Paragraph(
+                        markup((transform or {}).get("title") or observation["title"]),
+                        subheading,
+                    ),
+                    Paragraph(
+                        markup(
+                            (transform or {}).get("body")
+                            if transform is not None
+                            else observation.get("body") or ""
+                        ),
+                        body,
+                    ),
                 ]
             )
         story.append(PageBreak())

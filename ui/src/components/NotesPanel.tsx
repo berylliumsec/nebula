@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ApiClient } from "../api/client";
-import type { ObservationSummary } from "../api/types";
+import type {
+  ObservationCreateRequest,
+  ObservationSummary,
+  ObservationUpdateRequest,
+  ProviderHealth,
+} from "../api/types";
 import { useConfirmation } from "./DialogSystem";
+import { AIWritingDialog } from "./AIWritingDialog";
 import type { SelectionActionDraft } from "./selection";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
@@ -18,8 +24,12 @@ interface NotesPanelProps {
   engagementId: string;
   evidenceOptions?: LinkOption[];
   assetOptions?: LinkOption[];
+  providers?: ProviderHealth[];
   initialDraft?: SelectionActionDraft;
   onInitialDraftConsumed?: () => void;
+  createObservation?: (request: ObservationCreateRequest) => Promise<ObservationSummary>;
+  updateObservation?: (id: string, request: ObservationUpdateRequest) => Promise<ObservationSummary>;
+  deleteObservation?: (id: string, expectedRevision: number) => Promise<void>;
   onAskNebula?: (context: {
     text: string;
     sourceKind: "note";
@@ -33,6 +43,7 @@ const blank = {
   body: "",
   evidenceIds: [] as string[],
   assetIds: [] as string[],
+  metadata: {} as Record<string, unknown>,
 };
 
 export function NotesPanel({
@@ -40,8 +51,12 @@ export function NotesPanel({
   engagementId,
   evidenceOptions = [],
   assetOptions = [],
+  providers = [],
   initialDraft,
   onInitialDraftConsumed,
+  createObservation,
+  updateObservation,
+  deleteObservation,
   onAskNebula,
 }: NotesPanelProps) {
   const confirm = useConfirmation();
@@ -52,6 +67,21 @@ export function NotesPanel({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [writingOpen, setWritingOpen] = useState(false);
+  const consumedInitialDraftRef = useRef<SelectionActionDraft | undefined>(undefined);
+  const capturedNoteRef = useRef<ObservationSummary | undefined>(undefined);
+  const createNote = useCallback(
+    (request: ObservationCreateRequest) => createObservation ? createObservation(request) : api.createObservation(request),
+    [api, createObservation],
+  );
+  const updateNote = useCallback(
+    (id: string, request: ObservationUpdateRequest) => updateObservation ? updateObservation(id, request) : api.updateObservation(id, request),
+    [api, updateObservation],
+  );
+  const deleteNote = useCallback(
+    (id: string, expectedRevision: number) => deleteObservation ? deleteObservation(id, expectedRevision) : api.deleteObservation(id, expectedRevision),
+    [api, deleteObservation],
+  );
 
   const selected = useMemo(
     () => notes.find((note) => note.id === selectedId),
@@ -64,10 +94,12 @@ export function NotesPanel({
     try {
       const response = await api.listObservations(engagementId, signal);
       const next = response.items.filter((item) => item.observationType === "note");
-      setNotes(next);
-      setSelectedId((current) => current && next.some((item) => item.id === current)
+      const captured = capturedNoteRef.current;
+      const merged = captured && !next.some((item) => item.id === captured.id) ? [captured, ...next] : next;
+      setNotes(merged);
+      setSelectedId((current) => current && merged.some((item) => item.id === current)
         ? current
-        : next[0]?.id);
+        : merged[0]?.id);
     } catch (loadError) {
       void logCaughtDiagnostic("interface.notes_panel.caught_failure_01", "A handled interface operation failed.", loadError, "notes_panel");
       if (!signal?.aborted) {
@@ -85,7 +117,7 @@ export function NotesPanel({
   }, [load]);
 
   useEffect(() => {
-    if (creating) return;
+    if (creating || initialDraft) return;
     if (!selected) {
       setDraft(blank);
       return;
@@ -95,23 +127,52 @@ export function NotesPanel({
       body: selected.body,
       evidenceIds: selected.evidenceIds,
       assetIds: selected.assetIds,
+      metadata: selected.metadata,
     });
-  }, [creating, selected]);
+  }, [creating, initialDraft, selected]);
 
   useEffect(() => {
-    if (!initialDraft) return;
+    if (!initialDraft || consumedInitialDraftRef.current === initialDraft) return;
+    consumedInitialDraftRef.current = initialDraft;
     const label = initialDraft.source.label.trim() || "selected text";
     setCreating(true);
     setSelectedId(undefined);
-    setDraft({
+    const nextDraft = {
       title: `Note from ${label}`.slice(0, 500),
       body: initialDraft.text,
       evidenceIds: [],
       assetIds: [],
-    });
+      metadata: {
+        selection_source: {
+          kind: initialDraft.source.kind,
+          id: initialDraft.source.id,
+          label: initialDraft.source.label,
+          truncated: initialDraft.truncated,
+          original_length: initialDraft.originalLength,
+        },
+      },
+    };
+    setDraft(nextDraft);
     setError(undefined);
     onInitialDraftConsumed?.();
-  }, [initialDraft, onInitialDraftConsumed]);
+    setSaving(true);
+    void createNote({
+      engagementId,
+      observationType: "note",
+      title: nextDraft.title,
+      body: nextDraft.body,
+      source: "selection-note",
+      metadata: nextDraft.metadata,
+    }).then((created) => {
+      capturedNoteRef.current = created;
+      setNotes((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      setSelectedId(created.id);
+      setCreating(false);
+    }).catch((saveError: unknown) => {
+      void logCaughtDiagnostic("interface.notes_panel.selection_capture_failed", "A selected-text note could not be saved.", saveError, "notes_panel");
+      setError(saveError instanceof Error ? saveError.message : "Could not save the selected text as a note.");
+    }).finally(() => setSaving(false));
+  }, [createNote, engagementId, initialDraft, onInitialDraftConsumed]);
 
   const startNote = () => {
     setCreating(true);
@@ -126,7 +187,7 @@ export function NotesPanel({
     setError(undefined);
     try {
       if (creating || !selected) {
-        const created = await api.createObservation({
+        const created = await createNote({
           engagementId,
           observationType: "note",
           title: draft.title,
@@ -134,16 +195,18 @@ export function NotesPanel({
           evidenceIds: draft.evidenceIds,
           assetIds: draft.assetIds,
           source: "operator-note",
+          metadata: draft.metadata,
         });
         setNotes((current) => [created, ...current]);
         setSelectedId(created.id);
         setCreating(false);
       } else {
-        const updated = await api.updateObservation(selected.id, {
+        const updated = await updateNote(selected.id, {
           title: draft.title,
           body: draft.body,
           evidenceIds: draft.evidenceIds,
           assetIds: draft.assetIds,
+          metadata: draft.metadata,
           expectedRevision: selected.revision,
         });
         setNotes((current) => current.map((item) => item.id === updated.id ? updated : item));
@@ -166,7 +229,8 @@ export function NotesPanel({
     });
     if (!approved) return;
     try {
-      await api.deleteObservation(selected.id, selected.revision);
+      await deleteNote(selected.id, selected.revision);
+      if (capturedNoteRef.current?.id === selected.id) capturedNoteRef.current = undefined;
       const next = notes.filter((item) => item.id !== selected.id);
       setNotes(next);
       setSelectedId(next[0]?.id);
@@ -205,6 +269,7 @@ export function NotesPanel({
             <input aria-label="Note title" value={draft.title} placeholder="Note title" maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />
             <div>
               {selected && <button className="button quiet" type="button" onClick={() => void remove()}><Trash2 size={14} /> Delete</button>}
+              <button className="button quiet" type="button" disabled={!draft.body.trim() || !providers.some((provider) => provider.enabled && provider.models.length)} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
               <button className="button quiet" type="button" disabled={!draft.body.trim() || !onAskNebula} onClick={() => onAskNebula?.({ text: draft.body, sourceKind: "note", sourceId: selected?.id, sourceLabel: draft.title || "Untitled note" })}><MessageSquareQuote size={14} /> Ask Nebula</button>
               <button className="button primary" type="button" disabled={saving || !draft.title.trim()} onClick={() => void save()}><Save size={14} /> {saving ? "Saving…" : "Save"}</button>
             </div>
@@ -219,6 +284,26 @@ export function NotesPanel({
           </details>}
         </> : <div className="empty-state note-empty-state"><NotebookPen size={24} aria-hidden="true" /><strong>Start a project note</strong><p>Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence.</p><button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button></div>}
       </section>
+      {writingOpen && <AIWritingDialog
+        api={api}
+        engagementId={engagementId}
+        providers={providers}
+        purpose="note"
+        title="Transform note with AI"
+        description="Tell Nebula how to organize or rewrite this note. The generated text remains editable and is not persisted until you save the note."
+        sourceLabel={draft.title || "Untitled note"}
+        sourceText={draft.body}
+        initialInstruction="Turn this into a concise analyst note. Preserve exact observations, separate hypotheses, and keep useful technical details."
+        onClose={() => setWritingOpen(false)}
+        onApply={(result) => {
+          setDraft((current) => ({
+            ...current,
+            body: result.content,
+            metadata: { ...current.metadata, ai_writing: result.provenance },
+          }));
+          setWritingOpen(false);
+        }}
+      />}
     </div>
   );
 }

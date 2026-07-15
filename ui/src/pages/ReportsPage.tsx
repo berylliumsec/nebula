@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Archive, BadgeCheck, Download, FileText, LoaderCircle, Plus, Save, ShieldCheck, X } from "lucide-react";
+import { Archive, BadgeCheck, Download, FileText, LoaderCircle, Plus, RotateCcw, Save, ShieldCheck, Sparkles, X } from "lucide-react";
+import type { AIWritingProvenance, ReportNoteTransform } from "../api/types";
+import { AIWritingDialog } from "../components/AIWritingDialog";
 import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -28,6 +30,7 @@ export function ReportsPage() {
     engagement,
     findings,
     observations,
+    providers,
     reports,
     signOffReport,
     updateReport,
@@ -39,6 +42,8 @@ export function ReportsPage() {
   const [summary, setSummary] = useState("");
   const [findingIds, setFindingIds] = useState<string[]>([]);
   const [observationIds, setObservationIds] = useState<string[]>([]);
+  const [noteTransforms, setNoteTransforms] = useState<ReportNoteTransform[]>([]);
+  const [summaryProvenance, setSummaryProvenance] = useState<AIWritingProvenance>();
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -51,6 +56,7 @@ export function ReportsPage() {
   const [signoffName, setSignoffName] = useState("");
   const [attestation, setAttestation] = useState("I reviewed this report and approve it as the final record.");
   const [signing, setSigning] = useState(false);
+  const [writingTarget, setWritingTarget] = useState<{ kind: "summary" } | { kind: "note"; observationId: string }>();
   const readOnly = selected?.status === "final";
 
   useEffect(() => {
@@ -64,6 +70,8 @@ export function ReportsPage() {
       setSummary("");
       setFindingIds([]);
       setObservationIds([]);
+      setNoteTransforms([]);
+      setSummaryProvenance(undefined);
       setDirty(false);
       return;
     }
@@ -72,12 +80,40 @@ export function ReportsPage() {
     setSummary(selected.executiveSummary);
     setFindingIds(selected.findingIds);
     setObservationIds(selected.observationIds);
+    setNoteTransforms(selected.noteTransforms);
+    setSummaryProvenance(selected.executiveSummaryProvenance);
     setDirty(false);
     setError(undefined);
   }, [selected]);
 
   const linkedFindings = useMemo(() => findings.filter((finding) => findingIds.includes(finding.id)), [findingIds, findings]);
   const linkedObservations = useMemo(() => observations.filter((observation) => observationIds.includes(observation.id)), [observationIds, observations]);
+  const writingObservation = writingTarget?.kind === "note"
+    ? observations.find((observation) => observation.id === writingTarget.observationId)
+    : undefined;
+  const reportWritingSource = useMemo(() => {
+    const noteSections = linkedObservations.map((observation) => {
+      const transform = noteTransforms.find((item) => item.observationId === observation.id);
+      return {
+        title: transform?.title ?? observation.title,
+        body: transform?.body ?? observation.body,
+        source: observation.observationType,
+      };
+    });
+    return JSON.stringify({
+      engagement: engagement?.name,
+      report_title: title,
+      existing_executive_summary: summary,
+      selected_findings: linkedFindings.map((finding) => ({
+        title: finding.title,
+        severity: finding.severity,
+        status: finding.status,
+        description: finding.description,
+        evidence_count: finding.evidenceIds.length,
+      })),
+      selected_note_sections: noteSections,
+    }, null, 2).slice(0, 100_000);
+  }, [engagement?.name, linkedFindings, linkedObservations, noteTransforms, summary, title]);
   const create = async (event: FormEvent) => {
     event.preventDefault();
     if (!engagement) return;
@@ -111,6 +147,8 @@ export function ReportsPage() {
         executiveSummary: summary,
         findingIds,
         observationIds,
+        noteTransforms,
+        executiveSummaryProvenance: summaryProvenance ?? null,
         expectedRevision: selected.revision,
       });
       setDirty(false);
@@ -125,6 +163,17 @@ export function ReportsPage() {
   const setField = <T,>(setter: (value: T) => void, value: T) => {
     if (readOnly) return;
     setter(value);
+    setDirty(true);
+  };
+
+  const setIncludedObservation = (observationId: string, included: boolean) => {
+    if (readOnly) return;
+    setObservationIds(included
+      ? [...observationIds, observationId]
+      : observationIds.filter((id) => id !== observationId));
+    if (!included) {
+      setNoteTransforms((current) => current.filter((item) => item.observationId !== observationId));
+    }
     setDirty(true);
   };
 
@@ -227,7 +276,30 @@ export function ReportsPage() {
         </aside>
         <section className="panel report-editor" aria-readonly={readOnly || undefined}>
           <header className="report-editor-toolbar"><div><label>Status<select value={status} disabled={readOnly} onChange={(event) => setField(setStatus, event.target.value)}><option value="draft">Draft</option><option value="review">In review</option><option value="final" disabled>Final · signed</option></select></label></div><span>{readOnly ? `Final · read-only · revision ${selected.revision}` : saving ? "Saving…" : dirty ? "Unsaved changes" : `Saved · revision ${selected.revision}`}</span></header>
-          <div className="report-form">{readOnly && <p className="provider-dialog-note" role="status">This final report is an immutable signed record. Export remains available; create a new draft to make changes.</p>}<label>Report title<input value={title} readOnly={readOnly} onChange={(event) => setField(setTitle, event.target.value)} /></label><label>Executive summary<textarea rows={14} value={summary} readOnly={readOnly} placeholder="Summarize scope, posture, material findings, and recommended next actions…" onChange={(event) => setField(setSummary, event.target.value)} /></label><fieldset disabled={readOnly}><legend>Included findings</legend>{findings.length ? findings.map((finding) => <label key={finding.id}><input type="checkbox" checked={findingIds.includes(finding.id)} onChange={(event) => setField(setFindingIds, event.target.checked ? [...findingIds, finding.id] : findingIds.filter((id) => id !== finding.id))} /><span><strong>{finding.title}</strong><small>{finding.severity} · {finding.status.replaceAll("_", " ")}</small></span></label>) : <p>No findings are available.</p>}</fieldset><fieldset disabled={readOnly}><legend>Selected notes</legend>{observations.length ? observations.map((observation) => <label key={observation.id}><input type="checkbox" checked={observationIds.includes(observation.id)} onChange={(event) => setField(setObservationIds, event.target.checked ? [...observationIds, observation.id] : observationIds.filter((id) => id !== observation.id))} /><span><strong>{observation.title}</strong><small>{observation.observationType.replaceAll("_", " ")} · {observation.evidenceIds.length} evidence link{observation.evidenceIds.length === 1 ? "" : "s"}</small></span></label>) : <p>No observations are available.</p>}</fieldset><footer><span>{linkedFindings.length} finding{linkedFindings.length === 1 ? "" : "s"} · {linkedObservations.length} note{linkedObservations.length === 1 ? "" : "s"}</span><button className="button primary" type="button" disabled={readOnly || !dirty || saving || !title.trim()} onClick={() => void save()}><Save size={15} /> {readOnly ? "Final report" : saving ? "Saving…" : "Save report"}</button></footer></div>
+          <div className="report-form">
+            {readOnly && <p className="provider-dialog-note" role="status">This final report is an immutable signed record. Export remains available; create a new draft to make changes.</p>}
+            <label>Report title<input value={title} readOnly={readOnly} onChange={(event) => setField(setTitle, event.target.value)} /></label>
+            <label>
+              <span className="report-field-heading"><span>Executive summary</span>{!readOnly && <button className="button quiet" type="button" disabled={!api || !providers.some((provider) => provider.enabled && provider.models.length)} onClick={() => setWritingTarget({ kind: "summary" })}><Sparkles size={14} /> Draft with AI</button>}</span>
+              <textarea rows={14} value={summary} readOnly={readOnly} placeholder="Summarize scope, posture, material findings, and recommended next actions…" onChange={(event) => {
+                if (readOnly) return;
+                setSummary(event.target.value);
+                setSummaryProvenance(undefined);
+                setDirty(true);
+              }} />
+              {summaryProvenance && <small>AI-assisted draft · {summaryProvenance.model} · operator editable</small>}
+            </label>
+            <fieldset disabled={readOnly}><legend>Included findings</legend>{findings.length ? findings.map((finding) => <label key={finding.id}><input type="checkbox" checked={findingIds.includes(finding.id)} onChange={(event) => setField(setFindingIds, event.target.checked ? [...findingIds, finding.id] : findingIds.filter((id) => id !== finding.id))} /><span><strong>{finding.title}</strong><small>{finding.severity} · {finding.status.replaceAll("_", " ")}</small></span></label>) : <p>No findings are available.</p>}</fieldset>
+            <fieldset disabled={readOnly}><legend>Note sections</legend>{observations.length ? observations.map((observation) => {
+              const included = observationIds.includes(observation.id);
+              const transform = noteTransforms.find((item) => item.observationId === observation.id);
+              return <div key={observation.id}>
+                <label className="report-note-option"><input type="checkbox" checked={included} onChange={(event) => setIncludedObservation(observation.id, event.target.checked)} /><span><strong>{observation.title}</strong><small>{observation.observationType.replaceAll("_", " ")} · {observation.evidenceIds.length} evidence link{observation.evidenceIds.length === 1 ? "" : "s"}</small></span>{included && !readOnly && <button className="button quiet" type="button" onClick={(event) => { event.preventDefault(); setWritingTarget({ kind: "note", observationId: observation.id }); }}><Sparkles size={13} /> {transform ? "Transform again" : "Transform with AI"}</button>}</label>
+                {included && transform && <section className="report-note-transform"><header><span>AI-assisted section · source revision {transform.sourceRevision}{transform.sourceRevision !== observation.revision ? " · source note changed" : ""}</span>{!readOnly && <button className="button quiet" type="button" onClick={() => { setNoteTransforms((current) => current.filter((item) => item.observationId !== observation.id)); setDirty(true); }}><RotateCcw size={13} /> Use original note</button>}</header><textarea aria-label={`Report section for ${observation.title}`} readOnly={readOnly} value={transform.body} onChange={(event) => { setNoteTransforms((current) => current.map((item) => item.observationId === observation.id ? { ...item, body: event.target.value } : item)); setDirty(true); }} /></section>}
+              </div>;
+            }) : <p>No project notes are available. Capture notes from selected text or create one in Workbench.</p>}</fieldset>
+            <footer><span>{linkedFindings.length} finding{linkedFindings.length === 1 ? "" : "s"} · {linkedObservations.length} note section{linkedObservations.length === 1 ? "" : "s"}</span><button className="button primary" type="button" disabled={readOnly || !dirty || saving || !title.trim()} onClick={() => void save()}><Save size={15} /> {readOnly ? "Final report" : saving ? "Saving…" : "Save report"}</button></footer>
+          </div>
         </section>
         <aside className="panel report-review">
           <header><h2>{selected.status === "review" ? "Sign off & export" : "Export"}</h2><p>{dirty ? "Save this revision before exporting. PDF output is always rendered from the persisted record." : `PDF output uses saved revision ${selected.revision}.`}</p></header>
@@ -237,6 +309,39 @@ export function ReportsPage() {
       </div>}
       {creating && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="report-dialog-title" onSubmit={(event) => void create(event)}><header><div><small>Persisted deliverable</small><h2 id="report-dialog-title">New report</h2></div><button className="icon-button subtle" type="button" aria-label="Close report dialog" onClick={() => setCreating(false)}><X size={17} /></button></header><label>Title<input required autoFocus value={newTitle} placeholder={`${engagement?.name ?? "Engagement"} assessment`} onChange={(event) => setNewTitle(event.target.value)} /></label><p className="provider-dialog-note">Validated and confirmed findings are included initially and can be changed in the editor.</p>{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button secondary" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={createSaving || !newTitle.trim()}>{createSaving ? "Creating…" : "Create report"}</button></footer></form></div>}
       {signoffOpen && selected && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="report-signoff-title" onSubmit={(event) => void completeSignoff(event)}><header><div><small>Revision {selected.revision} · permanent attribution</small><h2 id="report-signoff-title">Sign off final report</h2></div><button className="icon-button subtle" type="button" aria-label="Close report sign-off" disabled={signing} onClick={() => setSignoffOpen(false)}><X size={17} /></button></header><p className="provider-dialog-note">Sign-off finalizes this saved revision and makes it read-only. Included findings must already be validated.</p>{!activeOperator && <label>Your display name<input required autoFocus maxLength={200} value={signoffName} placeholder="Name shown in report attribution" onChange={(event) => setSignoffName(event.target.value)} /></label>}{activeOperator && <label>Signing as<input value={activeOperator.displayName} readOnly aria-readonly="true" /></label>}<label>Attestation<textarea required rows={4} maxLength={2000} value={attestation} onChange={(event) => setAttestation(event.target.value)} /></label>{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button secondary" type="button" disabled={signing} onClick={() => setSignoffOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={signing || !attestation.trim() || (!activeOperator && !signoffName.trim())}>{signing ? <><LoaderCircle className="spin" size={15} /> Signing…</> : <><BadgeCheck size={15} /> Sign off report</>}</button></footer></form></div>}
+      {writingTarget && api && engagement && (writingTarget.kind === "summary" || writingObservation) && <AIWritingDialog
+        api={api}
+        engagementId={engagement.id}
+        providers={providers}
+        purpose={writingTarget.kind === "summary" ? "report_summary" : "report_section"}
+        title={writingTarget.kind === "summary" ? "Draft executive summary with AI" : "Transform note into a report section"}
+        description={writingTarget.kind === "summary"
+          ? "Nebula will draft from the report's selected findings and note sections. Review and edit the result before saving the report."
+          : "Tell Nebula how this project note should read in the report. The original note remains unchanged."}
+        sourceLabel={writingTarget.kind === "summary" ? `${selected?.title ?? title} report context` : writingObservation?.title ?? "Project note"}
+        sourceText={writingTarget.kind === "summary" ? reportWritingSource : (writingObservation?.body ?? "").slice(0, 100_000)}
+        initialInstruction={writingTarget.kind === "summary"
+          ? "Draft a concise executive summary covering scope, overall posture, material verified findings, and prioritized next actions. Do not present working notes as confirmed findings."
+          : "Rewrite this note as a concise report section for a technical stakeholder. Preserve concrete facts and clearly label uncertainty."}
+        onClose={() => setWritingTarget(undefined)}
+        onApply={(result) => {
+          if (writingTarget.kind === "summary") {
+            setSummary(result.content);
+            setSummaryProvenance(result.provenance);
+          } else if (writingObservation) {
+            const next: ReportNoteTransform = {
+              observationId: writingObservation.id,
+              sourceRevision: writingObservation.revision,
+              title: writingObservation.title,
+              body: result.content,
+              provenance: result.provenance,
+            };
+            setNoteTransforms((current) => [next, ...current.filter((item) => item.observationId !== writingObservation.id)]);
+          }
+          setDirty(true);
+          setWritingTarget(undefined);
+        }}
+      />}
     </div>
   );
 }

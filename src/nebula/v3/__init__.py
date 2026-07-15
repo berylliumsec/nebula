@@ -6,6 +6,7 @@ it must never initialize a GUI or read legacy global configuration.
 
 from .domain import (
     Advisory,
+    AIWritingProvenance,
     AgentAttempt,
     AgentRun,
     Approval,
@@ -25,6 +26,7 @@ from .domain import (
     ProviderProfile,
     Remediation,
     Report,
+    ReportNoteTransform,
     ReportStatus,
     RunEvent,
     ScopePolicy,
@@ -38,6 +40,7 @@ from .version import __version__, build_metadata
 
 __all__ = [
     "Advisory",
+    "AIWritingProvenance",
     "AgentAttempt",
     "AgentRun",
     "Approval",
@@ -57,6 +60,7 @@ __all__ = [
     "ProviderProfile",
     "Remediation",
     "Report",
+    "ReportNoteTransform",
     "ReportStatus",
     "RunEvent",
     "ScopePolicy",

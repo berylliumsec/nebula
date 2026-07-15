@@ -188,6 +188,8 @@ export function SessionsPage() {
     approvals,
     assets,
     coreState,
+    createObservation,
+    deleteObservation,
     engagement,
     evidence,
     knowledgeSources,
@@ -198,6 +200,7 @@ export function SessionsPage() {
     setupStatus,
     startMission,
     uploadEvidence,
+    updateObservation,
   } = useWorkspace();
   const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
   const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
@@ -1336,8 +1339,12 @@ export function SessionsPage() {
               engagementId={engagement.id}
               evidenceOptions={evidence.map((item) => ({ id: item.id, label: item.title }))}
               assetOptions={assets.map((item) => ({ id: item.id, label: item.displayName }))}
+              providers={providers}
               initialDraft={noteDraft}
               onInitialDraftConsumed={clearNoteDraft}
+              createObservation={createObservation}
+              updateObservation={updateObservation}
+              deleteObservation={deleteObservation}
               onAskNebula={requestNebulaDraft}
             />
           ) : view !== "chat" ? (
