@@ -1004,6 +1004,24 @@ export function SessionsPage() {
   };
 
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "ArrowUp" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && draft.length === 0) {
+      let lastUserMessage: ConversationMessage | undefined;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index]?.role === "user") {
+          lastUserMessage = messages[index];
+          break;
+        }
+      }
+      if (lastUserMessage) {
+        event.preventDefault();
+        setDraft(lastUserMessage.content);
+        globalThis.requestAnimationFrame?.(() => {
+          const composer = composerRef.current;
+          if (composer) composer.setSelectionRange(composer.value.length, composer.value.length);
+        });
+      }
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();

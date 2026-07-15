@@ -325,11 +325,20 @@ describe("Nebula workspace", () => {
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Chat model" })).toHaveValue("model-1"));
     expect(screen.getByRole("option", { name: "model-2" })).toBeVisible();
     expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-1/health") && init?.method === "POST")).toBe(true);
-    await user.type(screen.getByRole("textbox", { name: "Message the analyst assistant" }), "Review the scope");
+    const composer = screen.getByRole("textbox", { name: "Message the analyst assistant" });
+    await user.type(composer, "Review the scope");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     await user.click(await screen.findByRole("button", { name: "Allow this request" }));
 
     expect(await screen.findByText("Bounded answer")).toBeVisible();
+    expect(composer).toHaveValue("");
+    await user.click(composer);
+    await user.keyboard("{ArrowUp}");
+    expect(composer).toHaveValue("Review the scope");
+    await user.clear(composer);
+    await user.type(composer, "Keep this draft");
+    await user.keyboard("{ArrowUp}");
+    expect(composer).toHaveValue("Keep this draft");
     const chatCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/chat/completions"));
     expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({
       provider_id: "provider-1",
