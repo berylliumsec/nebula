@@ -101,6 +101,7 @@ FORBIDDEN_MODULES = (
 
 REQUIRED_MEMBERS = (
     ("nebula.v3.cli",),
+    ("nebula.v3.mcp_gateway",),
     # Tool-output regex searches use the third-party timeout-capable engine.
     # A frozen Core must not pass audit if that runtime dependency is absent.
     ("regex",),

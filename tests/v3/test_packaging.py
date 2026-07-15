@@ -176,7 +176,7 @@ def test_core_archive_rejects_nltk_and_its_pyinstaller_runtime_hook():
 
 def test_core_archive_requires_timeout_capable_regex_runtime():
     with pytest.raises(ArtifactAuditError, match="required members absent: regex"):
-        validate_members(["nebula.v3.cli"])
+        validate_members(["nebula.v3.cli", "nebula.v3.mcp_gateway"])
 
 
 def test_nebula3_runtime_has_no_conditional_import_fallbacks():
@@ -259,6 +259,7 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
     result = validate_members(
         {
             "nebula.v3.cli",
+            "nebula.v3.mcp_gateway",
             "regex",
             "reportlab",
             "PIL",

@@ -45,6 +45,7 @@ from .domain import (
     ToolPackInstallation,
 )
 from .missions import MissionService
+from .mcp_gateway import serve as serve_mcp_gateway
 from .exporter import export_engagement
 from .importer import import_2x_engagement
 from .orchestration import (
@@ -87,6 +88,20 @@ diagnostics_app = typer.Typer(
 )
 app.add_typer(tools_app, name="tools")
 app.add_typer(diagnostics_app, name="diagnostics")
+
+
+@app.command("mcp-gateway", hidden=True)
+def mcp_gateway(
+    socket_path: Annotated[Path, typer.Option("--socket")],
+) -> None:
+    """Run the authenticated session gateway shim for a packaged Core."""
+
+    token = os.environ.pop("NEBULA_MCP_GATEWAY_TOKEN", None)
+    if not token:
+        raise typer.BadParameter("gateway token environment is required")
+    exit_code = asyncio.run(serve_mcp_gateway(socket_path, token))
+    if exit_code:
+        raise typer.Exit(exit_code)
 
 
 @tools_app.callback()

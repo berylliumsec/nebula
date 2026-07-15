@@ -43,6 +43,40 @@ def test_loopback_detection_supports_ipv6_and_rejects_mixed_dns(monkeypatch):
     assert _is_loopback("mixed.example") is False
 
 
+def test_hidden_mcp_gateway_command_uses_environment_token(tmp_path, monkeypatch):
+    observed = {}
+
+    async def serve_gateway(socket_path, token):
+        observed.update(socket_path=socket_path, token=token)
+        return 0
+
+    monkeypatch.setattr("nebula.v3.cli.serve_mcp_gateway", serve_gateway)
+    monkeypatch.setenv("NEBULA_MCP_GATEWAY_TOKEN", "single-use-token")
+
+    result = CliRunner().invoke(
+        app,
+        ["mcp-gateway", "--socket", str(tmp_path / "core.sock")],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert observed == {
+        "socket_path": tmp_path / "core.sock",
+        "token": "single-use-token",
+    }
+
+
+def test_hidden_mcp_gateway_command_requires_environment_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEBULA_MCP_GATEWAY_TOKEN", raising=False)
+
+    result = CliRunner().invoke(
+        app,
+        ["mcp-gateway", "--socket", str(tmp_path / "core.sock")],
+    )
+
+    assert result.exit_code == 2
+    assert "gateway token environment is required" in result.output
+
+
 def test_doctor_reports_analysis_only_without_host_fallback(tmp_path, monkeypatch):
     async def unavailable(_self):
         return False, "rootless runner is not configured"

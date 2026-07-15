@@ -64,7 +64,11 @@ from nebula.v3.harnesses import (
     HarnessTransportError,
 )
 from nebula.v3.exporter import export_engagement
-from nebula.v3.mcp import McpGatewaySession, McpProbeService
+from nebula.v3.mcp import (
+    GATEWAY_STARTUP_TIMEOUT_SECONDS,
+    McpGatewaySession,
+    McpProbeService,
+)
 from nebula.v3.mcp_gateway import GatewayClient
 from nebula.v3.policy import PolicyEngine
 from nebula.v3.sandbox import SandboxResult, SandboxRunner
@@ -485,6 +489,53 @@ def test_gateway_unix_ipc_accepts_messages_above_streamreader_default() -> None:
                 )
         finally:
             await client.close()
+            await gateway.close()
+
+    asyncio.run(scenario())
+
+
+def test_gateway_launch_uses_python_module_outside_frozen_build(monkeypatch) -> None:
+    async def scenario() -> None:
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        gateway = McpGatewaySession(
+            list_tools=lambda params: {"tools": []},
+            call_tool=lambda name, arguments: {},
+        )
+        launch = await gateway.start()
+        try:
+            assert launch.command == sys.executable
+            assert launch.arguments == (
+                "-m",
+                "nebula.v3.mcp_gateway",
+                "--socket",
+                str(launch.socket_path),
+            )
+        finally:
+            await gateway.close()
+
+    asyncio.run(scenario())
+
+
+def test_gateway_launch_uses_core_command_in_frozen_build(monkeypatch) -> None:
+    async def scenario() -> None:
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        gateway = McpGatewaySession(
+            list_tools=lambda params: {"tools": []},
+            call_tool=lambda name, arguments: {},
+        )
+        launch = await gateway.start()
+        try:
+            assert launch.command == sys.executable
+            assert launch.arguments == (
+                "mcp-gateway",
+                "--socket",
+                str(launch.socket_path),
+            )
+            assert (
+                launch.runtime_config()["nebula"]["startup_timeout_seconds"]
+                == GATEWAY_STARTUP_TIMEOUT_SECONDS
+            )
+        finally:
             await gateway.close()
 
     asyncio.run(scenario())

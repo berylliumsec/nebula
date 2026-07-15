@@ -40,6 +40,8 @@ from .redaction import redact_text
 from .storage import NebulaStore
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
+# A frozen Core relaunch may need one-file extraction and platform verification.
+GATEWAY_STARTUP_TIMEOUT_SECONDS = 30.0
 MAX_MCP_MESSAGE_BYTES = 4 * 1024 * 1024
 MAX_MCP_TOOL_RESPONSE_BYTES = 100 * 1024 * 1024
 
@@ -803,7 +805,7 @@ class McpGatewayLaunch:
                 "name": "nebula",
                 "transport": McpTransport.STDIO.value,
                 "required": True,
-                "startup_timeout_seconds": 10.0,
+                "startup_timeout_seconds": GATEWAY_STARTUP_TIMEOUT_SECONDS,
                 "tool_timeout_seconds": 900.0,
                 "enabled_tools": [],
                 "disabled_tools": [],
@@ -847,16 +849,21 @@ class McpGatewaySession:
             limit=MAX_MCP_MESSAGE_BYTES + 1,
         )
         self.socket_path.chmod(0o600)
-        return McpGatewayLaunch(
-            socket_path=self.socket_path,
-            token=self.token,
-            command=sys.executable,
-            arguments=(
+        arguments = (
+            ("mcp-gateway", "--socket", str(self.socket_path))
+            if getattr(sys, "frozen", False)
+            else (
                 "-m",
                 "nebula.v3.mcp_gateway",
                 "--socket",
                 str(self.socket_path),
-            ),
+            )
+        )
+        return McpGatewayLaunch(
+            socket_path=self.socket_path,
+            token=self.token,
+            command=sys.executable,
+            arguments=arguments,
         )
 
     async def close(self) -> None:
