@@ -7,7 +7,12 @@ from nebula.v3.artifacts import (
 )
 
 
-def test_content_addressed_store_deduplicates_and_verifies(tmp_path):
+def test_content_addressed_store_deduplicates_and_verifies(tmp_path, monkeypatch):
+    diagnostics = []
+    monkeypatch.setattr(
+        "nebula.v3.artifacts.record_diagnostic",
+        lambda *args, **kwargs: diagnostics.append((args, kwargs)),
+    )
     store = ArtifactStore(tmp_path / "artifacts")
     first = store.put_bytes_with_status(
         b"immutable evidence",
@@ -27,6 +32,21 @@ def test_content_addressed_store_deduplicates_and_verifies(tmp_path):
     assert store.read(first.artifact) == b"immutable evidence"
     assert store.verify(first.artifact) is True
     assert oct(store.path_for(first.artifact).stat().st_mode & 0o777) == "0o400"
+    assert diagnostics == [
+        (
+            (
+                "debug",
+                "storage",
+                "storage.artifacts.blob_reused",
+                "An immutable artifact blob already existed and passed integrity verification.",
+            ),
+            {
+                "outcome": "deduplicated",
+                "stage": "artifacts",
+                "metadata": {"byte_count": len(b"immutable evidence")},
+            },
+        )
+    ]
 
 
 def test_integrity_verification_detects_tampering(tmp_path):

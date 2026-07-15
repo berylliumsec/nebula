@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .diagnostics import record_caught_exception
+from .diagnostics import record_caught_exception, record_diagnostic
 
 import hashlib
 import io
@@ -210,14 +210,11 @@ class ArtifactStore:
                 os.link(temporary_path, destination_path)
                 created = True
                 destination_path.chmod(0o400)
-            except FileExistsError as caught_error:
-                record_caught_exception(
-                    "storage",
-                    "storage.artifacts.caught_failure_002",
-                    "A handled storage operation raised an exception.",
-                    caught_error,
-                    stage="artifacts",
-                )
+            except FileExistsError:
+                # The content-addressed destination can already exist during
+                # ordinary deduplication or a concurrent immutable write. Only
+                # classify the branch after the existing blob passes the same
+                # size and digest checks as the incoming stream.
                 if destination_path.stat().st_size != size:
                     raise ArtifactIntegrityError(
                         f"existing blob size does not match digest {digest_value}"
@@ -233,6 +230,15 @@ class ArtifactStore:
                     raise ArtifactIntegrityError(
                         f"existing blob content does not match digest {digest_value}"
                     )
+                record_diagnostic(
+                    "debug",
+                    "storage",
+                    "storage.artifacts.blob_reused",
+                    "An immutable artifact blob already existed and passed integrity verification.",
+                    outcome="deduplicated",
+                    stage="artifacts",
+                    metadata={"byte_count": size},
+                )
 
             relative_path = destination_path.relative_to(self.root).as_posix()
             artifact = Artifact(

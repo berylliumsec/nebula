@@ -124,6 +124,9 @@ class ChatToolComponents:
     specs: Mapping[str, ToolSpec]
     tool_pack_digests: tuple[str, ...]
     interface_catalog_digests: tuple[str, ...]
+    interface_catalogs_by_manifest: Mapping[str, ToolInterfaceCatalog] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -1294,13 +1297,7 @@ class ToolPlatform:
             raise ToolPlatformError(
                 "engagement has no enabled Toolbox assignment or selected MCP server"
             )
-        interface_digests = sorted(
-            {
-                item.interface_catalog_digest
-                for item in installations
-                if item.interface_catalog_digest
-            }
-        )
+        interface_catalogs_by_manifest: dict[str, ToolInterfaceCatalog] = {}
         for installation in installations:
             if bool(installation.interface_catalog_path) != bool(
                 installation.interface_catalog_digest
@@ -1308,10 +1305,15 @@ class ToolPlatform:
                 raise ToolPlatformError("assigned interface catalog lock is incomplete")
             if installation.interface_catalog_path:
                 assert installation.interface_catalog_digest is not None
-                load_interface_catalog_file(
-                    Path(installation.interface_catalog_path),
-                    installation.interface_catalog_digest,
+                interface_catalogs_by_manifest[installation.manifest_digest] = (
+                    load_interface_catalog_file(
+                        Path(installation.interface_catalog_path),
+                        installation.interface_catalog_digest,
+                    )
                 )
+        interface_digests = sorted(
+            {catalog.digest for catalog in interface_catalogs_by_manifest.values()}
+        )
         registry = ToolRegistry()
         runner: Any = AnalysisOnlyRunner()
         runner_profile: StoredRunnerProfile | None = None
@@ -1397,6 +1399,7 @@ class ToolPlatform:
             specs=specs,
             tool_pack_digests=tuple(digests),
             interface_catalog_digests=tuple(interface_digests),
+            interface_catalogs_by_manifest=interface_catalogs_by_manifest,
         )
 
     def workspace_for(self, engagement_id: str) -> Path:

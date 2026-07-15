@@ -74,6 +74,7 @@ from .providers import (
 )
 from .redaction import redact_text
 from .storage import NebulaStore, NotFoundError
+from .tool_interfaces import ToolInterfaceError
 from .tools import ApprovalRequired, PolicyDenied, ToolInvocation
 from .tool_results import (
     ToolResultStatus,
@@ -360,7 +361,11 @@ turn.
 _CHAT_TOOL_INSTRUCTIONS = """You are Nebula's analyst assistant with a bounded
 Toolbox. For each routing step, call exactly one supplied function and return no
 prose. Call a real capability only when it advances the operator's request. Call
-finish_response when you have enough information to answer. Never invent a tool,
+finish_response immediately for greetings, acknowledgements, general conversation,
+or questions about which supplied capabilities are available; those requests do
+not justify executing a capability. environment.help reads one exact command
+interface only after a tool is selected; its command_path contains subcommands,
+never the executable name, and is [] for a top-level command. Never invent a tool,
 target, argument, observation, or result. After a capability fails or returns a
 nonzero exit code, do not repeat the same call unchanged. Finish unless the exact
 result justifies a specific corrected invocation. Action capabilities return only
@@ -375,6 +380,8 @@ retrieved excerpts. Accurately identify capabilities that ran, distinguish their
 from assumptions, and do not expose routing markup or successful raw command
 output. When a result is denied, fails, times out, or has a nonzero exit code,
 report the exact capability, status or exit code, and any retrieved error excerpt.
+An error saying a tool has no catalogued command path means the requested
+subcommand path was invalid; it does not mean the executable is missing.
 Do not replace the observed error with generic troubleshooting, and never
 invent configuration, packages, dependencies, commands, files, or log paths.
 
@@ -402,7 +409,60 @@ def _routing_input_schema(spec: Any) -> dict[str, Any]:
             "const": ".",
             "description": "Engagement workspace root; supplied by Nebula Core.",
         }
+    if spec.name == "environment.help" and isinstance(properties, dict):
+        tool = properties.get("tool")
+        if isinstance(tool, dict):
+            tool["description"] = (
+                "Exact executable inventory name, such as nmap or bash."
+            )
+        command_path = properties.get("command_path")
+        if isinstance(command_path, dict):
+            command_path["description"] = (
+                "Subcommand tokens only; use [] for top-level command help and "
+                "never include the executable name or a shell command."
+            )
     return schema
+
+
+def _tool_inventory_instructions(specs: Any) -> str:
+    """Expose trusted assigned capability metadata to final synthesis."""
+
+    inventory = [
+        {
+            "name": spec.name,
+            "description": spec.description,
+            "risk_class": spec.risk_class.value,
+            "network_access": spec.network_access,
+            "requires_approval": spec.requires_approval,
+        }
+        for spec in sorted(specs.values(), key=lambda item: item.name)
+    ]
+    return (
+        "\n\nBEGIN TRUSTED ASSIGNED TOOLBOX CAPABILITIES (JSON)\n"
+        + json.dumps(inventory, ensure_ascii=False, separators=(",", ":"))
+        + "\nEND TRUSTED ASSIGNED TOOLBOX CAPABILITIES"
+    )
+
+
+def _normalize_routing_arguments(
+    components: Any, spec: Any, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Canonicalize interface-aware model arguments before persistence/execution."""
+
+    normalized = dict(arguments)
+    if spec.name != "environment.help" or not spec.manifest_digest:
+        return normalized
+    catalogs = getattr(components, "interface_catalogs_by_manifest", {})
+    catalog = catalogs.get(spec.manifest_digest)
+    if catalog is None:
+        return normalized
+    tool_name = normalized.get("tool")
+    command_path = normalized.get("command_path")
+    if isinstance(tool_name, str) and isinstance(command_path, list):
+        normalized["command_path"] = catalog.canonical_command_path(
+            tool_name, command_path
+        )
+    return normalized
 
 
 def _decoded_result(value: object) -> dict[str, Any] | None:
@@ -921,6 +981,15 @@ class ChatService:
                     call = call.model_copy(
                         update={"arguments": {**call.arguments, "cwd": "."}}
                     )
+                try:
+                    normalized_arguments = _normalize_routing_arguments(
+                        components, spec, call.arguments
+                    )
+                except ToolInterfaceError as exc:
+                    raise ChatError(
+                        f"provider requested an invalid Toolbox interface: {exc}"
+                    ) from exc
+                call = call.model_copy(update={"arguments": normalized_arguments})
                 step = turn.next_step
                 idempotency_key = f"chat:{turn.id}:step:{step}"
                 durable_call_id = str(
@@ -1075,6 +1144,7 @@ class ChatService:
                 update={
                     "instructions": (
                         _CHAT_TOOL_RESULT_INSTRUCTIONS
+                        + _tool_inventory_instructions(components.specs)
                         + _reference_instructions(
                             operator_help_chunks, trusted_operator_help=True
                         )
@@ -1181,7 +1251,11 @@ class ChatService:
     def _finish_tool() -> ToolDefinition:
         return ToolDefinition(
             name="finish_response",
-            description="Finish tool routing and produce the final analyst response.",
+            description=(
+                "Finish tool routing and produce the final analyst response. Use "
+                "this immediately for greetings, conversation, or questions about "
+                "the supplied capability list that require no execution."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {},
@@ -1193,16 +1267,28 @@ class ChatService:
     def _tool_operator_help(
         self, prepared: PreparedChat, turn: ChatTurn
     ) -> list[_RetrievedChunk]:
-        queries = [
-            str(message.content)
-            for message in prepared.model_request.messages[-2:]
-            if message.content
+        failed_entries = [
+            entry
+            for entry in turn.tool_history
+            if entry.get("status") in {"failed", "denied"}
         ]
+        if not failed_entries:
+            return []
+        queries = [
+            str(entry.get("provider_result", ""))
+            for entry in failed_entries
+            if entry.get("provider_result")
+        ]
+        # Bounded artifact searches after a failure can contain the exact
+        # observed error excerpt needed to choose the matching runbook.
         queries.extend(
             str(entry.get("provider_result", ""))
             for entry in turn.tool_history
-            if entry.get("status") != "complete"
+            if entry.get("budget_class") == "artifact_query"
+            and entry.get("provider_result")
         )
+        if not queries:
+            return []
         token_budget = max(
             1,
             resolve_context_limits(

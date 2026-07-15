@@ -198,6 +198,15 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
     assert messages[-1].metadata["tool_call_ids"] == turn.tool_call_ids
     assert provider.requests[0].tool_choice.value == "required"
     assert provider.requests[0].parallel_tool_calls is False
+    assert "finish_response immediately for greetings" in (
+        provider.requests[0].instructions or ""
+    )
+    finish_definition = next(
+        tool for tool in provider.requests[0].tools if tool.name == "finish_response"
+    )
+    assert (
+        "questions about the supplied capability list" in finish_definition.description
+    )
     routed_cwd = provider.requests[0].tools[0].input_schema["properties"]["cwd"]
     assert routed_cwd == {
         "type": "string",
@@ -216,6 +225,84 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
     assert "separate reviewed Run action" in (provider.requests[-1].instructions or "")
     assert "report the exact" in (provider.requests[-1].instructions or "")
     assert "invent configuration" in (provider.requests[-1].instructions or "")
+    assert "BEGIN TRUSTED ASSIGNED TOOLBOX CAPABILITIES (JSON)" in (
+        provider.requests[-1].instructions or ""
+    )
+    assert '"name":"parse.scan"' in (provider.requests[-1].instructions or "")
+    assert "BEGIN TRUSTED NEBULA OPERATOR HELP (JSON)" not in (
+        provider.requests[-1].instructions or ""
+    )
+
+
+def test_environment_help_routing_canonicalizes_executable_as_top_level_path():
+    manifest_digest = "a" * 64
+    spec = ToolSpec(
+        name="environment.help",
+        description="Return exact command help",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string"},
+                "command_path": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["tool", "command_path"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.LOCAL_READ,
+        pack_id="io.nebula/toolbox@0.1.3",
+        manifest_digest=manifest_digest,
+        image="example.invalid/nebula/toolbox@sha256:" + "b" * 64,
+        executable="/opt/nebula/bin/nebula-toolbox",
+    )
+
+    class Catalog:
+        def canonical_command_path(self, tool_name, command_path):
+            assert tool_name == "nmap"
+            assert command_path == ["nmap"]
+            return []
+
+    components = SimpleNamespace(
+        interface_catalogs_by_manifest={manifest_digest: Catalog()}
+    )
+
+    arguments = chat_module._normalize_routing_arguments(
+        components,
+        spec,
+        {"tool": "nmap", "command_path": ["nmap"]},
+    )
+
+    assert arguments == {"tool": "nmap", "command_path": []}
+
+
+def test_environment_help_routing_schema_explains_command_path_semantics():
+    spec = SimpleNamespace(
+        name="environment.help",
+        path_arguments=[],
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string"},
+                "command_path": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+        },
+    )
+
+    schema = chat_module._routing_input_schema(spec)
+
+    assert (
+        "Exact executable inventory name" in schema["properties"]["tool"]["description"]
+    )
+    assert (
+        "use [] for top-level command help"
+        in schema["properties"]["command_path"]["description"]
+    )
 
 
 def test_tool_final_synthesis_retrieves_help_from_the_observed_failure(

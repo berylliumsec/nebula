@@ -530,6 +530,12 @@ class ContainerEgressController(EgressController):
         ]
         if seccomp_profile is not None:
             argv.append(f"--security-opt=seccomp={seccomp_profile}")
+        # Containers joining this helper's network namespace cannot accept
+        # their own --add-host flags. Put the approved host mappings on the
+        # namespace owner so Docker/Podman can share the complete pinned
+        # network configuration without weakening the egress rules.
+        for host, address in sorted(request.pinned_hosts.items()):
+            argv.append(f"--add-host={host}:{_bracket_ip(address)}")
         argv.extend([self.helper_image, "serve"])
         for rule in request.egress_rules:
             for port in rule.ports:
@@ -1303,8 +1309,12 @@ class ContainerSandboxRunner(SandboxRunner):
                     "scoped execution requires an acquired egress namespace"
                 )
             argv.append(f"--network={selected_network}")
-            for host, address in sorted(request.pinned_hosts.items()):
-                argv.append(f"--add-host={host}:{address}")
+            # A certified per-invocation helper owns host pinning when the
+            # worker joins its network namespace. Direct named-network calls
+            # retain their own mappings for legacy compatibility.
+            if network_mode is None:
+                for host, address in sorted(request.pinned_hosts.items()):
+                    argv.append(f"--add-host={host}:{_bracket_ip(address)}")
         for name, value in sorted(request.environment.items()):
             argv.extend(["--env", f"{name}={value}"])
         argv.extend([request.image, *request.command])

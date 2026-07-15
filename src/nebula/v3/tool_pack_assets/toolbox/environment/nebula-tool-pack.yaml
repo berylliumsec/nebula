@@ -160,11 +160,13 @@ tools:
     properties:
       tool:
         type: string
+        description: Exact executable inventory name, such as nmap or bash.
         minLength: 1
         maxLength: 128
         pattern: ^[a-z0-9._-]+$
       command_path:
         type: array
+        description: Subcommand tokens only. Use [] for top-level command help and never include the executable name.
         maxItems: 16
         items:
           type: string

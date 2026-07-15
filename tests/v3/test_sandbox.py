@@ -129,6 +129,26 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
     assert all(value not in {"sh", "-c", "/bin/sh"} for value in argv[:-4])
 
 
+def test_container_namespace_argv_leaves_host_pins_on_egress_owner(tmp_path):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
+    request = _request(
+        tmp_path,
+        network=SandboxNetwork.SCOPED,
+        execution_kind=SandboxExecutionKind.NETWORK_TOOL,
+        egress_rules=[EgressRule(address="10.20.30.40", ports=[443])],
+        pinned_hosts={"target.example.test": "10.20.30.40"},
+    )
+
+    argv = runner._argv(
+        request,
+        runner._validate(request),
+        network_mode="container:nebula-call-egress",
+    )
+
+    assert "--network=container:nebula-call-egress" in argv
+    assert not any(value.startswith("--add-host=") for value in argv)
+
+
 def test_container_terminal_argv_adds_tty_without_host_shell_fallback(tmp_path):
     runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
     request = _request(
@@ -669,6 +689,10 @@ def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
             EgressRule(address="10.20.30.40", ports=[443]),
             EgressRule(address="2001:db8::1", ports=[8443]),
         ],
+        pinned_hosts={
+            "target.example.test": "10.20.30.40",
+            "v6.example.test": "2001:db8::1",
+        },
     )
 
     async def scenario():
@@ -686,6 +710,8 @@ def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
     helper_argv = calls[0][0]
     assert "--network=bridge" in helper_argv
     assert "--cap-add=NET_ADMIN" in helper_argv
+    assert "--add-host=target.example.test:10.20.30.40" in helper_argv
+    assert "--add-host=v6.example.test:[2001:db8::1]" in helper_argv
     assert "--allow" in helper_argv
     assert "tcp://10.20.30.40:443" in helper_argv
     assert "tcp://[2001:db8::1]:8443" in helper_argv
