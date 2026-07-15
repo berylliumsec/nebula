@@ -11,10 +11,12 @@ import type {
   ChatSessionSummary,
   ChatStreamEvent,
   ChatTurn,
+  ContainerTerminalCapacity,
   ContainerTerminalCapabilities,
   ContainerTerminalPreflight,
   ContainerTerminalRequest,
   ContainerTerminalRecovery,
+  ContainerTerminalRecoveryList,
   ContainerTerminalSession,
   TerminalCommandHistoryStatus,
   TerminalCommandPage,
@@ -785,6 +787,7 @@ interface WireContainerTerminalPreflight extends JsonObject {
 
 interface WireContainerTerminalSession extends JsonObject {
   session_id: string;
+  created_at: string;
   websocket_ticket: string;
   ticket_expires_at: string;
   websocket_path: string;
@@ -797,6 +800,19 @@ interface WireContainerTerminalRecovery extends JsonObject {
   active: boolean;
   session?: WireContainerTerminalSession | null;
   runtime?: WireContainerTerminalRuntime | null;
+}
+
+interface WireContainerTerminalRecoveryList extends JsonObject {
+  sessions: Array<{
+    session: WireContainerTerminalSession;
+    runtime: WireContainerTerminalRuntime;
+  }>;
+}
+
+interface WireContainerTerminalCapacity extends JsonObject {
+  active_sessions: number;
+  available_sessions: number;
+  max_active_sessions: number;
 }
 
 interface WireWorkspaceListing extends JsonObject {
@@ -1750,6 +1766,7 @@ function mapContainerTerminalSession(
 ): ContainerTerminalSession {
   return {
     sessionId: value.session_id,
+    createdAt: value.created_at,
     websocketTicket: value.websocket_ticket,
     ticketExpiresAt: value.ticket_expires_at,
     websocketPath: value.websocket_path,
@@ -3618,6 +3635,39 @@ export class ApiClient {
       session: value.session ? mapContainerTerminalSession(value.session) : undefined,
       runtime: value.runtime ? mapContainerTerminalRuntime(value.runtime) : undefined,
     }));
+  }
+
+  recoverContainerTerminals(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ContainerTerminalRecoveryList> {
+    return this.request<WireContainerTerminalRecoveryList>(
+      `engagements/${encodeURIComponent(engagementId)}/container-terminals/recover`,
+      { method: "POST", signal },
+    ).then((value) => ({
+      sessions: value.sessions.map((item) => ({
+        session: mapContainerTerminalSession(item.session),
+        runtime: mapContainerTerminalRuntime(item.runtime),
+      })),
+    }));
+  }
+
+  containerTerminalCapacity(signal?: AbortSignal): Promise<ContainerTerminalCapacity> {
+    return this.request<WireContainerTerminalCapacity>(
+      "container-terminal/capacity",
+      { signal },
+    ).then((value) => ({
+      activeSessions: value.active_sessions,
+      availableSessions: value.available_sessions,
+      maxActiveSessions: value.max_active_sessions,
+    }));
+  }
+
+  closeContainerTerminal(sessionId: string, signal?: AbortSignal): Promise<void> {
+    return this.request<void>(
+      `container-terminals/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE", signal },
+    );
   }
 
   executionCapabilities(engagementId: string, signal?: AbortSignal): Promise<ExecutionCapabilities> {

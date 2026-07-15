@@ -584,6 +584,12 @@ describe("Nebula workspace", () => {
         limits: { cpu_count: 1, memory_mb: 512, pids: 128, timeout_seconds: 1800, output_bytes_per_stream: 2_000_000 },
         idle_timeout_seconds: 900, fresh_container: true, detail: null,
       }), { status: 200 });
+      if (path.endsWith("/container-terminals/recover") && init?.method === "POST") {
+        return new Response(JSON.stringify({ sessions: [] }), { status: 200 });
+      }
+      if (path.endsWith("/container-terminal/capacity")) {
+        return new Response(JSON.stringify({ active_sessions: 0, available_sessions: 32, max_active_sessions: 32 }), { status: 200 });
+      }
       if (path.endsWith("/tool-packs")) return new Response(JSON.stringify([
         {
           ...entity, id: "pack-incomplete", publisher: "berylliumsec", name: "nebula-toolbox-staging", version: "0.1.0.dev6", manifest_digest: incompleteDigest,

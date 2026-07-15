@@ -1,8 +1,22 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 
 from nebula.v3 import kali_tool_inventory as inventory
+
+
+def test_inventory_script_runs_standalone_for_container_image_build():
+    result = subprocess.run(
+        [sys.executable, inventory.__file__, "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "--output" in result.stdout
 
 
 def test_inventory_uses_installed_security_dependencies_and_path_executables(

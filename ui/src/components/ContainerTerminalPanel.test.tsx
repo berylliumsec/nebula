@@ -1,7 +1,9 @@
 import { StrictMode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
+import { DialogProvider } from "./DialogSystem";
 import { ContainerTerminalPanel } from "./ContainerTerminalPanel";
 
 const socketSpies = vi.hoisted(() => ({
@@ -11,18 +13,23 @@ const socketSpies = vi.hoisted(() => ({
 }));
 
 const terminalSpies = vi.hoisted(() => ({
+  fit: vi.fn(),
+  focus: vi.fn(),
   keyHandler: undefined as ((event: KeyboardEvent) => boolean) | undefined,
   selection: "",
 }));
 
 vi.mock("../api/containerTerminal", () => ({
   ContainerTerminalSocket: class {
-    constructor(options: { session: unknown }) {
+    constructor(private readonly options: { session: unknown; onState?: (state: string) => void; onExit?: (result: { outcome: string }) => void }) {
       socketSpies.constructed(options.session);
     }
-    connect = socketSpies.connect;
+    connect = () => {
+      socketSpies.connect();
+      this.options.onState?.("ready");
+    };
     dispose = socketSpies.dispose;
-    requestClose(): void {}
+    requestClose = () => this.options.onExit?.({ outcome: "closed" });
     resize(): void {}
     sendInput(): void {}
   },
@@ -30,7 +37,7 @@ vi.mock("../api/containerTerminal", () => ({
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
-    fit(): void {}
+    fit = terminalSpies.fit;
   },
 }));
 
@@ -39,7 +46,7 @@ vi.mock("@xterm/xterm", () => ({
     cols = 100;
     rows = 30;
     dispose(): void {}
-    focus(): void {}
+    focus = terminalSpies.focus;
     loadAddon(): void {}
     open(): void {}
     write(): void {}
@@ -64,53 +71,77 @@ vi.mock("@xterm/xterm", () => ({
   },
 }));
 
+const runtime = {
+  sourceImage: "docker.io/kalilinux/kali-rolling:latest",
+  baseImage: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
+  baseImageDigest: `sha256:${"b".repeat(64)}`,
+  image: `sha256:${"c".repeat(64)}`,
+  imageDigest: `sha256:${"c".repeat(64)}`,
+  installedPackages: ["kali-linux-headless", "iputils-ping"],
+  interpreter: "/bin/bash",
+  arguments: ["--noprofile", "--norc", "-i"],
+  runnerProfileId: "local",
+  runnerProfileRevision: 1,
+  runnerRuntime: "podman" as const,
+  runnerIsolation: "rootless",
+  runnerExecutable: "/usr/bin/podman",
+  runnerPlatform: "linux/amd64",
+};
+
+const session = (id: string, ticket = `ticket-${id}`, createdAt = "2026-07-15T12:00:00Z") => ({
+  sessionId: id,
+  createdAt,
+  websocketTicket: ticket,
+  ticketExpiresAt: "2026-07-15T18:00:00Z",
+  websocketPath: `/api/v1/container-terminals/${id}/ws`,
+  reconnectGraceSeconds: 600,
+  replayMaxBytes: 1_048_576,
+  lastSequence: 0,
+});
+
+const capacity = (activeSessions: number) => ({
+  activeSessions,
+  availableSessions: 32 - activeSessions,
+  maxActiveSessions: 32,
+});
+
+function renderPanel(api: ApiClient, strict = false) {
+  const panel = <DialogProvider><ContainerTerminalPanel
+    api={api}
+    engagementId="engagement-1"
+    engagementName="Lab"
+    setupTerminalStatus="ready"
+  /></DialogProvider>;
+  return render(strict ? <StrictMode>{panel}</StrictMode> : panel);
+}
+
 describe("ContainerTerminalPanel", () => {
   beforeEach(() => {
     socketSpies.connect.mockClear();
     socketSpies.constructed.mockClear();
     socketSpies.dispose.mockClear();
+    terminalSpies.fit.mockClear();
+    terminalSpies.focus.mockClear();
     terminalSpies.keyHandler = undefined;
     terminalSpies.selection = "";
   });
 
-  it("copies a highlighted terminal selection while preserving Ctrl-C as interrupt without one", async () => {
+  it("copies highlighted terminal text and polls Project audit health only once", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
     });
-    const runtime = {
-      sourceImage: "docker.io/kalilinux/kali-rolling:latest",
-      baseImage: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
-      baseImageDigest: `sha256:${"b".repeat(64)}`,
-      image: `sha256:${"c".repeat(64)}`,
-      imageDigest: `sha256:${"c".repeat(64)}`,
-      installedPackages: ["kali-linux-headless", "iputils-ping"],
-      interpreter: "/bin/bash",
-      arguments: ["--noprofile", "--norc", "-i"],
-      runnerProfileId: "local",
-      runnerProfileRevision: 1,
-      runnerRuntime: "podman" as const,
-      runnerIsolation: "rootless",
-      runnerExecutable: "/usr/bin/podman",
-      runnerPlatform: "linux/amd64",
-    };
     const api = {
       baseUrl: "http://127.0.0.1:8765/api/v1",
       getToken: () => "test-token",
-      recoverContainerTerminal: vi.fn().mockResolvedValue({
-        active: true,
-        session: {
-          sessionId: "terminal-active",
-          websocketTicket: "ticket",
-          ticketExpiresAt: "2026-07-13T18:00:00Z",
-          websocketPath: "/api/v1/container-terminals/terminal-active/ws",
-          reconnectGraceSeconds: 600,
-          replayMaxBytes: 1_048_576,
-          lastSequence: 0,
-        },
-        runtime,
+      recoverContainerTerminals: vi.fn().mockResolvedValue({
+        sessions: [
+          { session: session("terminal-1"), runtime },
+          { session: session("terminal-2", "ticket-2", "2026-07-15T12:01:00Z"), runtime },
+        ],
       }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(2)),
       terminalCommandHistoryStatus: vi.fn().mockResolvedValue({
         engagementId: "engagement-1",
         enabled: true,
@@ -126,18 +157,13 @@ describe("ContainerTerminalPanel", () => {
       }),
     } as unknown as ApiClient;
 
-    render(<ContainerTerminalPanel
-      api={api}
-      engagementId="engagement-1"
-      engagementName="Lab"
-      setupTerminalStatus="ready"
-    />);
-    await waitFor(() => expect(terminalSpies.keyHandler).toBeTypeOf("function"));
-    expect(await screen.findByText(/1 terminal audit warning detected/)).toBeVisible();
+    renderPanel(api);
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(2));
+    expect(await screen.findAllByText(/1 terminal audit warning detected/)).toHaveLength(2);
+    expect(api.terminalCommandHistoryStatus).toHaveBeenCalledTimes(1);
 
     const interrupt = new KeyboardEvent("keydown", { key: "c", ctrlKey: true });
     expect(terminalSpies.keyHandler?.(interrupt)).toBe(true);
-
     terminalSpies.selection = "nmap output";
     const copy = new KeyboardEvent("keydown", { key: "c", ctrlKey: true, cancelable: true });
     expect(terminalSpies.keyHandler?.(copy)).toBe(false);
@@ -145,11 +171,13 @@ describe("ContainerTerminalPanel", () => {
     expect(copy.defaultPrevented).toBe(true);
   });
 
-  it("waits for runner detection and does not duplicate launch during the StrictMode probe", async () => {
+  it("prepares and starts exactly one initial terminal during the StrictMode probe", async () => {
     const api = {
       baseUrl: "http://127.0.0.1:8765/api/v1",
       getToken: () => "test-token",
-      recoverContainerTerminal: vi.fn().mockResolvedValue({ active: false }),
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(1)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
       setupStatus: vi.fn().mockResolvedValue({
         core: { status: "ready" },
         scratchProjectId: "engagement-1",
@@ -180,8 +208,6 @@ describe("ContainerTerminalPanel", () => {
             candidates: [],
             imagePreparation: {
               phase: "ready",
-              operationId: "00000000-0000-4000-8000-000000000001",
-              projectId: "engagement-1",
               progressPercent: 100,
               progressIndeterminate: false,
               canCancel: false,
@@ -192,135 +218,232 @@ describe("ContainerTerminalPanel", () => {
           assistant: { status: "needs_model" },
         },
       }),
-      containerTerminalCapabilities: vi.fn().mockResolvedValue({
-        ready: true,
-      }),
+      containerTerminalCapabilities: vi.fn().mockResolvedValue({ ready: true }),
       preflightContainerTerminal: vi.fn().mockResolvedValue({
         allowed: true,
         detail: "approved",
         previewToken: "preview-token",
         previewFingerprint: "preview-fingerprint",
-        runtime: {
-          sourceImage: "docker.io/kalilinux/kali-rolling:latest",
-          baseImage: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
-          baseImageDigest: `sha256:${"b".repeat(64)}`,
-          image: `sha256:${"c".repeat(64)}`,
-          imageDigest: `sha256:${"c".repeat(64)}`,
-          installedPackages: ["kali-linux-headless", "iputils-ping"],
-          interpreter: "/bin/bash",
-          arguments: ["--noprofile", "--norc", "-i"],
-          runnerProfileId: "local",
-          runnerProfileRevision: 1,
-          runnerRuntime: "podman",
-          runnerIsolation: "rootless",
-          runnerExecutable: "/usr/bin/podman",
-          runnerPlatform: "linux/amd64",
-        },
+        runtime,
       }),
-      startContainerTerminal: vi.fn().mockResolvedValue({
-        sessionId: "terminal-1",
-        websocketTicket: "one-use-ticket",
-        ticketExpiresAt: "2026-07-13T18:00:00Z",
-        websocketPath: "/api/v1/container-terminals/terminal-1/ws",
-        reconnectGraceSeconds: 600,
-        replayMaxBytes: 1_048_576,
-        lastSequence: 0,
-      }),
+      startContainerTerminal: vi.fn().mockResolvedValue(session("terminal-1")),
     } as unknown as ApiClient;
 
-    render(<StrictMode>
-      <ContainerTerminalPanel
-        api={api}
-        engagementId="engagement-1"
-        engagementName="Lab"
-        setupTerminalStatus="detecting_runner"
-        setupTerminalDetail="Checking supported local container runtimes."
-      />
-    </StrictMode>);
-
-    expect(screen.getByText("Detecting a supported local container runtime…")).toBeVisible();
+    renderPanel(api, true);
     await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(1));
-    expect(api.recoverContainerTerminal).toHaveBeenCalledTimes(1);
-    expect(api.setupStatus).toHaveBeenCalledTimes(1);
-    expect(api.prepareSetupImage).toHaveBeenCalledWith("engagement-1", expect.any(AbortSignal));
-    expect(api.containerTerminalCapabilities).toHaveBeenCalledTimes(1);
+    expect(api.recoverContainerTerminals).toHaveBeenCalledTimes(1);
+    expect(api.prepareSetupImage).toHaveBeenCalledTimes(1);
     expect(api.startContainerTerminal).toHaveBeenCalledTimes(1);
-    expect(socketSpies.dispose).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tab", { name: /Terminal 1/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText(/Unrestricted outbound · root · writable/)).toBeVisible();
-    expect(screen.getByText(/Bridge networking can reach the public Internet/)).toBeVisible();
-    expect(screen.getByText(/Installed baseline:/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Screenshot" })).toBeVisible();
-    expect(screen.getByTitle(`docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`)).toBeVisible();
   });
 
-  it("recovers the same active terminal after a top-level unmount without starting another", async () => {
-    const runtime = {
-      sourceImage: "docker.io/kalilinux/kali-rolling:latest",
-      baseImage: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
-      baseImageDigest: `sha256:${"b".repeat(64)}`,
-      image: `sha256:${"c".repeat(64)}`,
-      imageDigest: `sha256:${"c".repeat(64)}`,
-      installedPackages: ["kali-linux-headless", "iputils-ping"],
-      interpreter: "/bin/bash",
-      arguments: ["--noprofile", "--norc", "-i"],
-      runnerProfileId: "local",
-      runnerProfileRevision: 1,
-      runnerRuntime: "podman" as const,
-      runnerIsolation: "rootless",
-      runnerExecutable: "/usr/bin/podman",
-      runnerPlatform: "linux/amd64",
-    };
-    const recoveredSession = (ticket: string) => ({
-      sessionId: "terminal-active",
-      websocketTicket: ticket,
-      ticketExpiresAt: "2026-07-13T18:00:00Z",
-      websocketPath: "/api/v1/container-terminals/terminal-active/ws",
-      reconnectGraceSeconds: 600,
-      replayMaxBytes: 1_048_576,
-      lastSequence: 0,
-    });
+  it("recovers every terminal and keeps sockets mounted while switching tabs", async () => {
+    const user = userEvent.setup();
+    const recoverContainerTerminals = vi.fn()
+      .mockResolvedValueOnce({ sessions: [
+        { session: session("terminal-1", "fresh-1"), runtime },
+        { session: session("terminal-2", "fresh-2", "2026-07-15T12:01:00Z"), runtime },
+      ] })
+      .mockResolvedValueOnce({ sessions: [
+        { session: session("terminal-1", "fresh-3"), runtime },
+        { session: session("terminal-2", "fresh-4", "2026-07-15T12:01:00Z"), runtime },
+      ] });
     const api = {
       baseUrl: "http://127.0.0.1:8765/api/v1",
       getToken: () => "test-token",
-      recoverContainerTerminal: vi.fn()
-        .mockResolvedValueOnce({
-          active: true,
-          session: recoveredSession("fresh-ticket-1"),
-          runtime,
-        })
-        .mockResolvedValueOnce({
-          active: true,
-          session: recoveredSession("fresh-ticket-2"),
-          runtime,
-        }),
-      setupStatus: vi.fn(),
-      preflightContainerTerminal: vi.fn(),
+      recoverContainerTerminals,
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(2)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
       startContainerTerminal: vi.fn(),
+      preflightContainerTerminal: vi.fn(),
     } as unknown as ApiClient;
 
-    const first = render(<ContainerTerminalPanel
-      api={api}
-      engagementId="engagement-1"
-      engagementName="Lab"
-      setupTerminalStatus="ready"
-    />);
-    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(1));
+    const first = renderPanel(api);
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("tab", { name: /Terminal 2/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "Screenshot" }).closest("[role='tabpanel']"))
+      .toHaveAttribute("id", "terminal-panel-terminal-2");
+    await user.click(screen.getByRole("tab", { name: /Terminal 1/ }));
+    expect(screen.getByRole("tab", { name: /Terminal 1/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "Screenshot" }).closest("[role='tabpanel']"))
+      .toHaveAttribute("id", "terminal-panel-terminal-1");
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: /Terminal 2/ })).toHaveAttribute("aria-selected", "true");
+    expect(socketSpies.dispose).not.toHaveBeenCalled();
+    expect(terminalSpies.fit).toHaveBeenCalled();
     first.unmount();
 
-    render(<ContainerTerminalPanel
-      api={api}
-      engagementId="engagement-1"
-      engagementName="Lab"
-      setupTerminalStatus="ready"
-    />);
+    renderPanel(api);
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(4));
+    expect(recoverContainerTerminals).toHaveBeenCalledTimes(2);
+    expect(api.startContainerTerminal).not.toHaveBeenCalled();
+    expect(socketSpies.constructed.mock.calls.map(([value]) => (
+      value as { websocketTicket: string }
+    ).websocketTicket)).toEqual(["fresh-1", "fresh-2", "fresh-3", "fresh-4"]);
+  });
+
+  it("confirms a running tab close and stops only that session", async () => {
+    const user = userEvent.setup();
+    const closeContainerTerminal = vi.fn().mockResolvedValue(undefined);
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [
+        { session: session("terminal-1"), runtime },
+        { session: session("terminal-2", "ticket-2", "2026-07-15T12:01:00Z"), runtime },
+      ] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(2)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+      closeContainerTerminal,
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Close Terminal 1" }));
+    expect(screen.getByRole("dialog", { name: "Stop Terminal 1?" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Stop and close" }));
+    await waitFor(() => expect(closeContainerTerminal).toHaveBeenCalledWith("terminal-1"));
+    expect(screen.queryByRole("tab", { name: /Terminal 1/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Terminal 2/ })).toBeVisible();
+  });
+
+  it("preserves a running tab when close is cancelled or stopping fails", async () => {
+    const user = userEvent.setup();
+    const closeContainerTerminal = vi.fn().mockRejectedValue(new Error("container runtime refused stop"));
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [
+        { session: session("terminal-1"), runtime },
+      ] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(1)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+      closeContainerTerminal,
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "Close Terminal 1" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(closeContainerTerminal).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: /Terminal 1/ })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Close Terminal 1" }));
+    await user.click(screen.getByRole("button", { name: "Stop and close" }));
+    expect(await screen.findByText("container runtime refused stop")).toBeVisible();
+    expect(screen.getByRole("tab", { name: /Terminal 1/ })).toBeVisible();
+  });
+
+  it("adds a fresh terminal tab without remounting the existing socket", async () => {
+    const user = userEvent.setup();
+    const containerTerminalCapacity = vi.fn()
+      .mockResolvedValueOnce(capacity(1))
+      .mockResolvedValueOnce(capacity(2));
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [
+        { session: session("terminal-1"), runtime },
+      ] }),
+      containerTerminalCapacity,
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+      containerTerminalCapabilities: vi.fn().mockResolvedValue({ ready: true }),
+      preflightContainerTerminal: vi.fn().mockResolvedValue({
+        allowed: true,
+        detail: "approved",
+        previewToken: "preview-token-2",
+        previewFingerprint: "preview-fingerprint-2",
+        runtime,
+      }),
+      startContainerTerminal: vi.fn().mockResolvedValue(session("terminal-2", "ticket-2", "2026-07-15T12:01:00Z")),
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "New terminal" }));
     await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(2));
 
-    expect(api.recoverContainerTerminal).toHaveBeenCalledTimes(2);
-    expect(api.setupStatus).not.toHaveBeenCalled();
-    expect(api.preflightContainerTerminal).not.toHaveBeenCalled();
-    expect(api.startContainerTerminal).not.toHaveBeenCalled();
-    expect(socketSpies.constructed.mock.calls.map(([session]) => (
-      session as { websocketTicket: string }
-    ).websocketTicket)).toEqual(["fresh-ticket-1", "fresh-ticket-2"]);
+    expect(api.startContainerTerminal).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tab", { name: /Terminal 2/ })).toHaveAttribute("aria-selected", "true");
+    expect(socketSpies.dispose).not.toHaveBeenCalled();
+    expect(await screen.findByText("2 / 32")).toBeVisible();
+  });
+
+  it("retains a failed provisional tab and reuses its idempotency key on Retry", async () => {
+    const user = userEvent.setup();
+    const startContainerTerminal = vi.fn()
+      .mockRejectedValueOnce(new Error("terminal capacity is currently full"))
+      .mockResolvedValueOnce(session("terminal-2", "ticket-2", "2026-07-15T12:01:00Z"));
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [
+        { session: session("terminal-1"), runtime },
+      ] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(1)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+      containerTerminalCapabilities: vi.fn().mockResolvedValue({ ready: true }),
+      preflightContainerTerminal: vi.fn().mockResolvedValue({
+        allowed: true,
+        detail: "approved",
+        previewToken: "preview-token-2",
+        previewFingerprint: "preview-fingerprint-2",
+        runtime,
+      }),
+      startContainerTerminal,
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "New terminal" }));
+    expect(await screen.findByText("terminal capacity is currently full")).toBeVisible();
+    expect(screen.getByRole("tab", { name: /Terminal 2/ })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(2));
+
+    expect(startContainerTerminal).toHaveBeenCalledTimes(2);
+    expect(startContainerTerminal.mock.calls[0]?.[2]).toBe(startContainerTerminal.mock.calls[1]?.[2]);
+  });
+
+  it("exposes every tab through the overflow menu", async () => {
+    const user = userEvent.setup();
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [
+        { session: session("terminal-1"), runtime },
+        { session: session("terminal-2", "ticket-2", "2026-07-15T12:01:00Z"), runtime },
+        { session: session("terminal-3", "ticket-3", "2026-07-15T12:02:00Z"), runtime },
+      ] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(3)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(3));
+    await user.click(screen.getByRole("button", { name: "List all terminals" }));
+    const menu = screen.getByRole("menu");
+    expect(menu).toBeVisible();
+    await user.click(screen.getByRole("menuitem", { name: /Terminal 1/ }));
+    expect(screen.getByRole("tab", { name: /Terminal 1/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("disables New Terminal when the global capacity is full", async () => {
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [
+        { session: session("terminal-1"), runtime },
+      ] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(32)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+    await waitFor(() => expect(screen.getByText("32 / 32")).toBeVisible());
+    expect(screen.getByRole("button", { name: "New terminal" })).toBeDisabled();
   });
 });

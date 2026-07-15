@@ -1213,6 +1213,7 @@ export interface ContainerTerminalPreflight {
 
 export interface ContainerTerminalSession {
   sessionId: Identifier;
+  createdAt: string;
   websocketTicket: string;
   ticketExpiresAt: string;
   websocketPath: string;
@@ -1225,6 +1226,21 @@ export interface ContainerTerminalRecovery {
   active: boolean;
   session?: ContainerTerminalSession;
   runtime?: ContainerTerminalRuntimeSnapshot;
+}
+
+export interface ContainerTerminalRecoveredSession {
+  session: ContainerTerminalSession;
+  runtime: ContainerTerminalRuntimeSnapshot;
+}
+
+export interface ContainerTerminalRecoveryList {
+  sessions: ContainerTerminalRecoveredSession[];
+}
+
+export interface ContainerTerminalCapacity {
+  activeSessions: number;
+  availableSessions: number;
+  maxActiveSessions: number;
 }
 
 export interface TerminalCommandRecord {

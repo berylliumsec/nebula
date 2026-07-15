@@ -6,8 +6,6 @@ source can be copied into the workstation image and executed during its build.
 
 from __future__ import annotations
 
-from .diagnostics import record_caught_exception
-
 import argparse
 import json
 import os
@@ -15,6 +13,21 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Iterable
+
+
+if __package__:
+    from .diagnostics import record_caught_exception
+else:
+
+    def record_caught_exception(
+        feature: str,
+        event_code: str,
+        message: str,
+        exception: BaseException,
+        *,
+        stage: str,
+    ) -> str | None:
+        """Skip host diagnostics when this file runs standalone in the image build."""
 
 
 MANIFEST_SCHEMA = "nebula.kali-security-tools/v1"
