@@ -6574,7 +6574,7 @@ version = "2024.11.6"
 description = "Alternative regular expression module, to replace re."
 optional = false
 python-versions = ">=3.8"
-groups = ["legacy"]
+groups = ["main", "legacy"]
 files = [
     {file = "regex-2024.11.6-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:ff590880083d60acc0433f9c3f713c51f7ac6ebb9adf889c79a261ecf541aa91"},
     {file = "regex-2024.11.6-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:658f90550f38270639e83ce492f27d2c8d2cd63805c65a13a14d36ca126753f0"},
@@ -8168,6 +8168,18 @@ files = [
 ]
 
 [[package]]
+name = "types-regex"
+version = "2026.7.10.20260711"
+description = "Typing stubs for regex"
+optional = false
+python-versions = ">=3.10"
+groups = ["dev"]
+files = [
+    {file = "types_regex-2026.7.10.20260711-py3-none-any.whl", hash = "sha256:c7094184715b1bd5e466cc49414cd101303d8a5167ea5a61804f31e8f168bf48"},
+    {file = "types_regex-2026.7.10.20260711.tar.gz", hash = "sha256:9aa1b142060add5d4a4f42146ebcb70e01e7b2789e7ce473255323f3c5eedded"},
+]
+
+[[package]]
 name = "typing-extensions"
 version = "4.15.0"
 description = "Backported and Experimental Type Hints for Python 3.9+"
@@ -9157,4 +9169,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "1d2d2fd976cc8c79c040edba208813576bc9de45b144f9b211984c6519a50211"
+content-hash = "3e21d261de471820e0dcdc380f0eac6d48982623365296c51487032d9d5f7add"

@@ -42,6 +42,7 @@ from .missions import MissionComponents, MissionConfigurationError
 from .policy import PolicyEngine
 from .providers import ModelProvider
 from .sandbox import (
+    AnalysisOnlyRunner,
     ContainerEgressController,
     ContainerImagePreparer,
     ContainerRuntimeType,
@@ -54,6 +55,8 @@ from .sandbox import (
     RunnerProfile,
     SandboxError,
 )
+from .mcp import McpProbeService, build_mcp_tool_plugins
+from .domain import McpServerProfile
 from .storage import NebulaStore
 from .toolpack_sdk import ToolPackSDKError, read_tool_pack
 from .toolpacks import (
@@ -72,6 +75,7 @@ from .toolpacks import (
     default_tool_pack_root,
     fetch_bounded_https,
     manifest_digest,
+    parse_manifest_json,
 )
 from .kali_tool_inventory import TOOL_NAME_PATTERN
 from .toolparsers import SandboxParserExecutor
@@ -87,7 +91,10 @@ from .tools import (
     ToolBroker,
     ToolRegistry,
     ToolSpec,
+    UnknownTool,
+    register_artifact_retrieval_tools,
 )
+from .tool_results import ToolOutputService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -398,6 +405,14 @@ class ToolPlatform:
             verifier=self.keyring,
             cache_path=self.tool_pack_root / "catalog-cache.json",
         )
+        self.mcp_service: McpProbeService | None = None
+
+    def bind_mcp_service(self, service: McpProbeService) -> None:
+        """Bind Core-owned MCP transport after credentials/workspaces are ready."""
+
+        if service.store is not self.store:
+            raise ValueError("MCP service must use the tool platform store")
+        self.mcp_service = service
 
     async def catalog(self) -> list[dict[str, Any]]:
         if not self.has_trusted_keys:
@@ -1020,14 +1035,24 @@ class ToolPlatform:
     def mission_components(
         self, run: AgentRun, provider: ModelProvider
     ) -> MissionComponents:
-        if not self.execution_enabled:
-            raise MissionConfigurationError(
-                "executable tool missions remain release-gated until the "
-                "runner-isolation acceptance suite passes"
-            )
         selected = run.metadata.get("tool_names")
         if not isinstance(selected, list) or not selected:
             raise MissionConfigurationError("tool mission has no selected tools")
+        selected_oci = run.metadata.get("oci_tool_names", selected)
+        if not isinstance(selected_oci, list):
+            raise MissionConfigurationError("tool mission OCI lock is malformed")
+        if selected_oci and not self.execution_enabled:
+            raise MissionConfigurationError(
+                "executable OCI tool missions remain release-gated until the "
+                "runner-isolation acceptance suite passes"
+            )
+        try:
+            mcp_profiles = tuple(
+                McpServerProfile.model_validate(item)
+                for item in run.runtime_snapshot.get("mcp_snapshot", [])
+            )
+        except ValueError as exc:
+            raise MissionConfigurationError("frozen MCP snapshot is invalid") from exc
         engagement = self.store.get(Engagement, run.engagement_id)
         if not engagement.scope_policy_id:
             raise MissionConfigurationError("tool mission has no scope policy")
@@ -1042,9 +1067,9 @@ class ToolPlatform:
             for item in assignments
             for name in item.allowed_tool_names
         }
-        if any(name not in digest_by_tool for name in selected):
+        if any(name not in digest_by_tool for name in selected_oci):
             raise MissionConfigurationError("tool assignment changed before execution")
-        digests = sorted({digest_by_tool[name] for name in selected})
+        digests = sorted({digest_by_tool[name] for name in selected_oci})
         if digests != sorted(run.tool_pack_digests):
             raise MissionConfigurationError("tool-pack lock changed before execution")
         all_installations = self.store.list_entities(ToolPackInstallation, limit=1_000)
@@ -1073,27 +1098,54 @@ class ToolPlatform:
                 "one mission cannot span different Toolbox interface catalogs"
             )
         interface_catalog = interface_catalogs[0] if interface_catalogs else None
-        runtime_ids = {item.runtime_profile_id for item in installations}
-        if len(runtime_ids) != 1:
-            raise MissionConfigurationError("one mission cannot span local runners")
-        profile = self.store.get(StoredRunnerProfile, runtime_ids.pop())
-        if not profile.enabled or not profile.healthy:
-            raise MissionConfigurationError("selected runner is not verified healthy")
-        runner = self._runner(profile)
-        runner_platform = cast(Literal["linux/amd64", "linux/arm64"], profile.platform)
-        parser_executor = SandboxParserExecutor(
-            runner=runner, parser_root=self.parser_root
-        )
-        registry_all = build_tool_registry(
-            installations,
-            platform=runner_platform,
-            manifests=self.manifests,
-            parser_executor=parser_executor,
-        )
         registry = ToolRegistry()
-        for name in selected:
-            registry.register(registry_all.get(name))
+        runner: Any = AnalysisOnlyRunner()
+        profile: StoredRunnerProfile | None = None
+        if installations:
+            runtime_ids = {item.runtime_profile_id for item in installations}
+            if len(runtime_ids) != 1:
+                raise MissionConfigurationError("one mission cannot span local runners")
+            profile = self.store.get(StoredRunnerProfile, runtime_ids.pop())
+            if not profile.enabled or not profile.healthy:
+                raise MissionConfigurationError(
+                    "selected runner is not verified healthy"
+                )
+            runner = self._runner(profile)
+            runner_platform = cast(
+                Literal["linux/amd64", "linux/arm64"], profile.platform
+            )
+            parser_executor = SandboxParserExecutor(
+                runner=runner, parser_root=self.parser_root
+            )
+            registry_all = build_tool_registry(
+                installations,
+                platform=runner_platform,
+                manifests=self.manifests,
+                parser_executor=parser_executor,
+            )
+            for name in selected_oci:
+                registry.register(registry_all.get(name))
+        if mcp_profiles:
+            if self.mcp_service is None:
+                raise MissionConfigurationError(
+                    "Core MCP execution service is unavailable"
+                )
+            try:
+                for plugin in build_mcp_tool_plugins(self.mcp_service, mcp_profiles):
+                    registry.register(plugin)
+            except Exception as exc:
+                raise MissionConfigurationError(str(exc)) from exc
+        register_artifact_retrieval_tools(
+            registry,
+            output_service=ToolOutputService(self.store, self.artifact_store),
+        )
         specs = {spec.name: spec for spec in registry.specs()}
+        missing_specs = sorted(set(selected) - specs.keys())
+        if missing_specs:
+            raise MissionConfigurationError(
+                f"frozen mission tools are unavailable: {missing_specs}"
+            )
+        action_specs = {name: specs[name] for name in selected}
         network_tools = sorted(
             spec.name for spec in specs.values() if spec.network_access
         )
@@ -1107,13 +1159,14 @@ class ToolPlatform:
             ),
             None,
         )
-        egress_helper_image = profile.egress_helper_image or embedded_helper
-        if network_tools and not egress_helper_image:
-            raise MissionConfigurationError(
-                "selected network tools require a certified digest-pinned "
-                f"egress helper: {network_tools}"
-            )
-        runner = self._runner(profile, egress_helper_image=egress_helper_image)
+        if profile is not None:
+            egress_helper_image = profile.egress_helper_image or embedded_helper
+            if network_tools and not egress_helper_image:
+                raise MissionConfigurationError(
+                    "selected network tools require a certified digest-pinned "
+                    f"egress helper: {network_tools}"
+                )
+            runner = self._runner(profile, egress_helper_image=egress_helper_image)
         workspace = self.workspace_for(engagement.id)
         broker = ToolBroker(
             registry=registry,
@@ -1130,7 +1183,8 @@ class ToolPlatform:
             role_specs = {
                 name: spec
                 for name, spec in specs.items()
-                if role_for_tool(name) == role
+                if spec.budget_class == "artifact_query"
+                or (name in action_specs and role_for_tool(name) == role)
             }
             specialists[role] = BrokeredToolSpecialist(
                 provider,
@@ -1144,7 +1198,7 @@ class ToolPlatform:
                 interface_catalog=interface_catalog,
             )
         return MissionComponents(
-            supervisor=ToolMissionSupervisor(specs),
+            supervisor=ToolMissionSupervisor(action_specs),
             specialists=specialists,
             context={
                 "tool_names": selected,
@@ -1163,26 +1217,43 @@ class ToolPlatform:
         turn_id: str,
         provider: ModelProvider,
         model: str,
+        mcp_profiles: tuple[McpServerProfile, ...] = (),
+        include_oci: bool = True,
+        allow_empty: bool = False,
+        frozen_tool_names: tuple[str, ...] | None = None,
+        frozen_pack_digests: tuple[str, ...] | None = None,
     ) -> ChatToolComponents:
-        """Resolve the complete engagement assignment through the mission broker lock."""
+        """Resolve OCI and frozen MCP tools into the same brokered runtime.
+
+        Harness sessions pass immutable pack/tool snapshots on reconnect so an
+        assignment change cannot silently alter an already-open agent runtime.
+        """
 
         del turn_id, provider, model
-        if not self.execution_enabled:
-            raise ToolPlatformError("Toolbox execution is disabled in this Core")
+        if (frozen_tool_names is None) != (frozen_pack_digests is None):
+            raise ToolPlatformError(
+                "frozen Toolbox tool names and pack digests must be supplied together"
+            )
+        if frozen_pack_digests is not None and not include_oci:
+            raise ToolPlatformError("frozen Toolbox snapshots require OCI tools")
         engagement = self.store.get(Engagement, engagement_id)
         if not engagement.scope_policy_id:
             raise ToolPlatformError("engagement has no scope policy")
         scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
 
-        assignments = [
-            item
-            for item in self.store.list_entities(
-                EngagementToolAssignment,
-                engagement_id=engagement_id,
-                limit=1_000,
-            )
-            if item.enabled
-        ]
+        assignments = (
+            [
+                item
+                for item in self.store.list_entities(
+                    EngagementToolAssignment,
+                    engagement_id=engagement_id,
+                    limit=1_000,
+                )
+                if item.enabled
+            ]
+            if include_oci and frozen_pack_digests is None
+            else []
+        )
         ready_installations = [
             item
             for item in self.store.list_entities(ToolPackInstallation, limit=1_000)
@@ -1194,15 +1265,35 @@ class ToolPlatform:
         ]
         if assignments and not ready_assignments:
             raise ToolPlatformError("an assigned Toolbox pack is unavailable")
-        selected = list(
-            dict.fromkeys(
-                name for item in ready_assignments for name in item.allowed_tool_names
+        if frozen_pack_digests is not None:
+            missing = [
+                digest
+                for digest in frozen_pack_digests
+                if digest not in ready_by_digest
+            ]
+            if missing:
+                raise ToolPlatformError(
+                    "a frozen Toolbox pack is unavailable: " + ", ".join(missing)
+                )
+            selected_oci = list(dict.fromkeys(frozen_tool_names or ()))
+            digests = list(dict.fromkeys(frozen_pack_digests))
+            installations = [ready_by_digest[digest] for digest in digests]
+        else:
+            selected_oci = list(
+                dict.fromkeys(
+                    name
+                    for item in ready_assignments
+                    for name in item.allowed_tool_names
+                )
             )
-        )
-        if not selected:
-            raise ToolPlatformError("engagement has no enabled Toolbox assignment")
-        digests = sorted({item.manifest_digest for item in ready_assignments})
-        installations = [ready_by_digest[digest] for digest in digests]
+            digests = sorted({item.manifest_digest for item in ready_assignments})
+            installations = [ready_by_digest[digest] for digest in digests]
+        if selected_oci and not self.execution_enabled:
+            raise ToolPlatformError("Toolbox OCI execution is disabled in this Core")
+        if not selected_oci and not mcp_profiles and not allow_empty:
+            raise ToolPlatformError(
+                "engagement has no enabled Toolbox assignment or selected MCP server"
+            )
         interface_digests = sorted(
             {
                 item.interface_catalog_digest
@@ -1221,29 +1312,49 @@ class ToolPlatform:
                     Path(installation.interface_catalog_path),
                     installation.interface_catalog_digest,
                 )
-        runtime_ids = {item.runtime_profile_id for item in installations}
-        if len(runtime_ids) != 1:
-            raise ToolPlatformError(
-                "chat Toolbox assignments must use one local runner"
-            )
-        runner_profile = self.store.get(StoredRunnerProfile, runtime_ids.pop())
-        if not runner_profile.enabled or not runner_profile.healthy:
-            raise ToolPlatformError("selected Toolbox runner is unavailable")
-        runner_platform = cast(
-            Literal["linux/amd64", "linux/arm64"], runner_profile.platform
-        )
-        parser_executor = SandboxParserExecutor(
-            runner=self._runner(runner_profile), parser_root=self.parser_root
-        )
-        registry_all = build_tool_registry(
-            installations,
-            platform=runner_platform,
-            manifests=self.manifests,
-            parser_executor=parser_executor,
-        )
         registry = ToolRegistry()
-        for name in selected:
-            registry.register(registry_all.get(name))
+        runner: Any = AnalysisOnlyRunner()
+        runner_profile: StoredRunnerProfile | None = None
+        if installations:
+            runtime_ids = {item.runtime_profile_id for item in installations}
+            if len(runtime_ids) != 1:
+                raise ToolPlatformError(
+                    "chat Toolbox assignments must use one local runner"
+                )
+            runner_profile = self.store.get(StoredRunnerProfile, runtime_ids.pop())
+            if not runner_profile.enabled or not runner_profile.healthy:
+                raise ToolPlatformError("selected Toolbox runner is unavailable")
+            runner_platform = cast(
+                Literal["linux/amd64", "linux/arm64"], runner_profile.platform
+            )
+            parser_executor = SandboxParserExecutor(
+                runner=self._runner(runner_profile), parser_root=self.parser_root
+            )
+            registry_all = build_tool_registry(
+                installations,
+                platform=runner_platform,
+                manifests=self.manifests,
+                parser_executor=parser_executor,
+            )
+            for name in selected_oci:
+                try:
+                    registry.register(registry_all.get(name))
+                except UnknownTool as exc:
+                    raise ToolPlatformError(
+                        f"frozen Toolbox tool {name!r} is unavailable"
+                    ) from exc
+        if mcp_profiles:
+            if self.mcp_service is None:
+                raise ToolPlatformError("Core MCP execution service is unavailable")
+            try:
+                for plugin in build_mcp_tool_plugins(self.mcp_service, mcp_profiles):
+                    registry.register(plugin)
+            except Exception as exc:
+                raise ToolPlatformError(str(exc)) from exc
+        register_artifact_retrieval_tools(
+            registry,
+            output_service=ToolOutputService(self.store, self.artifact_store),
+        )
         specs = {spec.name: spec for spec in registry.specs()}
         network_tools = sorted(
             spec.name for spec in specs.values() if spec.network_access
@@ -1258,17 +1369,19 @@ class ToolPlatform:
             ),
             None,
         )
-        egress_helper_image = runner_profile.egress_helper_image or embedded_helper
-        if network_tools and not egress_helper_image:
-            raise ToolPlatformError(
-                "assigned network tools require a certified digest-pinned egress helper"
+        if runner_profile is not None:
+            egress_helper_image = runner_profile.egress_helper_image or embedded_helper
+            if network_tools and not egress_helper_image:
+                raise ToolPlatformError(
+                    "assigned network tools require a certified digest-pinned egress helper"
+                )
+            runner = self._runner(
+                runner_profile, egress_helper_image=egress_helper_image
             )
         broker = ToolBroker(
             registry=registry,
             policy_engine=PolicyEngine(),
-            runner=self._runner(
-                runner_profile, egress_helper_image=egress_helper_image
-            ),
+            runner=runner,
             ledger=StoreToolLedger(self.store),
             workspace_resolver=lambda owner_engagement_id: self.workspace_for(
                 owner_engagement_id
@@ -1785,7 +1898,7 @@ class ToolPlatform:
             )
             raise ToolPlatformError("tool-pack download failed") from exc
         try:
-            manifest = ToolPackManifestV1.model_validate_json(manifest_response)
+            manifest = parse_manifest_json(manifest_response)
             signature = SignatureEnvelope.model_validate_json(signature_response)
             self.keyring.verify_publisher(
                 canonical_manifest_json(manifest),

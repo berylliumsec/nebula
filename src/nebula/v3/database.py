@@ -165,6 +165,7 @@ class RunBudgetCounterRow(Base):
 
     run_id: Mapped[str] = mapped_column(String(200), primary_key=True)
     tool_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    artifact_queries: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_microusd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

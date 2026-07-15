@@ -30,6 +30,7 @@ from nebula.v3.providers import (
     ToolCall,
 )
 from nebula.v3.tool_interfaces import ToolInterfaceError, load_interface_catalog
+from nebula.v3.tool_results import ToolResultReceipt, ToolResultStatus
 from nebula.v3.tools import ToolExecutionResult, ToolSpec
 
 
@@ -493,12 +494,19 @@ def test_toolbox_mission_summary_is_structured_markdown_with_commands():
     assert "**Evidence:** evidence-1" in summary
 
 
-def test_toolbox_wrapper_compiles_structured_invocation(tmp_path, capsys):
+def test_toolbox_wrapper_compiles_structured_invocation(tmp_path):
     toolbox = load_script("nebula_toolbox_structured", "nebula-toolbox.py")
     catalog_path = tmp_path / "tool-catalog.json"
     write_test_catalog(catalog_path)
     toolbox.CATALOG_PATH = catalog_path
     toolbox.WORKSPACE = tmp_path
+    captured = {}
+
+    def execute(operation, command, **kwargs):
+        captured.update(operation=operation, command=command, **kwargs)
+        return 0
+
+    toolbox._execute = execute
 
     exit_code = toolbox.main(
         [
@@ -521,11 +529,9 @@ def test_toolbox_wrapper_compiles_structured_invocation(tmp_path, capsys):
             "30",
         ]
     )
-    output = json.loads(capsys.readouterr().out)
-
-    assert exit_code in {0, 127}
-    assert output["command"][-1] == "."
-    assert output["metadata"]["catalogued_guidance"] is True
+    assert exit_code == 0
+    assert captured["command"][-1] == "."
+    assert captured["guidance"] is True
 
 
 def test_toolbox_wrapper_keeps_large_pathological_output_valid_json():
@@ -571,10 +577,11 @@ def test_toolbox_wrapper_rejects_invented_structured_option(tmp_path, capsys):
             str(tmp_path),
         ]
     )
-    output = json.loads(capsys.readouterr().out)
+    streams = capsys.readouterr()
 
     assert exit_code == 2
-    assert "unknown option" in output["stderr"]
+    assert streams.out == ""
+    assert "unknown option" in streams.err
 
 
 def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
@@ -1003,24 +1010,38 @@ def test_specialist_investigates_failed_result_then_finishes(tmp_path):
     ("execution_result", "expected_status", "expected_detail"),
     [
         (
-            ToolExecutionResult(output={}, parser_error="invalid parser output"),
+            ToolExecutionResult(
+                output={},
+                receipt=ToolResultReceipt(
+                    tool_call_id="timeout-call",
+                    tool_name="environment.help",
+                    tool_version="1",
+                    status=ToolResultStatus.TIMED_OUT,
+                    incomplete=True,
+                ),
+            ),
             "failed",
-            "invalid parser output",
+            '"status": "timed_out"',
         ),
         (
-            ToolExecutionResult(output={}, execution={"timed_out": True}),
-            "failed",
-            '"timed_out": true',
-        ),
-        (
-            ToolExecutionResult(output={}, output_truncated=True),
+            ToolExecutionResult(
+                output={},
+                receipt=ToolResultReceipt(
+                    tool_call_id="truncated-call",
+                    tool_name="environment.help",
+                    tool_version="1",
+                    status=ToolResultStatus.COMPLETED,
+                    truncated=True,
+                    incomplete=True,
+                ),
+            ),
             "incomplete",
-            '"output_truncated": true',
+            '"truncated": true',
         ),
         (
             ToolExecutionResult(output={"data": "x" * 10_000}),
             "incomplete",
-            '"truncated": true',
+            '"schema": "nebula.bounded-result/v1"',
         ),
     ],
 )
@@ -1198,7 +1219,7 @@ def test_specialist_history_keeps_latest_failure_exact_when_bounding_turns():
     assert history[0].is_error is True
 
 
-def test_toolbox_shell_supports_full_pipeline_and_records_script_hash(tmp_path, capsys):
+def test_toolbox_shell_relays_native_pipeline_output(tmp_path, capfd):
     toolbox = load_script("nebula_toolbox_shell", "nebula-toolbox.py")
     catalog_path = tmp_path / "tool-catalog.json"
     write_test_catalog(catalog_path)
@@ -1216,12 +1237,11 @@ def test_toolbox_shell_supports_full_pipeline_and_records_script_hash(tmp_path, 
             "30",
         ]
     )
-    output = json.loads(capsys.readouterr().out)
+    streams = capfd.readouterr()
 
     assert exit_code == 0
-    assert output["stdout"].strip() == "2"
-    assert output["metadata"]["catalogued_guidance"] is False
-    assert len(output["metadata"]["script_sha256"]) == 64
+    assert streams.out.strip() == "2"
+    assert streams.err == ""
 
 
 def test_toolbox_wrapper_rejects_workspace_escape(tmp_path, capsys):
@@ -1240,10 +1260,11 @@ def test_toolbox_wrapper_rejects_workspace_escape(tmp_path, capsys):
             str(tmp_path.parent),
         ]
     )
-    output = json.loads(capsys.readouterr().out)
+    streams = capsys.readouterr()
 
     assert exit_code == 2
-    assert "inside /workspace" in output["stderr"]
+    assert streams.out == ""
+    assert "inside /workspace" in streams.err
 
 
 @pytest.mark.parametrize(

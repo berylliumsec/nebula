@@ -956,7 +956,13 @@ def test_chat_components_ignore_stale_assignment_when_ready_digest_exists(
     )
 
     assert components.tool_pack_digests == (DIGEST_B,)
-    assert set(components.specs) == {"sample.query"}
+    assert set(components.specs) == {
+        "sample.query",
+        "tool_output.search",
+        "tool_output.read",
+        "workspace.search",
+        "workspace.read",
+    }
 
 
 def test_human_terminal_runner_prefers_local_and_rejects_ambiguity(tmp_path):

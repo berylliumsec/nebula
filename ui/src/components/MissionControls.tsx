@@ -247,7 +247,7 @@ export function NewMissionButton({ className = "button primary", children }: New
 
   const openMission = () => {
     setError(undefined);
-    setMaxToolCalls(runtimeKind === "harness" ? 50 : automaticTools.length ? 50 : 0);
+    setMaxToolCalls(runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length ? 50 : 0);
     setMaxConcurrency(automaticTools.length ? 2 : 1);
     setOpen(true);
     ensureOfficialToolbox();
@@ -255,9 +255,9 @@ export function NewMissionButton({ className = "button primary", children }: New
 
   useEffect(() => {
     if (!open) return;
-    setMaxToolCalls(runtimeKind === "harness" ? 50 : automaticTools.length ? 50 : 0);
-    setMaxConcurrency(runtimeKind === "native" && automaticTools.length ? 2 : 1);
-  }, [automaticTools, open, runtimeKind]);
+    setMaxToolCalls(runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length ? 50 : 0);
+    setMaxConcurrency(runtimeKind === "native" && (automaticTools.length || selectedMcpIds.length) ? 2 : 1);
+  }, [automaticTools, open, runtimeKind, selectedMcpIds.length]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -300,27 +300,38 @@ export function NewMissionButton({ className = "button primary", children }: New
       setError("Retries must be a whole number from 0 to 2.");
       return;
     }
-    if ((runtimeKind === "harness" || automaticTools.length) && (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 100)) {
+    if ((runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length) && (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 100)) {
       setError("Maximum tool calls must be a whole number from 1 to 100.");
       return;
     }
-    if (automaticTools.length && (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 2)) {
+    if ((automaticTools.length || selectedMcpIds.length) && (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 2)) {
       setError("Maximum concurrency must be 1 or 2.");
       return;
     }
     const selectedHarnessSession = harnessSessions.find((item) => item.id === harnessSessionId);
-    const harnessUsesMcp = runtimeKind === "harness" && Boolean(
-      harnessSessionId ? selectedHarnessSession?.mcpServerIds.length : selectedMcpIds.length,
-    );
+    const runtimeUsesMcp = runtimeKind === "harness"
+      ? Boolean(harnessSessionId ? selectedHarnessSession?.mcpServerIds.length : selectedMcpIds.length)
+      : selectedMcpIds.length > 0;
+    if (runtimeKind === "native" && runtimeUsesMcp && !providerSupportsTools) {
+      setError(`Tool calling must be verified for ${cleanModel} before selecting MCP tools.`);
+      return;
+    }
     let allowCloudToolResults = false;
-    if (harnessUsesMcp && selectedHarness && !selectedHarness.localOnly) {
-      if (!selectedHarness.permitsSensitiveData) {
-        setError("This harness profile is text-only. Permit project/document data in Settings or remove MCP servers.");
+    const selectedRuntime = runtimeKind === "harness" ? selectedHarness : provider;
+    const runtimeIsLocal = runtimeKind === "harness"
+      ? selectedHarness?.localOnly === true
+      : provider?.kind === "local" || provider?.privacy === "local_only";
+    const runtimePermitsSensitive = runtimeKind === "harness"
+      ? selectedHarness?.permitsSensitiveData
+      : provider?.permitsSensitiveData;
+    if (runtimeUsesMcp && selectedRuntime && !runtimeIsLocal) {
+      if (!runtimePermitsSensitive) {
+        setError("This runtime profile is text-only. Permit project/document data in Settings or remove MCP servers.");
         return;
       }
       allowCloudToolResults = await confirm({
         title: "Allow MCP results in this mission?",
-        message: `Allow bounded MCP tool inputs and results to reach ${selectedHarness.name} for this mission? Every risky call still follows its exact approval policy.`,
+        message: `Allow bounded MCP tool inputs and result excerpts to reach ${selectedRuntime.name} for this mission? Raw artifacts remain local and every risky call follows its approval policy.`,
         confirmLabel: "Allow this mission",
       });
       if (!allowCloudToolResults) return;
@@ -343,7 +354,7 @@ export function NewMissionButton({ className = "button primary", children }: New
         maxToolCalls,
         maxConcurrency: 1,
         allowCloudToolResults,
-      } : { engagementId: engagement.id, objective: cleanObjective, backend: "native", providerId: provider?.id, model: cleanModel, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, toolNames: automaticTools, maxToolCalls: automaticTools.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length ? maxConcurrency : 1 });
+      } : { engagementId: engagement.id, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, toolNames: automaticTools, maxToolCalls: automaticTools.length || selectedMcpIds.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
       setOpen(false);
       setObjective("");
       setMaxToolCalls(0);
@@ -362,7 +373,7 @@ export function NewMissionButton({ className = "button primary", children }: New
       <div className="dialog-backdrop">
         <form noValidate className="provider-dialog resource-dialog mission-dialog" role="dialog" aria-modal="true" aria-labelledby="mission-dialog-title" onSubmit={(event) => void submit(event)}>
           <header>
-            <div><small>{automaticTools.length ? "Supervised automation" : "Analysis-only automation"}</small><h2 id="mission-dialog-title">Automate task</h2></div>
+            <div><small>{automaticTools.length || selectedMcpIds.length ? "Supervised automation" : "Analysis-only automation"}</small><h2 id="mission-dialog-title">Automate task</h2></div>
             <button className="icon-button subtle" type="button" aria-label="Close automation dialog" onClick={() => setOpen(false)}><X size={17} /></button>
           </header>
           <label>Objective<textarea required autoFocus rows={5} value={objective} placeholder="Describe the outcome you want Nebula to produce…" onChange={(event) => { setObjective(event.target.value); setError(undefined); }} /></label>
@@ -371,7 +382,7 @@ export function NewMissionButton({ className = "button primary", children }: New
             <label>Runtime<select aria-label="Mission runtime" value={runtimeKind} onChange={(event) => { const next = event.target.value as "native" | "harness"; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "native") selectProvider(providerId || availableProviders[0]?.id || ""); }}><option value="native">Native mission</option><option value="harness">Agent harness</option></select></label>
             {runtimeKind === "native" ? <label>Provider<select value={providerId} onChange={(event) => { selectProvider(event.target.value); setError(undefined); }}>{availableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label> : <><label>Harness<select aria-label="Mission harness" value={harnessId} disabled={Boolean(harnessSessionId)} onChange={(event) => { setHarnessId(event.target.value); setError(undefined); }}>{harnesses.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Session<select aria-label="Harness session" value={harnessSessionId} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">Start a new session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.model} · {item.status}</option>)}</select></label></>}
             <label>Model<input required value={model} list="mission-models" disabled={Boolean(harnessSessionId)} placeholder="Exact model ID" onChange={(event) => { setModel(event.target.value); setError(undefined); }} /><datalist id="mission-models">{runtimeKind === "native" && provider?.models.map((item) => <option value={item} key={item} />)}</datalist></label>
-            {runtimeKind === "harness" && !harnessSessionId && <fieldset className="mission-tools"><legend>MCP servers</legend>{mcpServers.length ? mcpServers.map((server) => <label className="provider-consent" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span><strong>{server.name}</strong><small>{server.transport} · {server.tools.length} discovered tools</small></span></label>) : <p>No enabled MCP profiles. Add one in Settings if this mission needs external tools.</p>}</fieldset>}
+            {(runtimeKind === "native" || !harnessSessionId) && <fieldset className="mission-tools"><legend>MCP servers · all agent runtimes</legend>{mcpServers.length ? mcpServers.map((server) => <label className="provider-consent" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span><strong>{server.name}</strong><small>{server.transport} · {server.tools.length} discovered tools · Core artifact capture</small></span></label>) : <p>No enabled MCP profiles. Add one in Settings if this mission needs external tools.</p>}</fieldset>}
             <div className="resource-form-grid">
               <label>Duration (minutes)<input type="number" min={1} max={60} value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))} /></label>
               <label>Token limit<input type="number" min={1} max={200000} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} /></label>
@@ -383,9 +394,9 @@ export function NewMissionButton({ className = "button primary", children }: New
               {toolConfigurationAvailable && providerSupportsTools && automaticTools.length
                 ? <fieldset className="resource-checklist automatic-tool-list"><legend>Automatically enabled capabilities</legend>{assignedTools.filter((tool) => tool.available).map((tool) => <div key={tool.name}><ShieldCheck size={15} /><span><strong>{tool.name}</strong><small>{tool.riskClass.replaceAll("_", " ")}{tool.requiresApproval ? " · approval required" : ""}</small></span></div>)}</fieldset>
                 : <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>{toolPreparation === "unavailable" ? toolPreparationDetail : toolSelectionMessage}</p></div>}
-              {automaticTools.length > 0 && <div className="resource-form-grid"><label>Maximum tool calls<input type="number" min={1} max={100} value={maxToolCalls} onChange={(event) => setMaxToolCalls(Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
+              {(automaticTools.length > 0 || selectedMcpIds.length > 0 || runtimeKind === "harness") && <div className="resource-form-grid"><label>Maximum execution calls<input type="number" min={1} max={100} value={maxToolCalls} onChange={(event) => setMaxToolCalls(Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
             </section>
-            <p className="provider-dialog-note">{automaticTools.length ? "All available assigned capabilities are enabled automatically. Core enforces project scope, container isolation, budgets, evidence capture, and high-risk approvals." : "This task is analysis-only and receives no execution capabilities."}</p>
+            <p className="provider-dialog-note">{automaticTools.length || selectedMcpIds.length ? "Selected OCI and MCP capabilities share Core scope, separate execution/retrieval budgets, artifact capture, and high-risk approvals. Models receive receipts rather than raw action output." : "This task is analysis-only and receives no execution capabilities."}</p>
           </details>
           {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
           <footer><button className="button secondary" type="button" onClick={() => setOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || toolPreparation === "preparing" || toolVerificationBusy}>{toolPreparation === "preparing" ? "Preparing Toolbox…" : toolVerificationBusy ? "Checking model…" : saving ? "Starting…" : "Automate task"}</button></footer>

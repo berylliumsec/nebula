@@ -322,6 +322,25 @@ removes promoted evidence.
 Operator setup, installation locations, CLI/API examples, extension authoring,
 and release status are documented in the [Toolbox guide](TOOLBOX.md).
 
+All native chat, mission, Codex, and Claude action tools share the same
+artifact-first runtime. OCI stdout/stderr, generated files, optional parsed
+values, and MCP content blocks are stored as immutable content-addressed
+artifacts. Models receive only a compact `nebula.tool-result/v2` receipt and can
+inspect relevant evidence through bounded, redacted `tool_output.search` and
+`tool_output.read` excerpts. Gateway-only harnesses also receive bounded
+`workspace.search` and `workspace.read`; vendor shell and file-execution tools
+are disabled. Execution and artifact-retrieval calls use independent durable
+budgets.
+
+Selected MCP profiles are available to native and harness chat and missions.
+Their tool schemas, policy, and identity are frozen into durable session/run
+state. Codex and Claude connect only to Nebula's session-scoped STDIO MCP
+gateway; upstream servers are never passed directly to a vendor harness. Core
+retains credentials and approval, scope, privacy, idempotency, and evidence
+enforcement, captures every upstream result, namespaces duplicate tool names,
+and revokes gateway access when the session closes. Managed Codex configuration
+is per thread and does not alter global Codex settings.
+
 Executable tools are disabled unless all of these are present:
 
 1. A typed `ToolSpec` with closed JSON schemas and trusted target/path mappings.
@@ -377,7 +396,7 @@ The native desktop is the canonical user path. Scanner import, topology,
 comparison, full-desktop capture, multiple detached terminals, rich HTML notes,
 legacy Chroma command search, and always-on AI suggestions remain deliberately
 out of the initial parity release. PostgreSQL team authorization, OIDC/RBAC,
-remote workers, MCP/A2A, signed third-party plugins, and advanced specialist
+remote workers, A2A, signed third-party plugins, and advanced specialist
 environments remain separate projects.
 
 Nebula 2 remains a separately triggered legacy distribution. Its PyQt licensing

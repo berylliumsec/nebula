@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { AlertTriangle, CheckCircle2, Package, RefreshCw, Server, ShieldCheck, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Package, RefreshCw, Server, ShieldCheck, Trash2, Upload, Wand2 } from "lucide-react";
 import { ApiError } from "../api/client";
 import type { StreamState } from "../api/events";
 import { ToolPackEventStream, type ToolPackProgressEvent } from "../api/toolPackEvents";
@@ -7,6 +7,8 @@ import type {
   RunnerProfile,
   RunnerIsolation,
   RunnerRuntime,
+  CustomToolArgumentDefinition,
+  CustomToolBundle,
   ToolPackCatalogEntry,
   ToolPackInstallation,
   ToolSummary,
@@ -75,6 +77,23 @@ export function ToolPackSettings() {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const [localBundle, setLocalBundle] = useState<File>();
+  const [customBundle, setCustomBundle] = useState<CustomToolBundle>();
+  const [customPackName, setCustomPackName] = useState("");
+  const [customToolName, setCustomToolName] = useState("");
+  const [customDescription, setCustomDescription] = useState("");
+  const [customImage, setCustomImage] = useState("");
+  const [customExecutable, setCustomExecutable] = useState("");
+  const [customArguments, setCustomArguments] = useState("");
+  const [customRisk, setCustomRisk] = useState<ToolSummary["riskClass"]>("local_read");
+  const [customNetwork, setCustomNetwork] = useState(false);
+  const [customTargetArgument, setCustomTargetArgument] = useState("");
+  const [customPortArgument, setCustomPortArgument] = useState("");
+  const [customWorkspace, setCustomWorkspace] = useState<"none" | "read" | "workspace_write">("none");
+  const [customApproval, setCustomApproval] = useState(false);
+  const [customOutputFlag, setCustomOutputFlag] = useState("");
+  const [customOutputFilename, setCustomOutputFilename] = useState("result");
+  const [customCapturePaths, setCustomCapturePaths] = useState("");
+  const [customExpectedExitCode, setCustomExpectedExitCode] = useState(0);
   const [progressEvents, setProgressEvents] = useState<ToolPackProgressEvent[]>([]);
   const [progressStreamState, setProgressStreamState] = useState<StreamState>("closed");
   const progressCursor = useRef(0);
@@ -184,6 +203,76 @@ export function ToolPackSettings() {
     }
   };
 
+  const parseCustomArguments = (): CustomToolArgumentDefinition[] => customArguments
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, valueType, binding, ...smokeParts] = line.split(":");
+      if (!name || !valueType || !binding || !["string", "integer", "number", "boolean", "string_list", "integer_list"].includes(valueType)) {
+        throw new Error("Arguments use name:type:positional-or-flag[:smoke JSON], one per line.");
+      }
+      let smokeValue: unknown;
+      if (smokeParts.length) smokeValue = JSON.parse(smokeParts.join(":"));
+      return {
+        name,
+        valueType: valueType as CustomToolArgumentDefinition["valueType"],
+        required: true,
+        positional: binding === "positional",
+        ...(binding === "positional" ? {} : { flag: binding }),
+        ...(smokeParts.length ? { smokeValue } : {}),
+      };
+    });
+
+  const generateCustom = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!api) return;
+    setBusy("custom-generate"); setError(undefined); setCustomBundle(undefined);
+    try {
+      const arguments_ = parseCustomArguments();
+      const inferredPortArgument = arguments_.find((item) =>
+        ["port", "ports"].includes(item.name.toLowerCase())
+        && ["integer", "integer_list"].includes(item.valueType),
+      )?.name;
+      const generated = await api.generateCustomTool({
+        packName: customPackName,
+        toolName: customToolName,
+        description: customDescription,
+        image: customImage,
+        executable: customExecutable,
+        arguments: arguments_,
+        riskClass: customRisk,
+        networkAccess: customNetwork,
+        targetArgument: customTargetArgument || undefined,
+        portArgument: customPortArgument || inferredPortArgument,
+        filesystemAccess: customWorkspace,
+        requiresApproval: customApproval,
+        outputFlag: customOutputFlag || undefined,
+        outputFilename: customOutputFilename,
+        capturePaths: customCapturePaths.split("\n").map((path) => path.trim()).filter(Boolean),
+        expectedExitCode: customExpectedExitCode,
+      });
+      setCustomBundle(generated);
+    } catch (generateError) {
+      void logCaughtDiagnostic("interface.tooling_settings.caught_failure_04", "A handled interface operation failed.", generateError, "tooling_settings");
+      setError(generateError instanceof Error ? generateError.message : "Could not generate the custom tool.");
+    } finally { setBusy(undefined); }
+  };
+
+  const installGenerated = async () => {
+    if (!api || !readyRunner || !customBundle) return;
+    await action("custom-install", () => api.installLocalToolPack(customBundle.bundleBase64, readyRunner.id, true));
+  };
+
+  const saveGenerated = () => {
+    if (!customBundle) return;
+    const bytes = Uint8Array.from(atob(customBundle.bundleBase64), (character) => character.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+    const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = customBundle.filename; anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   const removePack = async (pack: ToolPackInstallation) => {
     if (!api || !await confirm({
       title: `Remove ${pack.name}?`,
@@ -228,7 +317,7 @@ export function ToolPackSettings() {
           {catalog.length ? <div className="tool-pack-list">{catalog.map((entry) => <article className="tool-pack-card catalog" key={entry.id}><header><div><strong>{entry.publisher}/{entry.name}</strong><small>Version {entry.version}</small></div>{entry.signed && <span className="signed-badge"><ShieldCheck size={12} /> Signed</span>}</header><p>{entry.description || entry.toolNames.join(", ")}</p><div className="scope-chip-list">{entry.permissions.map((permission) => <span key={permission}>{permission.replaceAll("_", " ")}</span>)}</div><footer><span>{entry.platforms.join(" · ") || "Platform manifest"}</span><button className="button primary" type="button" disabled={!readyRunner || installedDigests.has(entry.manifestDigest) || busy === entry.id || previewMode} onClick={() => install(entry)}>{installedDigests.has(entry.manifestDigest) ? "Installed" : busy === entry.id ? "Installing…" : "Install"}</button></footer></article>)}</div> : <div className="empty-state compact"><Package size={22} /><strong>{loading ? "Loading catalog…" : "Catalog unavailable"}</strong><p>An installed environment can still run by digest when the signed catalog cannot be reached.</p></div>}
         </div>
       </div>
-      <details className="developer-pack"><summary>Use a custom compatible environment</summary><div><p>Load a local Toolbox image. Nebula verifies its pinned digest and enables it automatically; access can be limited per engagement.</p><label>Environment bundle<input type="file" accept=".nebula-toolpack,.zip,application/zip" onChange={(event: ChangeEvent<HTMLInputElement>) => setLocalBundle(event.target.files?.[0])} /></label><button className="button secondary" type="button" disabled={!localBundle || !readyRunner || busy === "local"} onClick={() => void installLocal()}><Upload size={14} /> {busy === "local" ? "Installing…" : "Load local environment"}</button></div></details>
+      <details className="developer-pack"><summary>Use a custom compatible environment</summary><div><p>Add a digest-pinned OCI command without writing a JSON wrapper or parser. Nebula generates the strict schemas, bindings, smoke test, permission preview, and unsigned local bundle.</p><form className="runner-form panel" onSubmit={(event) => void generateCustom(event)}><label>Pack name<input required pattern="[a-z0-9][a-z0-9._-]*" value={customPackName} placeholder="local-nmap" onChange={(event) => setCustomPackName(event.target.value)} /></label><label>Tool name<input required pattern="[a-z][a-z0-9_.-]+" value={customToolName} placeholder="nmap.scan" onChange={(event) => setCustomToolName(event.target.value)} /></label><label>Description<input required value={customDescription} placeholder="Scan an approved target with Nmap" onChange={(event) => setCustomDescription(event.target.value)} /></label><label>Digest-pinned OCI image<input required value={customImage} pattern="[^\s@]+@sha256:[0-9a-f]{64}" placeholder="registry.example/nmap@sha256:…" spellCheck={false} onChange={(event) => setCustomImage(event.target.value)} /></label><label>Executable inside image<input required value={customExecutable} pattern="/.*" placeholder="/usr/bin/nmap" spellCheck={false} onChange={(event) => setCustomExecutable(event.target.value)} /></label><label>Typed arguments<textarea rows={4} value={customArguments} placeholder={'target:string:positional:"127.0.0.1"\nports:integer_list:-p:[80,443]'} onChange={(event) => setCustomArguments(event.target.value)} /><small>One per line: name:type:positional-or-flag[:smoke JSON]. Types: string, integer, number, boolean, string_list, integer_list.</small></label><label>Risk<select value={customRisk} onChange={(event) => setCustomRisk(event.target.value as ToolSummary["riskClass"])}><option value="local_read">Local read</option><option value="passive">Passive</option><option value="active_scan">Active scan</option><option value="workspace_write">Workspace write</option><option value="credential_use">Credential use</option><option value="exploitation">Exploitation</option><option value="destructive">Destructive</option></select></label><label>Workspace access<select value={customWorkspace} onChange={(event) => setCustomWorkspace(event.target.value as typeof customWorkspace)}><option value="none">None</option><option value="read">Read</option><option value="workspace_write">Write</option></select></label><label className="provider-consent"><input type="checkbox" checked={customNetwork} onChange={(event) => setCustomNetwork(event.target.checked)} /><span><strong>Network access</strong><small>Requires an approved target argument and scoped egress.</small></span></label>{customNetwork && <><label>Target argument<input required value={customTargetArgument} placeholder="target" onChange={(event) => setCustomTargetArgument(event.target.value)} /></label><label>Optional port argument<input value={customPortArgument} placeholder="ports" onChange={(event) => setCustomPortArgument(event.target.value)} /><small>Defaults to a typed integer argument named port or ports.</small></label></>}<label className="provider-consent"><input type="checkbox" checked={customApproval} onChange={(event) => setCustomApproval(event.target.checked)} /><span><strong>Require operator approval</strong><small>Mandatory for invasive risk classes.</small></span></label><label>Optional output flag<input value={customOutputFlag} placeholder="-oX" onChange={(event) => setCustomOutputFlag(event.target.value)} /></label>{customOutputFlag && <label>Output filename<input required value={customOutputFilename} onChange={(event) => setCustomOutputFilename(event.target.value)} /></label>}<label>Additional capture paths<textarea rows={2} value={customCapturePaths} placeholder={'reports/scan.xml\nreports/screenshots'} onChange={(event) => setCustomCapturePaths(event.target.value)} /><small>Optional fixed workspace-relative paths, one per line. Symlinks and traversal are rejected.</small></label><label>Expected smoke-test exit code<input type="number" min={0} max={255} value={customExpectedExitCode} onChange={(event) => setCustomExpectedExitCode(Number(event.target.value))} /></label><footer><span>Rootless OCI only · raw output becomes artifacts automatically.</span><button className="button primary" type="submit" disabled={busy === "custom-generate" || previewMode}><Wand2 size={14} /> {busy === "custom-generate" ? "Generating…" : "Generate and preview"}</button></footer></form>{customBundle && <article className="tool-pack-card"><header><div><strong>Permission preview</strong><code>{customBundle.manifestDigest.slice(0, 18)}…</code></div><span className="signed-badge"><AlertTriangle size={12} /> Unsigned local</span></header><pre>{JSON.stringify(customBundle.permissionPreview, null, 2)}</pre><footer><button className="button quiet" type="button" onClick={saveGenerated}><Download size={14} /> Save bundle</button><button className="button primary" type="button" disabled={!readyRunner || busy === "custom-install"} onClick={() => void installGenerated()}>{busy === "custom-install" ? "Verifying…" : "Verify and install"}</button></footer></article>}<hr /><p>Already have a generated bundle?</p><label>Environment bundle<input type="file" accept=".nebula-toolpack,.zip,application/zip" onChange={(event: ChangeEvent<HTMLInputElement>) => setLocalBundle(event.target.files?.[0])} /></label><button className="button secondary" type="button" disabled={!localBundle || !readyRunner || busy === "local"} onClick={() => void installLocal()}><Upload size={14} /> {busy === "local" ? "Installing…" : "Load local environment"}</button></div></details>
     </section>
   );
 }

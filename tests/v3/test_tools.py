@@ -210,6 +210,51 @@ def test_analysis_tool_result_is_persisted_and_idempotently_replayed(tmp_path):
     ]
 
 
+def test_historical_action_replay_returns_receipt_without_legacy_raw_output(tmp_path):
+    plugin = SandboxCommandTool(
+        ToolSpec(
+            name="legacy.scan",
+            description="Replay a pre-v2 completed action",
+            input_schema=OBJECT_SCHEMA,
+            output_schema=OBJECT_SCHEMA,
+            risk_class=RiskClass.LOCAL_READ,
+        ),
+        image="example.invalid/legacy@sha256:" + "a" * 64,
+        command_builder=lambda arguments: ["/usr/bin/legacy-scan"],
+    )
+    broker, store = _broker(tmp_path, plugin)
+    invocation = ToolInvocation(
+        engagement_id="eng-1",
+        run_id="run-legacy",
+        tool_name=plugin.spec.name,
+        workspace=tmp_path,
+        idempotency_key="completed-before-v2",
+    )
+    scope = ScopePolicy(engagement_id="eng-1")
+    prepared = asyncio.run(broker.prepare(invocation, scope))
+    store.update(
+        ToolCall,
+        prepared.call.id,
+        {
+            "status": ToolCallStatus.COMPLETE,
+            "result": {
+                "output": {"protocol": "nebula.toolbox/v1", "exit_code": 0},
+                "stdout": "legacy raw secret must not reach the model",
+                "stderr": "",
+                "exit_code": 0,
+            },
+        },
+        expected_revision=prepared.call.revision,
+    )
+
+    replay = asyncio.run(broker.execute(invocation, scope))
+
+    assert replay.receipt is not None
+    assert replay.output["schema"] == "nebula.tool-result/v2"
+    assert replay.output["incomplete"] is True
+    assert "legacy raw secret" not in str(replay.model_result())
+
+
 def test_parser_failure_still_records_raw_immutable_execution_evidence(tmp_path):
     plugin = SandboxCommandTool(
         ToolSpec(
@@ -249,16 +294,26 @@ def test_parser_failure_still_records_raw_immutable_execution_evidence(tmp_path)
         workspace=tmp_path,
     )
 
-    with pytest.raises(ToolBrokerError, match="output parsing failed"):
-        asyncio.run(broker.execute(invocation, ScopePolicy(engagement_id="eng-1")))
+    result = asyncio.run(broker.execute(invocation, ScopePolicy(engagement_id="eng-1")))
 
     [call] = store.list_entities(ToolCall, engagement_id="eng-1")
-    assert call.status == ToolCallStatus.FAILED
+    assert call.status == ToolCallStatus.COMPLETE
+    assert result.receipt is not None
+    assert result.receipt.status.value == "completed"
+    assert result.receipt.parser.state.value == "failed"
+    assert "ValueError" in result.receipt.warnings[0]
+    assert "malformed parser fixture" not in result.receipt.warnings[0]
     [evidence] = store.list_entities(Evidence, engagement_id="eng-1")
-    artifact = store.get(Artifact, evidence.artifact_id)
-    envelope = artifacts.path_for(artifact).read_text(encoding="utf-8")
-    assert '"stdout":"{}"' in envelope
-    assert "malformed parser fixture" in envelope
+    receipt_artifact = store.get(Artifact, evidence.artifact_id)
+    receipt = artifacts.path_for(receipt_artifact).read_text(encoding="utf-8")
+    assert '"schema":"nebula.tool-result/v2"' in receipt
+    assert '"stdout":"{}"' not in receipt
+    stdout_artifact = next(
+        item
+        for item in store.list_entities(Artifact, engagement_id="eng-1")
+        if item.metadata.get("kind") == "stdout"
+    )
+    assert artifacts.path_for(stdout_artifact).read_text(encoding="utf-8") == "{}"
 
 
 def test_active_tool_creates_durable_approval_and_resumes_after_decision(tmp_path):
@@ -308,7 +363,9 @@ def test_active_tool_creates_durable_approval_and_resumes_after_decision(tmp_pat
     )
     result = asyncio.run(broker.execute(invocation, scope, approval=approved))
 
-    assert result.output == {"open": [443]}
+    assert result.output["schema"] == "nebula.tool-result/v2"
+    assert result.receipt is not None
+    assert result.receipt.parser.state.value == "completed"
     assert len(result.evidence_ids) == 1
     assert plugin.calls == 1
     assert store.get(ToolCall, pending.tool_call_id).status == ToolCallStatus.COMPLETE
@@ -346,7 +403,8 @@ def test_in_scope_active_tool_runs_when_its_contract_does_not_require_approval(
 
     result = asyncio.run(broker.execute(invocation, scope))
 
-    assert result.output == {"open": [443]}
+    assert result.output["schema"] == "nebula.tool-result/v2"
+    assert result.receipt is not None
     assert plugin.calls == 1
     assert store.count(Approval) == 0
     assert [

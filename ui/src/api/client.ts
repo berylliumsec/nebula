@@ -74,9 +74,14 @@ import type {
   SetupStatus,
   EngagementToolAssignment,
   EngagementToolAssignmentUpdateRequest,
+  CustomToolBundle,
+  CustomToolDefinition,
   ToolPackCatalogEntry,
   ToolPackInstallation,
   ToolSummary,
+  ToolArtifactReference,
+  ToolOutputReadResult,
+  ToolOutputSearchResult,
   WorkspaceListing,
   WorkspacePreview,
   WorkspaceResetResult,
@@ -492,6 +497,19 @@ interface WireChatStreamEvent extends Partial<WireChatCompletion> {
   status?: string;
   summary?: string;
   evidence_ids?: string[];
+  result_artifact_id?: string | null;
+  artifacts?: Array<{
+    artifact_id: string;
+    kind: ToolArtifactReference["kind"];
+    filename?: string | null;
+    media_type: string;
+    byte_count: number;
+    observed_byte_count: number;
+    sha256: string;
+    searchable: boolean;
+    truncated: boolean;
+  }>;
+  receipt?: JsonObject;
   step?: number;
   approval?: JsonObject;
   approval_id?: string;
@@ -1819,6 +1837,7 @@ function chatRequestBody(body: ChatCompletionRequest, stream: boolean): JsonObje
     include_knowledge: body.includeKnowledge ?? true,
     allow_cloud_knowledge: body.allowCloudKnowledge ?? false,
     tools_enabled: body.toolsEnabled ?? false,
+    max_artifact_queries: body.maxArtifactQueries ?? 20,
     allow_cloud_tool_results: body.allowCloudToolResults ?? false,
     stream,
   };
@@ -2487,6 +2506,7 @@ export class ApiClient {
         max_retries: body.maxRetries,
         tool_names: body.toolNames ?? [],
         max_tool_calls: body.maxToolCalls ?? 0,
+        max_artifact_queries: body.maxArtifactQueries ?? 200,
         max_concurrency: body.maxConcurrency ?? 1,
         allow_cloud_tool_results: body.allowCloudToolResults === true,
       }),
@@ -2644,6 +2664,150 @@ export class ApiClient {
         developer_mode_confirmed: developerModeConfirmed,
       }),
     }).then(mapToolPackInstallation);
+  }
+
+  generateCustomTool(definition: CustomToolDefinition): Promise<CustomToolBundle> {
+    return this.request<{
+      filename: string;
+      bundle_base64: string;
+      manifest_digest: string;
+      permission_preview: Record<string, unknown>;
+    }>("tool-packs/generate", {
+      method: "POST",
+      body: JSON.stringify({
+        pack_name: definition.packName,
+        publisher: definition.publisher ?? "local",
+        tool_name: definition.toolName,
+        description: definition.description,
+        image: definition.image,
+        platform: definition.platform ?? "linux/amd64",
+        executable: definition.executable,
+        fixed_arguments: definition.fixedArguments ?? [],
+        arguments: (definition.arguments ?? []).map((argument) => ({
+          name: argument.name,
+          value_type: argument.valueType,
+          description: argument.description ?? "",
+          required: argument.required ?? true,
+          flag: argument.flag ?? null,
+          positional: argument.positional ?? false,
+          smoke_value: argument.smokeValue ?? null,
+        })),
+        risk_class: definition.riskClass ?? "local_read",
+        network_access: definition.networkAccess ?? false,
+        target_argument: definition.targetArgument ?? null,
+        port_argument: definition.portArgument ?? null,
+        filesystem_access: definition.filesystemAccess ?? "none",
+        requires_approval: definition.requiresApproval ?? false,
+        timeout_seconds: definition.timeoutSeconds ?? 300,
+        output_flag: definition.outputFlag ?? null,
+        output_filename: definition.outputFilename ?? "result",
+        capture_paths: definition.capturePaths ?? [],
+        expected_exit_code: definition.expectedExitCode ?? 0,
+      }),
+    }).then((value) => ({
+      filename: value.filename,
+      bundleBase64: value.bundle_base64,
+      manifestDigest: value.manifest_digest,
+      permissionPreview: value.permission_preview,
+    }));
+  }
+
+  listToolCallArtifacts(toolCallId: string): Promise<ToolArtifactReference[]> {
+    return this.request<Array<{
+      id: string;
+      sha256: string;
+      size: number;
+      filename?: string | null;
+      media_type: string;
+      metadata?: JsonObject;
+    }>>(`tool-calls/${encodeURIComponent(toolCallId)}/artifacts`).then((artifacts) =>
+      artifacts.map((artifact) => {
+        const metadata = artifact.metadata ?? {};
+        return {
+          artifactId: artifact.id,
+          kind: String(metadata.kind ?? "generated_file") as ToolArtifactReference["kind"],
+          filename: artifact.filename ?? undefined,
+          mediaType: artifact.media_type,
+          byteCount: artifact.size,
+          observedByteCount: typeof metadata.observed_byte_count === "number" ? metadata.observed_byte_count : artifact.size,
+          sha256: artifact.sha256,
+          searchable: metadata.searchable === true,
+          truncated: metadata.truncated === true,
+        };
+      }),
+    );
+  }
+
+  searchToolOutput(
+    toolCallId: string,
+    query: string,
+    options: { mode?: "literal" | "regex"; caseSensitive?: boolean; contextLines?: number; matchLimit?: number; cursor?: string } = {},
+  ): Promise<ToolOutputSearchResult> {
+    return this.request<{
+      matches: Array<{ artifact_id: string; filename?: string | null; line: number; context: Array<{ line: number; text: string; line_truncated?: boolean }> }>;
+      skipped?: Array<{ artifact_id: string; reason: string }>;
+      truncated: boolean;
+      continuation_cursor?: string | null;
+    }>(`tool-calls/${encodeURIComponent(toolCallId)}/output/search`, {
+      method: "POST",
+      body: JSON.stringify({
+        query,
+        mode: options.mode ?? "literal",
+        case_sensitive: options.caseSensitive ?? false,
+        context_lines: options.contextLines ?? 1,
+        match_limit: options.matchLimit ?? 20,
+        cursor: options.cursor ?? null,
+      }),
+    }).then((value) => ({
+      matches: value.matches.map((match) => ({
+        artifactId: match.artifact_id,
+        filename: match.filename ?? undefined,
+        line: match.line,
+        context: match.context.map((line) => ({ line: line.line, text: line.text, lineTruncated: line.line_truncated })),
+      })),
+      skipped: (value.skipped ?? []).map((item) => ({ artifactId: item.artifact_id, reason: item.reason })),
+      truncated: value.truncated,
+      continuationCursor: value.continuation_cursor ?? undefined,
+    }));
+  }
+
+  readToolOutput(artifactId: string, startingLine = 1, lineCount = 100): Promise<ToolOutputReadResult> {
+    return this.request<{
+      artifact_id: string;
+      filename?: string | null;
+      searchable?: boolean;
+      lines?: Array<{ line: number; text: string; line_truncated?: boolean }>;
+      truncated?: boolean;
+      continuation?: { starting_line?: number } | null;
+    }>(`artifacts/${encodeURIComponent(artifactId)}/output/read`, {
+      method: "POST",
+      body: JSON.stringify({ starting_line: startingLine, line_count: lineCount }),
+    }).then((value) => ({
+      artifactId: value.artifact_id,
+      filename: value.filename ?? undefined,
+      searchable: value.searchable ?? false,
+      lines: (value.lines ?? []).map((line) => ({ line: line.line, text: line.text, lineTruncated: line.line_truncated })),
+      truncated: value.truncated ?? false,
+      continuationStartingLine: value.continuation?.starting_line,
+    }));
+  }
+
+  async downloadToolArtifact(artifactId: string): Promise<{ blob: Blob; filename?: string }> {
+    const headers = new Headers({
+      Accept: "application/octet-stream",
+      "X-Nebula-Sensitive-Data-Acknowledged": "true",
+      "X-Nebula-Operation-ID": newOperationId(),
+    });
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await this.fetchImpl(`${this.baseUrl}/artifacts/${encodeURIComponent(artifactId)}/content`, {
+      headers,
+      credentials: "same-origin",
+    });
+    if (!response.ok) throw await responseError(response);
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const filename = /filename="?([^";]+)"?/i.exec(disposition)?.[1];
+    return { blob: await response.blob(), filename };
   }
 
   verifyToolPack(id: string): Promise<ToolPackInstallation> {
@@ -3857,14 +4021,31 @@ export class ApiClient {
         const turnId = wire.turn_id ?? wire.harness_turn_id;
         const capability = wire.capability ?? wire.tool_name;
         if (!turnId || !wire.tool_call_id || !capability) return;
+        const payloadArtifacts = Array.isArray(wire.payload?.artifacts)
+          ? wire.payload.artifacts as WireChatStreamEvent["artifacts"]
+          : [];
+        const artifacts = wire.artifacts ?? payloadArtifacts ?? [];
         onEvent({
           type: "tool_completed",
           turnId,
           toolCallId: wire.tool_call_id,
           capability,
-          status: wire.status ?? "complete",
-          summary: wire.summary ?? "Capability completed",
+          status: wire.status ?? (typeof wire.payload?.status === "string" ? wire.payload.status : "complete"),
+          summary: wire.summary ?? (typeof wire.payload?.summary === "string" ? wire.payload.summary : "Capability completed"),
           evidenceIds: wire.evidence_ids ?? [],
+          resultArtifactId: wire.result_artifact_id ?? (typeof wire.payload?.result_artifact_id === "string" ? wire.payload.result_artifact_id : undefined),
+          receipt: wire.receipt ?? (wire.payload?.receipt && typeof wire.payload.receipt === "object" && !Array.isArray(wire.payload.receipt) ? wire.payload.receipt as Record<string, unknown> : undefined),
+          artifacts: artifacts.map((artifact) => ({
+            artifactId: artifact.artifact_id,
+            kind: artifact.kind,
+            filename: artifact.filename ?? undefined,
+            mediaType: artifact.media_type,
+            byteCount: artifact.byte_count,
+            observedByteCount: artifact.observed_byte_count,
+            sha256: artifact.sha256,
+            searchable: artifact.searchable,
+            truncated: artifact.truncated,
+          })),
           step: wire.step ?? 0,
         });
         return;

@@ -246,6 +246,18 @@ from .terminal_history import (
     TerminalRecordingToolsUpdate,
 )
 from .tool_platform import ToolPlatform, ToolPlatformError
+from .toolpack_sdk import (
+    CustomToolDefinition,
+    generate_custom_tool_project,
+    pack_tool_pack,
+    custom_tool_manifest,
+)
+from .toolpacks import manifest_digest
+from .tool_results import (
+    ToolOutputAccessError,
+    ToolOutputQueryError,
+    ToolOutputService,
+)
 from .version import __version__, build_metadata
 from .workspace import (
     WorkspaceListing,
@@ -402,6 +414,20 @@ class ApprovalDecisionRequest(NebulaModel):
     edited_arguments: dict[str, Any] | None = None
 
 
+class ToolOutputSearchRequest(NebulaModel):
+    query: str = Field(min_length=1, max_length=512)
+    mode: str = Field(default="literal", pattern=r"^(literal|regex)$")
+    case_sensitive: bool = False
+    context_lines: int = Field(default=0, ge=0, le=5)
+    match_limit: int = Field(default=20, ge=1, le=100)
+    cursor: str | None = Field(default=None, max_length=4096)
+
+
+class ToolOutputReadRequest(NebulaModel):
+    starting_line: int = Field(default=1, ge=1)
+    line_count: int = Field(default=100, ge=1, le=200)
+
+
 class KnowledgeIngestRequest(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
     filename: str = Field(min_length=1, max_length=1024)
@@ -429,6 +455,7 @@ class MissionStartRequest(NebulaModel):
     max_retries: int = Field(default=1, ge=0, le=MAX_API_MISSION_RETRIES)
     tool_names: list[str] = Field(default_factory=list, max_length=64)
     max_tool_calls: int = Field(default=0, ge=0, le=100)
+    max_artifact_queries: int = Field(default=200, ge=0, le=1000)
     max_concurrency: int = Field(default=1, ge=1, le=2)
     allow_cloud_tool_results: bool = False
 
@@ -437,17 +464,9 @@ class MissionStartRequest(NebulaModel):
         if self.backend == RunBackend.NATIVE:
             if not self.provider_id or not self.model:
                 raise ValueError("native missions require provider_id and model")
-            if (
-                self.harness_profile_id
-                or self.harness_session_id
-                or self.mcp_server_ids
-            ):
+            if self.harness_profile_id or self.harness_session_id:
                 raise ValueError(
                     "native missions cannot include harness runtime fields"
-                )
-            if self.allow_cloud_tool_results:
-                raise ValueError(
-                    "native missions use their existing tool-result policy"
                 )
         elif not self.harness_profile_id or self.provider_id:
             raise ValueError(
@@ -472,6 +491,7 @@ class HarnessMissionHandoffRequest(NebulaModel):
     max_tokens: int = Field(default=32_000, ge=1, le=MAX_API_MISSION_TOKENS)
     max_cost_usd: float | None = Field(default=None, ge=0, le=MAX_API_MISSION_COST_USD)
     max_tool_calls: int = Field(default=100, ge=0, le=100)
+    max_artifact_queries: int = Field(default=200, ge=0, le=1000)
     allow_cloud_tool_results: bool = False
 
 
@@ -527,6 +547,13 @@ class LocalToolPackInstallRequest(NebulaModel):
     bundle_base64: str = Field(min_length=1, max_length=24_000_000)
     runtime_profile_id: str = Field(min_length=1, max_length=200)
     developer_mode_confirmed: bool = False
+
+
+class CustomToolBundleResponse(NebulaModel):
+    filename: str
+    bundle_base64: str
+    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    permission_preview: dict[str, Any]
 
 
 class MissionStopRequest(NebulaModel):
@@ -786,14 +813,20 @@ def create_app(
         store,
         credential_store=credentials,
         workspace_resolver=harness_workspace,
+        artifact_store=artifact_store,
+        tool_platform=tool_platform,
     )
     if harness_runtime.store is not store:
         raise ValueError("harness_runtime_service must use the API store")
+    if tool_platform is not None:
+        harness_runtime.bind_tool_platform(tool_platform)
     mcp_probes = McpProbeService(
         store,
         credential_store=credentials,
         workspace_resolver=harness_workspace,
     )
+    if tool_platform is not None:
+        tool_platform.bind_mcp_service(mcp_probes)
 
     def provider_factory(profile: ProviderProfile):
         try:
@@ -4151,6 +4184,36 @@ def create_app(
         )
 
     @app.post(
+        f"{API_PREFIX}/tool-packs/generate",
+        response_model=CustomToolBundleResponse,
+        status_code=201,
+        tags=["tool-packs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def generate_custom_tool_pack(
+        request: CustomToolDefinition,
+    ) -> CustomToolBundleResponse:
+        """Generate, validate, and archive a parser-free unsigned local pack."""
+
+        def generate() -> tuple[bytes, str]:
+            with tempfile.TemporaryDirectory(prefix="nebula-custom-tool-") as root:
+                source = Path(root) / "source"
+                destination = Path(root) / f"{request.pack_name}.nebula-toolpack"
+                generate_custom_tool_project(source, request)
+                pack_tool_pack(source, destination)
+                return destination.read_bytes(), manifest_digest(
+                    custom_tool_manifest(request)
+                )
+
+        bundle, digest = await asyncio.to_thread(generate)
+        return CustomToolBundleResponse(
+            filename=f"{request.pack_name}.nebula-toolpack",
+            bundle_base64=base64.b64encode(bundle).decode("ascii"),
+            manifest_digest=digest,
+            permission_preview=request.permission_preview(),
+        )
+
+    @app.post(
         f"{API_PREFIX}/tool-packs/install-local",
         response_model=ToolPackInstallation,
         status_code=201,
@@ -4502,11 +4565,14 @@ def create_app(
         operator_id = active_operator_id()
         budget = RunBudget(
             max_concurrency=request.max_concurrency,
-            max_delegation_depth=1 if request.tool_names else 0,
+            max_delegation_depth=(
+                1 if request.tool_names or request.mcp_server_ids else 0
+            ),
             max_duration_seconds=request.max_duration_seconds,
             max_tokens=request.max_tokens,
             max_cost_usd=request.max_cost_usd,
             max_tool_calls=request.max_tool_calls,
+            max_artifact_queries=request.max_artifact_queries,
             max_retries=request.max_retries,
             per_target_active_operations=1,
         )
@@ -4529,6 +4595,8 @@ def create_app(
             model=request.model or "",
             budget=budget,
             tool_names=request.tool_names,
+            mcp_server_ids=request.mcp_server_ids,
+            allow_cloud_tool_results=request.allow_cloud_tool_results,
             actor_id=operator_id,
         )
 
@@ -4609,6 +4677,7 @@ def create_app(
                 max_tokens=request.max_tokens,
                 max_cost_usd=request.max_cost_usd,
                 max_tool_calls=request.max_tool_calls,
+                max_artifact_queries=request.max_artifact_queries,
                 max_retries=0,
                 per_target_active_operations=1,
             ),
@@ -4985,6 +5054,7 @@ def create_app(
                 runtime_context=runtime_context,
                 citations=citations,
                 allow_remote_mcp=request.allow_cloud_tool_results,
+                max_artifact_queries=request.max_artifact_queries,
             )
 
             async def harness_events() -> Any:
@@ -5767,12 +5837,96 @@ def create_app(
     if artifact_store is not None:
 
         @app.get(
+            f"{API_PREFIX}/tool-calls/{{tool_call_id}}/artifacts",
+            response_model=list[Artifact],
+            tags=["artifacts"],
+            dependencies=[Depends(require_auth)],
+        )
+        async def tool_call_artifacts(tool_call_id: str) -> list[Artifact]:
+            call = store.get(ToolCall, tool_call_id)
+            return sorted(
+                [
+                    item
+                    for item in store.list_entities(
+                        Artifact, engagement_id=call.engagement_id, limit=1_000
+                    )
+                    if item.metadata.get("tool_call_id") == call.id
+                ],
+                key=lambda item: (item.created_at, item.id),
+            )
+
+        @app.post(
+            f"{API_PREFIX}/tool-calls/{{tool_call_id}}/output/search",
+            tags=["artifacts"],
+            dependencies=[Depends(require_auth)],
+        )
+        async def search_tool_call_output(
+            tool_call_id: str, request: ToolOutputSearchRequest
+        ) -> dict[str, Any]:
+            call = store.get(ToolCall, tool_call_id)
+            try:
+                return await asyncio.to_thread(
+                    ToolOutputService(store, artifact_store).search,
+                    engagement_id=call.engagement_id,
+                    owner_id=call.run_id,
+                    tool_call_id=call.id,
+                    **request.model_dump(),
+                )
+            except ToolOutputQueryError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except ToolOutputAccessError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        @app.post(
+            f"{API_PREFIX}/artifacts/{{artifact_id}}/output/read",
+            tags=["artifacts"],
+            dependencies=[Depends(require_auth)],
+        )
+        async def read_tool_output_artifact(
+            artifact_id: str, request: ToolOutputReadRequest
+        ) -> dict[str, Any]:
+            artifact = store.get(Artifact, artifact_id)
+            call_id = artifact.metadata.get("tool_call_id")
+            if not isinstance(call_id, str):
+                raise HTTPException(status_code=404, detail="artifact is unavailable")
+            call = store.get(ToolCall, call_id)
+            try:
+                return await asyncio.to_thread(
+                    ToolOutputService(store, artifact_store).read,
+                    engagement_id=call.engagement_id,
+                    owner_id=call.run_id,
+                    artifact_id=artifact.id,
+                    **request.model_dump(),
+                )
+            except ToolOutputQueryError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except ToolOutputAccessError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        @app.get(
             f"{API_PREFIX}/artifacts/{{artifact_id}}/content",
             tags=["artifacts"],
             dependencies=[Depends(require_auth)],
         )
-        async def artifact_content(artifact_id: str) -> FileResponse:
+        async def artifact_content(
+            artifact_id: str,
+            sensitive_data_acknowledged: str | None = Header(
+                default=None,
+                alias="X-Nebula-Sensitive-Data-Acknowledged",
+            ),
+        ) -> FileResponse:
             artifact = store.get(Artifact, artifact_id)
+            if (
+                isinstance(artifact.metadata.get("tool_call_id"), str)
+                and (sensitive_data_acknowledged or "").lower() != "true"
+            ):
+                raise HTTPException(
+                    status_code=428,
+                    detail=(
+                        "raw tool artifact download requires explicit sensitive-data "
+                        "acknowledgement"
+                    ),
+                )
             path = artifact_store.path_for(artifact)
             if not path.is_file():
                 raise NotFoundError(f"artifact content not found: {artifact_id}")
@@ -5788,6 +5942,11 @@ def create_app(
                     "Cache-Control": "private, no-store",
                     "Content-Security-Policy": "sandbox; default-src 'none'",
                     "X-Content-Type-Options": "nosniff",
+                    "X-Nebula-Artifact-SHA256": artifact.sha256,
+                    "X-Nebula-Artifact-Bytes": str(artifact.size),
+                    "X-Nebula-Artifact-Truncated": str(
+                        bool(artifact.metadata.get("truncated"))
+                    ).lower(),
                 },
             )
 

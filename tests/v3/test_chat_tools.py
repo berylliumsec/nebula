@@ -325,7 +325,7 @@ def test_oversized_tool_results_remain_bounded_valid_json():
     assert decoded["preview"].startswith('{"data": "')
 
 
-def test_provider_tool_history_rehydrates_json_objects_and_preserves_legacy_text():
+def test_provider_tool_history_preserves_only_explicit_trusted_results():
     turn = SimpleNamespace(
         tool_history=[
             {
@@ -333,6 +333,7 @@ def test_provider_tool_history_rehydrates_json_objects_and_preserves_legacy_text
                 "name": "parse.scan",
                 "arguments": {},
                 "provider_result": '{"count": 2}',
+                "trusted_result": True,
                 "status": "complete",
             },
             {
@@ -349,7 +350,9 @@ def test_provider_tool_history_rehydrates_json_objects_and_preserves_legacy_text
 
     assert history[0].output == {"count": 2}
     assert history[0].is_error is False
-    assert history[1].output == "legacy non-JSON output"
+    assert history[1].output["schema"] == "nebula.tool-result/v2"
+    assert history[1].output["incomplete"] is True
+    assert "legacy non-JSON output" not in json.dumps(history[1].output)
     assert history[1].is_error is True
 
 

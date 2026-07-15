@@ -1233,14 +1233,14 @@ describe("Nebula workspace", () => {
     expect(within(dialog).getByText("Advanced")).toBeVisible();
     expect(within(dialog).getByLabelText("Provider")).not.toBeVisible();
     await user.click(within(dialog).getByText("Advanced"));
-    expect(within(dialog).getByText(/core enforces project scope/i)).toBeVisible();
+    expect(within(dialog).getByText(/share core scope/i)).toBeVisible();
     await user.click(within(dialog).getByRole("button", { name: "Automate task" }));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Enter a mission objective.");
     expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/missions") && request?.method === "POST")).toBe(false);
     await user.type(within(dialog).getByRole("textbox", { name: "Objective" }), "Scan the assigned target");
     expect(within(dialog).getByText("environment.run_network")).toBeVisible();
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("spinbutton", { name: "Maximum tool calls" })).toHaveValue(50);
+    expect(within(dialog).getByRole("spinbutton", { name: "Maximum execution calls" })).toHaveValue(50);
     expect(within(dialog).getByRole("spinbutton", { name: "Maximum concurrency" })).toHaveValue(2);
     await user.click(within(dialog).getByRole("button", { name: "Close automation dialog" }));
     await user.click(screen.getByRole("button", { name: "Automate task" }));

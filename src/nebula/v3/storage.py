@@ -339,10 +339,18 @@ class NebulaStore:
                     updated_at=existing["updated_at"],
                 )
                 return _row_to_entity(row, ToolCall)
+            artifact_query = call.metadata.get("budget_class") == "artifact_query"
+            budget_field = (
+                "max_artifact_queries" if artifact_query else "max_tool_calls"
+            )
             maximum = (
-                int(run["payload"].get("max_tool_calls", 0))
+                int(run["payload"].get(budget_field, 20 if artifact_query else 0))
                 if call.origin == ToolCallOrigin.CHAT
-                else int(run["payload"].get("budget", {}).get("max_tool_calls", 0))
+                else int(
+                    run["payload"]
+                    .get("budget", {})
+                    .get(budget_field, 200 if artifact_query else 0)
+                )
             )
             counter = (
                 connection.execute(
@@ -353,22 +361,25 @@ class NebulaStore:
                 .mappings()
                 .first()
             )
-            current = int(counter["tool_calls"]) if counter else 0
+            counter_field = "artifact_queries" if artifact_query else "tool_calls"
+            current = int(counter[counter_field]) if counter else 0
             if current >= maximum:
                 raise RunBudgetExceededError(
-                    f"run {call.run_id} exhausted its tool-call budget ({maximum})"
+                    f"run {call.run_id} exhausted its "
+                    f"{'artifact-query' if artifact_query else 'tool-call'} budget ({maximum})"
                 )
             if counter:
                 connection.execute(
                     update(RunBudgetCounterRow)
                     .where(RunBudgetCounterRow.run_id == call.run_id)
-                    .values(tool_calls=current + 1, updated_at=utc_now())
+                    .values(**{counter_field: current + 1, "updated_at": utc_now()})
                 )
             else:
                 connection.execute(
                     insert(RunBudgetCounterRow).values(
                         run_id=call.run_id,
-                        tool_calls=1,
+                        tool_calls=0 if artifact_query else 1,
+                        artifact_queries=1 if artifact_query else 0,
                         input_tokens=0,
                         output_tokens=0,
                         cost_microusd=0,

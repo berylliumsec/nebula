@@ -9,15 +9,19 @@ import re
 import stat
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .domain import RiskClass
 from .toolpacks import (
-    ToolPackManifestV1,
+    ToolPackManifest,
     ToolPackValidationError,
     canonical_manifest_json,
     compile_manifest_yaml,
     manifest_digest,
+    parse_manifest_json,
 )
 
 
@@ -33,9 +37,321 @@ class ToolPackSDKError(RuntimeError):
 class ToolPackArchive(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    manifest: ToolPackManifestV1
+    manifest: ToolPackManifest
     manifest_digest: str
     files: dict[str, bytes]
+
+
+class CustomToolArgument(BaseModel):
+    """One typed declarative argv binding used by CLI and UI generation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
+    value_type: Literal[
+        "string", "integer", "number", "boolean", "string_list", "integer_list"
+    ]
+    description: str = Field(default="", max_length=500)
+    required: bool = True
+    flag: str | None = Field(default=None, max_length=200)
+    positional: bool = False
+    smoke_value: Any = None
+
+    @model_validator(mode="after")
+    def binding_is_unambiguous(self) -> "CustomToolArgument":
+        if self.positional == (self.flag is not None):
+            raise ValueError("arguments require exactly one of flag or positional=true")
+        if self.flag is not None and (
+            not self.flag.startswith("-") or "\x00" in self.flag
+        ):
+            raise ValueError("argument flags must be fixed option tokens")
+        return self
+
+
+class CustomToolDefinition(BaseModel):
+    """Configuration-only contract for a parser-free custom OCI tool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pack_name: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$")
+    publisher: str = Field(default="local", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    tool_name: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,127}$")
+    description: str = Field(min_length=1, max_length=2_000)
+    image: str = Field(pattern=r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+    platform: Literal["linux/amd64", "linux/arm64"] = "linux/amd64"
+    executable: str = Field(pattern=r"^/[^\x00]+$")
+    fixed_arguments: list[str] = Field(default_factory=list, max_length=64)
+    arguments: list[CustomToolArgument] = Field(default_factory=list, max_length=64)
+    risk_class: RiskClass = RiskClass.LOCAL_READ
+    network_access: bool = False
+    target_argument: str | None = None
+    port_argument: str | None = None
+    filesystem_access: Literal["none", "read", "workspace_write"] = "none"
+    requires_approval: bool = False
+    timeout_seconds: int = Field(default=300, ge=1, le=86_400)
+    output_flag: str | None = Field(default=None, max_length=200)
+    output_filename: str = Field(default="result", pattern=r"^[A-Za-z0-9._-]{1,200}$")
+    capture_paths: list[str] = Field(default_factory=list, max_length=32)
+    expected_exit_code: int = Field(default=0, ge=0, le=255)
+
+    @field_validator("fixed_arguments")
+    @classmethod
+    def fixed_arguments_are_literal(cls, values: list[str]) -> list[str]:
+        if any("\x00" in value for value in values):
+            raise ValueError("fixed arguments cannot contain NUL bytes")
+        return values
+
+    @model_validator(mode="after")
+    def policy_and_arguments_are_coherent(self) -> "CustomToolDefinition":
+        names = [item.name for item in self.arguments]
+        if len(names) != len(set(names)):
+            raise ValueError("custom tool argument names must be unique")
+        if self.network_access and not self.target_argument:
+            raise ValueError("network tools require target_argument")
+        for mapped in (self.target_argument, self.port_argument):
+            if mapped is not None and mapped not in names:
+                raise ValueError(f"mapped argument {mapped!r} is not declared")
+        if self.target_argument is not None:
+            target = next(
+                item for item in self.arguments if item.name == self.target_argument
+            )
+            if not target.required or target.value_type != "string":
+                raise ValueError("target_argument must be a required string")
+        if self.port_argument is not None:
+            port = next(
+                item for item in self.arguments if item.name == self.port_argument
+            )
+            if port.value_type not in {"integer", "integer_list"}:
+                raise ValueError("port_argument must be an integer or integer list")
+        if self.output_flag is not None and not self.output_flag.startswith("-"):
+            raise ValueError("output_flag must be a fixed option token")
+        if (
+            self.risk_class
+            in {
+                RiskClass.CREDENTIAL_USE,
+                RiskClass.EXPLOITATION,
+                RiskClass.PERSISTENCE,
+                RiskClass.DESTRUCTIVE,
+            }
+            and not self.requires_approval
+        ):
+            raise ValueError("invasive custom tools require approval")
+        return self
+
+    def permission_preview(self) -> dict[str, Any]:
+        return {
+            "network": self.network_access,
+            "workspace": self.filesystem_access,
+            "risk_class": self.risk_class.value,
+            "requires_approval": self.requires_approval,
+            "capture_paths": list(self.capture_paths),
+            "rootless_oci_only": True,
+            "parser": "not_configured",
+        }
+
+
+def _argument_schema(argument: CustomToolArgument) -> dict[str, Any]:
+    schema: dict[str, Any]
+    if argument.value_type == "string":
+        schema = {"type": "string", "maxLength": 8_192}
+    elif argument.value_type == "integer":
+        schema = {"type": "integer"}
+    elif argument.value_type == "number":
+        schema = {"type": "number"}
+    elif argument.value_type == "boolean":
+        schema = {"type": "boolean"}
+    elif argument.value_type == "string_list":
+        schema = {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 8_192},
+            "maxItems": 256,
+        }
+    else:
+        schema = {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 1, "maximum": 65_535},
+            "maxItems": 256,
+        }
+    if argument.description:
+        schema["description"] = argument.description
+    return schema
+
+
+def _smoke_value(argument: CustomToolArgument) -> Any:
+    if argument.smoke_value is not None:
+        return argument.smoke_value
+    return {
+        "string": "127.0.0.1" if "target" in argument.name else "smoke-test",
+        "integer": 80 if "port" in argument.name else 1,
+        "number": 1.0,
+        "boolean": False,
+        "string_list": ["smoke-test"],
+        "integer_list": [80],
+    }[argument.value_type]
+
+
+def custom_tool_manifest(definition: CustomToolDefinition) -> ToolPackManifest:
+    """Build and validate the exact v2 manifest shared by every authoring surface."""
+
+    properties = {
+        argument.name: _argument_schema(argument) for argument in definition.arguments
+    }
+    if definition.port_argument is not None:
+        port_schema = properties[definition.port_argument]
+        if port_schema.get("type") == "integer":
+            port_schema.update(minimum=1, maximum=65_535)
+    required = [argument.name for argument in definition.arguments if argument.required]
+    bindings = []
+    for argument in definition.arguments:
+        if argument.positional:
+            kind = "positional"
+        elif argument.value_type == "boolean":
+            kind = "boolean_flag"
+        elif argument.value_type in {"string_list", "integer_list"}:
+            kind = "repeat"
+        else:
+            kind = "value"
+        bindings.append(
+            {
+                "argument": argument.name,
+                "kind": kind,
+                **({"flag": argument.flag} if argument.flag is not None else {}),
+            }
+        )
+    fixed_arguments = list(definition.fixed_arguments)
+    if definition.output_flag is not None:
+        fixed_arguments.extend(
+            [definition.output_flag, f"{{output_dir}}/{definition.output_filename}"]
+        )
+    smoke_arguments = {
+        argument.name: _smoke_value(argument)
+        for argument in definition.arguments
+        if argument.required or argument.smoke_value is not None
+    }
+    payload = {
+        "api_version": "tools.nebula.security/v2",
+        "kind": "ToolPack",
+        "metadata": {
+            "publisher": definition.publisher,
+            "name": definition.pack_name,
+            "version": "0.1.0",
+            "minimum_nebula_version": "3.0.0a1",
+            "description": definition.description,
+            "licenses": ["LicenseRef-Proprietary"],
+        },
+        "images": [
+            {
+                "name": "tool",
+                "platform": definition.platform,
+                "image": definition.image,
+                "sbom": "sbom/tool.cdx.json",
+                "provenance": "provenance/tool.intoto.jsonl",
+            }
+        ],
+        "permissions": {
+            "network": definition.network_access,
+            "workspace": definition.filesystem_access,
+            "credentials": [],
+        },
+        "tools": [
+            {
+                "name": definition.tool_name,
+                "description": definition.description,
+                "image": "tool",
+                "executable": definition.executable,
+                "fixed_arguments": fixed_arguments,
+                "argument_bindings": bindings,
+                "input_schema": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                    "additionalProperties": False,
+                },
+                "policy": {
+                    "risk_class": definition.risk_class.value,
+                    "target_argument": definition.target_argument,
+                    "port_argument": definition.port_argument,
+                    "network_access": definition.network_access,
+                    "filesystem_access": definition.filesystem_access,
+                    "requires_approval": definition.requires_approval,
+                },
+                "capture_paths": definition.capture_paths,
+                "timeout_seconds": definition.timeout_seconds,
+                "smoke_tests": [
+                    {
+                        "arguments": smoke_arguments,
+                        "expected_exit_code": definition.expected_exit_code,
+                        "timeout_seconds": min(definition.timeout_seconds, 300),
+                    }
+                ],
+            }
+        ],
+    }
+    return compile_manifest_yaml(yaml.safe_dump(payload, sort_keys=False))
+
+
+def generate_custom_tool_project(
+    directory: Path, definition: CustomToolDefinition
+) -> Path:
+    """Generate a complete unsigned local source bundle without host execution."""
+
+    root = directory.expanduser().resolve()
+    if root.exists() and any(root.iterdir()):
+        raise ToolPackSDKError("custom-tool destination must be empty")
+    root.mkdir(parents=True, exist_ok=True)
+    for relative in ("schemas", "tests", "sbom", "provenance"):
+        (root / relative).mkdir(parents=True, exist_ok=True)
+    manifest = custom_tool_manifest(definition)
+    source = yaml.safe_dump(
+        manifest.model_dump(mode="json", by_alias=True, exclude_none=True),
+        sort_keys=False,
+    )
+    files = {
+        "nebula-tool-pack.yaml": source,
+        "schemas/input.json": json.dumps(
+            manifest.tools[0].input_schema, indent=2, sort_keys=True
+        )
+        + "\n",
+        "tests/smoke.json": json.dumps(
+            manifest.tools[0].smoke_tests[0].model_dump(mode="json"),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        "tests/policy-cases.yaml": "cases: []\n",
+        "sbom/tool.cdx.json": json.dumps(
+            {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.5",
+                "version": 1,
+                "metadata": {
+                    "component": {"type": "container", "name": definition.image}
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        "provenance/tool.intoto.jsonl": json.dumps(
+            {
+                "_type": "https://in-toto.io/Statement/v1",
+                "subject": [{"name": definition.image}],
+                "predicateType": "https://slsa.dev/provenance/v1",
+                "predicate": {"buildDefinition": {}, "runDetails": {}},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        "README.md": (
+            f"# {definition.pack_name}\n\nGenerated parser-free custom tool "
+            f"`{definition.tool_name}`. Raw stdout/stderr and files under "
+            "`NEBULA_OUTPUT_DIR` become immutable artifacts.\n"
+        ),
+    }
+    for relative, content in files.items():
+        (root / relative).write_text(content, encoding="utf-8", newline="\n")
+    validate_tool_pack_directory(root, allow_digest_placeholders=False)
+    return root
 
 
 def init_tool_pack(directory: Path, *, name: str, publisher: str) -> Path:
@@ -68,7 +384,7 @@ def init_tool_pack(directory: Path, *, name: str, publisher: str) -> Path:
 
 
 def _manifest_template(name: str, publisher: str) -> str:
-    return f"""api_version: tools.nebula.security/v1
+    return f"""api_version: tools.nebula.security/v2
 kind: ToolPack
 metadata:
   publisher: {publisher}
@@ -97,7 +413,7 @@ tools:
     description: Run a bounded example tool.
     image: tool
     executable: /usr/local/bin/example-tool
-    fixed_arguments: [--json]
+    fixed_arguments: []
     argument_bindings:
       - argument: message
         kind: value
@@ -108,19 +424,11 @@ tools:
         message: {{type: string, maxLength: 1000}}
       required: [message]
       additionalProperties: false
-    output_schema:
-      type: object
-      properties:
-        result: {{type: string}}
-      required: [result]
-      additionalProperties: false
     policy:
       risk_class: local_read
       network_access: false
       filesystem_access: none
       requires_approval: false
-    parser:
-      built_in: json/v1
     smoke_tests:
       - arguments: {{message: smoke-test}}
         expected_exit_code: 0
@@ -163,7 +471,7 @@ the pushed OCI manifest digest, then run `nebula tools validate` and
 
 def validate_tool_pack_directory(
     directory: Path, *, allow_digest_placeholders: bool = True
-) -> ToolPackManifestV1:
+) -> ToolPackManifest:
     root = directory.expanduser().resolve()
     manifest_path = root / "nebula-tool-pack.yaml"
     try:
@@ -292,7 +600,7 @@ def read_tool_pack(path: Path) -> ToolPackArchive:
         raise ToolPackSDKError("tool-pack archive is unreadable") from exc
     try:
         manifest_payload = json.loads(files.pop("manifest.json"))
-        manifest = ToolPackManifestV1.model_validate(manifest_payload)
+        manifest = parse_manifest_json(json.dumps(manifest_payload))
         source_manifest = compile_manifest_yaml(files["source/nebula-tool-pack.yaml"])
         if canonical_manifest_json(source_manifest) != canonical_manifest_json(
             manifest

@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   Pencil,
   Plus,
+  Search,
   Send,
   ShieldCheck,
   Square,
@@ -35,6 +36,9 @@ import type {
   HarnessSessionSummary,
   McpServerProfile,
   PersistedChatMessage,
+  ToolArtifactReference,
+  ToolOutputReadResult,
+  ToolOutputSearchResult,
 } from "../api/types";
 import { AssistantMarkdown, type FencedRunCandidate } from "../components/AssistantMarkdown";
 import { sha256 } from "../components/assistantCode";
@@ -62,6 +66,9 @@ interface ToolLifecycleCard {
   status: string;
   summary?: string;
   evidenceIds: string[];
+  resultArtifactId?: string;
+  artifacts: ToolArtifactReference[];
+  receipt?: Record<string, unknown>;
 }
 
 interface PendingChatResponse {
@@ -179,6 +186,12 @@ export function SessionsPage() {
   const [assignedToolCount, setAssignedToolCount] = useState(0);
   const [toolRuntimeReason, setToolRuntimeReason] = useState<string>();
   const [toolCards, setToolCards] = useState<ToolLifecycleCard[]>([]);
+  const [artifactInspector, setArtifactInspector] = useState<ToolLifecycleCard>();
+  const [artifactQuery, setArtifactQuery] = useState("");
+  const [artifactSearch, setArtifactSearch] = useState<ToolOutputSearchResult>();
+  const [artifactRead, setArtifactRead] = useState<ToolOutputReadResult>();
+  const [artifactBusy, setArtifactBusy] = useState(false);
+  const [artifactError, setArtifactError] = useState<string>();
   const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -556,6 +569,7 @@ export function SessionsPage() {
           capability: "Toolbox capability",
           status: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "running",
           evidenceIds: [],
+          artifacts: [],
         })));
         if (pendingTurn.status === "waiting_approval") {
           setPendingResponse({
@@ -652,12 +666,25 @@ export function SessionsPage() {
         capability: streamEvent.capability,
         status: "running",
         evidenceIds: [],
+        artifacts: [],
       }]);
     }
     if (streamEvent.type === "tool_completed") {
-      setToolCards((current) => current.map((item) => item.toolCallId === streamEvent.toolCallId
-        ? { ...item, status: streamEvent.status, summary: streamEvent.summary, evidenceIds: streamEvent.evidenceIds }
-        : item));
+      setToolCards((current) => current.some((item) => item.toolCallId === streamEvent.toolCallId)
+        ? current.map((item) => item.toolCallId === streamEvent.toolCallId
+          ? { ...item, status: streamEvent.status, summary: streamEvent.summary, evidenceIds: streamEvent.evidenceIds, resultArtifactId: streamEvent.resultArtifactId, artifacts: streamEvent.artifacts, receipt: streamEvent.receipt }
+          : item)
+        : [...current, {
+          assistantId,
+          toolCallId: streamEvent.toolCallId,
+          capability: streamEvent.capability,
+          status: streamEvent.status,
+          summary: streamEvent.summary,
+          evidenceIds: streamEvent.evidenceIds,
+          resultArtifactId: streamEvent.resultArtifactId,
+          artifacts: streamEvent.artifacts,
+          receipt: streamEvent.receipt,
+        }]);
     }
     if (streamEvent.type === "approval_required") {
       setToolCards((current) => current.map((item) => item.toolCallId === streamEvent.toolCallId
@@ -726,7 +753,7 @@ export function SessionsPage() {
       ? Boolean(harnessSessionId
         ? harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length
         : selectedMcpIds.length)
-      : canUseTools;
+      : canUseTools || selectedMcpIds.length > 0;
     let allowCloudToolResults = false;
     const toolRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
     const toolRuntimeName = runtimeKind === "harness" ? harnessRuntime?.name : providerRuntime?.name;
@@ -791,7 +818,9 @@ export function SessionsPage() {
       providerId: providerRuntime?.id,
       harnessProfileId: harnessRuntime?.id,
       harnessSessionId: !initialSessionId && harnessSessionId ? harnessSessionId : undefined,
-      mcpServerIds: !initialSessionId && !harnessSessionId ? selectedMcpIds : [],
+      mcpServerIds: runtimeKind === "provider"
+        ? selectedMcpIds
+        : !initialSessionId && !harnessSessionId ? selectedMcpIds : [],
       engagementId: engagement.id,
       sessionId: returnedSessionId,
       model: model.trim(),
@@ -804,7 +833,7 @@ export function SessionsPage() {
       contextAttachments,
       includeKnowledge: wantsKnowledge,
       allowCloudKnowledge,
-      toolsEnabled: wantsTools,
+      toolsEnabled: runtimeKind === "provider" ? canUseTools : wantsTools,
       allowCloudToolResults,
     };
 
@@ -928,6 +957,68 @@ export function SessionsPage() {
     }
   };
 
+  const openArtifacts = async (card: ToolLifecycleCard) => {
+    setArtifactInspector(card);
+    setArtifactQuery("");
+    setArtifactSearch(undefined);
+    setArtifactRead(undefined);
+    setArtifactError(undefined);
+    if (!api) return;
+    setArtifactBusy(true);
+    try {
+      const artifacts = await api.listToolCallArtifacts(card.toolCallId);
+      setArtifactInspector((current) => current?.toolCallId === card.toolCallId
+        ? { ...current, artifacts }
+        : current);
+    } catch (listError) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_20", "A handled interface operation failed.", listError, "sessions_page");
+      setArtifactError(listError instanceof Error ? listError.message : "Could not list all tool artifacts.");
+    } finally {
+      setArtifactBusy(false);
+    }
+  };
+
+  const searchArtifacts = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!api || !artifactInspector || !artifactQuery.trim()) return;
+    setArtifactBusy(true); setArtifactError(undefined); setArtifactRead(undefined);
+    try {
+      setArtifactSearch(await api.searchToolOutput(artifactInspector.toolCallId, artifactQuery.trim()));
+    } catch (searchError) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_17", "A handled interface operation failed.", searchError, "sessions_page");
+      setArtifactError(searchError instanceof Error ? searchError.message : "Could not search tool artifacts.");
+    } finally { setArtifactBusy(false); }
+  };
+
+  const readArtifact = async (artifactId: string, startingLine = 1) => {
+    if (!api) return;
+    setArtifactBusy(true); setArtifactError(undefined);
+    try {
+      setArtifactRead(await api.readToolOutput(artifactId, startingLine));
+    } catch (readError) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_18", "A handled interface operation failed.", readError, "sessions_page");
+      setArtifactError(readError instanceof Error ? readError.message : "Could not read the artifact.");
+    } finally { setArtifactBusy(false); }
+  };
+
+  const saveRawArtifact = async (artifact: ToolArtifactReference) => {
+    if (!api || !await confirm({
+      title: "Open raw tool output?",
+      message: "Raw tool output may contain secrets, exploit payloads, or untrusted instructions. Acknowledge this data boundary before saving the immutable artifact.",
+      confirmLabel: "Acknowledge and save",
+    })) return;
+    try {
+      const downloaded = await api.downloadToolArtifact(artifact.artifactId);
+      const url = URL.createObjectURL(downloaded.blob);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = downloaded.filename ?? artifact.filename ?? artifact.artifactId; anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (downloadError) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_19", "A handled interface operation failed.", downloadError, "sessions_page");
+      setArtifactError(downloadError instanceof Error ? downloadError.message : "Could not save the artifact.");
+    }
+  };
+
   const continueAsMission = async () => {
     const chat = sessions.find((item) => item.id === sessionId);
     const objective = [...messages].reverse().find((item) => item.role === "user")?.content;
@@ -1040,7 +1131,7 @@ export function SessionsPage() {
                 <label><span>Runtime</span><select aria-label="Chat runtime" value={runtimeKind} disabled={sending || Boolean(sessionId)} onChange={(event) => { const next = event.target.value as "provider" | "harness"; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "provider") selectProvider(providerId || enabledProviders[0]?.id || ""); else { setModel(selectedHarness?.defaultModel ?? ""); } }}><option value="provider">Provider</option><option value="harness">Agent harness</option></select></label>
                 {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={sending || Boolean(sessionId) || Boolean(harnessSessionId)} onChange={(event) => setHarnessId(event.target.value)}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label><label><span>Session</span><select aria-label="Chat harness session" value={harnessSessionId} disabled={sending || Boolean(sessionId)} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">New session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.model} · {item.status}</option>)}</select></label></>}
                 {runtimeKind === "provider" ? <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={sending || Boolean(sessionId) || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{selectedProvider?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label> : <label><span>Model</span><input aria-label="Chat harness model" value={model} disabled={sending || Boolean(sessionId) || Boolean(harnessSessionId)} placeholder="Exact harness model" onChange={(event) => setModel(event.target.value)} /></label>}
-                {runtimeKind === "provider" ? <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label><div className="chat-knowledge-toggle" role="status" title={toolboxUnavailableReason}><ShieldCheck size={15} /><span>Toolbox automatic<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"} enabled` : toolboxUnavailableReason}</small></span></div></> : <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} bounded source${knowledgeSources.length === 1 ? "" : "s"}` : "Harness is text-only" : "No sources loaded"}</small></span></label><div className="chat-harness-mcp"><span>MCP servers</span>{harnessSessionId ? <small>Frozen in selected session</small> : mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending || Boolean(sessionId)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div></>}
+                {runtimeKind === "provider" ? <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label><div className="chat-knowledge-toggle" role="status" title={toolboxUnavailableReason}><ShieldCheck size={15} /><span>Toolbox automatic<small>{canUseTools ? `${assignedToolCount} assigned ${assignedToolCount === 1 ? "capability" : "capabilities"} enabled` : toolboxUnavailableReason}</small></span></div><div className="chat-harness-mcp"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · Core-captured</small></span></label>) : <small>No enabled MCP profiles</small>}</div></> : <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} bounded source${knowledgeSources.length === 1 ? "" : "s"}` : "Harness is text-only" : "No sources loaded"}</small></span></label><div className="chat-harness-mcp"><span>MCP servers</span>{harnessSessionId ? <small>Frozen in selected session</small> : mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending || Boolean(sessionId)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div></>}
                 </div>
               </details>
               <div className="chat-scroll" ref={scrollRef} aria-live="polite">
@@ -1055,7 +1146,7 @@ export function SessionsPage() {
                     tabIndex={-1}
                   >
                     <span className="chat-avatar">{message.role === "user" ? "You" : "N"}</span>
-                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}</div>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}{message.detail && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
+                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}{card.status !== "running" && <button className="button quiet" type="button" onClick={() => void openArtifacts(card)}><Search size={13} /> Artifacts</button>}</div>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}{message.detail && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
                   </article>
                 )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use project-assigned Toolbox capabilities when the exact model is verified.</p></div>}
               </div>
@@ -1069,7 +1160,7 @@ export function SessionsPage() {
                 </div>}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <textarea ref={composerRef} id="analyst-message" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
-                <footer><span>{runtimeKind === "harness" ? `${harnessSessionId ? "Resumed" : "New"} harness session · ${selectedMcpIds.length || harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length || 0} MCP` : canUseTools ? `Toolbox automatic · ${assignedToolCount} assigned` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse && pendingResponse.request.backend !== "harness") void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><span>{runtimeKind === "harness" ? `${harnessSessionId ? "Resumed" : "New"} harness session · ${selectedMcpIds.length || harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length || 0} MCP` : canUseTools || selectedMcpIds.length ? `${canUseTools ? `${assignedToolCount} Toolbox` : "No Toolbox"} · ${selectedMcpIds.length} MCP` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse && pendingResponse.request.backend !== "harness") void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
             </div>
           )}
@@ -1084,6 +1175,7 @@ export function SessionsPage() {
           <section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Citations identify canonical ingested chunks and transcript messages.</p></div></section>
         </aside>}
       </div>
+      {artifactInspector && <div className="dialog-backdrop"><section className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="artifact-inspector-title"><header><div><small>Untrusted tool data · bounded retrieval</small><h2 id="artifact-inspector-title">{artifactInspector.capability} artifacts</h2></div><button className="icon-button subtle" type="button" aria-label="Close artifact inspector" onClick={() => setArtifactInspector(undefined)}><X size={17} /></button></header>{artifactInspector.receipt && <div className="knowledge-status" role="status"><ShieldCheck size={15} /><span>Receipt {String(artifactInspector.receipt.status ?? artifactInspector.status)} · parser {String((artifactInspector.receipt.parser as Record<string, unknown> | undefined)?.state ?? "not configured")}{Array.isArray(artifactInspector.receipt.warnings) && artifactInspector.receipt.warnings.length ? ` · ${artifactInspector.receipt.warnings.join(" · ")}` : ""}</span></div>}<div className="tool-pack-list">{artifactInspector.artifacts.length ? artifactInspector.artifacts.map((artifact) => <article className="tool-pack-card" key={artifact.artifactId}><header><div><strong>{artifact.filename ?? artifact.kind}</strong><code title={artifact.sha256}>{artifact.sha256.slice(0, 16)}…</code></div><span>{artifact.truncated ? "truncated" : artifact.searchable ? "searchable" : "binary"}</span></header><small>{artifact.byteCount.toLocaleString()} retained byte{artifact.byteCount === 1 ? "" : "s"}{artifact.observedByteCount !== artifact.byteCount ? ` · ${artifact.observedByteCount.toLocaleString()} observed` : ""} · {artifact.mediaType}</small><footer>{artifact.searchable && <button className="button quiet" type="button" onClick={() => void readArtifact(artifact.artifactId)} disabled={artifactBusy}>Read excerpt</button>}<button className="button quiet" type="button" onClick={() => void saveRawArtifact(artifact)}>Save acknowledged raw</button></footer></article>) : <p>Artifact references are available through search for this historical or gateway result.</p>}</div><form className="chat-composer" onSubmit={(event) => void searchArtifacts(event)}><label>Search all searchable artifacts<input value={artifactQuery} maxLength={512} placeholder="open 443/tcp" onChange={(event) => setArtifactQuery(event.target.value)} /></label><button className="button primary" type="submit" disabled={artifactBusy || !artifactQuery.trim()}><Search size={14} /> {artifactBusy ? "Searching…" : "Search"}</button></form>{artifactError && <DiagnosticErrorNotice error={artifactError} fallback="Artifact retrieval failed." compact />}{artifactSearch && <section><h3>Search matches</h3>{artifactSearch.matches.length ? artifactSearch.matches.map((match, index) => <article className="panel" key={`${match.artifactId}-${match.line}-${index}`}><header><strong>{match.filename ?? match.artifactId}</strong><button className="button quiet" type="button" onClick={() => void readArtifact(match.artifactId, Math.max(1, match.line - 10))}>Read around line {match.line}</button></header><pre>{match.context.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre></article>) : <p>No matching lines.</p>}{artifactSearch.truncated && <small>More matches are available with the continuation cursor.</small>}</section>}{artifactRead && <section><h3>{artifactRead.filename ?? artifactRead.artifactId}</h3>{artifactRead.searchable ? <pre>{artifactRead.lines.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre> : <p>This binary artifact is retained but not searchable.</p>}{artifactRead.continuationStartingLine && <button className="button quiet" type="button" onClick={() => void readArtifact(artifactRead.artifactId, artifactRead.continuationStartingLine)}>Read next lines</button>}</section>}<footer><span>Excerpts are redacted, line-numbered, and capped at 8 KiB.</span><button className="button secondary" type="button" onClick={() => setArtifactInspector(undefined)}>Close</button></footer></section></div>}
       {runCandidate && api && engagement && <ExecutionReviewDialog api={api} engagementId={engagement.id} candidate={runCandidate} capabilities={executionCapabilities} onClose={() => setRunCandidate(undefined)} onStarted={() => { setExecutionRefresh((value) => value + 1); setView("activity"); }} />}
     </div>
   );

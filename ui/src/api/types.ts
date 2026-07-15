@@ -66,6 +66,7 @@ export interface MissionCreateRequest {
   maxRetries?: number;
   toolNames?: string[];
   maxToolCalls?: number;
+  maxArtifactQueries?: number;
   maxConcurrency?: number;
   allowCloudToolResults?: boolean;
 }
@@ -123,6 +124,85 @@ export interface ToolSummary {
   requiresApproval: boolean;
   available: boolean;
   unavailableReason?: string;
+}
+
+export interface CustomToolArgumentDefinition {
+  name: string;
+  valueType: "string" | "integer" | "number" | "boolean" | "string_list" | "integer_list";
+  description?: string;
+  required?: boolean;
+  flag?: string;
+  positional?: boolean;
+  smokeValue?: unknown;
+}
+
+export interface CustomToolDefinition {
+  packName: string;
+  publisher?: string;
+  toolName: string;
+  description: string;
+  image: string;
+  platform?: "linux/amd64" | "linux/arm64";
+  executable: string;
+  fixedArguments?: string[];
+  arguments?: CustomToolArgumentDefinition[];
+  riskClass?: ToolSummary["riskClass"];
+  networkAccess?: boolean;
+  targetArgument?: string;
+  portArgument?: string;
+  filesystemAccess?: "none" | "read" | "workspace_write";
+  requiresApproval?: boolean;
+  timeoutSeconds?: number;
+  outputFlag?: string;
+  outputFilename?: string;
+  capturePaths?: string[];
+  expectedExitCode?: number;
+}
+
+export interface CustomToolBundle {
+  filename: string;
+  bundleBase64: string;
+  manifestDigest: string;
+  permissionPreview: Record<string, unknown>;
+}
+
+export interface ToolArtifactReference {
+  artifactId: Identifier;
+  kind: "stdout" | "stderr" | "parsed" | "receipt" | "mcp_content" | "generated_file";
+  filename?: string;
+  mediaType: string;
+  byteCount: number;
+  observedByteCount: number;
+  sha256: string;
+  searchable: boolean;
+  truncated: boolean;
+}
+
+export interface ToolOutputLine {
+  line: number;
+  text: string;
+  lineTruncated?: boolean;
+}
+
+export interface ToolOutputSearchResult {
+  matches: Array<{
+    artifactId: Identifier;
+    filename?: string;
+    line: number;
+    context: ToolOutputLine[];
+  }>;
+  truncated: boolean;
+  continuationCursor?: string;
+  skipped: Array<{ artifactId: Identifier; reason: string }>;
+}
+
+export interface ToolOutputReadResult {
+  artifactId: Identifier;
+  filename?: string;
+  searchable: boolean;
+  lines: ToolOutputLine[];
+  truncated: boolean;
+  continuationStartingLine?: number;
 }
 
 export type RunnerRuntime = "podman" | "docker";
@@ -663,6 +743,7 @@ export interface ChatCompletionRequest {
   includeKnowledge?: boolean;
   allowCloudKnowledge?: boolean;
   toolsEnabled?: boolean;
+  maxArtifactQueries?: number;
   allowCloudToolResults?: boolean;
 }
 
@@ -743,7 +824,7 @@ export type ChatStreamEvent =
   | { type: "started"; providerId?: Identifier; harnessProfileId?: Identifier; harnessSessionId?: Identifier; harnessTurnId?: Identifier; model: string; sessionId?: Identifier; turnId?: Identifier }
   | { type: "delta" | "message_delta"; providerId?: Identifier; harnessSessionId?: Identifier; model: string; delta: string; turnId?: Identifier }
   | { type: "tool_started"; turnId: Identifier; toolCallId: Identifier; capability: string; arguments: Record<string, unknown>; step: number }
-  | { type: "tool_completed"; turnId: Identifier; toolCallId: Identifier; capability: string; status: string; summary: string; evidenceIds: Identifier[]; step: number }
+  | { type: "tool_completed"; turnId: Identifier; toolCallId: Identifier; capability: string; status: string; summary: string; evidenceIds: Identifier[]; resultArtifactId?: Identifier; artifacts: ToolArtifactReference[]; receipt?: Record<string, unknown>; step: number }
   | { type: "approval_required"; turnId: Identifier; toolCallId: Identifier; approval: Record<string, unknown> }
   | { type: "item_started" | "item_completed" | "usage" | "interrupted" | "completed"; harnessSessionId?: Identifier; harnessTurnId?: Identifier; payload?: Record<string, unknown> }
   | ({ type: "done" } & ChatCompletionResponse)

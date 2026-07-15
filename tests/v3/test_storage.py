@@ -9,11 +9,26 @@ from nebula.v3.database import (
     Database,
     OperationEventRow,
     RunEventRow,
+    RunBudgetCounterRow,
     SchemaVersionError,
     SchemaVersionRow,
 )
-from nebula.v3.domain import Asset, Engagement, RunStatus, AgentRun, utc_now
-from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
+from nebula.v3.domain import (
+    AgentRun,
+    Asset,
+    Engagement,
+    RiskClass,
+    RunBudget,
+    RunStatus,
+    ToolCall,
+    utc_now,
+)
+from nebula.v3.storage import (
+    ConflictError,
+    NebulaStore,
+    NotFoundError,
+    RunBudgetExceededError,
+)
 
 
 @pytest.fixture
@@ -136,6 +151,56 @@ def test_event_sequence_is_atomic_between_threads(store):
     with ThreadPoolExecutor(max_workers=8) as executor:
         sequences = list(executor.map(append, range(20)))
     assert sorted(sequences) == list(range(1, 21))
+
+
+def test_execution_and_artifact_query_budgets_are_independent_and_atomic(store):
+    engagement = store.create(Engagement(name="Independent budgets"))
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="exercise both counters",
+            budget=RunBudget(max_tool_calls=1, max_artifact_queries=1),
+        )
+    )
+
+    def reserve(call_id: str, budget_class: str) -> str:
+        call = ToolCall(
+            id=call_id,
+            engagement_id=engagement.id,
+            run_id=run.id,
+            tool_name=(
+                "tool_output.search"
+                if budget_class == "artifact_query"
+                else "nmap.scan"
+            ),
+            risk_class=RiskClass.LOCAL_READ,
+            metadata={"budget_class": budget_class},
+        )
+        try:
+            return store.reserve_tool_call(call).id
+        except RunBudgetExceededError:
+            return "exhausted"
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        outcomes = list(
+            executor.map(
+                lambda item: reserve(*item),
+                [
+                    ("action-a", "execution"),
+                    ("action-b", "execution"),
+                    ("query-a", "artifact_query"),
+                    ("query-b", "artifact_query"),
+                ],
+            )
+        )
+    assert outcomes.count("exhausted") == 2
+    assert len([item for item in outcomes if item.startswith("action-")]) == 1
+    assert len([item for item in outcomes if item.startswith("query-")]) == 1
+    with store.database.session() as session:
+        counter = session.get(RunBudgetCounterRow, run.id)
+        assert counter is not None
+        assert counter.tool_calls == 1
+        assert counter.artifact_queries == 1
 
 
 def test_create_with_event_is_atomic_when_event_conflicts(store):

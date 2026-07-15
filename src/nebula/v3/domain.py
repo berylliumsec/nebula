@@ -804,6 +804,7 @@ class RunBudget(NebulaModel):
     max_tokens: int | None = Field(default=None, ge=1)
     max_cost_usd: float | None = Field(default=None, ge=0)
     max_tool_calls: int = Field(default=100, ge=0)
+    max_artifact_queries: int = Field(default=200, ge=0)
     max_retries: int = Field(default=2, ge=0, le=100)
     per_target_active_operations: int = Field(default=1, ge=1, le=64)
 
@@ -1593,7 +1594,10 @@ class ChatTurn(Entity):
     status: ChatTurnStatus = ChatTurnStatus.ROUTING
     tools_enabled: bool = False
     max_tool_calls: int = Field(default=5, ge=0, le=5)
-    next_step: int = Field(default=0, ge=0, le=5)
+    max_artifact_queries: int = Field(default=20, ge=0, le=200)
+    next_step: int = Field(default=0, ge=0, le=205)
+    execution_tool_calls: int = Field(default=0, ge=0, le=5)
+    artifact_queries: int = Field(default=0, ge=0, le=200)
     tool_call_ids: list[str] = Field(default_factory=list)
     tool_history: list[dict[str, Any]] = Field(default_factory=list)
     approval_id: str | None = None

@@ -58,6 +58,9 @@ from .providers import ProviderRegistry, provider_from_profile
 from .sandbox import ContainerSandboxRunner
 from .storage import NebulaStore
 from .toolpack_sdk import (
+    CustomToolArgument,
+    CustomToolDefinition,
+    generate_custom_tool_project,
     init_tool_pack,
     pack_tool_pack,
     validate_tool_pack_directory,
@@ -421,11 +424,154 @@ def tools_init(
     directory: Annotated[Path, typer.Argument()],
     name: Annotated[str, typer.Option(help="Canonical pack name.")],
     publisher: Annotated[str, typer.Option()] = "local",
+    image: Annotated[
+        str | None,
+        typer.Option(help="Optional digest-pinned OCI image for a ready custom tool."),
+    ] = None,
+    executable: Annotated[
+        str | None,
+        typer.Option(help="Absolute executable path inside --image."),
+    ] = None,
+    tool_name: Annotated[str | None, typer.Option()] = None,
 ) -> None:
     """Create a conservative declarative tool-pack project."""
 
-    created = init_tool_pack(directory, name=name, publisher=publisher)
+    if bool(image) != bool(executable):
+        raise typer.BadParameter("--image and --executable must be supplied together")
+    if image and executable:
+        definition = CustomToolDefinition(
+            pack_name=name,
+            publisher=publisher,
+            tool_name=tool_name or f"{name}.run",
+            description=f"Run {name} in a bounded OCI environment.",
+            image=image,
+            executable=executable,
+        )
+        created = generate_custom_tool_project(directory, definition)
+    else:
+        created = init_tool_pack(directory, name=name, publisher=publisher)
     _print({"status": "created", "path": str(created)})
+
+
+def _custom_argument(value: str) -> CustomToolArgument:
+    parts = value.split(":", 3)
+    if len(parts) < 3:
+        raise typer.BadParameter(
+            "--argument uses NAME:TYPE:POSITIONAL_OR_FLAG[:SMOKE_JSON]"
+        )
+    name, value_type, binding = parts[:3]
+    smoke: Any = None
+    if len(parts) == 4:
+        try:
+            smoke = json.loads(parts[3])
+        except json.JSONDecodeError as exc:
+            raise typer.BadParameter("argument smoke values must be JSON") from exc
+    return CustomToolArgument.model_validate(
+        {
+            "name": name,
+            "value_type": value_type,
+            "positional": binding == "positional",
+            "flag": None if binding == "positional" else binding,
+            "smoke_value": smoke,
+        }
+    )
+
+
+def _author_value(value: str | None, label: str) -> str:
+    if value:
+        return value
+    if sys.stdin.isatty():
+        return typer.prompt(label)
+    raise typer.BadParameter(
+        f"--{label.lower().replace(' ', '-')} is required in noninteractive mode"
+    )
+
+
+@tools_app.command("add")
+def tools_add(
+    directory: Annotated[Path, typer.Argument()],
+    bundle: Annotated[
+        Path | None,
+        typer.Option(
+            "--bundle",
+            help="Unsigned bundle destination; defaults beside the source directory.",
+        ),
+    ] = None,
+    pack_name: Annotated[str | None, typer.Option()] = None,
+    tool_name: Annotated[str | None, typer.Option()] = None,
+    image: Annotated[str | None, typer.Option()] = None,
+    executable: Annotated[str | None, typer.Option()] = None,
+    description: Annotated[str | None, typer.Option()] = None,
+    publisher: Annotated[str, typer.Option()] = "local",
+    platform: Annotated[str, typer.Option()] = "linux/amd64",
+    argument: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--argument",
+            help="NAME:TYPE:POSITIONAL_OR_FLAG[:SMOKE_JSON]; repeat as needed.",
+        ),
+    ] = None,
+    fixed_argument: Annotated[
+        list[str] | None, typer.Option("--fixed-argument")
+    ] = None,
+    risk_class: Annotated[str, typer.Option()] = "local_read",
+    network: Annotated[bool, typer.Option()] = False,
+    target_argument: Annotated[str | None, typer.Option()] = None,
+    port_argument: Annotated[str | None, typer.Option()] = None,
+    workspace: Annotated[str, typer.Option()] = "none",
+    requires_approval: Annotated[bool, typer.Option()] = False,
+    timeout_seconds: Annotated[int, typer.Option(min=1, max=86_400)] = 300,
+    output_flag: Annotated[str | None, typer.Option()] = None,
+    output_filename: Annotated[str, typer.Option()] = "result",
+    capture_path: Annotated[list[str] | None, typer.Option("--capture-path")] = None,
+    expected_exit_code: Annotated[int, typer.Option(min=0, max=255)] = 0,
+) -> None:
+    """Generate a parser-free custom OCI tool from configuration only."""
+
+    definition = CustomToolDefinition.model_validate(
+        {
+            "pack_name": _author_value(pack_name, "Pack name"),
+            "publisher": publisher,
+            "tool_name": _author_value(tool_name, "Tool name"),
+            "description": _author_value(description, "Description"),
+            "image": _author_value(image, "Image"),
+            "platform": platform,
+            "executable": _author_value(executable, "Executable"),
+            "fixed_arguments": fixed_argument or [],
+            "arguments": [_custom_argument(item) for item in argument or []],
+            "risk_class": risk_class,
+            "network_access": network,
+            "target_argument": target_argument,
+            "port_argument": port_argument,
+            "filesystem_access": workspace,
+            "requires_approval": requires_approval,
+            "timeout_seconds": timeout_seconds,
+            "output_flag": output_flag,
+            "output_filename": output_filename,
+            "capture_paths": capture_path or [],
+            "expected_exit_code": expected_exit_code,
+        }
+    )
+    created = generate_custom_tool_project(directory, definition)
+    manifest = validate_tool_pack_directory(created, allow_digest_placeholders=False)
+    bundle_path = pack_tool_pack(
+        created,
+        bundle or created.parent / f"{definition.pack_name}.nebula-toolpack",
+    )
+    _print(
+        {
+            "status": "created",
+            "path": str(created),
+            "bundle": str(bundle_path),
+            "identity": manifest.identity,
+            "manifest_digest": manifest_digest(manifest),
+            "permission_preview": definition.permission_preview(),
+            "next": [
+                f"nebula3 tools test {created}",
+                f"nebula3 tools install-local {bundle_path} --runner RUNNER_ID --yes",
+            ],
+        }
+    )
 
 
 @tools_app.command("validate")
@@ -738,6 +884,7 @@ def run_mission(
     data_dir: Annotated[Path | None, typer.Option()] = None,
     max_duration: Annotated[int, typer.Option(min=1)] = 3600,
     max_tool_calls: Annotated[int, typer.Option(min=0)] = 0,
+    max_artifact_queries: Annotated[int, typer.Option(min=0)] = 200,
     max_concurrency: Annotated[int, typer.Option(min=1, max=2)] = 1,
     max_tokens: Annotated[int, typer.Option(min=1)] = 32_000,
     tool_names: Annotated[
@@ -814,6 +961,7 @@ def run_mission(
                     max_concurrency=max_concurrency,
                     max_duration_seconds=max_duration,
                     max_tool_calls=max_tool_calls,
+                    max_artifact_queries=max_artifact_queries,
                     max_tokens=max_tokens,
                 ),
                 provider_id=provider_id,
@@ -846,6 +994,7 @@ def run_mission(
                     max_delegation_depth=1,
                     max_duration_seconds=max_duration,
                     max_tool_calls=max_tool_calls,
+                    max_artifact_queries=max_artifact_queries,
                     max_tokens=max_tokens,
                     per_target_active_operations=1,
                 ),

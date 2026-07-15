@@ -5,13 +5,17 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception
 
 import asyncio
+import base64
 import hashlib
 import ipaddress
 import json
+import os
 import re
+import shutil
 import socket
+import tempfile
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -26,6 +30,7 @@ from .artifacts import ArtifactStore
 from .domain import (
     Approval,
     ApprovalStatus,
+    Artifact,
     Evidence,
     RiskClass,
     ToolCallOrigin,
@@ -45,6 +50,22 @@ from .sandbox import (
     SandboxWorkspaceAccess,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .tool_results import (
+    MAX_CAPTURE_BYTES,
+    MAX_GENERATED_BYTES,
+    MAX_GENERATED_FILES,
+    MAX_MODEL_ARTIFACT_REFS,
+    ParserState,
+    StreamCapture,
+    ToolParserReceipt,
+    ToolResultStatus,
+    ToolTimingReceipt,
+    ToolResultReceipt,
+    ToolOutputService,
+    WorkspaceOutputService,
+    artifact_ref,
+    bytes_are_searchable,
+)
 
 
 class ToolBrokerError(RuntimeError):
@@ -138,6 +159,8 @@ class ToolSpec(BaseModel):
     argument_bindings: list[ToolArgumentBinding] = Field(default_factory=list)
     parser_contract: dict[str, Any] | None = None
     smoke_test_fixture: dict[str, Any] | None = None
+    budget_class: Literal["execution", "artifact_query"] = "execution"
+    capture_paths: list[str] = Field(default_factory=list, max_length=32)
 
     @field_validator("input_schema", "output_schema")
     @classmethod
@@ -172,6 +195,12 @@ class ToolSpec(BaseModel):
         if self.network_access and not self.target_argument:
             raise ValueError("network tools require a trusted target_argument mapping")
         properties = self.input_schema.get("properties", {})
+        for value in self.capture_paths:
+            path = Path(value)
+            if not value or path.is_absolute() or ".." in path.parts or "\x00" in value:
+                raise ValueError("capture paths must be fixed workspace-relative paths")
+        if len(self.capture_paths) != len(set(self.capture_paths)):
+            raise ValueError("capture paths must be unique")
         mapped = [
             value
             for value in [
@@ -190,14 +219,12 @@ class ToolSpec(BaseModel):
             "required", []
         ):
             raise ValueError("target_argument must be required by the input schema")
-        execution_fields = (
-            self.image,
-            self.executable,
-            self.pack_id,
-            self.manifest_digest,
-        )
-        if any(value is not None for value in execution_fields):
-            if any(value is None for value in execution_fields):
+        oci_execution_fields = (self.image, self.executable, self.manifest_digest)
+        if any(value is not None for value in oci_execution_fields):
+            if (
+                any(value is None for value in oci_execution_fields)
+                or self.pack_id is None
+            ):
                 raise ValueError(
                     "declarative tools require image, executable, pack_id, and "
                     "manifest_digest"
@@ -366,6 +393,76 @@ class ToolExecutionResult(BaseModel):
     parser_error: str | None = Field(default=None, max_length=1_000)
     execution: dict[str, Any] = Field(default_factory=dict)
     evidence_ids: list[str] = Field(default_factory=list)
+    receipt: ToolResultReceipt | None = None
+    result_artifact_id: str | None = None
+    stdout_artifact_path: Path | None = Field(default=None, exclude=True)
+    stderr_artifact_path: Path | None = Field(default=None, exclude=True)
+    output_directory: Path | None = Field(default=None, exclude=True)
+    mcp_content_blocks: list[dict[str, Any]] = Field(default_factory=list, exclude=True)
+    observed_stdout_bytes: int = Field(default=0, ge=0)
+    observed_stderr_bytes: int = Field(default=0, ge=0)
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+
+    def model_result(self) -> dict[str, Any]:
+        return (
+            self.receipt.as_model_result() if self.receipt is not None else self.output
+        )
+
+
+def _legacy_action_receipt(
+    call: PersistedToolCall, spec: ToolSpec
+) -> ToolResultReceipt:
+    """Keep pre-v2 action bytes durable without replaying them into model context."""
+
+    legacy = call.result if isinstance(call.result, dict) else {}
+    execution = legacy.get("execution")
+    execution = execution if isinstance(execution, dict) else {}
+    exit_code = legacy.get("exit_code")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        nested = legacy.get("output")
+        nested_exit = nested.get("exit_code") if isinstance(nested, dict) else None
+        exit_code = (
+            nested_exit
+            if isinstance(nested_exit, int) and not isinstance(nested_exit, bool)
+            else None
+        )
+    return ToolResultReceipt(
+        tool_call_id=call.id,
+        tool_name=spec.name,
+        tool_version=spec.version,
+        status=ToolResultStatus.COMPLETED,
+        exit_code=exit_code,
+        timing=ToolTimingReceipt(
+            started_at=(
+                str(execution["started_at"])
+                if execution.get("started_at") is not None
+                else None
+            ),
+            completed_at=(
+                str(execution["completed_at"])
+                if execution.get("completed_at") is not None
+                else None
+            ),
+            duration_seconds=(
+                float(execution["duration_seconds"])
+                if isinstance(execution.get("duration_seconds"), (int, float))
+                else None
+            ),
+        ),
+        incomplete=True,
+        warnings=[
+            "Historical pre-v2 action output was retained unchanged and omitted from model context."
+        ],
+    )
+
+
+class ToolExecutionCancelled(asyncio.CancelledError):
+    """Carry partial captured evidence through cooperative cancellation."""
+
+    def __init__(self, result: ToolExecutionResult) -> None:
+        super().__init__("tool execution cancelled")
+        self.result = result
 
 
 class PreparedToolCall(BaseModel):
@@ -413,6 +510,33 @@ class AnalysisTool(ToolPlugin):
         return ToolExecutionResult(output=await self._handler(invocation.arguments))
 
 
+class InvocationAnalysisTool(AnalysisTool):
+    """A trusted bounded retriever that also needs owner/workspace context."""
+
+    def __init__(
+        self,
+        spec: ToolSpec,
+        handler: Callable[[ToolInvocation], Awaitable[dict[str, Any]]],
+    ) -> None:
+        super().__init__(
+            spec, lambda arguments: _unreachable_analysis_handler(arguments)
+        )
+        self._invocation_handler = handler
+
+    async def execute(
+        self,
+        invocation: ToolInvocation,
+        runner: SandboxRunner,
+    ) -> ToolExecutionResult:
+        del runner
+        return ToolExecutionResult(output=await self._invocation_handler(invocation))
+
+
+async def _unreachable_analysis_handler(arguments: dict[str, Any]) -> dict[str, Any]:
+    del arguments
+    raise AssertionError("invocation analysis handler was called without context")
+
+
 CommandBuilder = Callable[[dict[str, Any]], list[str]]
 OutputParser = Callable[[str, str, int | None], dict[str, Any]]
 
@@ -424,7 +548,7 @@ class SandboxCommandTool(ToolPlugin):
         self,
         spec: ToolSpec,
         *,
-        output_parser: OutputParser,
+        output_parser: OutputParser | None = None,
         image: str | None = None,
         command_builder: CommandBuilder | None = None,
         network_name: str | None = None,
@@ -483,49 +607,166 @@ class SandboxCommandTool(ToolPlugin):
                 EgressRule(address=address, ports=ports)
                 for address in invocation.resolved_ips
             ]
-        result = await runner.run(
-            SandboxRequest(
-                image=self.image,
-                command=command,
-                workspace=invocation.workspace,
-                workspace_access=SandboxWorkspaceAccess(self.spec.filesystem_access),
-                network=(
-                    SandboxNetwork.SCOPED
-                    if self.spec.network_access
-                    else SandboxNetwork.NONE
-                ),
-                execution_kind=(
-                    SandboxExecutionKind.NETWORK_TOOL
-                    if self.spec.network_access
-                    else SandboxExecutionKind.LOCAL_TOOL
-                ),
-                egress_rules=egress_rules,
-                pinned_hosts=pins,
-                limits=self.spec.resource_limits.model_copy(
-                    update={"timeout_seconds": self.spec.timeout_seconds}
-                ),
+        workspace = invocation.workspace.expanduser().resolve(strict=True)
+        output_directory = Path(
+            tempfile.mkdtemp(
+                prefix=f".nebula-output-{invocation.id[:12]}-", dir=workspace
             )
         )
-        parser_error: str | None = None
+        # The engagement workspace is protected by its host-only parent, while
+        # the rootless container runs as an unmapped non-root UID and needs to
+        # create files in this one dedicated bind mount.
+        output_directory.chmod(0o777)
+        stdout_descriptor, stdout_name = tempfile.mkstemp(
+            prefix=f"nebula-{invocation.id[:12]}-stdout-"
+        )
+        stderr_descriptor, stderr_name = tempfile.mkstemp(
+            prefix=f"nebula-{invocation.id[:12]}-stderr-"
+        )
+        stdout_stream = os.fdopen(stdout_descriptor, "w+b")
+        stderr_stream = os.fdopen(stderr_descriptor, "w+b")
+        stdout_capture = StreamCapture(stdout_stream, limit=MAX_CAPTURE_BYTES)
+        stderr_capture = StreamCapture(stderr_stream, limit=MAX_CAPTURE_BYTES)
+        started_at = utc_now()
+
+        async def capture(stream: str, chunk: bytes) -> None:
+            (stdout_capture if stream == "stdout" else stderr_capture).write(chunk)
+
+        command = [value.replace("{output_dir}", "/nebula-output") for value in command]
         try:
-            output = self.output_parser(result.stdout, result.stderr, result.exit_code)
-        except Exception as exc:
-            record_caught_exception(
-                "toolbox",
-                "toolbox.tools.caught_failure_003",
-                "A handled toolbox operation raised an exception.",
-                exc,
-                stage="tools",
+            result = await runner.run_stream(
+                SandboxRequest(
+                    image=self.image,
+                    command=command,
+                    workspace=invocation.workspace,
+                    workspace_access=SandboxWorkspaceAccess(
+                        self.spec.filesystem_access
+                    ),
+                    network=(
+                        SandboxNetwork.SCOPED
+                        if self.spec.network_access
+                        else SandboxNetwork.NONE
+                    ),
+                    execution_kind=(
+                        SandboxExecutionKind.NETWORK_TOOL
+                        if self.spec.network_access
+                        else SandboxExecutionKind.LOCAL_TOOL
+                    ),
+                    egress_rules=egress_rules,
+                    pinned_hosts=pins,
+                    output_directory=output_directory,
+                    retain_output=self.output_parser is not None,
+                    environment={"NEBULA_OUTPUT_DIR": "/nebula-output"},
+                    limits=self.spec.resource_limits.model_copy(
+                        update={"timeout_seconds": self.spec.timeout_seconds}
+                    ),
+                ),
+                on_chunk=capture,
             )
-            output = {}
-            parser_error = _bounded_execution_error(exc)
+            stdout_capture.flush()
+            stderr_capture.flush()
+        except asyncio.CancelledError:
+            stdout_capture.flush()
+            stderr_capture.flush()
+            completed_at = utc_now()
+            raise ToolExecutionCancelled(
+                ToolExecutionResult(
+                    output={},
+                    exit_code=None,
+                    output_truncated=(
+                        stdout_capture.truncated or stderr_capture.truncated
+                    ),
+                    stdout_artifact_path=Path(stdout_name),
+                    stderr_artifact_path=Path(stderr_name),
+                    output_directory=output_directory,
+                    observed_stdout_bytes=stdout_capture.observed_bytes,
+                    observed_stderr_bytes=stderr_capture.observed_bytes,
+                    stdout_truncated=stdout_capture.truncated,
+                    stderr_truncated=stderr_capture.truncated,
+                    execution={
+                        "command": command,
+                        "image": self.image,
+                        "runtime": "container",
+                        "started_at": started_at.isoformat(),
+                        "completed_at": completed_at.isoformat(),
+                        "duration_seconds": max(
+                            0.0, (completed_at - started_at).total_seconds()
+                        ),
+                        "timed_out": False,
+                        "cancelled": True,
+                    },
+                )
+            )
+        except BaseException:
+            stdout_stream.close()
+            stderr_stream.close()
+            Path(stdout_name).unlink(missing_ok=True)
+            Path(stderr_name).unlink(missing_ok=True)
+            shutil.rmtree(output_directory, ignore_errors=True)
+            raise
+        finally:
+            if not stdout_stream.closed:
+                stdout_stream.close()
+            if not stderr_stream.closed:
+                stderr_stream.close()
+        parser_error: str | None = None
+        output: dict[str, Any] = {}
+        if self.output_parser is not None and result.output_truncated:
+            parser_error = (
+                "parser input exceeded its bounded stdout/stderr buffer; "
+                "raw captured artifacts remain available"
+            )
+        elif self.output_parser is not None:
+            try:
+                output = self.output_parser(
+                    result.stdout, result.stderr, result.exit_code
+                )
+            except Exception as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.tools.caught_failure_003",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="tools",
+                )
+                parser_error = _bounded_execution_error(exc)
+        effective_stdout = result.stdout
+        effective_stderr = result.stderr
+        effective_exit_code = result.exit_code
+        effective_timed_out = result.timed_out
+        legacy_envelope = output.get("protocol") == "nebula.toolbox/v1"
+        if legacy_envelope:
+            if isinstance(output.get("stdout"), str):
+                effective_stdout = output["stdout"]
+            if isinstance(output.get("stderr"), str):
+                effective_stderr = output["stderr"]
+            if isinstance(output.get("exit_code"), int):
+                effective_exit_code = output["exit_code"]
+            effective_timed_out = bool(output.get("timed_out", effective_timed_out))
+            Path(stdout_name).unlink(missing_ok=True)
+            Path(stderr_name).unlink(missing_ok=True)
         return ToolExecutionResult(
             output=output,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            exit_code=result.exit_code,
-            output_truncated=result.output_truncated,
+            stdout=effective_stdout,
+            stderr=effective_stderr,
+            exit_code=effective_exit_code,
+            output_truncated=(stdout_capture.truncated or stderr_capture.truncated),
             parser_error=parser_error,
+            stdout_artifact_path=None if legacy_envelope else Path(stdout_name),
+            stderr_artifact_path=None if legacy_envelope else Path(stderr_name),
+            output_directory=output_directory,
+            observed_stdout_bytes=(
+                len(effective_stdout.encode("utf-8"))
+                if legacy_envelope
+                else stdout_capture.observed_bytes
+            ),
+            observed_stderr_bytes=(
+                len(effective_stderr.encode("utf-8"))
+                if legacy_envelope
+                else stderr_capture.observed_bytes
+            ),
+            stdout_truncated=stdout_capture.truncated,
+            stderr_truncated=stderr_capture.truncated,
             execution={
                 "command": result.command,
                 "image": result.image,
@@ -533,7 +774,8 @@ class SandboxCommandTool(ToolPlugin):
                 "started_at": result.started_at.isoformat(),
                 "completed_at": result.completed_at.isoformat(),
                 "duration_seconds": result.duration_seconds,
-                "timed_out": result.timed_out,
+                "timed_out": effective_timed_out,
+                "legacy_toolbox_envelope": legacy_envelope,
             },
         )
 
@@ -587,6 +829,7 @@ class ToolLedger(Protocol):
         result: dict[str, Any] | None = None,
         error: str | None = None,
         approval_id: str | None = None,
+        result_artifact_id: str | None = None,
     ) -> PersistedToolCall: ...
 
     async def request_approval(
@@ -609,7 +852,7 @@ class ToolEvidenceRecorder(Protocol):
         invocation: ToolInvocation,
         spec: ToolSpec,
         result: ToolExecutionResult,
-    ) -> list[str]: ...
+    ) -> ToolExecutionResult: ...
 
 
 class StoreToolLedger:
@@ -648,6 +891,7 @@ class StoreToolLedger:
             risk_class=spec.risk_class,
             arguments=invocation.arguments,
             idempotency_key=invocation.idempotency_key,
+            metadata={"budget_class": spec.budget_class},
         )
         try:
             if self.enforce_run_budget:
@@ -700,6 +944,7 @@ class StoreToolLedger:
         result: dict[str, Any] | None = None,
         error: str | None = None,
         approval_id: str | None = None,
+        result_artifact_id: str | None = None,
     ) -> PersistedToolCall:
         changes: dict[str, Any] = {"status": status}
         if result is not None:
@@ -708,6 +953,8 @@ class StoreToolLedger:
             changes["error"] = error
         if approval_id is not None:
             changes["approval_id"] = approval_id
+        if result_artifact_id is not None:
+            changes["result_artifact_id"] = result_artifact_id
         if status == ToolCallStatus.RUNNING:
             changes["started_at"] = utc_now()
         if status in {
@@ -822,8 +1069,47 @@ class StoreToolLedger:
         return updated
 
 
+def _path_has_symlink_component(root: Path, candidate: Path) -> bool:
+    """Reject generated evidence reached through any symlink component."""
+
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError:
+        return True
+    current = root
+    for component in relative.parts:
+        current = current / component
+        if current.is_symlink():
+            return True
+    return False
+
+
+def _regular_files_beneath(root: Path) -> Iterator[Path]:
+    """Walk regular files deterministically without materializing a full tree."""
+
+    if root.is_file() and not root.is_symlink():
+        yield root
+        return
+    for directory, child_directories, filenames in os.walk(
+        root, topdown=True, followlinks=False
+    ):
+        parent = Path(directory)
+        child_directories[:] = sorted(
+            name for name in child_directories if not (parent / name).is_symlink()
+        )
+        for filename in sorted(filenames):
+            candidate = parent / filename
+            if candidate.is_symlink():
+                continue
+            try:
+                if candidate.is_file():
+                    yield candidate
+            except OSError:
+                continue
+
+
 class StoreToolEvidenceRecorder:
-    """Capture a canonical immutable execution envelope as Artifact + Evidence."""
+    """Persist raw streams separately and return only a compact v2 receipt."""
 
     def __init__(self, store: NebulaStore, artifact_store: ArtifactStore) -> None:
         self.store = store
@@ -835,7 +1121,35 @@ class StoreToolEvidenceRecorder:
         invocation: ToolInvocation,
         spec: ToolSpec,
         result: ToolExecutionResult,
-    ) -> list[str]:
+    ) -> ToolExecutionResult:
+        stored_items: list[Any] = []
+        try:
+            return await self._record(
+                call, invocation, spec, result, stored_items=stored_items
+            )
+        except BaseException:
+            for stored in stored_items:
+                await asyncio.to_thread(self.artifact_store.discard_new_blob, stored)
+            raise
+        finally:
+            for temporary_path in (
+                result.stdout_artifact_path,
+                result.stderr_artifact_path,
+            ):
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+            if result.output_directory is not None:
+                shutil.rmtree(result.output_directory, ignore_errors=True)
+
+    async def _record(
+        self,
+        call: PersistedToolCall,
+        invocation: ToolInvocation,
+        spec: ToolSpec,
+        result: ToolExecutionResult,
+        *,
+        stored_items: list[Any],
+    ) -> ToolExecutionResult:
         toolbox_metadata = result.output.get("metadata")
         if not isinstance(toolbox_metadata, dict):
             toolbox_metadata = {}
@@ -849,59 +1163,398 @@ class StoreToolEvidenceRecorder:
             r"[0-9a-f]{64}", script_sha256
         ):
             script_sha256 = None
-        envelope = {
-            "schema": "nebula.tool-evidence.v1",
+        script = invocation.arguments.get("script")
+        if script_sha256 is None and isinstance(script, str):
+            script_sha256 = hashlib.sha256(script.encode("utf-8")).hexdigest()
+        common_metadata = {
             "tool_call_id": call.id,
             "run_id": call.run_id,
+            "chat_session_id": call.chat_session_id,
+            "chat_turn_id": call.chat_turn_id,
             "task_id": call.task_id,
-            "tool": {"name": spec.name, "version": spec.version},
-            "tool_pack": {
-                "identity": spec.pack_id,
-                "manifest_digest": spec.manifest_digest,
-                "image": spec.image,
-                "parser": spec.parser_contract,
-                "interface_catalog_digest": interface_catalog_digest,
-            },
-            "risk_class": spec.risk_class.value,
-            "arguments": invocation.arguments,
-            "target": invocation.target,
-            "resolved_ips": invocation.resolved_ips,
-            "output": result.output,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "exit_code": result.exit_code,
-            "output_truncated": result.output_truncated,
-            "parser_error": result.parser_error,
-            "execution": result.execution,
-            "script_sha256": script_sha256,
+            "tool": spec.name,
+            "tool_version": spec.version,
+            "tool_pack": spec.pack_id,
+            "manifest_digest": spec.manifest_digest,
         }
-        payload = json.dumps(
-            envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        artifact_entities: list[Artifact] = []
+        references = []
+        warnings: list[str] = []
+
+        async def store_stream(
+            *,
+            kind: Literal["stdout", "stderr"],
+            path: Path | None,
+            fallback: str,
+            observed: int,
+            truncated: bool,
+        ) -> None:
+            media_type = "text/plain"
+            if path is not None and path.is_file():
+                with path.open("rb") as probe:
+                    searchable = bytes_are_searchable(
+                        probe.read(8192), media_type=media_type
+                    )
+                stored = await asyncio.to_thread(
+                    self.artifact_store.put_file_with_status,
+                    path,
+                    engagement_id=invocation.engagement_id,
+                    filename=f"tool-call-{call.id}-{kind}.txt",
+                    media_type=media_type,
+                    source=f"tool:{spec.name}@{spec.version}:{kind}",
+                    metadata={
+                        **common_metadata,
+                        "kind": kind,
+                        "searchable": searchable,
+                        "observed_byte_count": observed,
+                        "truncated": truncated,
+                    },
+                )
+            else:
+                payload = fallback.encode("utf-8")
+                searchable = bytes_are_searchable(payload, media_type=media_type)
+                stored = await asyncio.to_thread(
+                    self.artifact_store.put_bytes_with_status,
+                    payload,
+                    engagement_id=invocation.engagement_id,
+                    filename=f"tool-call-{call.id}-{kind}.txt",
+                    media_type=media_type,
+                    source=f"tool:{spec.name}@{spec.version}:{kind}",
+                    metadata={
+                        **common_metadata,
+                        "kind": kind,
+                        "searchable": searchable,
+                        "observed_byte_count": observed or len(payload),
+                        "truncated": truncated,
+                    },
+                )
+            stored_items.append(stored)
+            artifact_entities.append(stored.artifact)
+            references.append(
+                artifact_ref(
+                    stored.artifact,
+                    kind=kind,
+                    observed_byte_count=observed or stored.artifact.size,
+                    searchable=searchable,
+                    truncated=truncated,
+                )
+            )
+
+        await store_stream(
+            kind="stdout",
+            path=result.stdout_artifact_path,
+            fallback=result.stdout,
+            observed=result.observed_stdout_bytes,
+            truncated=result.stdout_truncated,
+        )
+        await store_stream(
+            kind="stderr",
+            path=result.stderr_artifact_path,
+            fallback=result.stderr,
+            observed=result.observed_stderr_bytes,
+            truncated=result.stderr_truncated,
+        )
+
+        parser_configured = bool(
+            spec.parser or spec.parser_contract or result.output or result.parser_error
+        )
+        parsed_artifact_id: str | None = None
+        if parser_configured and result.parser_error is None:
+            parsed_payload = json.dumps(
+                result.output,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+            parsed = await asyncio.to_thread(
+                self.artifact_store.put_bytes_with_status,
+                parsed_payload,
+                engagement_id=invocation.engagement_id,
+                filename=f"tool-call-{call.id}-parsed.json",
+                media_type="application/json",
+                source=f"tool:{spec.name}@{spec.version}:parser",
+                metadata={
+                    **common_metadata,
+                    "kind": "parsed",
+                    "searchable": True,
+                },
+            )
+            stored_items.append(parsed)
+            artifact_entities.append(parsed.artifact)
+            references.append(
+                artifact_ref(parsed.artifact, kind="parsed", searchable=True)
+            )
+            parsed_artifact_id = parsed.artifact.id
+        elif result.parser_error:
+            warnings.append(f"optional parser failed: {result.parser_error}")
+
+        for index, block in enumerate(result.mcp_content_blocks):
+            block_type = str(block.get("type") or "unknown")
+            media_type = "application/json"
+            payload: bytes
+            filename = f"tool-call-{call.id}-mcp-{index:03d}.json"
+            if block_type == "text" and isinstance(block.get("text"), str):
+                payload = block["text"].encode("utf-8")
+                media_type = "text/plain"
+                filename = f"tool-call-{call.id}-mcp-{index:03d}.txt"
+            elif block_type == "image" and isinstance(block.get("data"), str):
+                try:
+                    payload = base64.b64decode(block["data"], validate=True)
+                    media_type = str(
+                        block.get("mimeType") or "application/octet-stream"
+                    )
+                    filename = f"tool-call-{call.id}-mcp-{index:03d}.bin"
+                except (ValueError, TypeError):
+                    payload = json.dumps(block, ensure_ascii=False).encode()
+                    warnings.append(f"MCP image block {index} had invalid base64 data")
+            else:
+                payload = json.dumps(
+                    block, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                ).encode()
+            searchable = bytes_are_searchable(payload, media_type=media_type)
+            stored = await asyncio.to_thread(
+                self.artifact_store.put_bytes_with_status,
+                payload,
+                engagement_id=invocation.engagement_id,
+                filename=filename,
+                media_type=media_type,
+                source=f"mcp:{spec.name}:{block_type}",
+                metadata={
+                    **common_metadata,
+                    "kind": "mcp_content",
+                    "block_type": block_type,
+                    "block_index": index,
+                    "searchable": searchable,
+                },
+            )
+            stored_items.append(stored)
+            artifact_entities.append(stored.artifact)
+            references.append(
+                artifact_ref(stored.artifact, kind="mcp_content", searchable=searchable)
+            )
+
+        generated_count = 0
+        generated_bytes = 0
+        if result.output_directory is not None and result.output_directory.is_dir():
+            for path in _regular_files_beneath(result.output_directory):
+                if (
+                    _path_has_symlink_component(result.output_directory, path)
+                    or not path.is_file()
+                ):
+                    continue
+                if generated_count >= MAX_GENERATED_FILES:
+                    warnings.append(
+                        f"generated file limit reached ({MAX_GENERATED_FILES}); remaining files were not promoted"
+                    )
+                    break
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                if generated_bytes + size > MAX_GENERATED_BYTES:
+                    warnings.append(
+                        "generated output exceeded the 100 MiB combined limit; remaining files were not promoted"
+                    )
+                    break
+                relative = path.relative_to(result.output_directory).as_posix()
+                stored = await asyncio.to_thread(
+                    self.artifact_store.put_file_with_status,
+                    path,
+                    engagement_id=invocation.engagement_id,
+                    filename=relative,
+                    source=f"tool:{spec.name}@{spec.version}:generated",
+                    metadata={
+                        **common_metadata,
+                        "kind": "generated_file",
+                        "relative_path": relative,
+                    },
+                )
+                with self.artifact_store.open(stored.artifact) as probe:
+                    searchable = bytes_are_searchable(
+                        probe.read(8192), media_type=stored.artifact.media_type
+                    )
+                stored.artifact.metadata["searchable"] = searchable
+                stored_items.append(stored)
+                artifact_entities.append(stored.artifact)
+                references.append(
+                    artifact_ref(
+                        stored.artifact,
+                        kind="generated_file",
+                        searchable=searchable,
+                    )
+                )
+                generated_count += 1
+                generated_bytes += size
+
+        capture_limit_reached = False
+        workspace = invocation.workspace.expanduser().resolve(strict=True)
+        for configured in spec.capture_paths:
+            if capture_limit_reached:
+                break
+            unresolved = workspace / configured
+            if _path_has_symlink_component(workspace, unresolved):
+                warnings.append(
+                    f"configured capture path contains a symlink: {configured}"
+                )
+                continue
+            try:
+                root = unresolved.resolve(strict=True)
+            except OSError:
+                warnings.append(
+                    f"configured capture path was not created: {configured}"
+                )
+                continue
+            if root != workspace and workspace not in root.parents:
+                warnings.append(
+                    f"configured capture path escaped the workspace: {configured}"
+                )
+                continue
+            if unresolved.is_symlink() or (not root.is_file() and not root.is_dir()):
+                warnings.append(
+                    f"configured capture path is not a regular file: {configured}"
+                )
+                continue
+            for path in _regular_files_beneath(root):
+                if _path_has_symlink_component(workspace, path) or not path.is_file():
+                    continue
+                resolved = path.resolve(strict=True)
+                if resolved != workspace and workspace not in resolved.parents:
+                    warnings.append("a configured generated file escaped the workspace")
+                    continue
+                if generated_count >= MAX_GENERATED_FILES:
+                    warnings.append(
+                        f"generated file limit reached ({MAX_GENERATED_FILES}); remaining files were not promoted"
+                    )
+                    capture_limit_reached = True
+                    break
+                size = resolved.stat().st_size
+                if generated_bytes + size > MAX_GENERATED_BYTES:
+                    warnings.append(
+                        "generated output exceeded the 100 MiB combined limit; remaining files were not promoted"
+                    )
+                    capture_limit_reached = True
+                    break
+                relative = resolved.relative_to(workspace).as_posix()
+                stored = await asyncio.to_thread(
+                    self.artifact_store.put_file_with_status,
+                    resolved,
+                    engagement_id=invocation.engagement_id,
+                    filename=relative,
+                    source=f"tool:{spec.name}@{spec.version}:workspace-generated",
+                    metadata={
+                        **common_metadata,
+                        "kind": "generated_file",
+                        "relative_path": relative,
+                        "capture_path": configured,
+                    },
+                )
+                with self.artifact_store.open(stored.artifact) as probe:
+                    searchable = bytes_are_searchable(
+                        probe.read(8192), media_type=stored.artifact.media_type
+                    )
+                stored.artifact.metadata["searchable"] = searchable
+                stored_items.append(stored)
+                artifact_entities.append(stored.artifact)
+                references.append(
+                    artifact_ref(
+                        stored.artifact,
+                        kind="generated_file",
+                        searchable=searchable,
+                    )
+                )
+                generated_count += 1
+                generated_bytes += size
+
+        timed_out = bool(result.execution.get("timed_out"))
+        if result.execution.get("cancelled") is True:
+            status = ToolResultStatus.CANCELLED
+        elif timed_out:
+            status = ToolResultStatus.TIMED_OUT
+        elif result.exit_code is not None and result.exit_code != 0:
+            status = ToolResultStatus.FAILED
+        else:
+            status = ToolResultStatus.COMPLETED
+        truncated = result.output_truncated or any(ref.truncated for ref in references)
+        incomplete = (
+            truncated
+            or status in {ToolResultStatus.TIMED_OUT, ToolResultStatus.CANCELLED}
+            or bool(warnings and any("limit" in item for item in warnings))
+        )
+        if truncated:
+            warnings.append(
+                "captured output was truncated after the configured retention limit"
+            )
+        parser_state = (
+            ParserState.FAILED
+            if result.parser_error
+            else ParserState.COMPLETED
+            if parser_configured
+            else ParserState.NOT_CONFIGURED
+        )
+        model_references = references[:MAX_MODEL_ARTIFACT_REFS]
+        if len(references) > len(model_references):
+            warnings.append(
+                f"{len(references) - len(model_references)} additional generated artifacts are available through tool_output.search"
+            )
+        warning_count = len(warnings)
+        warnings = [re.sub(r"\s+", " ", item).strip()[:240] for item in warnings[:8]]
+        if warning_count > len(warnings):
+            warnings.append(
+                f"{warning_count - len(warnings)} additional warnings are available in execution diagnostics"
+            )
+        receipt = ToolResultReceipt(
+            tool_call_id=call.id,
+            tool_name=spec.name,
+            tool_version=spec.version,
+            status=status,
+            exit_code=result.exit_code,
+            timing=ToolTimingReceipt(
+                started_at=result.execution.get("started_at"),
+                completed_at=result.execution.get("completed_at"),
+                duration_seconds=result.execution.get("duration_seconds"),
+            ),
+            artifacts=model_references,
+            truncated=truncated,
+            incomplete=incomplete,
+            parser=ToolParserReceipt(
+                state=parser_state,
+                artifact_id=parsed_artifact_id,
+                contract=spec.parser_contract,
+            ),
+            warnings=warnings,
+        )
+        receipt_payload = json.dumps(
+            receipt.as_model_result(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
         ).encode()
-        stored = await asyncio.to_thread(
+        receipt_stored = await asyncio.to_thread(
             self.artifact_store.put_bytes_with_status,
-            payload,
+            receipt_payload,
             engagement_id=invocation.engagement_id,
-            filename=f"tool-call-{call.id}.json",
+            filename=f"tool-call-{call.id}-receipt.json",
             media_type="application/json",
-            source=f"tool:{spec.name}@{spec.version}",
+            source=f"tool:{spec.name}@{spec.version}:receipt",
             metadata={
+                **common_metadata,
+                "kind": "receipt",
+                "searchable": False,
                 "tool_call_id": call.id,
-                "run_id": call.run_id,
-                "tool_pack": spec.pack_id,
-                "manifest_digest": spec.manifest_digest,
                 "image": spec.image,
                 "interface_catalog_digest": interface_catalog_digest,
                 "script_sha256": script_sha256,
             },
         )
+        stored_items.append(receipt_stored)
+        artifact_entities.append(receipt_stored.artifact)
         evidence = Evidence(
             engagement_id=invocation.engagement_id,
             evidence_type="tool_execution",
             title=f"{spec.name} execution",
-            artifact_id=stored.artifact.id,
+            artifact_id=receipt_stored.artifact.id,
             tool_call_id=call.id,
-            sha256=stored.artifact.sha256,
+            sha256=receipt_stored.artifact.sha256,
             captured_by=invocation.requested_by,
             source_version=(
                 f"{spec.pack_id}:{spec.name}@{spec.version}"
@@ -916,10 +1569,14 @@ class StoreToolEvidenceRecorder:
                 "interface_catalog_digest": interface_catalog_digest,
                 "script_sha256": script_sha256,
                 "exit_code": result.exit_code,
+                "status": status.value,
+                "artifact_ids": [item.artifact_id for item in references],
             },
         )
         try:
-            await asyncio.to_thread(self.store.create_many, [stored.artifact, evidence])
+            await asyncio.to_thread(
+                self.store.create_many, [*artifact_entities, evidence]
+            )
         except Exception as caught_error:
             record_caught_exception(
                 "toolbox",
@@ -928,9 +1585,33 @@ class StoreToolEvidenceRecorder:
                 caught_error,
                 stage="tools",
             )
-            await asyncio.to_thread(self.artifact_store.discard_new_blob, stored)
+            for stored in stored_items:
+                await asyncio.to_thread(self.artifact_store.discard_new_blob, stored)
             raise
-        return [evidence.id]
+        finally:
+            for temporary_path in (
+                result.stdout_artifact_path,
+                result.stderr_artifact_path,
+            ):
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+            if result.output_directory is not None:
+                shutil.rmtree(result.output_directory, ignore_errors=True)
+        return result.model_copy(
+            update={
+                "output": receipt.as_model_result(),
+                "artifacts": [item.model_dump(mode="json") for item in references],
+                "stdout": "",
+                "stderr": "",
+                "receipt": receipt,
+                "result_artifact_id": receipt_stored.artifact.id,
+                "evidence_ids": [evidence.id],
+                "stdout_artifact_path": None,
+                "stderr_artifact_path": None,
+                "output_directory": None,
+                "mcp_content_blocks": [],
+            }
+        )
 
 
 class ToolRegistry:
@@ -957,6 +1638,170 @@ class ToolRegistry:
 
     def specs(self) -> list[ToolSpec]:
         return [plugin.spec for plugin in self._plugins.values()]
+
+
+def register_artifact_retrieval_tools(
+    registry: ToolRegistry,
+    *,
+    output_service: ToolOutputService,
+) -> None:
+    """Install the four trusted, bounded retrieval capabilities."""
+
+    common_output = {"type": "object", "additionalProperties": True}
+
+    async def tool_search(invocation: ToolInvocation) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            output_service.search,
+            engagement_id=invocation.engagement_id,
+            owner_id=invocation.run_id,
+            **invocation.arguments,
+        )
+
+    async def tool_read(invocation: ToolInvocation) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            output_service.read,
+            engagement_id=invocation.engagement_id,
+            owner_id=invocation.run_id,
+            **invocation.arguments,
+        )
+
+    async def workspace_search(invocation: ToolInvocation) -> dict[str, Any]:
+        service = WorkspaceOutputService(invocation.workspace)
+        return await asyncio.to_thread(service.search, **invocation.arguments)
+
+    async def workspace_read(invocation: ToolInvocation) -> dict[str, Any]:
+        service = WorkspaceOutputService(invocation.workspace)
+        return await asyncio.to_thread(service.read, **invocation.arguments)
+
+    definitions: list[
+        tuple[
+            str,
+            str,
+            dict[str, Any],
+            Callable[[ToolInvocation], Awaitable[dict[str, Any]]],
+        ]
+    ] = [
+        (
+            "tool_output.search",
+            "Search immutable output artifacts from a prior tool call. Returns only bounded, redacted, line-numbered untrusted excerpts.",
+            {
+                "type": "object",
+                "properties": {
+                    "tool_call_id": {"type": "string"},
+                    "query": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["literal", "regex"],
+                        "default": "literal",
+                    },
+                    "case_sensitive": {"type": "boolean", "default": False},
+                    "context_lines": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 5,
+                        "default": 0,
+                    },
+                    "match_limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                    },
+                    "cursor": {"type": ["string", "null"]},
+                },
+                "required": ["tool_call_id", "query"],
+                "additionalProperties": False,
+            },
+            tool_search,
+        ),
+        (
+            "tool_output.read",
+            "Read at most 200 lines and 8 KiB from one authorized tool artifact.",
+            {
+                "type": "object",
+                "properties": {
+                    "artifact_id": {"type": "string"},
+                    "starting_line": {"type": "integer", "minimum": 1, "default": 1},
+                    "line_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 100,
+                    },
+                },
+                "required": ["artifact_id"],
+                "additionalProperties": False,
+            },
+            tool_read,
+        ),
+        (
+            "workspace.search",
+            "Search authorized engagement workspace files with bounded, redacted output.",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "path": {"type": "string", "default": "."},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["literal", "regex"],
+                        "default": "literal",
+                    },
+                    "case_sensitive": {"type": "boolean", "default": False},
+                    "context_lines": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 5,
+                        "default": 0,
+                    },
+                    "match_limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                    },
+                    "cursor": {"type": ["string", "null"]},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            workspace_search,
+        ),
+        (
+            "workspace.read",
+            "Read at most 200 lines and 8 KiB from an authorized workspace file.",
+            {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "starting_line": {"type": "integer", "minimum": 1, "default": 1},
+                    "line_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 100,
+                    },
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            workspace_read,
+        ),
+    ]
+    for name, description, input_schema, handler in definitions:
+        registry.register(
+            InvocationAnalysisTool(
+                ToolSpec(
+                    name=name,
+                    description=description,
+                    input_schema=input_schema,
+                    output_schema=common_output,
+                    risk_class=RiskClass.LOCAL_READ,
+                    budget_class="artifact_query",
+                ),
+                handler,
+            )
+        )
 
 
 class ToolBroker:
@@ -995,7 +1840,41 @@ class ToolBroker:
             raise InvalidToolArguments("this tool requires an idempotency key")
         call = await self.ledger.reserve(invocation, plugin.spec)
         if call.status == ToolCallStatus.COMPLETE and call.result is not None:
-            cached = ToolExecutionResult.model_validate(call.result)
+            if (
+                isinstance(call.result, dict)
+                and call.result.get("schema") == "nebula.tool-result/v2"
+            ):
+                receipt = ToolResultReceipt.model_validate(call.result)
+                cached = ToolExecutionResult(
+                    output=receipt.as_model_result(),
+                    artifacts=[
+                        item.model_dump(mode="json") for item in receipt.artifacts
+                    ],
+                    receipt=receipt,
+                    result_artifact_id=call.result_artifact_id,
+                )
+            elif isinstance(plugin, AnalysisTool):
+                # Trusted bounded analysis/retrieval results are not action
+                # output and retain their original replay behavior.
+                legacy_output = (
+                    call.result
+                    if isinstance(call.result, dict)
+                    else {
+                        "schema": "nebula.bounded-result/v1",
+                        "status": "incomplete",
+                        "warning": "historical analysis result was not an object",
+                    }
+                )
+                cached = ToolExecutionResult(output=legacy_output)
+            else:
+                # Do not rewrite historical evidence, but never replay its raw
+                # action payload into a modern model request.
+                receipt = _legacy_action_receipt(call, plugin.spec)
+                cached = ToolExecutionResult(
+                    output=receipt.as_model_result(),
+                    receipt=receipt,
+                    result_artifact_id=call.result_artifact_id,
+                )
             return PreparedToolCall(
                 call=call,
                 decision=PolicyDecision(
@@ -1149,15 +2028,27 @@ class ToolBroker:
                         raise ToolBrokerError(
                             "executable tools require an immutable evidence recorder"
                         )
-                    evidence_ids = await self.evidence_recorder.record(
+                    if result.parser_error is None and (
+                        plugin.spec.parser
+                        or plugin.spec.parser_contract
+                        or result.output
+                    ):
+                        try:
+                            self._validate(
+                                plugin.spec.output_schema, result.output, "output"
+                            )
+                        except InvalidToolArguments as exc:
+                            # Parsing is optional enrichment.  A schema problem
+                            # must not erase a successful process execution or
+                            # its raw evidence.
+                            result = result.model_copy(
+                                update={"parser_error": _bounded_execution_error(exc)}
+                            )
+                    result = await self.evidence_recorder.record(
                         running, invocation, plugin.spec, result
                     )
-                    result = result.model_copy(update={"evidence_ids": evidence_ids})
-                if result.parser_error is not None:
-                    raise ToolBrokerError(
-                        f"tool output parsing failed: {result.parser_error}"
-                    )
-                self._validate(plugin.spec.output_schema, result.output, "output")
+                else:
+                    self._validate(plugin.spec.output_schema, result.output, "output")
             except asyncio.CancelledError as caught_error:
                 record_caught_exception(
                     "toolbox",
@@ -1166,7 +2057,39 @@ class ToolBroker:
                     caught_error,
                     stage="tools",
                 )
-                await self.ledger.transition(running, ToolCallStatus.CANCELLED)
+                partial = getattr(caught_error, "result", None)
+                if (
+                    isinstance(partial, ToolExecutionResult)
+                    and self.evidence_recorder is not None
+                ):
+                    try:
+                        recorded = await asyncio.shield(
+                            self.evidence_recorder.record(
+                                running, invocation, plugin.spec, partial
+                            )
+                        )
+                    except Exception as exc:
+                        await self.ledger.transition(
+                            running,
+                            ToolCallStatus.FAILED,
+                            error=(
+                                "artifact persistence failed during cancellation: "
+                                + _bounded_execution_error(exc)
+                            ),
+                        )
+                    else:
+                        await self.ledger.transition(
+                            running,
+                            ToolCallStatus.CANCELLED,
+                            result=(
+                                recorded.receipt.as_model_result()
+                                if recorded.receipt is not None
+                                else recorded.output
+                            ),
+                            result_artifact_id=recorded.result_artifact_id,
+                        )
+                else:
+                    await self.ledger.transition(running, ToolCallStatus.CANCELLED)
                 raise
             except Exception as exc:
                 record_caught_exception(
@@ -1180,10 +2103,25 @@ class ToolBroker:
                     running, ToolCallStatus.FAILED, error=str(exc)
                 )
                 raise
+            terminal_status = ToolCallStatus.COMPLETE
+            terminal_error: str | None = None
+            if result.receipt is not None and result.receipt.status in {
+                ToolResultStatus.FAILED,
+                ToolResultStatus.TIMED_OUT,
+                ToolResultStatus.CANCELLED,
+            }:
+                terminal_status = ToolCallStatus.FAILED
+                terminal_error = f"tool execution {result.receipt.status.value}"
             await self.ledger.transition(
                 running,
-                ToolCallStatus.COMPLETE,
-                result=result.model_dump(mode="json"),
+                terminal_status,
+                result=(
+                    result.receipt.as_model_result()
+                    if result.receipt is not None
+                    else result.output
+                ),
+                error=terminal_error,
+                result_artifact_id=result.result_artifact_id,
             )
             return result
 
@@ -1332,8 +2270,12 @@ def invocation_digest(invocation: ToolInvocation) -> str:
 
 
 def _bounded_execution_error(exc: Exception) -> str:
-    detail = " ".join(str(exc).split()) or exc.__class__.__name__
-    return f"{exc.__class__.__name__}: {detail}"[:1_000]
+    # Exception messages from optional/custom parsers are not trusted metadata:
+    # they can echo the complete tool output (or secrets found in it).  Receipts
+    # and persisted call summaries are model-facing, so retain only the failure
+    # class here.  The full exception is still available to the internal
+    # diagnostic logger at each call site.
+    return f"{exc.__class__.__name__}: details withheld; inspect captured artifacts"
 
 
 def _mapped_ports(spec: ToolSpec, arguments: dict[str, Any]) -> list[int]:

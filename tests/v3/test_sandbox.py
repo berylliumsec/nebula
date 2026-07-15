@@ -25,6 +25,7 @@ from nebula.v3.sandbox import (
     SandboxRootFilesystem,
     SandboxUnavailable,
     SandboxWorkspaceAccess,
+    _read_limited_stream,
 )
 
 
@@ -64,6 +65,33 @@ def test_analysis_only_runner_fails_closed_instead_of_using_host(tmp_path):
     assert "container runner" in reason
     with pytest.raises(SandboxUnavailable, match="never fall back to the host"):
         asyncio.run(runner.run(_request(tmp_path)))
+
+
+def test_stream_reader_can_capture_without_retaining_a_second_memory_copy():
+    async def scenario():
+        reader = asyncio.StreamReader()
+        payload = b"nmap-line\n" * 100_000
+        reader.feed_data(payload)
+        reader.feed_eof()
+        captured = 0
+
+        async def persist(_stream: str, chunk: bytes) -> None:
+            nonlocal captured
+            captured += len(chunk)
+
+        retained, truncated, observed = await _read_limited_stream(
+            reader,
+            32,
+            stream="stdout",
+            on_chunk=persist,
+            retain=False,
+        )
+        assert retained == b""
+        assert truncated is False
+        assert observed == len(payload)
+        assert captured == len(payload)
+
+    asyncio.run(scenario())
 
 
 def test_sandbox_request_rejects_nul_and_unbounded_scoped_network(tmp_path):

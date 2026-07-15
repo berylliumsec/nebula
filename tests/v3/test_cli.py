@@ -212,6 +212,44 @@ def test_tools_cli_accepts_stable_json_output_flag(tmp_path):
     assert json.loads(result.output) == {"installations": [], "tools": []}
 
 
+def test_tools_add_generates_a_parser_free_v2_pack(tmp_path):
+    destination = tmp_path / "custom-tool"
+    result = CliRunner().invoke(
+        app,
+        [
+            "tools",
+            "--json",
+            "add",
+            str(destination),
+            "--pack-name",
+            "custom-tool",
+            "--tool-name",
+            "custom.run",
+            "--description",
+            "Run a configuration-only fixture tool",
+            "--image",
+            "example.invalid/custom@sha256:" + "a" * 64,
+            "--executable",
+            "/usr/bin/custom",
+            "--argument",
+            'name:string:--name:"smoke"',
+            "--capture-path",
+            "reports/result.txt",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    assert report["status"] == "created"
+    bundle = tmp_path / "custom-tool.nebula-toolpack"
+    assert report["bundle"] == str(bundle)
+    assert bundle.is_file()
+    manifest = (destination / "nebula-tool-pack.yaml").read_text(encoding="utf-8")
+    assert "tools.nebula.security/v2" in manifest
+    assert "capture_paths:" in manifest
+    assert "parser:" not in manifest
+
+
 def test_cli_imports_legacy_side_by_side_then_exports_bundle(tmp_path, monkeypatch):
     monkeypatch.delenv("NEBULA_V3_DATABASE_URL", raising=False)
     monkeypatch.delenv("NEBULA_V3_ARTIFACT_DIR", raising=False)

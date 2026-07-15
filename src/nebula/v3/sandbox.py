@@ -25,7 +25,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -245,6 +245,11 @@ class SandboxRequest(BaseModel):
     command: list[str] = Field(min_length=1)
     workspace: Path
     workspace_access: SandboxWorkspaceAccess = SandboxWorkspaceAccess.NONE
+    output_directory: Path | None = None
+    # Artifact-first callers stream directly to durable capture files and do
+    # not need a second in-memory copy of stdout/stderr. Interactive and legacy
+    # callers retain the previous behavior by default.
+    retain_output: bool = True
     environment: dict[str, str] = Field(default_factory=dict)
     network: SandboxNetwork = SandboxNetwork.NONE
     execution_kind: SandboxExecutionKind | None = None
@@ -351,6 +356,10 @@ class SandboxResult(BaseModel):
     stderr: str
     timed_out: bool = False
     output_truncated: bool = False
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    observed_stdout_bytes: int = Field(default=0, ge=0)
+    observed_stderr_bytes: int = Field(default=0, ge=0)
 
 
 class EgressLease(ABC):
@@ -612,7 +621,14 @@ class SandboxRunner(ABC):
                 await on_chunk("stdout", result.stdout.encode("utf-8"))
             if result.stderr:
                 await on_chunk("stderr", result.stderr.encode("utf-8"))
-        return result
+        return result.model_copy(
+            update={
+                "observed_stdout_bytes": result.observed_stdout_bytes
+                or len(result.stdout.encode("utf-8")),
+                "observed_stderr_bytes": result.observed_stderr_bytes
+                or len(result.stderr.encode("utf-8")),
+            }
+        )
 
 
 class AnalysisOnlyRunner(SandboxRunner):
@@ -891,6 +907,7 @@ class ContainerSandboxRunner(SandboxRunner):
             "HISTFILE",
             "LANG",
             "LC_ALL",
+            "NEBULA_OUTPUT_DIR",
             "TZ",
             "TERM",
             "NO_COLOR",
@@ -1166,6 +1183,26 @@ class ContainerSandboxRunner(SandboxRunner):
                 raise SandboxError(
                     "workspace is outside the configured workspace roots"
                 )
+        if request.output_directory is not None:
+            unresolved_output = request.output_directory.expanduser()
+            if unresolved_output.is_symlink():
+                raise SandboxError("tool output directory cannot be a symlink")
+            output_directory = unresolved_output.resolve(strict=True)
+            engagement_workspace = request.workspace.expanduser().resolve(strict=True)
+            if not output_directory.is_dir():
+                raise SandboxError("tool output directory must be a regular directory")
+            if engagement_workspace not in output_directory.parents:
+                raise SandboxError("tool output directory must remain in the workspace")
+            if any(
+                character in str(output_directory) for character in {",", "\n", "\r"}
+            ):
+                raise SandboxError("tool output directory cannot be encoded safely")
+            if self.workspace_roots is not None and not any(
+                engagement_workspace == root
+                or engagement_workspace.is_relative_to(root)
+                for root in self.workspace_roots
+            ):
+                raise SandboxError("tool output directory is outside workspace roots")
         repository_digest = re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", request.image)
         local_image_id = re.fullmatch(r"sha256:[0-9a-f]{64}", request.image)
         if (
@@ -1250,6 +1287,11 @@ class ContainerSandboxRunner(SandboxRunner):
                     "--workdir=/workspace",
                 ]
             )
+        if request.output_directory is not None:
+            output_directory = request.output_directory.expanduser().resolve(
+                strict=True
+            )
+            argv.append(f"--mount=type=bind,src={output_directory},dst=/nebula-output")
         if request.network == SandboxNetwork.NONE:
             argv.append("--network=none")
         elif request.network == SandboxNetwork.UNRESTRICTED:
@@ -1530,6 +1572,7 @@ class ContainerSandboxRunner(SandboxRunner):
                 request.limits.output_bytes,
                 stream="stdout",
                 on_chunk=on_chunk,
+                retain=request.retain_output,
             )
         )
         # diagnostic-expected: paired with stdout_task and gathered below.
@@ -1539,6 +1582,7 @@ class ContainerSandboxRunner(SandboxRunner):
                 request.limits.output_bytes,
                 stream="stderr",
                 on_chunk=on_chunk,
+                retain=request.retain_output,
             )
         )
         timed_out = False
@@ -1572,9 +1616,20 @@ class ContainerSandboxRunner(SandboxRunner):
                 await self._force_remove(selected_name)
                 stdout_task.cancel()
                 stderr_task.cancel()
+                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
                 raise
-            stdout, stdout_truncated = await stdout_task
-            stderr, stderr_truncated = await stderr_task
+            stream_results = await asyncio.gather(
+                stdout_task, stderr_task, return_exceptions=True
+            )
+            for stream_result in stream_results:
+                if isinstance(stream_result, BaseException):
+                    raise stream_result
+            stdout, stdout_truncated, observed_stdout = cast(
+                tuple[bytes, bool, int], stream_results[0]
+            )
+            stderr, stderr_truncated, observed_stderr = cast(
+                tuple[bytes, bool, int], stream_results[1]
+            )
             return SandboxResult(
                 command=request.command,
                 image=request.image,
@@ -1587,6 +1642,10 @@ class ContainerSandboxRunner(SandboxRunner):
                 stderr=stderr.decode("utf-8", errors="replace"),
                 timed_out=timed_out,
                 output_truncated=stdout_truncated or stderr_truncated,
+                stdout_truncated=stdout_truncated,
+                stderr_truncated=stderr_truncated,
+                observed_stdout_bytes=observed_stdout,
+                observed_stderr_bytes=observed_stderr,
             )
         finally:
             if lease is not None:
@@ -2433,24 +2492,37 @@ async def _read_limited_stream(
     *,
     stream: str,
     on_chunk: Callable[[str, bytes], Awaitable[None]] | None,
-) -> tuple[bytes, bool]:
+    retain: bool = True,
+) -> tuple[bytes, bool, int]:
     chunks: list[bytes] = []
     retained = 0
+    observed = 0
     truncated = False
+    callback_error: BaseException | None = None
     while True:
         chunk = await reader.read(32_768)
         if not chunk:
             break
-        remaining = max(0, limit - retained)
-        captured = chunk[:remaining]
-        if captured:
-            chunks.append(captured)
-            retained += len(captured)
-            if on_chunk is not None:
-                await on_chunk(stream, captured)
-        if len(chunk) > remaining:
-            truncated = True
-    return b"".join(chunks), truncated
+        observed += len(chunk)
+        if on_chunk is not None and callback_error is None:
+            try:
+                await on_chunk(stream, chunk)
+            except BaseException as exc:
+                # Keep draining both pipes so a failed capture destination can
+                # never deadlock the child process.  Surface the persistence
+                # failure only after EOF.
+                callback_error = exc
+        if retain:
+            remaining = max(0, limit - retained)
+            captured = chunk[:remaining]
+            if captured:
+                chunks.append(captured)
+                retained += len(captured)
+            if len(chunk) > remaining:
+                truncated = True
+    if callback_error is not None:
+        raise callback_error
+    return b"".join(chunks), truncated, observed
 
 
 async def _communicate_limited(

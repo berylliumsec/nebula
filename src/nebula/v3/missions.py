@@ -23,6 +23,7 @@ from .domain import (
     ApprovalStatus,
     Engagement,
     EngagementToolAssignment,
+    McpApprovalMode,
     ProviderProfile,
     RunBudget,
     RunStatus,
@@ -46,6 +47,7 @@ from .orchestration import (
 )
 from .providers import ModelProvider, ProviderError, provider_from_profile
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
+from .mcp import McpProbeError, mcp_tool_runtime_name, resolve_mcp_profiles
 from .storage import ConflictError, NebulaStore
 
 MAX_API_MISSION_DURATION_SECONDS = 3_600
@@ -186,6 +188,8 @@ class MissionService:
         model: str,
         budget: RunBudget,
         tool_names: list[str] | None = None,
+        mcp_server_ids: list[str] | None = None,
+        allow_cloud_tool_results: bool = False,
         actor_id: str = "system",
     ) -> AgentRun:
         """Validate, queue, and schedule one explicit analysis-only mission."""
@@ -194,6 +198,21 @@ class MissionService:
         clean_provider_id = provider_id.strip()
         clean_model = model.strip()
         selected_tools = list(dict.fromkeys(tool_names or ()))
+        try:
+            mcp_profiles = resolve_mcp_profiles(
+                self.store, list(dict.fromkeys(mcp_server_ids or ()))
+            )
+        except (McpProbeError, ValueError) as exc:
+            raise MissionConfigurationError(str(exc)) from exc
+        selected_mcp_tools = [
+            mcp_tool_runtime_name(profile.id, tool.name)
+            for profile in mcp_profiles
+            for tool in profile.capabilities.tools
+            if (not profile.enabled_tools or tool.name in profile.enabled_tools)
+            and tool.name not in profile.disabled_tools
+            and profile.tool_overrides.get(tool.name) != McpApprovalMode.DENY
+        ]
+        selected_action_tools = [*selected_tools, *selected_mcp_tools]
         if not clean_objective:
             raise MissionConfigurationError("mission objective cannot be empty")
         if not clean_provider_id or not clean_model:
@@ -206,7 +225,7 @@ class MissionService:
             for name in selected_tools
         ):
             raise MissionConfigurationError("mission tool names are invalid")
-        self._validate_budget(budget, tool_names=selected_tools)
+        self._validate_budget(budget, tool_names=selected_action_tools)
         if self.checkpoint_path is None:
             raise MissionServiceUnavailable(
                 "API missions require a file-backed local SQLite checkpoint store"
@@ -243,7 +262,7 @@ class MissionService:
             )
         pack_digests: list[str] = []
         interface_catalog_digests: list[str] = []
-        if selected_tools:
+        if selected_action_tools:
             if not profile.tools_verified_for(clean_model):
                 raise MissionConfigurationError(
                     "executable missions require reliable strict structured tool calling "
@@ -312,6 +331,15 @@ class MissionService:
                 stage="missions",
             )
             raise MissionConfigurationError(str(exc)) from exc
+        if mcp_profiles and not provider.config.local:
+            if not profile.privacy.permits_sensitive_data:
+                raise MissionConfigurationError(
+                    "provider profile does not permit MCP result transfer"
+                )
+            if not allow_cloud_tool_results:
+                raise MissionConfigurationError(
+                    "cloud MCP result transfer requires explicit confirmation"
+                )
 
         run = AgentRun(
             id=str(uuid4()),
@@ -323,13 +351,25 @@ class MissionService:
             budget=budget,
             tool_pack_digests=pack_digests,
             tool_interface_catalog_digests=interface_catalog_digests,
+            runtime_snapshot={
+                "mcp_server_ids": [item.id for item in mcp_profiles],
+                "mcp_snapshot": [item.model_dump(mode="json") for item in mcp_profiles],
+            },
             metadata={
-                "analysis_only": not selected_tools,
+                "analysis_only": not selected_action_tools,
                 "origin": "api",
-                **({"tool_names": selected_tools} if selected_tools else {}),
+                **(
+                    {
+                        "tool_names": selected_action_tools,
+                        "oci_tool_names": selected_tools,
+                        "mcp_tool_names": selected_mcp_tools,
+                    }
+                    if selected_action_tools
+                    else {}
+                ),
             },
         )
-        if selected_tools:
+        if selected_action_tools:
             if self.tool_components_factory is None:
                 raise MissionServiceUnavailable(
                     "tool mission runtime is not configured"
@@ -377,14 +417,16 @@ class MissionService:
                     "provider_id": profile.id,
                     "model": clean_model,
                     "budget": budget.model_dump(mode="json"),
-                    "analysis_only": not selected_tools,
+                    "analysis_only": not selected_action_tools,
                     **(
                         {
-                            "tool_names": selected_tools,
+                            "tool_names": selected_action_tools,
+                            "oci_tool_names": selected_tools,
+                            "mcp_server_ids": [item.id for item in mcp_profiles],
                             "tool_pack_digests": pack_digests,
                             "tool_interface_catalog_digests": interface_catalog_digests,
                         }
-                        if selected_tools
+                        if selected_action_tools
                         else {}
                     ),
                 },

@@ -1,4 +1,7 @@
+import base64
+import io
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
@@ -58,6 +61,46 @@ def _create_engagement(client: TestClient, name: str = "Tooling API") -> dict:
     )
     assert response.status_code == 201
     return response.json()
+
+
+def test_custom_tool_generator_returns_valid_parser_free_bundle(tmp_path):
+    client = TestClient(
+        create_app(NebulaStore(tmp_path / "generator.db"), auth_token="test-token")
+    )
+
+    response = client.post(
+        "/api/v1/tool-packs/generate",
+        headers=AUTH,
+        json={
+            "pack_name": "custom-nmap",
+            "tool_name": "nmap.scan",
+            "description": "Run a scoped scan",
+            "image": "example.invalid/nmap@sha256:" + "b" * 64,
+            "executable": "/usr/bin/nmap",
+            "arguments": [
+                {
+                    "name": "target",
+                    "value_type": "string",
+                    "positional": True,
+                    "smoke_value": "127.0.0.1",
+                }
+            ],
+            "risk_class": "active_scan",
+            "network_access": True,
+            "target_argument": "target",
+            "capture_paths": ["reports/scan.xml"],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    with zipfile.ZipFile(
+        io.BytesIO(base64.b64decode(payload["bundle_base64"]))
+    ) as bundle:
+        manifest = bundle.read("source/nebula-tool-pack.yaml").decode()
+        assert "tools.nebula.security/v2" in manifest
+        assert "capture_paths:" in manifest
+        assert "parser:" not in manifest
 
 
 def _runner_payload(**changes) -> dict:
@@ -674,6 +717,8 @@ def test_executable_mission_preflight_is_strict_and_pins_ready_packs(tmp_path):
             "analysis_only": False,
             "origin": "api",
             "tool_names": [TOOL_NAME],
+            "oci_tool_names": [TOOL_NAME],
+            "mcp_tool_names": [],
         }
         assert queued["tool_pack_digests"] == [PACK_DIGEST]
         assert queued["budget"]["max_tool_calls"] == 20
@@ -776,6 +821,7 @@ def test_approval_decision_resumes_the_same_executable_run(tmp_path):
                 "developer_mode_confirmed": True,
             },
         ),
+        ("post", "/api/v1/tool-packs/generate", {}),
         ("post", "/api/v1/tool-packs/missing/verify", None),
         ("post", "/api/v1/tool-packs/missing/update", None),
         ("delete", "/api/v1/tool-packs/missing", None),

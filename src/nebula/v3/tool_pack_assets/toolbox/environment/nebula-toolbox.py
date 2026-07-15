@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stable JSON contract between Nebula Core and a Toolbox image."""
+"""Toolbox adapter: native action streams plus bounded catalog JSON."""
 
 from __future__ import annotations
 
@@ -395,7 +395,8 @@ def _execute(
     ports: str | None,
     guidance: bool,
     script: str | None = None,
-) -> dict[str, Any]:
+) -> int:
+    """Relay native child streams and status; Core owns artifact capture."""
     environment = {
         "HOME": "/tmp",
         "LANG": "C.UTF-8",
@@ -403,6 +404,7 @@ def _execute(
         "PATH": "/opt/nebula/venv/bin:/opt/nebula/nmap/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         "NEBULA_TARGET": target or "",
         "NEBULA_PORTS": ports or "[]",
+        "NEBULA_OUTPUT_DIR": os.getenv("NEBULA_OUTPUT_DIR", "/tmp"),
         "NUCLEI_TEMPLATES": "/opt/nebula/nuclei-templates",
         "SEMGREP_ENABLE_VERSION_CHECK": "0",
         "SEMGREP_SEND_METRICS": "off",
@@ -413,33 +415,18 @@ def _execute(
             cwd=cwd,
             env=environment,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             timeout=timeout,
             check=False,
         )
-        return _envelope(
-            operation,
-            tool=tool,
-            command=command,
-            exit_code=completed.returncode,
-            stdout=_bounded(completed.stdout),
-            stderr=_bounded(completed.stderr),
-            metadata=_metadata(guidance=guidance, script=script),
+        return int(completed.returncode)
+    except subprocess.TimeoutExpired:
+        # Child output was already relayed. Core records this status and the
+        # partial streams even though the adapter-level deadline fired.
+        print(
+            f"nebula-toolbox: {tool or operation} timed out after {timeout}s",
+            file=sys.stderr,
         )
-    except subprocess.TimeoutExpired as exc:
-        # diagnostic-expected: timeout is a structured result consumed and
-        # classified by the supervising sandbox/execution service.
-        return _envelope(
-            operation,
-            tool=tool,
-            command=command,
-            exit_code=124,
-            stdout=_bounded(exc.stdout or b""),
-            stderr=_bounded(exc.stderr or b""),
-            timed_out=True,
-            metadata=_metadata(guidance=guidance, script=script),
-        )
+        return 124
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -522,6 +509,7 @@ def _execute_code(language: str) -> int:
             "PATH": "/opt/nebula/venv/bin:/opt/nebula/nmap/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
             "NEBULA_TARGET": os.getenv("NEBULA_TARGET", ""),
             "NEBULA_PORTS": os.getenv("NEBULA_PORTS", "[]"),
+            "NEBULA_OUTPUT_DIR": os.getenv("NEBULA_OUTPUT_DIR", "/tmp"),
             "NUCLEI_TEMPLATES": "/opt/nebula/nuclei-templates",
             "SEMGREP_ENABLE_VERSION_CHECK": "0",
             "SEMGREP_SEND_METRICS": "off",
@@ -539,6 +527,7 @@ def _execute_code(language: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    native_action = False
     try:
         options = _parser().parse_args(argv)
         if options.operation == "code":
@@ -583,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
                 metadata=_metadata(guidance=True),
             )
         else:
+            native_action = True
             if options.timeout < 1 or options.timeout > 3600:
                 raise ValueError("timeout must be between 1 and 3600 seconds")
             cwd = _cwd(options.cwd)
@@ -624,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
                 tool = "shell"
                 guidance = False
                 script = options.script
-            output = _execute(
+            return _execute(
                 options.operation,
                 argv,
                 tool=tool,
@@ -636,6 +626,9 @@ def main(argv: list[str] | None = None) -> int:
                 script=script,
             )
     except Exception as exc:
+        if native_action:
+            print(f"{exc.__class__.__name__}: {exc}", file=sys.stderr)
+            return 2
         # diagnostic-expected: this isolated adapter returns a bounded failure
         # envelope; Core records it without protocol payloads or tool output.
         try:

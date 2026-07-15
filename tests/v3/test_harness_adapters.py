@@ -28,6 +28,7 @@ from nebula.v3.harnesses import (
     HarnessPermissionDecision,
     PermissionTicket,
     _CodexRpc,
+    _codex_thread_config,
 )
 
 
@@ -249,6 +250,20 @@ def test_codex_rpc_rejects_malformed_and_uncorrelated_messages():
     asyncio.run(scenario())
 
 
+def test_codex_gateway_thread_disables_vendor_execution_and_environment():
+    config = _codex_thread_config({}, gateway_only=True)
+
+    assert config["features"]["shell_tool"] is False
+    assert config["features"]["unified_exec"] is False
+    assert config["features"]["plugins"] is False
+    assert config["features"]["browser_use"] is False
+    assert config["web_search"] == "disabled"
+    assert config["shell_environment_policy"] == {
+        "inherit": "none",
+        "set": {"PATH": "/nonexistent"},
+    }
+
+
 class StreamEvent:
     def __init__(self, event: dict[str, Any]) -> None:
         self.event = event
@@ -301,6 +316,7 @@ class FakeClaudeClient:
     def __init__(self, *, options: FakeClaudeOptions) -> None:
         self.options = options
         self.connected = False
+        self.mcp_status_calls = 0
         self.queries: list[str] = []
         self.interrupted = False
         self.disconnected = False
@@ -333,7 +349,13 @@ class FakeClaudeClient:
         yield ResultMessage()
 
     async def get_mcp_status(self) -> dict[str, Any]:
-        return {"mcpServers": [{"name": "workspace_server", "status": "connected"}]}
+        self.mcp_status_calls += 1
+        return {
+            "mcpServers": [
+                {"name": name, "status": "connected"}
+                for name in self.options.kwargs["mcp_servers"]
+            ]
+        }
 
     async def interrupt(self) -> None:
         self.interrupted = True
@@ -441,5 +463,67 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
         assert FakeClaudeClient.latest.interrupted is True
         await connection.close()
         assert FakeClaudeClient.latest.disconnected is True
+
+    asyncio.run(scenario())
+
+
+def test_claude_gateway_is_required_and_ready_before_the_session_opens(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        sdk = SimpleNamespace(
+            ClaudeAgentOptions=FakeClaudeOptions,
+            ClaudeSDKClient=FakeClaudeClient,
+            PermissionResultAllow=PermissionResultAllow,
+        )
+        monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
+
+        async def permission(_request):
+            future: asyncio.Future[HarnessPermissionDecision] = (
+                asyncio.get_running_loop().create_future()
+            )
+            future.set_result(HarnessPermissionDecision(allowed=False))
+            return PermissionTicket(None, None, future)
+
+        profile = HarnessProfile(
+            id="claude-gateway",
+            name="Claude gateway",
+            kind=HarnessKind.CLAUDE_AGENT_SDK,
+            default_model="claude-test",
+        )
+        session = HarnessSession(
+            id="session-gateway",
+            engagement_id="eng-a",
+            harness_profile_id=profile.id,
+            model="claude-test",
+        )
+        connection = await ClaudeAgentSdkAdapter().open(
+            AdapterOpenRequest(
+                profile=profile,
+                session=session,
+                workspace=tmp_path,
+                mcp_profiles=(),
+                gateway_config={
+                    "nebula": {
+                        "transport": "stdio",
+                        "command": "/usr/bin/python3",
+                        "args": ["-m", "nebula.v3.mcp_gateway"],
+                        "env": {"NEBULA_MCP_GATEWAY_TOKEN": "fixture"},
+                        "required": True,
+                        "startup_timeout_seconds": 10.0,
+                        "tool_timeout_seconds": 900.0,
+                    }
+                },
+                credential_store=CredentialStore(),
+                permission_handler=permission,
+            )
+        )
+
+        options = FakeClaudeClient.latest.options.kwargs
+        assert set(options["mcp_servers"]) == {"nebula"}
+        assert FakeClaudeClient.latest.mcp_status_calls == 1
+        assert "Bash" in options["disallowed_tools"]
+        assert "Read" in options["disallowed_tools"]
+        await connection.close()
 
     asyncio.run(scenario())

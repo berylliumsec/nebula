@@ -59,6 +59,7 @@ from .version import __version__
 
 
 TOOL_PACK_API_VERSION = "tools.nebula.security/v1"
+TOOL_PACK_API_VERSION_V2 = "tools.nebula.security/v2"
 MAX_MANIFEST_BYTES = 2_000_000
 MAX_STORED_MANIFEST_BYTES = 5_000_000
 
@@ -261,7 +262,11 @@ class ToolPackTool(StrictModel):
 
     @field_validator("input_schema", "output_schema")
     @classmethod
-    def schemas_are_strict_objects(cls, schema: dict[str, Any]) -> dict[str, Any]:
+    def schemas_are_strict_objects(
+        cls, schema: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if schema is None:
+            return None
         _validate_strict_schema(schema)
         return schema
 
@@ -418,6 +423,88 @@ class ToolPackManifestV1(StrictModel):
         return result
 
 
+class ToolPackToolV2(ToolPackTool):
+    """Parser-free by default; raw artifact capture is the result contract."""
+
+    output_schema: dict[str, Any] | None = None  # type: ignore[assignment]
+    parser: ToolParserReference | None = None  # type: ignore[assignment]
+    capture_paths: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("capture_paths")
+    @classmethod
+    def capture_paths_are_workspace_relative(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            path = Path(value)
+            if not value or path.is_absolute() or ".." in path.parts or "\x00" in value:
+                raise ValueError("capture paths must be fixed workspace-relative paths")
+            normalized.append(path.as_posix())
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("capture paths must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def parser_requires_output_schema(self) -> "ToolPackToolV2":
+        if self.parser is not None and self.output_schema is None:
+            raise ValueError("v2 tools that select a parser require output_schema")
+        if self.parser is None and self.output_schema is not None:
+            raise ValueError("output_schema is only valid when a parser is selected")
+        return self
+
+
+class ToolPackManifestV2(ToolPackManifestV1):
+    api_version: Literal["tools.nebula.security/v2"] = "tools.nebula.security/v2"  # type: ignore[assignment]
+    tools: list[ToolPackToolV2] = Field(min_length=1)  # type: ignore[assignment]
+
+    def tool_specs(
+        self,
+        platform: str,
+        *,
+        manifest_digest_value: str | None = None,
+    ) -> list[ToolSpec]:
+        digest = manifest_digest_value or manifest_digest(self)
+        result: list[ToolSpec] = []
+        for tool in self.tools:
+            parser_contract = (
+                tool.parser.model_dump(mode="json", exclude_none=True)
+                if tool.parser is not None
+                else None
+            )
+            result.append(
+                ToolSpec(
+                    name=tool.name,
+                    version=tool.version,
+                    description=tool.description,
+                    input_schema=tool.input_schema,
+                    output_schema=tool.output_schema
+                    or {"type": "object", "additionalProperties": True},
+                    risk_class=tool.policy.risk_class,
+                    requires_approval=tool.policy.requires_approval,
+                    network_access=tool.policy.network_access,
+                    filesystem_access=tool.policy.filesystem_access,
+                    timeout_seconds=tool.timeout_seconds,
+                    parser=(tool.parser.built_in if tool.parser is not None else None),
+                    idempotency=tool.policy.idempotency,
+                    target_argument=tool.policy.target_argument,
+                    port_argument=tool.policy.port_argument,
+                    path_arguments=tool.policy.path_arguments,
+                    pack_id=self.identity,
+                    manifest_digest=digest,
+                    image=self.image_for(tool.image, platform).image,
+                    executable=tool.executable,
+                    fixed_arguments=tool.fixed_arguments,
+                    argument_bindings=tool.argument_bindings,
+                    parser_contract=parser_contract,
+                    smoke_test_fixture=tool.smoke_tests[0].model_dump(mode="json"),
+                    capture_paths=tool.capture_paths,
+                )
+            )
+        return result
+
+
+ToolPackManifest = ToolPackManifestV1 | ToolPackManifestV2
+
+
 def _validate_strict_schema(schema: dict[str, Any]) -> None:
     try:
         Draft202012Validator.check_schema(schema)
@@ -473,7 +560,7 @@ _UniqueKeyLoader.add_constructor(
 )
 
 
-def compile_manifest_yaml(source: str | bytes) -> ToolPackManifestV1:
+def compile_manifest_yaml(source: str | bytes) -> ToolPackManifest:
     raw = source.encode("utf-8") if isinstance(source, str) else source
     if len(raw) > MAX_MANIFEST_BYTES:
         raise ToolPackValidationError("tool-pack manifest is too large")
@@ -503,7 +590,12 @@ def compile_manifest_yaml(source: str | bytes) -> ToolPackManifestV1:
     if not isinstance(payload, dict):
         raise ToolPackValidationError("tool-pack YAML must contain one object")
     try:
-        return ToolPackManifestV1.model_validate(payload)
+        api_version = payload.get("api_version")
+        if api_version == TOOL_PACK_API_VERSION:
+            return ToolPackManifestV1.model_validate(payload)
+        if api_version == TOOL_PACK_API_VERSION_V2:
+            return ToolPackManifestV2.model_validate(payload)
+        raise ValueError(f"unsupported tool-pack api_version: {api_version!r}")
     except Exception as exc:
         record_caught_exception(
             "toolbox",
@@ -515,7 +607,7 @@ def compile_manifest_yaml(source: str | bytes) -> ToolPackManifestV1:
         raise ToolPackValidationError("tool-pack manifest failed validation") from exc
 
 
-def canonical_manifest_json(manifest: ToolPackManifestV1) -> bytes:
+def canonical_manifest_json(manifest: ToolPackManifest) -> bytes:
     return json.dumps(
         manifest.model_dump(mode="json"),
         sort_keys=True,
@@ -525,7 +617,21 @@ def canonical_manifest_json(manifest: ToolPackManifestV1) -> bytes:
     ).encode("utf-8")
 
 
-def manifest_digest(manifest: ToolPackManifestV1) -> str:
+def parse_manifest_json(source: str | bytes) -> ToolPackManifest:
+    try:
+        payload = json.loads(source)
+        if not isinstance(payload, dict):
+            raise ValueError("manifest must be an object")
+        if payload.get("api_version", TOOL_PACK_API_VERSION) == TOOL_PACK_API_VERSION:
+            return ToolPackManifestV1.model_validate(payload)
+        if payload.get("api_version") == TOOL_PACK_API_VERSION_V2:
+            return ToolPackManifestV2.model_validate(payload)
+        raise ValueError("unsupported tool-pack api_version")
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ToolPackValidationError("tool-pack manifest failed validation") from exc
+
+
+def manifest_digest(manifest: ToolPackManifest) -> str:
     return hashlib.sha256(canonical_manifest_json(manifest)).hexdigest()
 
 
@@ -1146,7 +1252,7 @@ class ImmutableManifestStore:
             raise ToolPackInstallError(f"stored manifest digest mismatch: {digest}")
 
         try:
-            manifest = ToolPackManifestV1.model_validate_json(payload)
+            manifest = parse_manifest_json(payload)
         except Exception as exc:
             record_caught_exception(
                 "toolbox",
@@ -1255,7 +1361,7 @@ def build_tool_registry(
             {
                 f"parser:{tool.name}": tool.parser.container.image
                 for tool in manifest.tools
-                if tool.parser.container is not None
+                if tool.parser is not None and tool.parser.container is not None
             }
         )
         if installation.image_locks != expected_locks:
@@ -1270,7 +1376,7 @@ def build_tool_registry(
         ):
             try:
                 plugin: ToolPlugin
-                if tool.parser.container is not None:
+                if tool.parser is not None and tool.parser.container is not None:
                     if parser_executor is None:
                         raise ToolPackInstallError(
                             "parser-container execution is not configured for "
@@ -1282,6 +1388,10 @@ def build_tool_registry(
                         parser_executor=parser_executor,
                     )
                 else:
+                    if tool.parser is None:
+                        plugin = SandboxCommandTool(spec, output_parser=None)
+                        registry.register(plugin)
+                        continue
                     assert tool.parser.built_in is not None
                     try:
                         parser = parser_registry[tool.parser.built_in]
@@ -1594,19 +1704,23 @@ class ToolPackInstaller:
                         f"smoke test failed for {tool.name}: "
                         f"exit {result.exit_code}{suffix}"
                     )
-                parsed = await self._parse_smoke_output(tool, result.stdout)
-                errors = list(
-                    Draft202012Validator(tool.output_schema).iter_errors(parsed)
-                )
-                if errors:
-                    raise ToolPackInstallError(
-                        f"smoke-test output violates {tool.name} schema: "
-                        f"{errors[0].message}"
+                if tool.parser is not None:
+                    parsed = await self._parse_smoke_output(tool, result.stdout)
+                    assert tool.output_schema is not None
+                    errors = list(
+                        Draft202012Validator(tool.output_schema).iter_errors(parsed)
                     )
+                    if errors:
+                        raise ToolPackInstallError(
+                            f"smoke-test output violates {tool.name} schema: "
+                            f"{errors[0].message}"
+                        )
 
     async def _parse_smoke_output(
-        self, tool: ToolPackTool, stdout: str
+        self, tool: ToolPackTool | ToolPackToolV2, stdout: str
     ) -> dict[str, Any]:
+        if tool.parser is None:
+            raise ToolPackInstallError("parser-free tools do not parse smoke output")
         if tool.parser.built_in is not None:
             try:
                 return BUILTIN_PARSERS[tool.parser.built_in](stdout, "", 0)
@@ -1648,7 +1762,7 @@ class ToolPackInstaller:
             for tool in manifest.tools
         }
         for tool in manifest.tools:
-            if tool.parser.container is not None:
+            if tool.parser is not None and tool.parser.container is not None:
                 locks[f"parser:{tool.name}"] = tool.parser.container.image
         return locks
 

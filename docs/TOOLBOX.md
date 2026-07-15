@@ -43,12 +43,16 @@ actions, scope changes, and external filesystem writes remain approval-gated.
 Each specialist receives its role-compatible capabilities from the immutable
 mission tool lock and works in durable sequential turns. A turn may search the
 catalog, read exact help, select a structured interface, use the shell fallback,
-or explicitly finish the task; at most one brokered capability executes in a
-turn. Nonzero exits, timeouts, parser failures, output truncation, policy denials,
-and rejected approvals are returned to the next turn as error observations. The
-specialist must change a failed invocation, find a permitted alternative, or
-finish as blocked. It cannot report completion while its latest failure is
-unresolved.
+inspect earlier output, or explicitly finish the task; at most one brokered
+execution capability runs in a turn. Executions return a compact
+`nebula.tool-result/v2` receipt. Specialists use bounded `tool_output.search`
+and `tool_output.read` calls to inspect the captured stdout, stderr, parsed data,
+and generated-file artifacts they need. Nonzero exits, timeouts, output
+truncation, policy denials, and rejected approvals remain visible to the next
+turn. Parser/schema failures are warnings and never hide an otherwise successful
+native process result. The specialist must change a failed invocation, find a
+permitted alternative, or finish as blocked. It cannot report completion while
+its latest failure is unresolved.
 
 Tool calls, model tokens, cost, duration, and concurrency remain bounded by the
 existing mission controls. Investigative turns do not consume `max_retries`;
@@ -93,9 +97,11 @@ A compatible image must:
 - provide `/opt/nebula/bin/nebula-toolbox` with the `search`, `help`, `exec`,
   `shell`, and bounded `code` subcommands and `/usr/local/bin/nebula-egress`
   with the signed helper contract;
-- emit exactly one JSON object for catalogued Toolbox envelope operations; the
-  operator-reviewed `code` adapter instead streams the declared interpreter's
-  raw stdout/stderr and never gives it interactive stdin;
+- relay catalogued command and shell child stdout, stderr, and exit status
+  natively, without wrapping them in JSON; bounded catalog `search` and `help`
+  operations retain their trusted structured response contract, and the
+  operator-reviewed `code` adapter streams the declared interpreter's native
+  output without interactive stdin;
 - use `/workspace` for engagement files and run without an OCI `ENTRYPOINT`;
 - pass the offline search, help, local-exec, and loopback network smoke tests.
 
@@ -134,6 +140,21 @@ hard-coded schemas:
 | `environment.shell_local` | Run full Bash for uncatalogued tools and pipelines | None |
 | `environment.shell_network` | Run full Bash through broker-pinned egress | Scoped |
 
+Every agent runtime also receives `tool_output.search` and `tool_output.read`.
+Gateway-only Codex and Claude sessions receive bounded `workspace.search` and
+`workspace.read` instead of vendor-native shell or file tools. Artifact searches
+are independently budgeted (200 per mission and 20 per chat turn by default), so
+an agent can continue investigating prior evidence after exhausting its active
+execution-call budget. Excerpts are line-numbered, redacted, capped at 8 KiB,
+and explicitly treated as untrusted tool data.
+
+Core begins capture before starting a process and continuously drains stdout and
+stderr. It retains up to 100 MiB per stream while still counting bytes observed
+beyond the limit. Files written beneath `NEBULA_OUTPUT_DIR` (or an argv
+`{output_dir}` placeholder) are promoted as separate immutable artifacts, up to
+256 files and 100 MiB combined. The receipt records hashes, sizes, truncation,
+parser state, timing, and warnings but never contains raw action output.
+
 Core automatically injects the selected command's detailed interface into the
 execution model turn. Structured network positionals may use `{target}`; shell
 scripts use `NEBULA_TARGET` and `NEBULA_PORTS`. Shell guidance is intentionally
@@ -164,13 +185,43 @@ Build each platform image, push it to a registry, and record the immutable
 digests. Create a local environment bundle using the existing author SDK:
 
 ```bash
-nebula-core tools init my-toolbox --publisher your-company
+nebula-core tools init ./my-toolbox --name my-toolbox --publisher your-company
 # Replace the generated image/tool definitions with the Toolbox compatibility
 # manifest and its exact platform digests.
 nebula-core tools validate my-toolbox
-nebula-core tools test my-toolbox --runner local
-nebula-core tools pack my-toolbox --output my-toolbox.nebula-toolpack
+nebula-core tools test my-toolbox
+nebula-core tools pack my-toolbox my-toolbox.nebula-toolpack
 ```
+
+For a standalone OCI command, the configuration-only generator is simpler. It
+creates a parser-free `tools.nebula.security/v2` manifest, typed bindings,
+permission preview, smoke-test fixture, source scaffold, and an unsigned local
+bundle beside it:
+
+```bash
+nebula-core tools add ./nmap-pack \
+  --pack-name custom-nmap \
+  --tool-name nmap.scan \
+  --description "Run an authorized Nmap scan" \
+  --image registry.example/nmap@sha256:<64-hex-digest> \
+  --executable /usr/bin/nmap \
+  --argument 'target:string:positional:"127.0.0.1"' \
+  --argument 'ports:integer_list:-p:[80,443]' \
+  --network \
+  --target-argument target \
+  --port-argument ports
+```
+
+This writes `./custom-nmap.nebula-toolpack` by default; `--bundle` selects a
+different destination. The UI wizard exposes the same target and port policy
+mappings.
+
+The matching UI wizard is under the custom Toolbox controls. Neither path
+requires a JSON wrapper, parser, or Core code. Authors may optionally declare an
+output flag (Nebula supplies a dedicated output directory) and fixed
+workspace-relative capture paths. Arbitrary host binaries remain unsupported;
+custom execution always uses a digest-pinned rootless OCI image. Signed v1 packs
+continue to load unchanged.
 
 Enable device developer mode, then upload the bundle under **Settings →
 Advanced → Toolbox → Use a custom compatible environment**. Unsigned local environments

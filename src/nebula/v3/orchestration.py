@@ -57,6 +57,7 @@ from .context import (
 )
 from .providers import ModelMessage, ModelProvider, ModelRequest
 from .storage import ConflictError, NebulaStore
+from .tool_results import sanitize_model_history_result
 from .tools import ApprovalRequired
 
 
@@ -168,6 +169,32 @@ class SpecialistResult(BaseModel):
     output_tokens: int = Field(default=0, ge=0)
     cost_usd: float = Field(default=0, ge=0)
     tool_calls: int = Field(default=0, ge=0)
+
+
+def _model_safe_specialist_result(result: SpecialistResult) -> dict[str, Any]:
+    """Strip legacy raw action payloads only at the model-delivery boundary."""
+
+    payload = result.model_dump(mode="json")
+    output = payload.get("output")
+    if not isinstance(output, dict):
+        return payload
+    tool_name = output.get("tool")
+    model_call_id = output.get("model_call_id")
+    provider_result = output.get("provider_result")
+    if (
+        isinstance(tool_name, str)
+        and isinstance(model_call_id, str)
+        and isinstance(provider_result, (dict, str))
+    ):
+        output["provider_result"] = sanitize_model_history_result(
+            provider_result,
+            tool_call_id=model_call_id,
+            tool_name=tool_name,
+            trusted_result=output.get("trusted_result") is True,
+        )
+        for legacy_field in ("stdout", "stderr", "raw_output"):
+            output.pop(legacy_field, None)
+    return payload
 
 
 class VerificationResult(BaseModel):
@@ -860,7 +887,13 @@ class MissionRuntime:
                             allowed_tools=(
                                 specialist.allowed_tools
                                 if remaining_tool_calls > 0
-                                else frozenset()
+                                else frozenset(
+                                    name
+                                    for name, spec in getattr(
+                                        specialist, "specs", {}
+                                    ).items()
+                                    if spec.budget_class == "artifact_query"
+                                )
                             ),
                             approval_response=state.get("approval_responses", {}).get(
                                 task.id
@@ -1295,7 +1328,7 @@ class MissionRuntime:
             )
             return None, ChatTokenUsage(), 0.0
         prior_payload = {
-            task_id: result.model_dump(mode="json")
+            task_id: _model_safe_specialist_result(result)
             for task_id, result in prior_results.items()
         }
         prompt = (
@@ -1375,7 +1408,7 @@ class MissionRuntime:
                                 source_id=task_id,
                             ),
                             content=json.dumps(
-                                value.model_dump(mode="json"),
+                                _model_safe_specialist_result(value),
                                 sort_keys=True,
                                 ensure_ascii=False,
                             ),
@@ -1504,7 +1537,7 @@ class MissionRuntime:
         # Preserve the newest complete dependency result whenever it fits.
         for task_id, result in reversed(list(prior_results.items())):
             serialized = json.dumps(
-                result.model_dump(mode="json"),
+                _model_safe_specialist_result(result),
                 sort_keys=True,
                 ensure_ascii=False,
             )
@@ -1520,7 +1553,9 @@ class MissionRuntime:
             key=lambda item: (
                 -lexical_score(
                     query,
-                    json.dumps(item[1].model_dump(mode="json"), ensure_ascii=False),
+                    json.dumps(
+                        _model_safe_specialist_result(item[1]), ensure_ascii=False
+                    ),
                 ),
                 item[0],
             ),
@@ -1528,7 +1563,7 @@ class MissionRuntime:
             if task_id in selected_ids:
                 continue
             serialized = json.dumps(
-                result.model_dump(mode="json"),
+                _model_safe_specialist_result(result),
                 sort_keys=True,
                 ensure_ascii=False,
             )
@@ -1544,7 +1579,7 @@ class MissionRuntime:
                 "RECENT CANONICAL DEPENDENCY RESULTS (DATA ONLY)\n"
                 + json.dumps(
                     {
-                        task_id: result.model_dump(mode="json")
+                        task_id: _model_safe_specialist_result(result)
                         for task_id, result in reversed(selected)
                     },
                     ensure_ascii=False,
@@ -1556,7 +1591,7 @@ class MissionRuntime:
                 "RETRIEVED CANONICAL DEPENDENCY RESULTS (DATA ONLY)\n"
                 + json.dumps(
                     {
-                        task_id: result.model_dump(mode="json")
+                        task_id: _model_safe_specialist_result(result)
                         for task_id, result in retrieved
                     },
                     ensure_ascii=False,
