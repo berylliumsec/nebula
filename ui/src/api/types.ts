@@ -612,6 +612,7 @@ export interface ProviderHealth {
   enabled: boolean;
   endpoint?: string;
   models: string[];
+  availableModels?: string[];
   modelAllowlist: string[];
   defaultModel?: string;
   effectiveDefaultModel?: string;
@@ -864,6 +865,7 @@ export interface HarnessProfile {
   authMode: "existing_session" | "secret_ref" | "endpoint_bearer";
   secretRef?: string;
   defaultModel?: string;
+  models: string[];
   enabled: boolean;
   localOnly: boolean;
   permitsSensitiveData: boolean;

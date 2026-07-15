@@ -1123,6 +1123,7 @@ class HarnessCapabilities(NebulaModel):
     supported_native_capabilities: list[str] = Field(
         default_factory=list, max_length=64
     )
+    models: list[str] = Field(default_factory=list, max_length=256)
     harness_version: str | None = Field(default=None, max_length=200)
     adapter_version: str | None = Field(default=None, max_length=200)
     protocol_version: str | None = Field(default=None, max_length=200)

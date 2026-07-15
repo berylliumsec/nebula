@@ -275,6 +275,41 @@ def test_native_providers_translate_tool_definitions(monkeypatch, provider_class
         assert declaration["parameters"] == TOOL.input_schema
 
 
+def test_anthropic_health_discovers_models_without_a_configured_default(monkeypatch):
+    monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
+    observed = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.update(path=request.url.path, api_key=request.headers.get("x-api-key"))
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "claude-opus-4-1"},
+                    {"id": "claude-sonnet-4-5"},
+                    {"display_name": "invalid"},
+                ]
+            },
+        )
+
+    provider = AnthropicProvider(
+        ProviderConfig(
+            id="anthropic",
+            kind=ProviderKind.ANTHROPIC,
+            flavor=ProviderFlavor.ANTHROPIC,
+            base_url="https://api.anthropic.com",
+            api_key_env="NEBULA_TEST_PROVIDER_KEY",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    health = asyncio.run(provider.health())
+
+    assert observed == {"path": "/v1/models", "api_key": "secret"}
+    assert health.healthy is True
+    assert health.models == ["claude-opus-4-1", "claude-sonnet-4-5"]
+
+
 def test_capability_checks_and_registry_routing_are_explicit():
     cloud = OpenAICompatibleProvider(
         _config(ProviderKind.OPENAI_COMPATIBLE, residency="us")

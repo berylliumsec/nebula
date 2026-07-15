@@ -1117,6 +1117,40 @@ def _codex_usage(params: dict[str, Any]) -> ChatTokenUsage:
 class CodexAppServerAdapter(HarnessAdapter):
     kind = HarnessKind.CODEX_APP_SERVER
 
+    async def _models(self, rpc: _CodexRpc, *, timeout: float) -> list[str]:
+        models: list[str] = []
+        cursor: str | None = None
+        pages = 0
+        while len(models) < 256 and pages < 16:
+            pages += 1
+            params = {"cursor": cursor} if cursor else {}
+            result = await asyncio.wait_for(
+                rpc.request("model/list", params), timeout=timeout
+            )
+            if not isinstance(result, dict):
+                break
+            data = result.get("data")
+            if not isinstance(data, list):
+                break
+            for item in data:
+                if not isinstance(item, dict) or item.get("hidden") is True:
+                    continue
+                raw_model = item.get("model") or item.get("id")
+                model = raw_model.strip() if isinstance(raw_model, str) else ""
+                if model and len(model) <= 500 and model not in models:
+                    models.append(model)
+                    if len(models) == 256:
+                        break
+            next_cursor = result.get("nextCursor")
+            if (
+                not isinstance(next_cursor, str)
+                or not next_cursor
+                or next_cursor == cursor
+            ):
+                break
+            cursor = next_cursor
+        return models
+
     async def probe(
         self, profile: HarnessProfile, credential_store: CredentialStore
     ) -> HarnessHealth:
@@ -1125,6 +1159,9 @@ class CodexAppServerAdapter(HarnessAdapter):
             rpc = await self._connect(profile, credential_store, (), Path.cwd())
             initialize = await asyncio.wait_for(
                 self._initialize(rpc), timeout=profile.metadata.get("probe_timeout", 15)
+            )
+            models = await self._models(
+                rpc, timeout=profile.metadata.get("probe_timeout", 15)
             )
             version = (
                 initialize.get("userAgent") if isinstance(initialize, dict) else None
@@ -1142,6 +1179,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                     approvals=True,
                     streaming=True,
                     mcp=True,
+                    models=models,
                     supported_native_capabilities=_supported_native_capabilities(
                         self.kind
                     ),
@@ -1724,6 +1762,19 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                     approvals=True,
                     streaming=True,
                     mcp=True,
+                    models=list(
+                        dict.fromkeys(
+                            [
+                                *(
+                                    [profile.default_model]
+                                    if profile.default_model
+                                    else []
+                                ),
+                                "sonnet",
+                                "opus",
+                            ]
+                        )
+                    ),
                     supported_native_capabilities=_supported_native_capabilities(
                         self.kind
                     ),

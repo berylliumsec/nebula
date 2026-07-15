@@ -75,7 +75,8 @@ export function SettingsPage() {
   const [name, setName] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [model, setModel] = useState("");
-  const [modelAllowlistText, setModelAllowlistText] = useState("");
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [credentialEnv, setCredentialEnv] = useState("");
   const [credentialSecret, setCredentialSecret] = useState("");
   const [sessionCredential, setSessionCredential] = useState(false);
@@ -129,6 +130,19 @@ export function SettingsPage() {
     return () => window.removeEventListener("hashchange", syncSection);
   }, []);
 
+  useEffect(() => {
+    if (!adding || !editingProvider) return;
+    const current = providers.find((provider) => provider.id === editingProvider.id);
+    if (!current) return;
+    setAvailableModels((models) => [...new Set([
+      ...models,
+      ...(current.availableModels ?? []),
+      ...current.models,
+      ...current.modelAllowlist,
+      ...(current.defaultModel ? [current.defaultModel] : []),
+    ])]);
+  }, [adding, editingProvider, providers]);
+
   const openProviderDialog = () => {
     const entry = providerCatalog.find((item) => item.flavor === "vllm") ?? providerCatalog[0];
     if (!entry) return;
@@ -137,7 +151,8 @@ export function SettingsPage() {
     setName(entry.flavor === "vllm" ? "Local vLLM" : entry.displayName);
     setEndpoint(entry.defaultBaseUrl ?? "");
     setModel("");
-    setModelAllowlistText("");
+    setAvailableModels([]);
+    setSelectedModelIds([]);
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
     setCredentialSecret("");
     setSessionCredential(false);
@@ -160,7 +175,8 @@ export function SettingsPage() {
     setName(detected.displayName);
     setEndpoint(detected.endpoint);
     setModel(detected.models[0] ?? "");
-    setModelAllowlistText(detected.models.join("\n"));
+    setAvailableModels(detected.models);
+    setSelectedModelIds([]);
     setCredentialEnv("");
     setCredentialSecret("");
     setSessionCredential(false);
@@ -182,7 +198,13 @@ export function SettingsPage() {
     setName(provider.name);
     setEndpoint(provider.endpoint ?? entry?.defaultBaseUrl ?? "");
     setModel(provider.defaultModel ?? "");
-    setModelAllowlistText(provider.modelAllowlist.join("\n"));
+    setAvailableModels([...new Set([
+      ...(provider.availableModels ?? []),
+      ...provider.models,
+      ...provider.modelAllowlist,
+      ...(provider.defaultModel ? [provider.defaultModel] : []),
+    ])]);
+    setSelectedModelIds(provider.modelAllowlist);
     setCredentialEnv(provider.credentialEnv ?? "");
     setCredentialSecret("");
     setSessionCredential(provider.credentialRef?.startsWith("session:") ?? false);
@@ -195,6 +217,7 @@ export function SettingsPage() {
     setProviderActionError(undefined);
     setFormError(undefined);
     setAdding(true);
+    void refreshProvider(provider.id);
   };
 
   const chooseProvider = (flavor: string) => {
@@ -204,7 +227,8 @@ export function SettingsPage() {
     setName(entry.displayName);
     setEndpoint(entry.defaultBaseUrl ?? "");
     setModel("");
-    setModelAllowlistText("");
+    setAvailableModels([]);
+    setSelectedModelIds([]);
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
     setCredentialSecret("");
     setSessionCredential(false);
@@ -224,15 +248,11 @@ export function SettingsPage() {
       setFormError("A provider profile name is required.");
       return;
     }
-    if (["anthropic", "bedrock"].includes(providerType) && !model.trim()) {
-      setFormError(`${providerType === "bedrock" ? "AWS Bedrock" : "Anthropic"} profiles require a default model ID before chat or missions can use them.`);
-      return;
-    }
     if (providerType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim())) {
       setFormError("Vertex profiles require a Google Cloud project and location.");
       return;
     }
-    const modelAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
+    const modelAllowlist = selectedModelIds;
     const options = { ...(editingProvider?.options ?? {}) };
     const parsedContextWindow = contextWindow ? Number(contextWindow) : undefined;
     const parsedMaxOutputTokens = maxOutputTokens ? Number(maxOutputTokens) : undefined;
@@ -435,8 +455,11 @@ export function SettingsPage() {
   };
   const dialogProviderType = editingProvider?.providerType ?? selected?.flavor ?? "";
   const dialogLocal = editingProvider?.local ?? selected?.local ?? false;
-  const requiresDefaultModel = ["anthropic", "bedrock"].includes(dialogProviderType);
-  const dialogAllowlist = [...new Set(modelAllowlistText.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean))];
+  const dialogModels = [...new Set([
+    ...availableModels,
+    ...selectedModelIds,
+    ...(model ? [model] : []),
+  ])];
   const unconfiguredDetectedProviders = detectedLocalProviders.filter((detected) =>
     !providers.some((provider) => provider.endpoint === detected.endpoint && provider.enabled));
   const primaryProviderFlavors = ["openai", "anthropic", "gemini"];
@@ -518,13 +541,13 @@ export function SettingsPage() {
             {editingProvider && <p className="provider-dialog-note">Provider type and locality are fixed after creation. Other profile settings use revision-safe updates.</p>}
             <label>Profile name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
             <label>Endpoint<input required={!selected?.defaultBaseUrl} value={endpoint} placeholder={selected?.defaultBaseUrl ?? "https://provider.example/v1"} onChange={(event) => setEndpoint(event.target.value)} /></label>
-            <label>Default model<input required={requiresDefaultModel} aria-describedby="provider-model-help" value={model} placeholder={requiresDefaultModel ? "Required provider model ID" : "Runtime model ID (optional)"} onChange={(event) => setModel(event.target.value)} /></label>
-            <p className="provider-dialog-note" id="provider-model-help">{requiresDefaultModel ? `${dialogProviderType === "bedrock" ? "AWS Bedrock" : "Anthropic"} needs an explicit model ID so a fresh profile can be used immediately for chat and missions.` : !model.trim() && dialogAllowlist.length ? `No explicit default is set. Core will use ${dialogAllowlist[0]}, the first allowed model, as its fallback.` : "When blank with no allowed models, Nebula uses a model discovered by the provider health check."}</p>
+            <label>Default model<select aria-describedby="provider-model-help" value={model} disabled={!dialogModels.length} onChange={(event) => setModel(event.target.value)}><option value="">{dialogModels.length ? "Automatic (first available model)" : "Discovered after saving"}</option>{dialogModels.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+            <p className="provider-dialog-note" id="provider-model-help">{dialogModels.length ? "Choose a model reported by this runtime, or leave automatic selection enabled." : "Save the profile to run model discovery. Then edit it to choose a default from the reported models."}</p>
             <label>Credential<input type="password" autoComplete="new-password" value={credentialSecret} placeholder={editingProvider?.credentialRef || editingProvider?.credentialEnv ? "Leave blank to keep the current credential" : dialogLocal ? "Optional for local services" : "API key or token"} onChange={(event) => setCredentialSecret(event.target.value)} /></label>
             {credentialSecret && <label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the secret in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>}
             <details className="provider-advanced"><summary>Advanced provider options</summary>
-              <label>Allowed model IDs<textarea rows={3} value={modelAllowlistText} placeholder="One provider model ID per line" onChange={(event) => setModelAllowlistText(event.target.value)} /></label>
-              <p className="provider-dialog-note">The explicit default is added to this allowlist automatically.</p>
+              <fieldset className="resource-checklist"><legend>Allowed models</legend>{dialogModels.length ? dialogModels.map((item) => <label key={item}><input type="checkbox" checked={selectedModelIds.includes(item)} onChange={(event) => setSelectedModelIds((current) => event.target.checked ? [...new Set([...current, item])] : current.filter((value) => value !== item))} /><span>{item}</span></label>) : <p>Models will appear after the provider health check.</p>}</fieldset>
+              <p className="provider-dialog-note">Leave every model unchecked to allow all models reported by the provider. With restrictions enabled, the default is included automatically.</p>
               <div className="resource-form-grid"><label>Context window (tokens)<input type="number" min="1" inputMode="numeric" value={contextWindow} placeholder="8192 safe fallback" onChange={(event) => setContextWindow(event.target.value)} /></label><label>Maximum output tokens<input type="number" min="1" inputMode="numeric" value={maxOutputTokens} placeholder="2048 default" onChange={(event) => setMaxOutputTokens(event.target.value)} /></label></div>
               {dialogProviderType === "vertex" && <div className="resource-form-grid"><label>Google Cloud project<input required value={vertexProject} placeholder="my-security-project" onChange={(event) => setVertexProject(event.target.value)} /></label><label>Vertex location<input required value={vertexLocation} placeholder="us-central1" onChange={(event) => setVertexLocation(event.target.value)} /></label></div>}
               {dialogProviderType === "bedrock" && <label>AWS region<input value={awsRegion} placeholder="Uses the ambient AWS region when blank" onChange={(event) => setAwsRegion(event.target.value)} /></label>}
@@ -535,7 +558,7 @@ export function SettingsPage() {
             {selected?.notes && <p className="provider-dialog-note">{selected.notes}</p>}
             <p className="provider-dialog-note">Saving performs only liveness and model discovery. Tool calling is verified later, when you enable automation.</p>
             {formError && <DiagnosticErrorNotice error={formError} fallback="The form could not be saved." compact />}
-            <footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim() || (requiresDefaultModel && !model.trim()) || (dialogProviderType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim()))}>{saving ? "Saving…" : editingProvider ? "Save provider" : "Add provider"}</button></footer>
+            <footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim() || (dialogProviderType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim()))}>{saving ? "Saving…" : editingProvider ? "Save provider" : "Add provider"}</button></footer>
           </form>
         </div>
       )}

@@ -68,6 +68,7 @@ export function ExecutionInsightDialog({
   };
 
   const cloud = Boolean(provider && !provider.local);
+  const modelOptions = [...new Set([...(provider?.models ?? []), ...(model ? [model] : [])])];
   const canSubmit = Boolean(provider && model.trim() && (!cloud || cloudConfirmed) && !busy);
 
   const submit = async (event: FormEvent) => {
@@ -150,7 +151,7 @@ export function ExecutionInsightDialog({
           <p className="provider-dialog-note">No request is made until you submit this dialog. The provider receives only these categories:</p>
           <ul className="execution-context-categories">{CATEGORIES.map((category) => <li key={category}>{category}</li>)}</ul>
           <label>Provider<select value={providerId} disabled={busy} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{candidates.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.local ? "local" : "cloud"}</option>)}</select></label>
-          <label>Model<input required value={model} disabled={busy} list="execution-insight-models" onChange={(event) => setModel(event.target.value)} /><datalist id="execution-insight-models">{provider?.models.map((item) => <option value={item} key={item} />)}</datalist></label>
+          <label>Model<select required value={model} disabled={busy || !modelOptions.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelOptions.length ? "Select model" : "Run provider health check to discover models"}</option>{modelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
           {action === "draft" && candidates.length === 0 && <p className="form-error" role="alert">No enabled provider declares strict structured output. Configure one before drafting a note.</p>}
           {cloud && <label className="provider-consent"><input type="checkbox" checked={cloudConfirmed} onChange={(event) => setCloudConfirmed(event.target.checked)} /><span><strong>Allow this cloud request</strong><small>Send the listed redacted execution categories to {provider?.name} for this request only. The provider profile must also permit engagement data.</small></span></label>}
         </> : content && <section className="execution-draft-editor">

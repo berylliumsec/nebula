@@ -590,7 +590,7 @@ describe("ApiClient", () => {
       provider_type: "vllm",
       endpoint: "http://127.0.0.1:8000/v1",
       is_local: true,
-      model_allowlist: ["security-model"],
+      model_allowlist: [],
       privacy: { local_only: true },
     });
     expect(created).toMatchObject({ name: "Local vLLM", kind: "local" });
@@ -893,7 +893,7 @@ describe("ApiClient", () => {
     expect(updated.defaultModel).toBeUndefined();
     expect(updated.effectiveDefaultModel).toBe("allowed-first");
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).changes.metadata).toEqual({});
-    expect(() => client.createProvider({ name: "Anthropic", providerType: "anthropic", local: false })).toThrow("require a default model ID");
+    await expect(client.createProvider({ name: "Anthropic", providerType: "anthropic", local: false })).resolves.toBeDefined();
   });
 
   it("lists, ingests, reindexes, and deletes engagement knowledge sources", async () => {
@@ -1255,7 +1255,7 @@ describe("ApiClient", () => {
           web_search: true,
           subagents: true,
         },
-        capabilities: { checked_at: entity.updated_at, harness_version: "0.144.0" },
+        capabilities: { checked_at: entity.updated_at, harness_version: "0.144.0", models: ["gpt-test", "gpt-next"] },
       }]), { status: 200 });
       if (path.endsWith("/mcp-servers")) return new Response(JSON.stringify([{
         ...entity,
@@ -1311,6 +1311,7 @@ describe("ApiClient", () => {
 
     expect(harness).toMatchObject({
       version: "0.144.0",
+      models: ["gpt-test", "gpt-next"],
       localOnly: false,
       permitsSensitiveData: true,
       nativeCapabilities: {

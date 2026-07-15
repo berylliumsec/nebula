@@ -888,7 +888,6 @@ describe("Nebula workspace", () => {
     const dialog = screen.getByRole("dialog", { name: "Add model provider" });
     await user.selectOptions(within(dialog).getByLabelText("Provider type"), "vertex");
     await user.type(within(dialog).getByLabelText("Endpoint"), "https://us-central1-aiplatform.googleapis.com");
-    await user.type(within(dialog).getByLabelText("Default model"), "gemini-2.5-pro");
     await user.type(within(dialog).getByLabelText("Context window (tokens)"), "16000");
     await user.type(within(dialog).getByLabelText("Maximum output tokens"), "1000");
     await user.type(within(dialog).getByLabelText("Google Cloud project"), "security-project");
@@ -1093,8 +1092,9 @@ describe("Nebula workspace", () => {
     let provider: Record<string, unknown> | undefined = { ...entity, id: "provider-anthropic", revision: 3, name: "Anthropic review", provider_type: "anthropic", endpoint: "https://api.anthropic.com", enabled: true, is_local: false, secret_ref: "env:ANTHROPIC_API_KEY", model_allowlist: ["claude-old"], capabilities: { streaming: true }, privacy: { local_only: false, residency: [], permits_sensitive_data: false }, metadata: { default_model: "claude-old" } };
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const url = new URL(String(input));
+      if (url.pathname.endsWith("/providers/provider-anthropic/health")) return new Response(JSON.stringify({ provider_id: "provider-anthropic", healthy: true, models: ["claude-old", "claude-new"], detail: null }), { status: 200 });
       if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
-      if (url.pathname.endsWith("/provider-catalog")) return new Response(JSON.stringify([{ flavor: "anthropic", adapter: "anthropic", display_name: "Anthropic", local: false, default_base_url: "https://api.anthropic.com", suggested_key_env: "ANTHROPIC_API_KEY", support_tier: "native", notes: "Requires an explicit model." }]), { status: 200 });
+      if (url.pathname.endsWith("/provider-catalog")) return new Response(JSON.stringify([{ flavor: "anthropic", adapter: "anthropic", display_name: "Anthropic", local: false, default_base_url: "https://api.anthropic.com", suggested_key_env: "ANTHROPIC_API_KEY", support_tier: "native", notes: "Models are discovered after authentication." }]), { status: 200 });
       if (url.pathname.endsWith("/providers/provider-anthropic") && init?.method === "PATCH") {
         const request = JSON.parse(String(init.body));
         provider = { ...provider, ...request.changes, revision: Number(provider?.revision) + 1, updated_at: "2026-07-12T12:00:00Z" };
@@ -1116,10 +1116,8 @@ describe("Nebula workspace", () => {
     await user.click(await screen.findByRole("button", { name: "Edit Anthropic review" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Anthropic review" });
     const defaultModel = within(dialog).getByLabelText("Default model");
-    await user.clear(defaultModel);
-    expect(within(dialog).getByRole("button", { name: "Save provider" })).toBeDisabled();
-    expect(within(dialog).getByText(/needs an explicit model ID/i)).toBeVisible();
-    await user.type(defaultModel, "claude-new");
+    await waitFor(() => expect(within(defaultModel).getByRole("option", { name: "claude-new" })).toBeInTheDocument());
+    await user.selectOptions(defaultModel, "claude-new");
     await user.click(within(dialog).getByRole("button", { name: "Save provider" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit Anthropic review" })).not.toBeInTheDocument());
 

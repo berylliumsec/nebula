@@ -45,6 +45,16 @@ export function NewMissionButton({ className = "button primary", children }: New
   const toolPreparationRef = useRef<Promise<void> | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
   const toolPackRevision = useToolPackRevision();
+  const selectedHarness = harnesses.find((item) => item.id === harnessId);
+  const attachedHarnessSession = harnessSessions.find((item) => item.id === harnessSessionId);
+  const modelOptions = [...new Set([
+    ...(runtimeKind === "native"
+      ? provider?.models ?? []
+      : attachedHarnessSession
+        ? [attachedHarnessSession.model]
+        : selectedHarness?.models ?? []),
+    ...(model ? [model] : []),
+  ])];
 
   useEffect(() => {
     if (availableProviders.some((item) => item.id === providerId)) return;
@@ -75,7 +85,7 @@ export function NewMissionButton({ className = "button primary", children }: New
     const attached = harnessSessions.find((item) => item.id === harnessSessionId);
     const harness = harnesses.find((item) => item.id === (attached?.harnessProfileId ?? harnessId));
     if (attached) setHarnessId(attached.harnessProfileId);
-    setModel(attached?.model ?? harness?.defaultModel ?? "");
+    setModel(attached?.model ?? harness?.defaultModel ?? harness?.models[0] ?? "");
   }, [harnessId, harnessSessionId, harnessSessions, harnesses, runtimeKind]);
 
   useEffect(() => {
@@ -127,7 +137,7 @@ export function NewMissionButton({ className = "button primary", children }: New
         ? `Tool verification failed for ${model}: ${verification.failureDetail ?? "the provider did not return a valid structured call"}. Reverify it in Settings.`
         : model
           ? `Tool calling has not been verified for ${model}. Verify it in Settings.`
-          : "Select an exact model and verify tool calling in Settings."
+          : "Select a model and verify tool calling in Settings."
       : assignedTools.length === 0
         ? "No ready Toolbox capabilities are assigned to this engagement."
         : undefined;
@@ -267,7 +277,6 @@ export function NewMissionButton({ className = "button primary", children }: New
       setError("Select an engagement before starting a mission.");
       return;
     }
-    const selectedHarness = harnesses.find((item) => item.id === harnessId);
     if (runtimeKind === "native" && !provider) {
       setError("Select an enabled provider before starting a mission.");
       return;
@@ -281,7 +290,7 @@ export function NewMissionButton({ className = "button primary", children }: New
       return;
     }
     if (!cleanModel) {
-      setError("Enter the exact model ID for this mission.");
+      setError("Select a model for this mission.");
       return;
     }
     if (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 60) {
@@ -381,7 +390,7 @@ export function NewMissionButton({ className = "button primary", children }: New
             <summary>Advanced</summary>
             <label>Runtime<select aria-label="Mission runtime" value={runtimeKind} onChange={(event) => { const next = event.target.value as "native" | "harness"; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "native") selectProvider(providerId || availableProviders[0]?.id || ""); }}><option value="native">Native mission</option><option value="harness">Agent harness</option></select></label>
             {runtimeKind === "native" ? <label>Provider<select value={providerId} onChange={(event) => { selectProvider(event.target.value); setError(undefined); }}>{availableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label> : <><label>Harness<select aria-label="Mission harness" value={harnessId} disabled={Boolean(harnessSessionId)} onChange={(event) => { setHarnessId(event.target.value); setError(undefined); }}>{harnesses.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Session<select aria-label="Harness session" value={harnessSessionId} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">Start a new session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.model} · {item.status}</option>)}</select></label></>}
-            <label>Model<input required value={model} list="mission-models" disabled={Boolean(harnessSessionId)} placeholder="Exact model ID" onChange={(event) => { setModel(event.target.value); setError(undefined); }} /><datalist id="mission-models">{runtimeKind === "native" && provider?.models.map((item) => <option value={item} key={item} />)}</datalist></label>
+            <label>Model<select required value={model} disabled={Boolean(harnessSessionId) || !modelOptions.length} onChange={(event) => { setModel(event.target.value); setError(undefined); }}><option value="">{modelOptions.length ? "Select model" : runtimeKind === "harness" ? "Run a harness check to discover models" : "Run provider health check to discover models"}</option>{modelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             {(runtimeKind === "native" || !harnessSessionId) && <fieldset className="mission-tools"><legend>MCP servers · all agent runtimes</legend>{mcpServers.length ? mcpServers.map((server) => <label className="provider-consent" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span><strong>{server.name}</strong><small>{server.transport} · {server.tools.length} discovered tools · Core artifact capture</small></span></label>) : <p>No enabled MCP profiles. Add one in Settings if this mission needs external tools.</p>}</fieldset>}
             <div className="resource-form-grid">
               <label>Duration (minutes)<input type="number" min={1} max={60} value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))} /></label>

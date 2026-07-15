@@ -55,6 +55,15 @@ class FixtureCodexRpc:
         self.calls.append((method, params))
         if method == "initialize":
             return {"userAgent": "codex-cli/0.144.0"}
+        if method == "model/list":
+            return {
+                "data": [
+                    {"id": "gpt-5.4", "model": "gpt-5.4", "isDefault": True},
+                    {"id": "gpt-5.3-codex", "model": "gpt-5.3-codex"},
+                    {"id": "internal", "model": "internal", "hidden": True},
+                ],
+                "nextCursor": None,
+            }
         if method == "thread/start":
             return {"thread": {"id": "thread-fixture"}}
         if method == "thread/resume":
@@ -164,6 +173,46 @@ def _mcp_profile() -> McpServerProfile:
         enabled=True,
         capabilities=McpCapabilitySnapshot(tools=[McpToolSnapshot(name="read_file")]),
     )
+
+
+def test_codex_probe_discovers_selectable_models():
+    async def scenario() -> None:
+        rpc = FixtureCodexRpc()
+        adapter = FixtureCodexAdapter(rpc)
+        profile = HarnessProfile(
+            id="codex-a",
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+        )
+
+        health = await adapter.probe(profile, CredentialStore())
+
+        assert health.healthy is True
+        assert health.capabilities.models == ["gpt-5.4", "gpt-5.3-codex"]
+        assert [method for method, _ in rpc.calls] == ["initialize", "model/list"]
+        assert rpc.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_claude_probe_offers_stable_model_aliases(monkeypatch):
+    monkeypatch.setattr(
+        ClaudeAgentSdkAdapter,
+        "_sdk",
+        staticmethod(lambda: SimpleNamespace(__version__="1.2.3")),
+    )
+    profile = HarnessProfile(
+        id="claude-a",
+        name="Claude",
+        kind=HarnessKind.CLAUDE_AGENT_SDK,
+        default_model="custom-alias",
+    )
+
+    health = asyncio.run(ClaudeAgentSdkAdapter().probe(profile, CredentialStore()))
+
+    assert health.healthy is True
+    assert health.capabilities.models == ["custom-alias", "sonnet", "opus"]
 
 
 def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):

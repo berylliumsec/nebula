@@ -987,18 +987,20 @@ class AnthropicProvider(ModelProvider):
         )
 
     async def health(self) -> ProviderHealth:
-        # Anthropic does not require model discovery for health.  A configured
-        # key and model is a non-invasive readiness signal; live calls remain
-        # explicit to avoid cost.
         try:
-            self._headers()
+            async with self._client(self._headers()) as client:
+                response = await client.get(self._path("/v1/models"))
+            if response.is_error:
+                raise _safe_error(response)
+            models = [
+                item["id"]
+                for item in response.json().get("data", [])
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            ]
             return ProviderHealth(
                 provider_id=self.config.id,
-                healthy=bool(self.config.default_model),
-                models=[self.config.default_model] if self.config.default_model else [],
-                detail=None
-                if self.config.default_model
-                else "no default model configured",
+                healthy=True,
+                models=list(dict.fromkeys(models)),
             )
         except Exception as exc:
             record_caught_exception(

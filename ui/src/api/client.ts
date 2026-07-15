@@ -559,7 +559,7 @@ interface WireHarnessProfile extends WireEntity {
     skills?: boolean;
     subagents?: boolean;
   };
-  capabilities?: { checked_at?: string | null; harness_version?: string | null; protocol_version?: string | null; detail?: string | null };
+  capabilities?: { checked_at?: string | null; harness_version?: string | null; protocol_version?: string | null; detail?: string | null; models?: string[] };
 }
 
 interface WireMcpServerProfile extends WireEntity {
@@ -1025,12 +1025,15 @@ function objectOptions(value: unknown): Record<string, unknown> {
   return { ...(value as Record<string, unknown>) };
 }
 
-function configuredDefaultModel(providerType: string, value?: string): string | undefined {
-  const model = value?.trim() || undefined;
-  if (["anthropic", "bedrock"].includes(providerType.toLowerCase()) && !model) {
-    throw new Error(`${providerType === "bedrock" ? "AWS Bedrock" : "Anthropic"} profiles require a default model ID.`);
-  }
-  return model;
+function configuredDefaultModel(value?: string): string | undefined {
+  return value?.trim() || undefined;
+}
+
+function configuredModelAllowlist(values: string[] | undefined, defaultModel?: string): string[] {
+  const selected = [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
+  return selected.length && defaultModel
+    ? [...new Set([defaultModel, ...selected])]
+    : selected;
 }
 
 function normalizedIdentifiers(values?: string[]): string[] {
@@ -1357,12 +1360,9 @@ function mapProvider(value: WireProvider): ProviderHealth {
   const metadata = value.metadata ?? {};
   const defaultModel = stringField(metadata.default_model);
   const effectiveDefaultModel = defaultModel ?? value.model_allowlist?.[0];
-  const requiresDefaultModel = ["anthropic", "bedrock"].includes(value.provider_type.toLowerCase());
   const state: ProviderHealth["state"] = value.enabled === false
     ? "offline"
-    : requiresDefaultModel && !defaultModel
-      ? "unconfigured"
-      : "unchecked";
+    : "unchecked";
   return {
     id: value.id,
     revision: value.revision,
@@ -1374,6 +1374,7 @@ function mapProvider(value: WireProvider): ProviderHealth {
     enabled: value.enabled !== false,
     endpoint: value.endpoint ?? undefined,
     models: value.model_allowlist ?? [],
+    availableModels: value.model_allowlist ?? [],
     modelAllowlist: value.model_allowlist ?? [],
     defaultModel,
     effectiveDefaultModel,
@@ -1404,8 +1405,6 @@ function mapProvider(value: WireProvider): ProviderHealth {
     ),
     message: value.enabled === false
       ? "Provider profile is disabled."
-      : requiresDefaultModel && !defaultModel
-        ? "Configure a default model before using this provider for chat or missions."
       : "Profile loaded; run a health check to discover available models.",
   };
 }
@@ -1900,6 +1899,7 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     authMode: value.auth_mode,
     secretRef: value.secret_ref ?? undefined,
     defaultModel: value.default_model ?? undefined,
+    models: value.capabilities?.models ?? [],
     enabled: value.enabled,
     localOnly: value.privacy?.local_only === true,
     permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
@@ -3215,12 +3215,8 @@ export class ApiClient {
   }
 
   createProvider(body: ProviderCreateRequest): Promise<ProviderHealth> {
-    const defaultModel = configuredDefaultModel(body.providerType, body.defaultModel);
-    const modelAllowlist = [...new Set(
-      [defaultModel, ...(body.modelAllowlist ?? [])]
-        .filter((value): value is string => Boolean(value?.trim()))
-        .map((value) => value.trim()),
-    )];
+    const defaultModel = configuredDefaultModel(body.defaultModel);
+    const modelAllowlist = configuredModelAllowlist(body.modelAllowlist, defaultModel);
     const credentialEnv = body.credentialEnv?.trim().replace(/^env:/, "");
     return this.request<WireProvider>("providers", {
       method: "POST",
@@ -3246,12 +3242,8 @@ export class ApiClient {
   }
 
   updateProvider(id: string, body: ProviderUpdateRequest): Promise<ProviderHealth> {
-    const defaultModel = configuredDefaultModel(body.providerType, body.defaultModel);
-    const modelAllowlist = [...new Set(
-      [defaultModel, ...body.modelAllowlist]
-        .filter((value): value is string => Boolean(value?.trim()))
-        .map((value) => value.trim()),
-    )];
+    const defaultModel = configuredDefaultModel(body.defaultModel);
+    const modelAllowlist = configuredModelAllowlist(body.modelAllowlist, defaultModel);
     const credentialEnv = body.credentialEnv?.trim().replace(/^env:/, "");
     const metadata = { ...(body.metadata ?? {}) };
     delete metadata.default_model;

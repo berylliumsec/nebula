@@ -440,6 +440,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
                 ...provider,
                 state: result.healthy ? "healthy" : "offline",
                 models: selectableModels,
+                availableModels: result.healthy ? result.models : provider.availableModels,
                 modelCount: selectableModels.length,
                 lastCheckedAt: new Date().toISOString(),
                 message: result.healthy
@@ -485,8 +486,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     }
     const updated = await api.updateProvider(id, request);
     setProviders((current) => current.map((provider) => provider.id === id ? updated : provider));
+    void refreshProvider(id);
     return updated;
-  }, [api, coreState]);
+  }, [api, coreState, refreshProvider]);
 
   const reverifyProvider = useCallback(async (id: string, requestedModel?: string) => {
     if (coreState !== "online" || !api) {
