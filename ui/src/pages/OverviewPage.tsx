@@ -11,12 +11,16 @@ import {
   Target,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import type { ExecutionLanguage } from "../api/types";
+import { AssistantMarkdown } from "../components/AssistantMarkdown";
 import { PageHeader } from "../components/PageHeader";
 import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useChrome } from "../state/ChromeContext";
 
 type EventStepState = "complete" | "running" | "waiting" | "failed" | "stopped" | "queued";
+
+const noRunnableLanguages = new Set<ExecutionLanguage>();
 
 function eventStepState(kind: string): EventStepState {
   if (kind.includes("failed") || kind.includes("blocked")) return "failed";
@@ -105,7 +109,10 @@ export function OverviewPage() {
               {events.slice(0, 5).map((event) => { const state = eventStepState(event.kind); return (
                 <li className={state} key={event.id}>
                   <span className="step-state">{state === "complete" ? <CheckCircle2 size={16} /> : state === "running" ? <span /> : state === "waiting" ? <Clock3 size={13} /> : state === "failed" || state === "stopped" ? <CircleAlert size={13} /> : null}</span>
-                  <div><strong>{event.summary}</strong><small>{event.actor ?? "Nebula Core"}</small></div>
+                  <div className="mission-step-summary">
+                    <AssistantMarkdown content={event.summary} durable={false} runnableLanguages={noRunnableLanguages} onRun={() => undefined} />
+                    <small>{event.actor ?? "Nebula Core"}</small>
+                  </div>
                   <span className="step-label">#{event.sequence}</span>
                 </li>
               ); })}

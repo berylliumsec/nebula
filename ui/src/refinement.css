@@ -403,6 +403,20 @@ kbd { font-size: 11px; }
 .mission-steps li > div { min-width: 0; }
 .mission-steps strong { font-size: 13px; }
 .mission-steps small, .step-label { font-size: 11px; }
+.mission-step-summary .assistant-markdown {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.mission-step-summary .assistant-markdown p { margin: 6px 0; }
+.mission-step-summary .assistant-markdown h1,
+.mission-step-summary .assistant-markdown h2,
+.mission-step-summary .assistant-markdown h3,
+.mission-step-summary .assistant-markdown h4,
+.mission-step-summary .assistant-markdown h5,
+.mission-step-summary .assistant-markdown h6 { margin: 9px 0 6px; font-size: 13px; line-height: 1.4; }
+.mission-step-summary .assistant-markdown ul,
+.mission-step-summary .assistant-markdown ol { margin: 6px 0 8px; padding-left: 20px; }
 .mission-events-empty {
   display: flex;
   min-height: 116px;

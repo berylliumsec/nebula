@@ -354,6 +354,83 @@ test("all task workspaces keep responsive content inside its owning surface", as
   }
 });
 
+test("the populated finding editor stays contained and accessible", async ({ page }) => {
+  const finding = {
+    ...entity,
+    id: "finding-editor",
+    engagement_id: "scratch-project",
+    title: "Externally reachable script injection",
+    description: "Untrusted search input is reflected into an executable response context.",
+    severity: "high",
+    severity_rationale: "An unauthenticated remote user can execute script in another user's session.",
+    status: "validated",
+    asset_ids: ["asset-editor"],
+    evidence_ids: ["evidence-editor"],
+    cve_ids: ["CVE-2026-1234"],
+    cwe_ids: ["CWE-79"],
+    verifier_id: null,
+    verified_at: null,
+  };
+  await page.route("**/api/v1/findings**", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([finding]) });
+  });
+  await page.route("**/api/v1/assets**", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+      ...entity,
+      id: "asset-editor",
+      engagement_id: "scratch-project",
+      asset_type: "domain",
+      name: "portal.example.test",
+      address: null,
+      hostname: "portal.example.test",
+      criticality: "high",
+      exposed: true,
+      tags: [],
+      metadata: {},
+    }]) });
+  });
+  await page.route("**/api/v1/evidence**", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+      ...entity,
+      id: "evidence-editor",
+      engagement_id: "scratch-project",
+      evidence_type: "operator_upload",
+      title: "browser-response.html",
+      description: "Captured response",
+      artifact_id: null,
+      finding_id: "finding-editor",
+      asset_ids: ["asset-editor"],
+      sha256: "a".repeat(64),
+      captured_at: entity.updated_at,
+      captured_by: null,
+      source_version: null,
+      metadata: {},
+    }]) });
+  });
+
+  await openWorkspace(page, "/findings", "Findings");
+  await page.getByRole("button", { name: "Edit Externally reachable script injection" }).click();
+  const inspector = page.getByRole("complementary", { name: "Externally reachable script injection" });
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByLabel("Title")).toHaveValue("Externally reachable script injection");
+  await expect(inspector.getByRole("button", { name: "Save finding" })).toBeDisabled();
+
+  const containment = await inspector.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const clipped = [...element.querySelectorAll<HTMLElement>("input, textarea, select, button, fieldset, footer")]
+      .filter((control) => {
+        const rect = control.getBoundingClientRect();
+        return rect.width > 0 && (rect.left < bounds.left - 2 || rect.right > bounds.right + 2);
+      })
+      .map((control) => control.getAttribute("aria-label") || control.textContent?.trim().slice(0, 40) || control.tagName);
+    return { horizontalOverflow: element.scrollWidth > element.clientWidth + 2, clipped };
+  });
+  expect(containment).toEqual({ horizontalOverflow: false, clipped: [] });
+  const results = await new AxeBuilder({ page }).include(".finding-dialog").withTags(["wcag2a", "wcag2aa"]).analyze();
+  expect(results.violations, results.violations.map((violation) => `${violation.id}: ${violation.help}`).join("\n")).toEqual([]);
+});
+
 test("Project Overview empty activity keeps its copy in a readable content track", async ({ page }) => {
   await openWorkspace(page, "/project", "Scratch Project");
   const emptyState = page.locator(".mission-events-empty");

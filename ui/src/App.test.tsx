@@ -865,6 +865,146 @@ describe("Nebula workspace", () => {
     expect(JSON.parse(String(createCall?.[1]?.body))).not.toHaveProperty("verifier_id");
   });
 
+  it("edits all analyst-managed finding fields and protects unsaved drafts", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const assets = [
+      { ...entity, id: "asset-1", engagement_id: "engagement-1", asset_type: "domain", name: "old.example.test", address: null, hostname: "old.example.test", criticality: "high", exposed: true, tags: [], metadata: {} },
+      { ...entity, id: "asset-2", engagement_id: "engagement-1", asset_type: "host", name: "new.example.test", address: "192.0.2.10", hostname: "new.example.test", criticality: "critical", exposed: true, tags: [], metadata: {} },
+    ];
+    const evidence = [
+      { ...entity, id: "evidence-1", engagement_id: "engagement-1", evidence_type: "operator_upload", title: "old-proof.txt", description: "Old proof", artifact_id: null, finding_id: "finding-1", asset_ids: ["asset-1"], sha256: "a".repeat(64), captured_at: entity.updated_at, captured_by: null, source_version: null, metadata: {} },
+      { ...entity, id: "evidence-2", engagement_id: "engagement-1", evidence_type: "operator_upload", title: "new-proof.txt", description: "New proof", artifact_id: null, finding_id: null, asset_ids: ["asset-2"], sha256: "b".repeat(64), captured_at: entity.updated_at, captured_by: null, source_version: null, metadata: {} },
+    ];
+    let findings: Record<string, unknown>[] = [
+      { ...entity, id: "finding-1", revision: 2, engagement_id: "engagement-1", title: "Original finding", description: "Original description", severity: "high", severity_rationale: "Original rationale", status: "validated", asset_ids: ["asset-1"], evidence_ids: ["evidence-1"], cve_ids: ["CVE-2025-1111"], cwe_ids: ["CWE-20"], verifier_id: null, verified_at: null },
+      { ...entity, id: "finding-2", engagement_id: "engagement-1", title: "Second finding", description: "Another record", severity: "low", severity_rationale: "Limited impact", status: "candidate", asset_ids: [], evidence_ids: [], cve_ids: [], cwe_ids: [], verifier_id: null, verified_at: null },
+    ];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (url.pathname.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Finding review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (url.pathname.endsWith("/assets")) return new Response(JSON.stringify(assets), { status: 200 });
+      if (url.pathname.endsWith("/evidence")) return new Response(JSON.stringify(evidence), { status: 200 });
+      if (url.pathname.endsWith("/findings/finding-1") && init?.method === "PATCH") {
+        const request = JSON.parse(String(init.body));
+        const updated = { ...findings[0], ...request.changes, revision: 3, updated_at: "2026-07-12T12:00:00Z" };
+        findings = [updated, findings[1]];
+        return new Response(JSON.stringify(updated), { status: 200 });
+      }
+      if (url.pathname.endsWith("/findings")) return new Response(JSON.stringify(findings), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/findings");
+
+    await screen.findByRole("heading", { name: "Findings" });
+    await user.click(await screen.findByRole("button", { name: "Edit Original finding" }));
+    let inspector = screen.getByRole("complementary", { name: "Original finding" });
+    expect(within(inspector).getByRole("button", { name: "Save finding" })).toBeDisabled();
+
+    const title = within(inspector).getByLabelText("Title");
+    await user.clear(title);
+    await user.type(title, "  Updated finding  ");
+    const description = within(inspector).getByLabelText("Description");
+    await user.clear(description);
+    await user.type(description, "  Updated description  ");
+    await user.selectOptions(within(inspector).getByLabelText("Severity"), "critical");
+    const rationale = within(inspector).getByLabelText("Severity rationale");
+    await user.clear(rationale);
+    await user.type(rationale, "  Material external impact  ");
+    await user.click(within(inspector).getByLabelText("old.example.test"));
+    await user.click(within(inspector).getByLabelText("new.example.test"));
+    await user.selectOptions(within(inspector).getByLabelText("Finding lifecycle status"), "accepted_risk");
+    await user.click(within(inspector).getByLabelText("old-proof.txt"));
+    await user.click(within(inspector).getByLabelText("new-proof.txt"));
+
+    const cve = within(inspector).getByLabelText("CVE identifiers");
+    await user.clear(cve);
+    await user.type(cve, "not-a-cve");
+    expect(within(inspector).getByRole("button", { name: "Save finding" })).toBeDisabled();
+    expect(within(inspector).getByRole("alert")).toHaveTextContent("CVE identifiers must look like CVE-2026-1234");
+    expect(fetchMock.mock.calls.filter(([input, init]) => new URL(String(input)).pathname.endsWith("/findings/finding-1") && init?.method === "PATCH")).toHaveLength(0);
+    await user.clear(cve);
+    await user.type(cve, "cve-2026-1234, CVE-2026-1234");
+    const cwe = within(inspector).getByLabelText("CWE identifiers");
+    await user.clear(cwe);
+    await user.type(cwe, "cwe-79; CWE-79");
+
+    const save = within(inspector).getByRole("button", { name: "Save finding" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input, init]) => new URL(String(input)).pathname.endsWith("/findings/finding-1") && init?.method === "PATCH")).toHaveLength(1));
+    const patchCall = fetchMock.mock.calls.find(([input, init]) => new URL(String(input)).pathname.endsWith("/findings/finding-1") && init?.method === "PATCH");
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({
+      expected_revision: 2,
+      changes: {
+        title: "Updated finding",
+        description: "Updated description",
+        severity: "critical",
+        severity_rationale: "Material external impact",
+        asset_ids: ["asset-2"],
+        cve_ids: ["CVE-2026-1234"],
+        cwe_ids: ["CWE-79"],
+        status: "accepted-risk",
+        evidence_ids: ["evidence-2"],
+      },
+    });
+
+    expect(await within(screen.getByRole("table")).findByText("Updated finding")).toBeVisible();
+    inspector = screen.getByRole("complementary", { name: "Updated finding" });
+    expect(within(inspector).getByText("Saved · revision 3")).toBeVisible();
+    expect(within(inspector).getByRole("button", { name: "Save finding" })).toBeDisabled();
+
+    await user.type(within(inspector).getByLabelText("Title"), " draft");
+    await user.click(screen.getByRole("button", { name: "Edit Second finding" }));
+    let discardDialog = screen.getByRole("dialog", { name: "Discard finding changes?" });
+    await user.click(within(discardDialog).getByRole("button", { name: "Cancel" }));
+    expect(within(screen.getByRole("complementary", { name: "Updated finding" })).getByLabelText("Title")).toHaveValue("Updated finding draft");
+    await user.click(screen.getByRole("button", { name: "Edit Second finding" }));
+    discardDialog = screen.getByRole("dialog", { name: "Discard finding changes?" });
+    await user.click(within(discardDialog).getByRole("button", { name: "Discard changes" }));
+    const secondInspector = screen.getByRole("complementary", { name: "Second finding" });
+    expect(secondInspector).toBeVisible();
+    await user.type(within(secondInspector).getByLabelText("Title"), " draft");
+    await user.click(within(secondInspector).getByRole("button", { name: "Close finding details" }));
+    discardDialog = screen.getByRole("dialog", { name: "Discard finding changes?" });
+    await user.click(within(discardDialog).getByRole("button", { name: "Discard changes" }));
+    expect(screen.queryByRole("complementary", { name: "Second finding" })).not.toBeInTheDocument();
+  });
+
+  it("retains a finding draft after a revision conflict and validates confirmed evidence locally", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 4 };
+    const finding = { ...entity, id: "finding-confirmed", engagement_id: "engagement-1", title: "Confirmed issue", description: "Evidence-backed issue", severity: "high", severity_rationale: "Material impact", status: "confirmed", asset_ids: [], evidence_ids: ["evidence-1"], cve_ids: [], cwe_ids: ["CWE-79"], verifier_id: "operator-reviewer", verified_at: entity.updated_at };
+    const evidence = { ...entity, id: "evidence-1", engagement_id: "engagement-1", evidence_type: "operator_upload", title: "proof.txt", description: "Proof", artifact_id: null, finding_id: finding.id, asset_ids: [], sha256: "a".repeat(64), captured_at: entity.updated_at, captured_by: "operator-reviewer", source_version: null, metadata: {} };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (url.pathname.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Confirmed review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (url.pathname.endsWith("/findings/finding-confirmed") && init?.method === "PATCH") return new Response(JSON.stringify({ detail: "revision conflict: expected 4, found 5" }), { status: 409 });
+      if (url.pathname.endsWith("/findings")) return new Response(JSON.stringify([finding]), { status: 200 });
+      if (url.pathname.endsWith("/evidence")) return new Response(JSON.stringify([evidence]), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/findings");
+
+    await screen.findByRole("heading", { name: "Findings" });
+    await user.click(await screen.findByRole("button", { name: "Edit Confirmed issue" }));
+    const inspector = screen.getByRole("complementary", { name: "Confirmed issue" });
+    expect(within(inspector).getByText("operator-reviewer")).toBeVisible();
+    expect(within(inspector).getByRole("option", { name: "confirmed" })).toBeInTheDocument();
+    await user.click(within(inspector).getByLabelText("proof.txt"));
+    expect(within(inspector).getByRole("button", { name: "Save finding" })).toBeDisabled();
+    expect(within(inspector).getByRole("alert")).toHaveTextContent("Confirmed findings must retain at least one evidence record");
+    await user.click(within(inspector).getByLabelText("proof.txt"));
+    await user.type(within(inspector).getByLabelText("Description"), " Updated locally.");
+    await user.click(within(inspector).getByRole("button", { name: "Save finding" }));
+    expect(await within(inspector).findByRole("alert")).toHaveTextContent("revision conflict: expected 4, found 5");
+    expect(within(inspector).getByLabelText("Description")).toHaveValue("Evidence-backed issue Updated locally.");
+  });
+
   it("edits, disables, and deletes provider profiles with current revisions", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z" };
     let provider: Record<string, unknown> | undefined = { ...entity, id: "provider-anthropic", revision: 3, name: "Anthropic review", provider_type: "anthropic", endpoint: "https://api.anthropic.com", enabled: true, is_local: false, secret_ref: "env:ANTHROPIC_API_KEY", model_allowlist: ["claude-old"], capabilities: { streaming: true }, privacy: { local_only: false, residency: [], permits_sensitive_data: false }, metadata: { default_model: "claude-old" } };

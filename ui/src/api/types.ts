@@ -309,6 +309,13 @@ export interface FindingCreateRequest {
 }
 
 export interface FindingUpdateRequest {
+  title?: string;
+  description?: string;
+  severity?: FindingSummary["severity"];
+  severityRationale?: string;
+  assetIds?: Identifier[];
+  cveIds?: string[];
+  cweIds?: string[];
   status?: FindingStatus;
   evidenceIds?: Identifier[];
   verifierId?: Identifier;

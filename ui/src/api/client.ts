@@ -2811,6 +2811,13 @@ export class ApiClient {
       body: JSON.stringify({
         expected_revision: body.expectedRevision,
         changes: {
+          ...(body.title === undefined ? {} : { title: body.title.trim() }),
+          ...(body.description === undefined ? {} : { description: body.description.trim() }),
+          ...(body.severity === undefined ? {} : { severity: body.severity }),
+          ...(body.severityRationale === undefined ? {} : { severity_rationale: body.severityRationale.trim() }),
+          ...(body.assetIds === undefined ? {} : { asset_ids: [...new Set(body.assetIds)] }),
+          ...(body.cveIds === undefined ? {} : { cve_ids: normalizedIdentifiers(body.cveIds) }),
+          ...(body.cweIds === undefined ? {} : { cwe_ids: normalizedIdentifiers(body.cweIds) }),
           ...(body.status === undefined ? {} : { status: body.status.replaceAll("_", "-") }),
           ...(body.evidenceIds === undefined ? {} : { evidence_ids: [...new Set(body.evidenceIds)] }),
           ...(body.verifierId === undefined ? {} : { verifier_id: body.verifierId }),

@@ -13,6 +13,7 @@ from nebula.v3.domain import (
     Approval,
     Asset,
     Engagement,
+    Evidence,
     Finding,
     ProviderProfile,
     RiskClass,
@@ -202,6 +203,107 @@ def test_patch_and_replace_preserve_ownership_and_revision_precedence(api):
         json=replacement,
     )
     assert stale_replace.status_code == 409
+
+
+def test_finding_patch_updates_all_analyst_fields_and_preserves_revision_guards(api):
+    client, store = api
+    engagement = store.create(Engagement(name="Finding review"))
+    other = store.create(Engagement(name="Other review"))
+    first_asset = store.create(
+        Asset(engagement_id=engagement.id, name="old.example.test")
+    )
+    second_asset = store.create(
+        Asset(engagement_id=engagement.id, name="new.example.test")
+    )
+    foreign_asset = store.create(
+        Asset(engagement_id=other.id, name="foreign.example.test")
+    )
+    evidence = store.create(
+        Evidence(
+            engagement_id=engagement.id,
+            evidence_type="operator_upload",
+            title="proof.txt",
+        )
+    )
+    finding = store.create(
+        Finding(
+            engagement_id=engagement.id,
+            title="Original finding",
+            description="Original description",
+            severity="high",
+            severity_rationale="Original rationale",
+            asset_ids=[first_asset.id],
+            cve_ids=["CVE-2025-1111"],
+            cwe_ids=["CWE-20"],
+        )
+    )
+
+    updated = client.patch(
+        f"/api/v1/findings/{finding.id}",
+        headers=_auth(),
+        json={
+            "expected_revision": finding.revision,
+            "changes": {
+                "title": "Updated finding",
+                "description": "Updated description",
+                "severity": "critical",
+                "severity_rationale": "Material external impact",
+                "status": "accepted-risk",
+                "asset_ids": [second_asset.id],
+                "evidence_ids": [evidence.id],
+                "cve_ids": ["cve-2026-1234"],
+                "cwe_ids": ["cwe-79"],
+            },
+        },
+    )
+
+    assert updated.status_code == 200
+    expected = {
+        "title": "Updated finding",
+        "description": "Updated description",
+        "severity": "critical",
+        "severity_rationale": "Material external impact",
+        "status": "accepted-risk",
+        "asset_ids": [second_asset.id],
+        "evidence_ids": [evidence.id],
+        "cve_ids": ["CVE-2026-1234"],
+        "cwe_ids": ["CWE-79"],
+        "revision": finding.revision + 1,
+    }
+    assert {key: updated.json()[key] for key in expected} == expected
+
+    malformed = client.patch(
+        f"/api/v1/findings/{finding.id}",
+        headers=_auth(),
+        json={
+            "expected_revision": finding.revision + 1,
+            "changes": {"cve_ids": ["not-a-cve"]},
+        },
+    )
+    assert malformed.status_code == 422
+    assert store.get(Finding, finding.id).revision == finding.revision + 1
+
+    cross_engagement = client.patch(
+        f"/api/v1/findings/{finding.id}",
+        headers=_auth(),
+        json={
+            "expected_revision": finding.revision + 1,
+            "changes": {"asset_ids": [foreign_asset.id]},
+        },
+    )
+    assert cross_engagement.status_code == 422
+    assert "owned by engagement" in cross_engagement.json()["detail"]
+
+    stale = client.patch(
+        f"/api/v1/findings/{finding.id}",
+        headers=_auth(),
+        json={
+            "expected_revision": finding.revision,
+            "changes": {"title": "Stale overwrite"},
+        },
+    )
+    assert stale.status_code == 409
+    assert store.get(Finding, finding.id).title == "Updated finding"
 
 
 def test_engagement_scope_policy_must_belong_to_the_same_engagement(api):

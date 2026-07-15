@@ -669,6 +669,70 @@ describe("ApiClient", () => {
     expect(created).toMatchObject({ id: "finding-new", status: "candidate", verifierId: undefined, evidenceCount: 0 });
   });
 
+  it("updates every editable finding field with normalized, revision-checked changes", async () => {
+    const finding = {
+      id: "finding-1",
+      engagement_id: "engagement-1",
+      title: "Updated finding",
+      description: "Updated description",
+      severity: "critical" as const,
+      severity_rationale: "Material external impact",
+      status: "accepted-risk",
+      asset_ids: ["asset-1", "asset-2"],
+      evidence_ids: ["evidence-1", "evidence-2"],
+      cve_ids: ["CVE-2026-1234"],
+      cwe_ids: ["CWE-79"],
+      verifier_id: null,
+      verified_at: null,
+      created_at: "2026-07-12T10:00:00Z",
+      updated_at: "2026-07-12T12:00:00Z",
+      revision: 4,
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ ...finding, ...request.changes }), { status: 200 });
+    });
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const updated = await client.updateFinding("finding/1", {
+      title: "  Updated finding  ",
+      description: "  Updated description  ",
+      severity: "critical",
+      severityRationale: "  Material external impact  ",
+      assetIds: ["asset-1", "asset-1", "asset-2"],
+      cveIds: ["cve-2026-1234", "CVE-2026-1234"],
+      cweIds: ["cwe-79", "CWE-79"],
+      status: "accepted_risk",
+      evidenceIds: ["evidence-1", "evidence-1", "evidence-2"],
+      expectedRevision: 3,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8765/api/v1/findings/finding%2F1");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      expected_revision: 3,
+      changes: {
+        title: "Updated finding",
+        description: "Updated description",
+        severity: "critical",
+        severity_rationale: "Material external impact",
+        asset_ids: ["asset-1", "asset-2"],
+        cve_ids: ["CVE-2026-1234"],
+        cwe_ids: ["CWE-79"],
+        status: "accepted-risk",
+        evidence_ids: ["evidence-1", "evidence-2"],
+      },
+    });
+    expect(updated).toMatchObject({
+      id: "finding-1",
+      title: "Updated finding",
+      severity: "critical",
+      status: "accepted_risk",
+      affectedAssetCount: 2,
+      evidenceCount: 2,
+      revision: 4,
+    });
+  });
+
   it("updates, disables, and deletes providers with optimistic revisions", async () => {
     const provider = {
       id: "provider-anthropic",
