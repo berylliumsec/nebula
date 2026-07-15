@@ -290,6 +290,28 @@
 .provider-card footer { display: flex; align-items: center; justify-content: space-between; min-height: 30px; margin: 7px -5px -5px; padding: 6px 0 0 5px; border-top: 1px solid var(--border-soft); }
 .provider-card footer > span { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
 .provider-card-actions { display: flex; align-items: center; gap: 2px; }
+.provider-card.integration-card { container: integration-card / inline-size; display: grid; align-content: start; gap: 11px; }
+.integration-card-heading { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.integration-card-heading > .status-dot { flex: 0 0 auto; }
+.integration-card-heading > div { min-width: 0; }
+.integration-card-heading small { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.integration-card-heading h3 { overflow: hidden; margin: 0; color: var(--text-strong); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.integration-card-summary { min-width: 0; margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.integration-card-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border: 1px solid var(--border-soft); border-radius: 8px; overflow: hidden; }
+.integration-card-facts > div { display: grid; min-width: 0; grid-template-columns: 58px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 9px 10px; border-right: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
+.integration-card-facts > div:nth-child(even) { border-right: 0; }
+.integration-card-facts > div:nth-last-child(-n + 2) { border-bottom: 0; }
+.integration-card-facts dt { color: var(--muted); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+.integration-card-facts dd { min-width: 0; margin: 0; color: var(--text); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.integration-card > .provider-capability-policy { margin-top: 0; }
+.integration-card > footer { margin-top: auto; }
+.integration-card-actions { display: flex; align-items: center; gap: 3px; }
+@container integration-card (max-width: 520px) {
+  .integration-card-facts { grid-template-columns: 1fr; }
+  .integration-card-facts > div { border-right: 0; }
+  .integration-card-facts > div:nth-last-child(-n + 2) { border-bottom: 1px solid var(--border-soft); }
+  .integration-card-facts > div:last-child { border-bottom: 0; }
+}
 .settings-bottom-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 11px; }
 .runtime-panel dl { margin: 0; padding: 9px 16px; }
 .runtime-panel dl div { display: flex; justify-content: space-between; padding: 7px 0; }
