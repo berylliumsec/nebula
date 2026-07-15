@@ -18,6 +18,7 @@ import { PageHeader } from "../components/PageHeader";
 import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useChrome } from "../state/ChromeContext";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 const agents = [
   { name: "Scope planner", detail: "Policy and mission decomposition", state: "complete", icon: ShieldCheck, tools: "No executable tools" },
@@ -53,6 +54,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
       await api.steerRun(run.id, text);
       setSteeringText("");
     } catch (error) {
+      void logCaughtDiagnostic("interface.agents_page.caught_failure_01", "A handled interface operation failed.", error, "agents_page");
       setSteeringError(error instanceof Error ? error.message : "Could not steer the harness turn.");
     } finally {
       setSteering(false);
@@ -72,7 +74,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replace("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{approvals.length} pending approval request{approvals.length === 1 ? "" : "s"}.</p>{run?.backend === "harness" && <button className="button quiet" type="button" onClick={() => void discuss()}><MessageSquare size={15} /> Discuss in chat</button>}</div>
           <div className="mission-hero-progress"><span><strong>{run?.completedTasks ?? 0}</strong><small>complete</small></span><span><strong>{run?.totalTasks ?? 0}</strong><small>recorded tasks</small></span><span><strong>{events.length}</strong><small>events loaded</small></span></div>
         </section>
-        {run?.backend === "harness" && ["running", "waiting_approval"].includes(run.status) && <form className="panel mission-steer" onSubmit={(event) => void steer(event)}><label htmlFor="harness-steering">Steer active harness turn</label><div><input id="harness-steering" value={steeringText} maxLength={20_000} placeholder="Add direction without starting another turn" onChange={(event) => setSteeringText(event.target.value)} /><button className="button secondary" type="submit" disabled={steering || !steeringText.trim()}>{steering ? "Sending…" : "Steer"}</button></div>{steeringError && <p className="form-error" role="alert">{steeringError}</p>}</form>}
+        {run?.backend === "harness" && ["running", "waiting_approval"].includes(run.status) && <form className="panel mission-steer" onSubmit={(event) => void steer(event)}><label htmlFor="harness-steering">Steer active harness turn</label><div><input id="harness-steering" value={steeringText} maxLength={20_000} placeholder="Add direction without starting another turn" onChange={(event) => setSteeringText(event.target.value)} /><button className="button secondary" type="submit" disabled={steering || !steeringText.trim()}>{steering ? "Sending…" : "Steer"}</button></div>{steeringError && <DiagnosticErrorNotice error={steeringError} fallback="The harness could not be steered." compact />}</form>}
         {resultEvent && <section className={`panel mission-result ${resultEvent.kind === "run.failed" ? "failed" : "complete"}`} aria-labelledby="mission-result-title">
           <header><span className="mission-result-icon"><FileCheck2 size={19} /></span><div><small>{resultEvent.kind === "run.failed" ? "Mission ended with errors" : "Completed mission"}</small><h2 id="mission-result-title">Mission result</h2></div><span className="mission-result-sequence">#{resultEvent.sequence}</span></header>
           <div className="mission-result-body"><AssistantMarkdown content={resultEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /></div>

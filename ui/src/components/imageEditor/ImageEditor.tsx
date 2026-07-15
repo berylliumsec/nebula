@@ -24,6 +24,7 @@ import {
   undoImageEdit,
   validateSupportedImageBlob,
 } from "./imageEditModel";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../../diagnostics";
 
 export type ImageEditorTool = "pan" | "crop" | "rectangle" | "arrow" | "blur" | "redact" | "text";
 
@@ -239,6 +240,7 @@ export function ImageEditor({
     try {
       resource = loadImage(source, maxDecodedPixels, maxDimension);
     } catch (reason) {
+      void logCaughtDiagnostic("interface.image_editor.caught_failure_01", "A handled interface operation failed.", reason, "image_editor");
       setError(reason instanceof Error ? reason.message : "The image could not be loaded.");
       return;
     }
@@ -259,6 +261,7 @@ export function ImageEditor({
     try {
       return { value: imageDimensionsAfterOperations(loaded.width, loaded.height, history.operations) };
     } catch (reason) {
+      void logCaughtDiagnostic("interface.image_editor.caught_failure_02", "A handled interface operation failed.", reason, "image_editor");
       return { error: reason instanceof Error ? reason.message : "The edit recipe is invalid." };
     }
   }, [loaded, history.operations]);
@@ -286,6 +289,7 @@ export function ImageEditor({
         drawGesturePreview(context, gesture, tool, color, thickness, dimensions.width, dimensions.height);
       }
     } catch (reason) {
+      void logCaughtDiagnostic("interface.image_editor.caught_failure_03", "A handled interface operation failed.", reason, "image_editor");
       setError(reason instanceof Error ? reason.message : "The image could not be rendered.");
     }
   }, [loaded, dimensions, history.operations, gesture, tool, color, thickness, zoom]);
@@ -295,6 +299,7 @@ export function ImageEditor({
       setHistory((current) => appendImageEdit(current, operation, operationLimit));
       setError(undefined);
     } catch (reason) {
+      void logCaughtDiagnostic("interface.image_editor.caught_failure_04", "A handled interface operation failed.", reason, "image_editor");
       setError(reason instanceof Error ? reason.message : "The edit could not be added.");
     }
   }, [operationLimit]);
@@ -371,14 +376,15 @@ export function ImageEditor({
         recipe,
       });
     } catch (reason) {
+      void logCaughtDiagnostic("interface.image_editor.caught_failure_05", "A handled interface operation failed.", reason, "image_editor");
       setError(reason instanceof Error ? reason.message : "The edited image could not be saved.");
     } finally {
       setSaving(false);
     }
   };
 
-  if (error && !loaded) return <div className={styles.editor}><div className={styles.error} role="alert">{error}</div></div>;
-  if (loaded && dimensionResult.error) return <div className={styles.editor}><div className={styles.error} role="alert">{dimensionResult.error}</div></div>;
+  if (error && !loaded) return <div className={styles.editor}><DiagnosticErrorNotice error={error} fallback="The image editor could not load the capture." /></div>;
+  if (loaded && dimensionResult.error) return <div className={styles.editor}><DiagnosticErrorNotice error={dimensionResult.error} fallback="The capture dimensions are invalid." /></div>;
   if (!loaded || !dimensions) return <div className={styles.editor}><div className={styles.loading} aria-live="polite">Loading image editor…</div></div>;
 
   return <section className={styles.editor} aria-label="Image editor">
@@ -454,7 +460,7 @@ export function ImageEditor({
     <div className={styles.footer}>
       <span className={styles.status} aria-live="polite">
         {dimensions.width} × {dimensions.height}px · {history.operations.length}/{operationLimit} edits
-        {error ? <span className={styles.inlineError} role="alert"> · {error}</span> : null}
+        {error ? <DiagnosticErrorNotice error={error} fallback="The image edit could not be completed." compact /> : null}
       </span>
       <div>
         {onCancel && <button className={styles.button} type="button" disabled={saving} onClick={onCancel}>Cancel</button>}

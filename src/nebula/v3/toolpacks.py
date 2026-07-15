@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import base64
 import hashlib
 import json
@@ -96,6 +98,13 @@ class ToolPackMetadata(StrictModel):
         try:
             Version(value)
         except InvalidVersion as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_001",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise ValueError("tool-pack versions must be valid versions") from exc
         return value
 
@@ -408,6 +417,13 @@ def _validate_strict_schema(schema: dict[str, Any]) -> None:
     try:
         Draft202012Validator.check_schema(schema)
     except SchemaError as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpacks.caught_failure_002",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolpacks",
+        )
         raise ValueError(f"invalid JSON Schema: {exc.message}") from exc
     if schema.get("type") != "object":
         raise ValueError("tool schemas must describe an object")
@@ -461,15 +477,36 @@ def compile_manifest_yaml(source: str | bytes) -> ToolPackManifestV1:
         if any(isinstance(token, AliasToken) for token in yaml.scan(text)):
             raise ToolPackValidationError("YAML aliases are not permitted")
         payload = yaml.load(text, Loader=_UniqueKeyLoader)
-    except ToolPackValidationError:
+    except ToolPackValidationError as caught_error:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpacks.caught_failure_003",
+            "A handled toolbox operation raised an exception.",
+            caught_error,
+            stage="toolpacks",
+        )
         raise
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpacks.caught_failure_004",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolpacks",
+        )
         raise ToolPackValidationError("tool-pack YAML is invalid") from exc
     if not isinstance(payload, dict):
         raise ToolPackValidationError("tool-pack YAML must contain one object")
     try:
         return ToolPackManifestV1.model_validate(payload)
     except Exception as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpacks.caught_failure_005",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolpacks",
+        )
         raise ToolPackValidationError("tool-pack manifest failed validation") from exc
 
 
@@ -532,6 +569,13 @@ class ToolCatalogEntry(StrictModel):
         try:
             Version(value)
         except InvalidVersion as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_006",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise ValueError("catalog versions must be valid versions") from exc
         return value
 
@@ -543,6 +587,13 @@ class ToolCatalogEntry(StrictModel):
         try:
             Version(value)
         except InvalidVersion as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_007",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise ValueError("minimum Nebula version must be a valid version") from exc
         return value
 
@@ -625,6 +676,13 @@ class SignatureEnvelope(StrictModel):
         try:
             decoded = base64.b64decode(value, validate=True)
         except ValueError as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_008",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise ValueError("signature must be base64") from exc
         if len(decoded) != 64:
             raise ValueError("Ed25519 signatures must be 64 bytes")
@@ -683,6 +741,13 @@ class Ed25519Keyring:
             try:
                 raw = base64.b64decode(raw, validate=True)
             except ValueError as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.toolpacks.caught_failure_009",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="toolpacks",
+                )
                 raise ValueError(
                     "public key must be raw or base64 Ed25519 bytes"
                 ) from exc
@@ -699,6 +764,13 @@ class Ed25519Keyring:
         try:
             key.verify(base64.b64decode(envelope.signature), payload)
         except InvalidSignature as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_010",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise SignatureVerificationError("tool-pack signature is invalid") from exc
         return envelope.key_id
 
@@ -734,6 +806,13 @@ async def fetch_bounded_https(
             try:
                 declared = int(content_length)
             except ValueError as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.toolpacks.caught_failure_011",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="toolpacks",
+                )
                 raise ToolPackValidationError(
                     "download has an invalid content-length"
                 ) from exc
@@ -783,7 +862,14 @@ class ToolCatalogClient:
             )
             try:
                 cached = self._read_cache()
-            except ToolPackValidationError:
+            except ToolPackValidationError as caught_error:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.toolpacks.caught_failure_012",
+                    "A handled toolbox operation raised an exception.",
+                    caught_error,
+                    stage="toolpacks",
+                )
                 cached = None
             if cached is not None:
                 if catalog.generated_at < cached.catalog.generated_at:
@@ -800,7 +886,14 @@ class ToolCatalogClient:
                     )
             self._write_cache(catalog, signature)
             return CatalogLoadResult(catalog=catalog, signature=signature)
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_013",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="toolpacks",
+            )
             if not allow_verified_cache:
                 raise
             return self._read_cache()
@@ -827,6 +920,13 @@ class ToolCatalogClient:
         try:
             return ToolCatalogV1.model_validate_json(payload)
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_014",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise ToolPackValidationError("catalog response is invalid") from exc
 
     @staticmethod
@@ -834,6 +934,13 @@ class ToolCatalogClient:
         try:
             return SignatureEnvelope.model_validate_json(payload)
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_015",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise SignatureVerificationError("catalog signature is invalid") from exc
 
     def _write_cache(
@@ -876,6 +983,13 @@ class ToolCatalogClient:
                 self.catalog_publisher,
             )
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_016",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise ToolPackValidationError(
                 "catalog fetch failed and no valid signed cache is available"
             ) from exc
@@ -946,7 +1060,14 @@ class ImmutableManifestStore:
     def _put_immutable(path: Path, payload: bytes) -> None:
         try:
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
+        except FileExistsError as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_017",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="toolpacks",
+            )
             if path.is_symlink() or path.read_bytes() != payload:
                 raise ToolPackInstallError(
                     f"immutable tool-pack content conflicts at {path}"
@@ -957,7 +1078,14 @@ class ImmutableManifestStore:
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_018",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="toolpacks",
+            )
             path.unlink(missing_ok=True)
             raise
 
@@ -969,8 +1097,22 @@ class ImmutableManifestStore:
             payload = json.loads(path.read_text(encoding="utf-8"))
             manifest = ToolPackManifestV1.model_validate(payload)
         except FileNotFoundError as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_019",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise ToolPackInstallError(f"stored manifest not found: {digest}") from exc
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_020",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise ToolPackInstallError(f"stored manifest is invalid: {digest}") from exc
         if manifest_digest(manifest) != digest:
             raise ToolPackInstallError(f"stored manifest digest mismatch: {digest}")
@@ -985,10 +1127,24 @@ class ImmutableManifestStore:
                 )
             return SignatureEnvelope.model_validate_json(path.read_bytes())
         except FileNotFoundError as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_021",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise SignatureVerificationError(
                 f"stored manifest signature not found: {digest}"
             ) from exc
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_022",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise SignatureVerificationError(
                 f"stored manifest signature is invalid: {digest}"
             ) from exc
@@ -1017,6 +1173,13 @@ class ParserContainerCommandTool(SandboxCommandTool):
                 self.parser_container_contract, result.stdout.encode("utf-8")
             )
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_023",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             result.output = {}
             detail = " ".join(str(exc).split()) or exc.__class__.__name__
             result.parser_error = f"{exc.__class__.__name__}: {detail}"[:1_000]
@@ -1078,12 +1241,26 @@ def build_tool_registry(
                     try:
                         parser = parser_registry[tool.parser.built_in]
                     except KeyError as exc:
+                        record_caught_exception(
+                            "toolbox",
+                            "toolbox.toolpacks.caught_failure_024",
+                            "A handled toolbox operation raised an exception.",
+                            exc,
+                            stage="toolpacks",
+                        )
                         raise ToolPackInstallError(
                             f"parser is unavailable: {tool.parser.built_in}"
                         ) from exc
                     plugin = SandboxCommandTool(spec, output_parser=parser)
                 registry.register(plugin)
             except ValueError as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.toolpacks.caught_failure_025",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="toolpacks",
+                )
                 raise ToolPackInstallError(str(exc)) from exc
     return registry
 
@@ -1250,6 +1427,13 @@ class ToolPackInstaller:
                 failure_detail=None,
             )
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_026",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             self._transition(
                 installation,
                 ToolPackInstallationStatus.FAILED,
@@ -1279,6 +1463,13 @@ class ToolPackInstaller:
                 failure_detail=None,
             )
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_027",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             self._transition(
                 installation,
                 ToolPackInstallationStatus.FAILED,
@@ -1317,7 +1508,14 @@ class ToolPackInstaller:
                         detail = result.stdout.strip()
                         try:
                             payload = json.loads(detail)
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as caught_error:
+                            record_caught_exception(
+                                "toolbox",
+                                "toolbox.toolpacks.caught_failure_028",
+                                "A handled toolbox operation raised an exception.",
+                                caught_error,
+                                stage="toolpacks",
+                            )
                             pass
                         else:
                             if isinstance(payload, dict):
@@ -1349,6 +1547,13 @@ class ToolPackInstaller:
             try:
                 return BUILTIN_PARSERS[tool.parser.built_in](stdout, "", 0)
             except Exception as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.toolpacks.caught_failure_029",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="toolpacks",
+                )
                 raise ToolPackInstallError(
                     f"smoke-test output could not be parsed for {tool.name}"
                 ) from exc
@@ -1362,6 +1567,13 @@ class ToolPackInstaller:
                 tool.parser.container, stdout.encode("utf-8")
             )
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_030",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
             raise ToolPackInstallError(
                 f"parser-container smoke test failed for {tool.name}"
             ) from exc

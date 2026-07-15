@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,6 +71,13 @@ def _row_to_entity(row: EntityRow, expected: type[EntityT] | None = None) -> Ent
     try:
         return cast(EntityT, model.model_validate(row.payload))
     except Exception as exc:
+        record_caught_exception(
+            "storage",
+            "storage.storage.caught_failure_001",
+            "A handled storage operation raised an exception.",
+            exc,
+            stage="storage",
+        )
         raise CorruptRecordError(f"record {row.id} failed validation") from exc
 
 
@@ -92,6 +101,13 @@ class StoreTransaction:
         try:
             self.session.flush()
         except IntegrityError as exc:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_002",
+                "A handled storage operation raised an exception.",
+                exc,
+                stage="storage",
+            )
             raise ConflictError(f"entity already exists: {entity.id}") from exc
         return entity
 
@@ -232,11 +248,25 @@ class NebulaStore:
             connection.commit()
             return entity, event
         except IntegrityError as exc:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_003",
+                "A handled storage operation raised an exception.",
+                exc,
+                stage="storage",
+            )
             connection.rollback()
             raise ConflictError(
                 f"entity or initial run event already exists: {entity.id}"
             ) from exc
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_004",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="storage",
+            )
             connection.rollback()
             raise
         finally:
@@ -358,7 +388,14 @@ class NebulaStore:
             )
             connection.commit()
             return call
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_005",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="storage",
+            )
             connection.rollback()
             raise
         finally:
@@ -540,7 +577,14 @@ class NebulaStore:
             )
             connection.commit()
             return updated_entity, event
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_006",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="storage",
+            )
             connection.rollback()
             raise
         finally:
@@ -636,7 +680,14 @@ class NebulaStore:
             )
             connection.commit()
             return updated_entity, event
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_007",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="storage",
+            )
             connection.rollback()
             raise
         finally:
@@ -716,9 +767,9 @@ class NebulaStore:
             active_turn = and_(
                 EntityRow.kind == "chat_turns",
                 EntityRow.payload["session_id"].as_string() == session_id,
-                EntityRow.payload["status"].as_string().in_(
-                    ("routing", "waiting_approval", "finalizing")
-                ),
+                EntityRow.payload["status"]
+                .as_string()
+                .in_(("routing", "waiting_approval", "finalizing")),
             )
             if session.scalar(select(exists().where(active_turn))):
                 raise ConflictError(
@@ -842,7 +893,14 @@ class NebulaStore:
             )
             connection.commit()
             return event
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_008",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="storage",
+            )
             connection.rollback()
             raise
         finally:
@@ -933,7 +991,14 @@ class NebulaStore:
             )
             connection.commit()
             return event
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_009",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="storage",
+            )
             connection.rollback()
             raise
         finally:
@@ -1064,6 +1129,13 @@ class NebulaStore:
         try:
             return model.model_validate(row["payload"])
         except Exception as exc:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_010",
+                "A handled storage operation raised an exception.",
+                exc,
+                stage="storage",
+            )
             raise CorruptRecordError(f"record {row['id']} failed validation") from exc
 
     def _event_for_idempotency_key(

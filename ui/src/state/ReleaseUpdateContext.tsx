@@ -16,6 +16,7 @@ import {
   type AvailableUpdate,
   type ReleaseInfo,
 } from "../api/updater";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 export type ReleaseUpdatePhase =
   | "loading"
@@ -82,6 +83,7 @@ export function ReleaseUpdateProvider({ children }: PropsWithChildren) {
       setDismissed(false);
       setPhase(update ? "available" : "current");
     } catch (checkError) {
+      void logCaughtDiagnostic("interface.release_update_context.caught_failure_01", "A handled interface operation failed.", checkError, "release_update_context");
       if (!mounted.current) return;
       setPhase("error");
       setFailure("check");
@@ -111,6 +113,7 @@ export function ReleaseUpdateProvider({ children }: PropsWithChildren) {
         setPhase("current");
       }
     } catch (installError) {
+      void logCaughtDiagnostic("interface.release_update_context.caught_failure_02", "A handled interface operation failed.", installError, "release_update_context");
       if (!mounted.current) return;
       setDismissed(false);
       setPhase("error");
@@ -130,6 +133,7 @@ export function ReleaseUpdateProvider({ children }: PropsWithChildren) {
     try {
       await restartApplication();
     } catch (restartError) {
+      void logCaughtDiagnostic("interface.release_update_context.caught_failure_03", "A handled interface operation failed.", restartError, "release_update_context");
       if (!mounted.current) return;
       setPhase("error");
       setFailure("restart");
@@ -153,6 +157,7 @@ export function ReleaseUpdateProvider({ children }: PropsWithChildren) {
         void runCheck(true);
       })
       .catch((releaseError) => {
+        void logCaughtDiagnostic("interface.release_update_context.caught_failure_04", "A handled interface operation failed.", releaseError, "release_update_context");
         if (!active) return;
         setPhase("error");
         setFailure("release");

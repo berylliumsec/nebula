@@ -1,5 +1,6 @@
 import type { ContainerTerminalSession } from "./types";
 import { websocketAuthProtocol } from "./events";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 export type ContainerTerminalSocketState =
   | "connecting"
@@ -100,6 +101,7 @@ export class ContainerTerminalSocket {
         protocols,
       );
     } catch (reason) {
+      void logCaughtDiagnostic("interface.container_terminal.caught_failure_01", "A handled interface operation failed.", reason, "container_terminal");
       const suffix = reason instanceof Error && reason.message ? `: ${reason.message}` : ".";
       this.scheduleReconnect(`Terminal connection failed${suffix}`);
       return;
@@ -168,7 +170,8 @@ export class ContainerTerminalSocket {
     let frame: unknown;
     try {
       frame = JSON.parse(event.data);
-    } catch {
+    } catch (caughtError) {
+      void logCaughtDiagnostic("interface.container_terminal.caught_failure_02", "A handled interface operation failed.", caughtError, "container_terminal");
       this.options.onError?.("invalid_frame", "Core sent malformed terminal data.");
       return;
     }
@@ -239,7 +242,8 @@ export class ContainerTerminalSocket {
         this.lastSequence = value.sequence;
         this.options.session.lastSequence = value.sequence;
         this.options.onOutput(decoded);
-      } catch {
+      } catch (caughtError) {
+        void logCaughtDiagnostic("interface.container_terminal.caught_failure_03", "A handled interface operation failed.", caughtError, "container_terminal");
         this.options.onError?.("invalid_frame", "Core sent malformed base64 terminal output.");
       }
       return;

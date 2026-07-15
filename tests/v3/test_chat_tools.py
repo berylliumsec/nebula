@@ -213,9 +213,7 @@ def test_chat_runs_sequential_required_tool_loop_and_persists_final_message(
         provider.requests[-1].instructions or ""
     )
     assert "closed Markdown fence" in (provider.requests[-1].instructions or "")
-    assert "separate reviewed Run action" in (
-        provider.requests[-1].instructions or ""
-    )
+    assert "separate reviewed Run action" in (provider.requests[-1].instructions or "")
     assert "report the exact" in (provider.requests[-1].instructions or "")
     assert "invent configuration" in (provider.requests[-1].instructions or "")
 
@@ -301,7 +299,9 @@ def test_tool_final_synthesis_retrieves_help_from_the_observed_failure(
     done = next(payload for event, payload in events if event == "done")
 
     assert final_request.tool_results[0].is_error is True
-    assert "container runner is unavailable" in str(final_request.tool_results[0].output)
+    assert "container runner is unavailable" in str(
+        final_request.tool_results[0].output
+    )
     assert "BEGIN TRUSTED NEBULA OPERATOR HELP (JSON)" in (
         final_request.instructions or ""
     )

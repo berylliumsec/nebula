@@ -18,6 +18,7 @@ import type { KnowledgeSource } from "../api/types";
 import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 
@@ -119,6 +120,7 @@ export function KnowledgePage() {
       });
       setStatusMessage(`${file.name} is ready for cited retrieval.`);
     } catch (uploadError) {
+      void logCaughtDiagnostic("interface.knowledge_page.caught_failure_01", "A handled interface operation failed.", uploadError, "knowledge_page");
       setStatusMessage(undefined);
       setError(uploadError instanceof Error ? uploadError.message : "Could not ingest the selected source.");
     } finally {
@@ -133,6 +135,7 @@ export function KnowledgePage() {
       await reindexKnowledgeSource(source.id);
       setStatusMessage(`${source.name} was reindexed.`);
     } catch (reindexError) {
+      void logCaughtDiagnostic("interface.knowledge_page.caught_failure_02", "A handled interface operation failed.", reindexError, "knowledge_page");
       setError(reindexError instanceof Error ? reindexError.message : `Could not reindex ${source.name}.`);
     } finally {
       setSourceBusy(source.id, false);
@@ -170,6 +173,7 @@ export function KnowledgePage() {
       await removeKnowledgeSource(source.id);
       setStatusMessage(`${source.name} was removed from retrieval.`);
     } catch (removeError) {
+      void logCaughtDiagnostic("interface.knowledge_page.caught_failure_03", "A handled interface operation failed.", removeError, "knowledge_page");
       setError(removeError instanceof Error ? removeError.message : `Could not remove ${source.name}.`);
     } finally {
       setSourceBusy(source.id, false);
@@ -189,6 +193,7 @@ export function KnowledgePage() {
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (downloadError) {
+      void logCaughtDiagnostic("interface.knowledge_page.caught_failure_04", "A handled interface operation failed.", downloadError, "knowledge_page");
       setError(downloadError instanceof Error ? downloadError.message : `Could not download ${source.name}.`);
     } finally {
       setSourceBusy(source.id, false);
@@ -207,7 +212,7 @@ export function KnowledgePage() {
         </>}
       />
       {statusMessage && <div className="knowledge-status" role="status">{uploading && <LoaderCircle className="spin" size={15} />}{statusMessage}</div>}
-      {error && <div className="knowledge-status error" role="alert"><ShieldAlert size={15} />{error}</div>}
+      {error && <DiagnosticErrorNotice error={error} fallback="The knowledge operation could not be completed." />}
       <div className="knowledge-layout">
         <section className="panel data-panel knowledge-sources">
           <header className="data-toolbar">

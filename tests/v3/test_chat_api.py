@@ -170,12 +170,18 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     )
     deleted = client.delete(f"/api/v1/chat-sessions/{session_id}", headers=_auth())
     assert deleted.status_code == 204
-    assert client.get(
-        f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
-    ).status_code == 404
-    assert client.get(
-        f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
-    ).json() == []
+    assert (
+        client.get(
+            f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
+        ).json()
+        == []
+    )
     assert store.list_entities(ContextSnapshot, engagement_id=engagement.id) == []
 
     streamed = client.post(
@@ -264,9 +270,7 @@ def test_chat_delete_rejects_an_active_response(tmp_path):
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    response = client.delete(
-        f"/api/v1/chat-sessions/{session.id}", headers=_auth()
-    )
+    response = client.delete(f"/api/v1/chat-sessions/{session.id}", headers=_auth())
     rename_response = client.patch(
         f"/api/v1/chat-sessions/{session.id}",
         headers=_auth(),

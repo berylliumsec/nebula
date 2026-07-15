@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import create_diagnostic_task, record_caught_exception
+
 import asyncio
 import errno
 import fcntl
@@ -417,18 +419,39 @@ class _ContainerEgressLease(EgressLease):
                 env=self.runtime_environment,
             )
             await asyncio.wait_for(stop.wait(), timeout=10)
-        except (OSError, asyncio.TimeoutError):
+        except (OSError, asyncio.TimeoutError) as caught_error:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_001",
+                "A handled sandbox operation raised an exception.",
+                caught_error,
+                stage="sandbox",
+            )
             if self.process.returncode is None:
                 self.process.kill()
         try:
             await asyncio.wait_for(self.process.wait(), timeout=10)
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as caught_error:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_002",
+                "A handled sandbox operation raised an exception.",
+                caught_error,
+                stage="sandbox",
+            )
             self.process.kill()
             await self.process.wait()
         self.drain_task.cancel()
         try:
             await self.drain_task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_003",
+                "A handled sandbox operation raised an exception.",
+                caught_error,
+                stage="sandbox",
+            )
             pass
 
 
@@ -516,6 +539,13 @@ class ContainerEgressController(EgressController):
                 env=runtime_environment,
             )
         except OSError as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_004",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             raise SandboxUnavailable(f"could not start egress helper: {exc}") from exc
         assert process.stdout is not None
         try:
@@ -523,6 +553,13 @@ class ContainerEgressController(EgressController):
                 process.stdout.readline(), timeout=self.readiness_timeout_seconds
             )
         except asyncio.TimeoutError as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_005",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             process.kill()
             await process.wait()
             raise SandboxUnavailable("egress helper did not become ready") from exc
@@ -533,7 +570,13 @@ class ContainerEgressController(EgressController):
             raise SandboxUnavailable(
                 f"egress helper failed closed before readiness: {detail or 'no status'}"
             )
-        drain_task = asyncio.create_task(_discard_stream(process.stdout))
+        drain_task = create_diagnostic_task(
+            _discard_stream(process.stdout),
+            feature="sandbox",
+            event_code="sandbox.egress_output_drain",
+            failure_message="The sandbox egress supervisor stopped unexpectedly.",
+            name=f"nebula-egress-drain-{helper_name}",
+        )
         return _ContainerEgressLease(
             network_mode=f"container:{helper_name}",
             helper_name=helper_name,
@@ -613,9 +656,23 @@ class SandboxTerminalProcess:
         while not self._closed:
             try:
                 return os.read(self.master_fd, maximum_bytes)
-            except BlockingIOError:
+            except BlockingIOError as caught_error:
+                record_caught_exception(
+                    "sandbox",
+                    "sandbox.sandbox.caught_failure_006",
+                    "A handled sandbox operation raised an exception.",
+                    caught_error,
+                    stage="sandbox",
+                )
                 await _wait_for_fd(self.master_fd, writable=False)
             except OSError as exc:
+                record_caught_exception(
+                    "sandbox",
+                    "sandbox.sandbox.caught_failure_007",
+                    "A handled sandbox operation raised an exception.",
+                    exc,
+                    stage="sandbox",
+                )
                 if exc.errno in {errno.EBADF, errno.EIO}:
                     return b""
                 raise
@@ -631,9 +688,23 @@ class SandboxTerminalProcess:
             try:
                 written = os.write(self.master_fd, view)
                 view = view[written:]
-            except BlockingIOError:
+            except BlockingIOError as caught_error:
+                record_caught_exception(
+                    "sandbox",
+                    "sandbox.sandbox.caught_failure_008",
+                    "A handled sandbox operation raised an exception.",
+                    caught_error,
+                    stage="sandbox",
+                )
                 await _wait_for_fd(self.master_fd, writable=True)
             except OSError as exc:
+                record_caught_exception(
+                    "sandbox",
+                    "sandbox.sandbox.caught_failure_009",
+                    "A handled sandbox operation raised an exception.",
+                    exc,
+                    stage="sandbox",
+                )
                 if exc.errno in {errno.EBADF, errno.EIO}:
                     return
                 raise
@@ -662,20 +733,55 @@ class SandboxTerminalProcess:
                 if self.process.returncode is None:
                     try:
                         os.killpg(self.process.pid, signal.SIGTERM)
-                    except OSError:
+                    except OSError as caught_error:
+                        record_caught_exception(
+                            "sandbox",
+                            "sandbox.sandbox.caught_failure_010",
+                            "A handled sandbox operation raised an exception.",
+                            caught_error,
+                            stage="sandbox",
+                        )
                         try:
                             self.process.terminate()
-                        except ProcessLookupError:
+                        except ProcessLookupError as caught_error:
+                            record_caught_exception(
+                                "sandbox",
+                                "sandbox.sandbox.caught_failure_011",
+                                "A handled sandbox operation raised an exception.",
+                                caught_error,
+                                stage="sandbox",
+                            )
                             pass
                     try:
                         await asyncio.wait_for(self.process.wait(), timeout=2)
-                    except asyncio.TimeoutError:
+                    except asyncio.TimeoutError as caught_error:
+                        record_caught_exception(
+                            "sandbox",
+                            "sandbox.sandbox.caught_failure_012",
+                            "A handled sandbox operation raised an exception.",
+                            caught_error,
+                            stage="sandbox",
+                        )
                         try:
                             os.killpg(self.process.pid, signal.SIGKILL)
-                        except OSError:
+                        except OSError as caught_error:
+                            record_caught_exception(
+                                "sandbox",
+                                "sandbox.sandbox.caught_failure_013",
+                                "A handled sandbox operation raised an exception.",
+                                caught_error,
+                                stage="sandbox",
+                            )
                             try:
                                 self.process.kill()
-                            except ProcessLookupError:
+                            except ProcessLookupError as caught_error:
+                                record_caught_exception(
+                                    "sandbox",
+                                    "sandbox.sandbox.caught_failure_014",
+                                    "A handled sandbox operation raised an exception.",
+                                    caught_error,
+                                    stage="sandbox",
+                                )
                                 pass
                         await self.process.wait()
             finally:
@@ -687,7 +793,14 @@ class SandboxTerminalProcess:
                 finally:
                     try:
                         os.close(self.master_fd)
-                    except OSError:
+                    except OSError as caught_error:
+                        record_caught_exception(
+                            "sandbox",
+                            "sandbox.sandbox.caught_failure_015",
+                            "A handled sandbox operation raised an exception.",
+                            caught_error,
+                            stage="sandbox",
+                        )
                         pass
 
 
@@ -852,6 +965,13 @@ class ContainerSandboxRunner(SandboxRunner):
             json.JSONDecodeError,
             SandboxError,
         ) as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_016",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             return False, f"container runtime health check failed: {exc}"
 
     async def _validate_runtime_profile(self) -> tuple[bool, str]:
@@ -867,6 +987,13 @@ class ContainerSandboxRunner(SandboxRunner):
             try:
                 seccomp = self.profile.seccomp_profile.resolve(strict=True)
             except OSError as exc:
+                record_caught_exception(
+                    "sandbox",
+                    "sandbox.sandbox.caught_failure_017",
+                    "A handled sandbox operation raised an exception.",
+                    exc,
+                    stage="sandbox",
+                )
                 return False, f"configured seccomp profile is unavailable: {exc}"
             if not seccomp.is_file():
                 return False, "configured seccomp profile is not a regular file"
@@ -1217,6 +1344,13 @@ class ContainerSandboxRunner(SandboxRunner):
                 start_new_session=True,
             )
         except (OSError, SandboxError) as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_018",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             if master_fd is not None:
                 os.close(master_fd)
             if lease is not None:
@@ -1256,7 +1390,14 @@ class ContainerSandboxRunner(SandboxRunner):
             stdout, _stderr, return_code = await self._capture(
                 "ps", "--all", "--format", "{{.Names}}"
             )
-        except (OSError, asyncio.TimeoutError, SandboxError):
+        except (OSError, asyncio.TimeoutError, SandboxError) as caught_error:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_019",
+                "A handled sandbox operation raised an exception.",
+                caught_error,
+                stage="sandbox",
+            )
             return
         if return_code != 0:
             return
@@ -1340,6 +1481,13 @@ class ContainerSandboxRunner(SandboxRunner):
                 env=_runtime_environment(),
             )
         except OSError as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_020",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             if lease is not None:
                 await lease.close()
             raise SandboxUnavailable(
@@ -1353,14 +1501,29 @@ class ContainerSandboxRunner(SandboxRunner):
             try:
                 process.stdin.write(input_bytes)
                 await process.stdin.drain()
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError) as caught_error:
+                record_caught_exception(
+                    "sandbox",
+                    "sandbox.sandbox.caught_failure_021",
+                    "A handled sandbox operation raised an exception.",
+                    caught_error,
+                    stage="sandbox",
+                )
                 pass
             finally:
                 process.stdin.close()
                 try:
                     await process.stdin.wait_closed()
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError) as caught_error:
+                    record_caught_exception(
+                        "sandbox",
+                        "sandbox.sandbox.caught_failure_022",
+                        "A handled sandbox operation raised an exception.",
+                        caught_error,
+                        stage="sandbox",
+                    )
                     pass
+        # diagnostic-expected: both bounded stream readers are gathered below.
         stdout_task = asyncio.create_task(
             _read_limited_stream(
                 process.stdout,
@@ -1369,6 +1532,7 @@ class ContainerSandboxRunner(SandboxRunner):
                 on_chunk=on_chunk,
             )
         )
+        # diagnostic-expected: paired with stdout_task and gathered below.
         stderr_task = asyncio.create_task(
             _read_limited_stream(
                 process.stderr,
@@ -1383,12 +1547,26 @@ class ContainerSandboxRunner(SandboxRunner):
                 await asyncio.wait_for(
                     process.wait(), timeout=request.limits.timeout_seconds
                 )
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as caught_error:
+                record_caught_exception(
+                    "sandbox",
+                    "sandbox.sandbox.caught_failure_023",
+                    "A handled sandbox operation raised an exception.",
+                    caught_error,
+                    stage="sandbox",
+                )
                 timed_out = True
                 process.kill()
                 await process.wait()
                 await self._force_remove(selected_name)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as caught_error:
+                record_caught_exception(
+                    "sandbox",
+                    "sandbox.sandbox.caught_failure_024",
+                    "A handled sandbox operation raised an exception.",
+                    caught_error,
+                    stage="sandbox",
+                )
                 process.kill()
                 await process.wait()
                 await self._force_remove(selected_name)
@@ -1428,7 +1606,14 @@ class ContainerSandboxRunner(SandboxRunner):
                 env=_runtime_environment(),
             )
             await asyncio.wait_for(cleanup.wait(), timeout=10)
-        except (OSError, asyncio.TimeoutError):
+        except (OSError, asyncio.TimeoutError) as caught_error:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_025",
+                "A handled sandbox operation raised an exception.",
+                caught_error,
+                stage="sandbox",
+            )
             return
 
 
@@ -1576,6 +1761,13 @@ class ContainerImagePreparer:
                     :1000
                 ]
         except (OSError, SandboxError) as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_026",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             pull_detail = str(exc)[:1000]
         if pull_detail is not None:
             raise SandboxUnavailable(
@@ -1613,6 +1805,13 @@ class ContainerImagePreparer:
         try:
             base = await self._verified_base(required=False)
         except SandboxUnavailable as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_027",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             return None, str(exc)[:1000]
         if base is None:
             return None, "the configured base image is not present locally"
@@ -1665,6 +1864,13 @@ class ContainerImagePreparer:
                 derived_tag, base_resolved_reference, required=False
             )
         except SandboxUnavailable as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_028",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             return None, str(exc)[:1000]
         if derived is None:
             return None, "the prepared image is not present locally"
@@ -1749,6 +1955,13 @@ class ContainerImagePreparer:
         try:
             payload = json.loads(stdout)
         except json.JSONDecodeError as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_029",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             raise SandboxUnavailable(
                 "prepared human-workstation security-tool manifest is invalid JSON"
             ) from exc
@@ -1824,6 +2037,13 @@ class ContainerImagePreparer:
         try:
             return _first_document(json.loads(stdout)), ""
         except json.JSONDecodeError as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_030",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             raise SandboxUnavailable(
                 f"image inspection returned invalid JSON for {reference}"
             ) from exc
@@ -1857,12 +2077,26 @@ class ContainerImagePreparer:
                     -1000:
                 ]
         except (OSError, SandboxError) as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_031",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             build_detail = str(exc)[-1000:]
         try:
             derived = await self._verified_derived(
                 derived_tag, base.resolved_reference, required=True
             )
         except SandboxUnavailable as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_032",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             if build_detail is not None:
                 raise SandboxUnavailable(
                     "human-workstation image build failed "
@@ -1966,6 +2200,13 @@ CMD ["/bin/bash"]
                 process, timeout_seconds=timeout_seconds, output_bytes=5_000_000
             )
         except asyncio.TimeoutError as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_033",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             raise SandboxUnavailable("container runtime operation timed out") from exc
         return (
             stdout.decode("utf-8", errors="replace"),
@@ -2050,6 +2291,13 @@ class ContainerToolPackRuntimeAdapter:
         try:
             document = _first_document(json.loads(stdout))
         except json.JSONDecodeError as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_034",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             raise SandboxError("tool image inspection returned invalid JSON") from exc
         observed_digests: set[str] = set()
         digest = _mapping_get(document, "Digest", "digest")
@@ -2141,6 +2389,13 @@ class ContainerToolPackRuntimeAdapter:
                 process, timeout_seconds=timeout_seconds, output_bytes=5_000_000
             )
         except asyncio.TimeoutError as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_035",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="sandbox",
+            )
             raise SandboxUnavailable("container runtime operation timed out") from exc
         return (
             stdout.decode("utf-8", errors="replace"),
@@ -2206,11 +2461,20 @@ async def _communicate_limited(
 ) -> tuple[bytes, bytes]:
     assert process.stdout is not None
     assert process.stderr is not None
+    # diagnostic-expected: both bounded readers are awaited after process exit.
     stdout_task = asyncio.create_task(_read_limited(process.stdout, output_bytes))
+    # diagnostic-expected: paired with stdout_task and awaited below.
     stderr_task = asyncio.create_task(_read_limited(process.stderr, output_bytes))
     try:
         await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except (asyncio.TimeoutError, asyncio.CancelledError) as caught_error:
+        record_caught_exception(
+            "sandbox",
+            "sandbox.sandbox.caught_failure_036",
+            "A handled sandbox operation raised an exception.",
+            caught_error,
+            stage="sandbox",
+        )
         process.kill()
         await process.wait()
         stdout_task.cancel()

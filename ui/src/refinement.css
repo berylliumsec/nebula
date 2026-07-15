@@ -774,6 +774,7 @@ kbd { font-size: 11px; }
 .settings-detail > .settings-section,
 .settings-detail > .settings-bottom-grid { display: none; }
 .settings-detail[data-section="setup-settings"] > #setup-settings { display: grid; }
+.settings-detail[data-section="diagnostics-settings"] > #diagnostics-settings { display: grid; }
 .settings-detail[data-section="advanced-settings"] { display: grid; gap: 30px; }
 .settings-detail[data-section="advanced-settings"] > .settings-section,
 .settings-detail[data-section="advanced-settings"] > .settings-bottom-grid { display: grid; }
@@ -786,6 +787,94 @@ kbd { font-size: 11px; }
 .setup-card > header { display: flex; align-items: center; gap: 10px; }
 .setup-card > header > div { display: grid; gap: 2px; }
 .setup-card small { color: var(--muted); font-size: 11px; }
+
+.diagnostics-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 13px;
+  border: 1px solid color-mix(in srgb, var(--red) 42%, var(--border-soft));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--red) 9%, var(--surface-raised));
+  color: var(--text-strong);
+  font-size: 12px;
+}
+.diagnostics-unavailable > span { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; gap: 4px; }
+.diagnostics-unavailable a { color: var(--blue); font-weight: 650; }
+.diagnostic-error-notice,
+.diagnostics-health {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--red) 35%, var(--border-soft));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--red) 7%, var(--surface-raised));
+}
+.diagnostic-error-notice > span,
+.diagnostics-health > span { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.diagnostic-error-notice small,
+.diagnostics-health small { color: var(--muted); }
+.diagnostic-error-notice a { color: var(--blue); font-size: 12px; white-space: nowrap; }
+.diagnostic-error-notice.compact { padding: 8px 10px; font-size: 12px; }
+.diagnostic-error-notice.compact > svg { flex: 0 0 auto; }
+.diagnostic-error-notice.compact small { font-size: 10px; }
+.diagnostic-fatal {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  gap: 14px;
+  padding: 32px;
+  background: var(--surface-base);
+  color: var(--text-strong);
+  text-align: center;
+}
+.diagnostic-fatal p { max-width: 620px; color: var(--muted); }
+.diagnostic-fatal > div { display: flex; justify-content: center; gap: 9px; }
+.diagnostic-reference { font-family: var(--font-mono); font-size: 12px; }
+.diagnostics-panel { gap: 16px; }
+.diagnostics-grid { display: grid; grid-template-columns: minmax(340px, 1.15fr) minmax(280px, .85fr); gap: 14px; }
+.diagnostics-settings-card,
+.diagnostics-health-card,
+.diagnostics-errors-card,
+.diagnostics-files-card { display: grid; align-content: start; gap: 14px; padding: 17px; }
+.diagnostics-settings-card > label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.diagnostics-settings-card select,
+.diagnostics-errors-card select { min-height: 36px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-muted); color: var(--text-strong); }
+.diagnostics-level-help { margin: -6px 0 0; color: var(--muted); font-size: 11px; }
+.diagnostics-overrides { border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); padding: 10px 0; }
+.diagnostics-overrides summary { cursor: pointer; color: var(--text-strong); font-size: 12px; font-weight: 650; }
+.diagnostics-overrides > div { display: grid; max-height: 330px; gap: 5px; margin-top: 10px; overflow: auto; }
+.diagnostics-overrides label { display: grid; grid-template-columns: minmax(120px, 1fr) 130px; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px; }
+.diagnostics-health-card dl,
+.diagnostics-error-list dl { display: grid; gap: 8px; margin: 0; }
+.diagnostics-health-card dl > div,
+.diagnostics-error-list dl > div { display: grid; grid-template-columns: minmax(110px, .4fr) minmax(0, 1fr); gap: 10px; }
+.diagnostics-health-card dt,
+.diagnostics-error-list dt { color: var(--muted); font-size: 11px; }
+.diagnostics-health-card dd,
+.diagnostics-error-list dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11px; }
+.diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.diagnostics-errors-card > header { align-items: end; }
+.diagnostics-errors-card > header label { display: grid; gap: 4px; color: var(--muted); font-size: 10px; }
+.diagnostics-error-list { display: grid; max-height: 560px; gap: 7px; overflow: auto; }
+.diagnostics-error-list details { border: 1px solid var(--border-soft); border-radius: 9px; background: var(--surface-muted); }
+.diagnostics-error-list summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; }
+.diagnostics-error-list summary strong { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostics-error-list summary time { color: var(--muted); font-size: 10px; }
+.diagnostics-error-list details dl { padding: 0 12px 12px; }
+.diagnostic-level { padding: 3px 5px; border-radius: 5px; background: color-mix(in srgb, var(--red) 13%, transparent); color: var(--red); font-family: var(--font-mono); font-size: 9px; font-weight: 700; }
+.diagnostics-files-card > div { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 7px; }
+.diagnostics-files-card > div > span { display: grid; gap: 3px; padding: 9px 10px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-muted); }
+.diagnostics-files-card code { color: var(--text-strong); font-size: 11px; }
+.diagnostics-files-card small { color: var(--muted); font-size: 10px; }
+
+@media (max-width: 900px) {
+  .diagnostics-grid { grid-template-columns: 1fr; }
+  .diagnostics-error-list summary { grid-template-columns: auto minmax(0, 1fr); }
+  .diagnostics-error-list summary time { grid-column: 2; }
+}
 .setup-card h3 { margin: 0; font-size: 15px; }
 .setup-card p { margin: 0; color: var(--muted-strong); font-size: 12px; line-height: 1.5; }
 .setup-card > .button { justify-self: start; margin-top: auto; }

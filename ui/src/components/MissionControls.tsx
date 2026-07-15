@@ -6,6 +6,7 @@ import type { HarnessProfile, HarnessSessionSummary, McpServerProfile, ToolSumma
 import { useWorkspace } from "../state/WorkspaceContext";
 import { notifyToolPacksChanged, useToolPackRevision } from "../state/toolPackChanges";
 import { useConfirmation } from "./DialogSystem";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 interface NewMissionButtonProps {
   className?: string;
@@ -64,7 +65,8 @@ export function NewMissionButton({ className = "button primary", children }: New
         setHarnessSessions(nextSessions.filter((item) => item.status !== "closed"));
         setHarnessId((current) => enabled.some((item) => item.id === current) ? current : enabled[0]?.id ?? "");
       })
-      .catch(() => { if (active) { setHarnesses([]); setMcpServers([]); setHarnessSessions([]); } });
+      .catch((caughtError) => {
+        void logCaughtDiagnostic("interface.mission_controls.caught_failure_01", "A handled interface operation failed.", caughtError, "mission_controls"); if (active) { setHarnesses([]); setMcpServers([]); setHarnessSessions([]); } });
     return () => { active = false; };
   }, [api, coreState, engagement?.id]);
 
@@ -98,7 +100,8 @@ export function NewMissionButton({ className = "button primary", children }: New
           && assignment.manifestDigest === tool.packManifestDigest
           && assignment.toolNames.includes(tool.name))));
       })
-      .catch(() => {
+      .catch((caughtError) => {
+        void logCaughtDiagnostic("interface.mission_controls.caught_failure_02", "A handled interface operation failed.", caughtError, "mission_controls");
         if (!active) return;
         setAssignedTools([]);
         setToolConfigurationAvailable(false);
@@ -137,7 +140,7 @@ export function NewMissionButton({ className = "button primary", children }: New
     let active = true;
     setToolVerificationBusy(true);
     void reverifyProvider(provider.id, model)
-      .catch(() => undefined)
+      .catch((caughtError) => { void logCaughtDiagnostic("interface.mission_controls.caught_failure_03", "A handled interface operation failed.", caughtError, "mission_controls"); return undefined; })
       .finally(() => { if (active) setToolVerificationBusy(false); });
     return () => { active = false; };
   }, [coreState, model, open, previewMode, provider, reverifyProvider, verification]);
@@ -225,6 +228,7 @@ export function NewMissionButton({ className = "button primary", children }: New
         setToolPreparationDetail(undefined);
         notifyToolPacksChanged();
       } catch (preparationError) {
+        void logCaughtDiagnostic("interface.mission_controls.caught_failure_04", "A handled interface operation failed.", preparationError, "mission_controls");
         setToolPreparation("unavailable");
         setToolPreparationDetail(preparationError instanceof Error ? preparationError.message : "Could not prepare the official Toolbox.");
       }
@@ -345,6 +349,7 @@ export function NewMissionButton({ className = "button primary", children }: New
       setMaxToolCalls(0);
       setMaxConcurrency(1);
     } catch (startError) {
+      void logCaughtDiagnostic("interface.mission_controls.caught_failure_05", "A handled interface operation failed.", startError, "mission_controls");
       setError(startError instanceof Error ? startError.message : "Could not start the mission.");
     } finally {
       setSaving(false);
@@ -382,7 +387,7 @@ export function NewMissionButton({ className = "button primary", children }: New
             </section>
             <p className="provider-dialog-note">{automaticTools.length ? "All available assigned capabilities are enabled automatically. Core enforces project scope, container isolation, budgets, evidence capture, and high-risk approvals." : "This task is analysis-only and receives no execution capabilities."}</p>
           </details>
-          {error && <p className="form-error" role="alert">{error}</p>}
+          {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
           <footer><button className="button secondary" type="button" onClick={() => setOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || toolPreparation === "preparing" || toolVerificationBusy}>{toolPreparation === "preparing" ? "Preparing Toolbox…" : toolVerificationBusy ? "Checking model…" : saving ? "Starting…" : "Automate task"}</button></footer>
         </form>
       </div>,
@@ -411,10 +416,11 @@ export function StopMissionButton({ className = "button secondary" }: { classNam
     try {
       await stopMission(run.id, { reason: "Stopped by the operator from the workspace" });
     } catch (stopError) {
+      void logCaughtDiagnostic("interface.mission_controls.caught_failure_06", "A handled interface operation failed.", stopError, "mission_controls");
       setError(stopError instanceof Error ? stopError.message : "Could not stop the mission.");
     } finally {
       setStopping(false);
     }
   };
-  return <span className="mission-stop-control"><button className={className} type="button" disabled={disabled || stopping} onClick={() => void stop()}><Square size={14} /> {stopping ? "Stopping…" : run?.status === "cancelling" ? "Cancelling…" : "Stop mission"}</button>{error && <small role="alert">{error}</small>}</span>;
+  return <span className="mission-stop-control"><button className={className} type="button" disabled={disabled || stopping} onClick={() => void stop()}><Square size={14} /> {stopping ? "Stopping…" : run?.status === "cancelling" ? "Cancelling…" : "Stop mission"}</button>{error && <DiagnosticErrorNotice error={error} fallback="The mission could not be stopped." compact />}</span>;
 }

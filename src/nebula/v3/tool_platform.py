@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import gather_diagnostic, record_caught_exception
+
 import asyncio
 import hashlib
 import json
@@ -306,6 +308,13 @@ def _load_public_keys(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.tool_platform.caught_failure_001",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="tool_platform",
+        )
         raise ToolPlatformError("tool-pack public-key file is unreadable") from exc
     keys = payload.get("keys") if isinstance(payload, dict) else None
     if not isinstance(keys, dict) or any(not isinstance(key, str) for key in keys):
@@ -396,6 +405,13 @@ class ToolPlatform:
         try:
             loaded = await self.catalog_client.fetch()
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_002",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             raise ToolPlatformError(str(exc)) from exc
         return [self._catalog_payload(entry) for entry in loaded.catalog.entries]
 
@@ -410,6 +426,13 @@ class ToolPlatform:
                 manifest = self.manifests.get(installation.manifest_digest)
                 specs = manifest.tool_specs(self._installation_platform(installation))
             except Exception as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.tool_platform.caught_failure_003",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="tool_platform",
+                )
                 result.append(
                     {
                         "name": f"{installation.publisher}/{installation.name}",
@@ -475,7 +498,14 @@ class ToolPlatform:
             return False
         try:
             manifest = self.manifests.get(assignment.manifest_digest)
-        except ToolPackInstallError:
+        except ToolPackInstallError as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_004",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="tool_platform",
+            )
             return False
         return capability in {tool.name for tool in manifest.tools}
 
@@ -495,6 +525,13 @@ class ToolPlatform:
                 progress=progress,
             )
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_005",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             progress.emit("failed", result_status=ToolPackInstallationStatus.FAILED)
             if isinstance(exc, ToolPlatformError):
                 raise
@@ -552,12 +589,26 @@ class ToolPlatform:
                 created.append(installation)
             return installed
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_006",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             if progress is not None:
                 progress.emit("failed", result_status=ToolPackInstallationStatus.FAILED)
             for installation in reversed(created):
                 try:
                     self.disable(installation.id)
-                except Exception:
+                except Exception as caught_error:
+                    record_caught_exception(
+                        "toolbox",
+                        "toolbox.tool_platform.caught_failure_007",
+                        "A handled toolbox operation raised an exception.",
+                        caught_error,
+                        stage="tool_platform",
+                    )
                     pass
             if isinstance(exc, ToolPlatformError):
                 raise
@@ -639,6 +690,13 @@ class ToolPlatform:
                 )
             catalog = load_interface_catalog(payload)
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_008",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             raise ToolPlatformError(
                 "Toolbox interface catalog download failed"
             ) from exc
@@ -673,9 +731,23 @@ class ToolPlatform:
             os.chmod(temporary, 0o600)
             archive = read_tool_pack(temporary)
         except (OSError, ToolPackSDKError) as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_009",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             progress.emit("failed", result_status=ToolPackInstallationStatus.FAILED)
             raise ToolPlatformError(str(exc)) from exc
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_010",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="tool_platform",
+            )
             progress.emit("failed", result_status=ToolPackInstallationStatus.FAILED)
             raise
         finally:
@@ -718,6 +790,13 @@ class ToolPlatform:
             progress.emit("ready", result_status=installation.status)
             return installation
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_011",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             progress.emit("failed", result_status=ToolPackInstallationStatus.FAILED)
             if isinstance(exc, ToolPlatformError):
                 raise
@@ -830,6 +909,13 @@ class ToolPlatform:
             progress.emit("ready", result_status=verified.status)
             return verified
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_012",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             progress.emit("failed", result_status=ToolPackInstallationStatus.FAILED)
             if isinstance(exc, ToolPlatformError):
                 raise
@@ -864,6 +950,13 @@ class ToolPlatform:
                 progress=progress,
             )
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_013",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             progress.emit("failed", result_status=ToolPackInstallationStatus.FAILED)
             if isinstance(exc, ToolPlatformError):
                 raise
@@ -884,7 +977,14 @@ class ToolPlatform:
             progress.bind_installation(installation)
             progress.emit("ready", result_status=installation.status)
             return installation
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_014",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="tool_platform",
+            )
             progress.emit("failed", result_status=ToolPackInstallationStatus.FAILED)
             raise
 
@@ -1207,6 +1307,13 @@ class ToolPlatform:
                             expected_repository=self.human_terminal_repository,
                         ).prepare()
                     except (SandboxError, ValueError) as exc:
+                        record_caught_exception(
+                            "toolbox",
+                            "toolbox.tool_platform.caught_failure_015",
+                            "A handled toolbox operation raised an exception.",
+                            exc,
+                            stage="tool_platform",
+                        )
                         raise ToolPlatformError(str(exc)) from exc
                     self._persist_human_terminal_image_metadata(profile, image)
                     self._human_terminal_images[key] = image
@@ -1262,6 +1369,13 @@ class ToolPlatform:
             temporary.chmod(0o600)
             temporary.replace(self.human_terminal_image_metadata_path)
         except OSError as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_016",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
             raise ToolPlatformError(
@@ -1277,7 +1391,14 @@ class ToolPlatform:
             payload = json.loads(
                 self.human_terminal_image_metadata_path.read_text(encoding="utf-8")
             )
-        except (OSError, UnicodeError, json.JSONDecodeError):
+        except (OSError, UnicodeError, json.JSONDecodeError) as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_017",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="tool_platform",
+            )
             return None
         image_digest = (
             payload.get("image_digest") if isinstance(payload, dict) else None
@@ -1374,6 +1495,13 @@ class ToolPlatform:
                 runners.append(runner)
                 seen.add(identity)
             except (ValueError, ToolPlatformError) as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.tool_platform.caught_failure_018",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="tool_platform",
+                )
                 LOGGER.warning(
                     "Skipped orphan terminal cleanup for runner profile %s: %s",
                     profile.id,
@@ -1381,9 +1509,12 @@ class ToolPlatform:
                 )
                 continue
         if runners:
-            await asyncio.gather(
+            await gather_diagnostic(
                 *(runner.cleanup_terminal_containers() for runner in runners),
-                return_exceptions=True,
+                feature="sandbox",
+                event_code="sandbox.orphan_cleanup.runner_failed",
+                failure_message="A runner could not complete orphan cleanup.",
+                stage="orphan-cleanup",
             )
 
     def resolve_operator_runtime(
@@ -1631,6 +1762,13 @@ class ToolPlatform:
                     fetch_bounded_https(client, entry.signature_url, 100_000),
                 )
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_019",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             raise ToolPlatformError("tool-pack download failed") from exc
         try:
             manifest = ToolPackManifestV1.model_validate_json(manifest_response)
@@ -1641,6 +1779,13 @@ class ToolPlatform:
                 manifest.metadata.publisher,
             )
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tool_platform.caught_failure_020",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tool_platform",
+            )
             raise ToolPlatformError("downloaded tool pack failed verification") from exc
         return manifest, signature
 

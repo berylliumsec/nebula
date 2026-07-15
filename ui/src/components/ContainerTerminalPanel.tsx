@@ -27,6 +27,7 @@ import {
   useOptionalSelectionActions,
 } from "./selection";
 import { TerminalScreenshotAction } from "./TerminalScreenshotAction";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 interface ContainerTerminalPanelProps {
   active?: boolean;
@@ -134,6 +135,7 @@ function LiveContainerTerminal({
       event.preventDefault();
       event.stopPropagation();
       void copySelectionText(terminal.getSelection()).catch((reason: unknown) => {
+        void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_01", "A handled interface operation failed.", reason, "container_terminal_panel");
         setError(reason instanceof Error ? reason.message : "The selected terminal text could not be copied.");
       });
       return false;
@@ -169,7 +171,8 @@ function LiveContainerTerminal({
       try {
         fit.fit();
         if (terminal.cols > 0 && terminal.rows > 0) socket.resize(terminal.cols, terminal.rows);
-      } catch {
+      } catch (caughtError) {
+        void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_02", "A handled interface operation failed.", caughtError, "container_terminal_panel");
         // The view can briefly have zero dimensions while tabs are changing.
       }
     };
@@ -207,7 +210,8 @@ function LiveContainerTerminal({
       try {
         setAuditHealth(await api.terminalCommandHistoryStatus(engagementId, controller.signal));
         setAuditHealthUnavailable(false);
-      } catch {
+      } catch (caughtError) {
+        void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_03", "A handled interface operation failed.", caughtError, "container_terminal_panel");
         if (!controller.signal.aborted) setAuditHealthUnavailable(true);
       }
     };
@@ -248,7 +252,7 @@ function LiveContainerTerminal({
       </div>
     </header>
     <div className="terminal-live-notices">
-      {error && <p className="terminal-error" role="alert">{error}</p>}
+      {error && <DiagnosticErrorNotice error={error} fallback="The terminal operation could not be completed." compact />}
       {(auditWarningCount > 0 || auditHealthUnavailable) && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {auditHealthUnavailable ? "Terminal audit health is unavailable. Capture failures cannot be ruled out." : `${auditWarningCount} terminal audit warning${auditWarningCount === 1 ? "" : "s"} detected. Review Terminal Audit for classification, truncation, interruption, recovery, or persistence gaps.`}</p>}
       <p className="terminal-audit-active"><ShieldCheck size={14} /> Selective audit active · command metadata is retained; merged PTY results are retained only for configured security tools.</p>
       <p>Installed baseline: <code>kali-linux-headless</code> and <code>iputils-ping</code>. The official base is <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code>.</p>
@@ -401,6 +405,7 @@ export function ContainerTerminalPanel({
             controller.signal,
           );
         } catch (startError) {
+          void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_04", "A handled interface operation failed.", startError, "container_terminal_panel");
           // A second view can win the start race between our initial recovery
           // check and this request. Recover that one active Project terminal
           // instead of presenting a duplicate-start dead end.
@@ -419,7 +424,8 @@ export function ContainerTerminalPanel({
               }
               return;
             }
-          } catch {
+          } catch (caughtError) {
+            void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_05", "A handled interface operation failed.", caughtError, "container_terminal_panel");
             // Preserve the actionable start failure when no active terminal
             // can be recovered.
           }
@@ -427,6 +433,7 @@ export function ContainerTerminalPanel({
         }
         if (!controller.signal.aborted) setSession({ engagementId, value: created, runtime: preview.runtime });
       } catch (reason) {
+        void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_06", "A handled interface operation failed.", reason, "container_terminal_panel");
         if (!controller.signal.aborted) {
           setError(reason instanceof Error ? reason.message : "Could not start Terminal.");
         }
@@ -450,6 +457,7 @@ export function ContainerTerminalPanel({
       const control = await api.cancelSetupImage(imagePreparation.operationId);
       setImagePreparation(control.setup.terminal.imagePreparation);
     } catch (reason) {
+      void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_07", "A handled interface operation failed.", reason, "container_terminal_panel");
       setError(reason instanceof Error ? reason.message : "Could not cancel image preparation.");
     }
   };
@@ -475,7 +483,7 @@ export function ContainerTerminalPanel({
       <span className="terminal-boundary"><AlertTriangle size={15} /> Root + network</span>
     </section>
     <section className="terminal-auto-start" aria-live="polite">
-      {error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><p className="terminal-error" role="alert">{error}</p><button className="button primary" type="button" onClick={() => setLaunchAttempt((value) => value + 1)}><RotateCcw size={15} /> Retry</button></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><p>{phaseDetail ?? <>Terminal verifies the configured official image, prepares the cached <code>kali-linux-headless</code> workstation, and launches its immutable image ID with no host shell or runtime socket. The first preparation can take several minutes.</>}</p>{imagePreparation?.progressPercent !== undefined && <progress max={100} value={imagePreparation.progressPercent} aria-label="Workstation image preparation progress" />}{phase === "preparing" && <small>Image layers use local container-runtime storage. Cached verified launches do not contact the registry.</small>}{imagePreparation?.canCancel && <button className="button secondary" type="button" onClick={() => void cancelImagePreparation()}><CircleStop size={15} /> Cancel preparation</button>}</>}
+      {error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><DiagnosticErrorNotice error={error} fallback="The terminal operation could not be completed." compact /><button className="button primary" type="button" onClick={() => setLaunchAttempt((value) => value + 1)}><RotateCcw size={15} /> Retry</button></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><p>{phaseDetail ?? <>Terminal verifies the configured official image, prepares the cached <code>kali-linux-headless</code> workstation, and launches its immutable image ID with no host shell or runtime socket. The first preparation can take several minutes.</>}</p>{imagePreparation?.progressPercent !== undefined && <progress max={100} value={imagePreparation.progressPercent} aria-label="Workstation image preparation progress" />}{phase === "preparing" && <small>Image layers use local container-runtime storage. Cached verified launches do not contact the registry.</small>}{imagePreparation?.canCancel && <button className="button secondary" type="button" onClick={() => void cancelImagePreparation()}><CircleStop size={15} /> Cancel preparation</button>}</>}
     </section>
   </div>;
 }

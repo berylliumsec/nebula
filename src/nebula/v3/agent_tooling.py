@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import asyncio
 import json
 import re
@@ -241,6 +243,13 @@ class BrokeredToolSpecialist:
                         selection["tool"], selection["command_path"]
                     )
                 except ToolInterfaceError as exc:
+                    record_caught_exception(
+                        "missions",
+                        "missions.agent_tooling.caught_failure_001",
+                        "A handled missions operation raised an exception.",
+                        exc,
+                        stage="agent_tooling",
+                    )
                     raise MissionError(str(exc)) from exc
                 selected_allowed = frozenset(
                     name for name in allowed if name.startswith("environment.run_")
@@ -282,6 +291,9 @@ class BrokeredToolSpecialist:
             raise MissionError(f"model requested unavailable tool {call.name!r}")
 
         if selected_interface is not None:
+            interface_catalog = self.interface_catalog
+            if interface_catalog is None:
+                raise MissionError("tool interface catalog became unavailable")
             requested_tool = call.arguments.get("tool")
             invocation_payload = call.arguments.get("invocation")
             if requested_tool != selected_interface["tool"]["name"]:
@@ -295,10 +307,17 @@ class BrokeredToolSpecialist:
                     "model changed the command path after interface selection"
                 )
             try:
-                execution_path = self.interface_catalog.canonical_command_path(
+                execution_path = interface_catalog.canonical_command_path(
                     requested_tool, invocation_payload["command_path"]
                 )
             except ToolInterfaceError as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.agent_tooling.caught_failure_002",
+                    "A handled missions operation raised an exception.",
+                    exc,
+                    stage="agent_tooling",
+                )
                 raise MissionError(str(exc)) from exc
             if execution_path != selected_interface["command"]["path"]:
                 raise MissionError(
@@ -418,6 +437,13 @@ class BrokeredToolSpecialist:
                         )
                     )
                 except ToolInterfaceError as exc:
+                    record_caught_exception(
+                        "missions",
+                        "missions.agent_tooling.caught_failure_003",
+                        "A handled missions operation raised an exception.",
+                        exc,
+                        stage="agent_tooling",
+                    )
                     raise MissionError(str(exc)) from exc
         invocation = invocation.model_copy(update={"arguments": arguments})
         self._reject_unchanged_failed_invocation(
@@ -427,6 +453,13 @@ class BrokeredToolSpecialist:
         try:
             result = await self.broker.execute(invocation, self.scope)
         except ApprovalRequired as exc:
+            record_caught_exception(
+                "missions",
+                "missions.agent_tooling.caught_failure_004",
+                "A handled missions operation raised an exception.",
+                exc,
+                stage="agent_tooling",
+            )
             raise SpecialistApprovalRequired(
                 exc.approval,
                 usage=ChatTokenUsage(
@@ -437,6 +470,13 @@ class BrokeredToolSpecialist:
                 cost_usd=self._cost(*usage),
             ) from exc
         except PolicyDenied as denial:
+            record_caught_exception(
+                "missions",
+                "missions.agent_tooling.caught_failure_005",
+                "A handled missions operation raised an exception.",
+                denial,
+                stage="agent_tooling",
+            )
             status = "denied"
             provider_result: dict[str, Any] | str = {
                 "status": status,
@@ -451,9 +491,23 @@ class BrokeredToolSpecialist:
             reproducible: list[str] = []
             exit_code = None
             output_truncated = False
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "missions",
+                "missions.agent_tooling.caught_failure_006",
+                "A handled missions operation raised an exception.",
+                caught_error,
+                stage="agent_tooling",
+            )
             raise
         except Exception as exc:
+            record_caught_exception(
+                "missions",
+                "missions.agent_tooling.caught_failure_007",
+                "A handled missions operation raised an exception.",
+                exc,
+                stage="agent_tooling",
+            )
             status = "failed"
             detail = self._safe_text(f"{type(exc).__name__}: {exc}")
             provider_result = {"status": status, "detail": detail}
@@ -821,7 +875,7 @@ class BrokeredToolSpecialist:
         limit = 8_000
         if len(rendered) <= limit:
             return rendered
-        envelope = {
+        envelope: dict[str, Any] = {
             "status": "incomplete",
             "truncated": True,
             "original_characters": len(rendered),

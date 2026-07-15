@@ -880,6 +880,7 @@ export interface HealthResponse {
   mode: "local" | "team";
   runner: "ready" | "unavailable" | "degraded";
   containerTerminal: "configured" | "unavailable";
+  diagnosticsDegraded?: boolean;
 }
 
 export interface RunnerCandidate {

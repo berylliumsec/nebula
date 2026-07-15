@@ -7,6 +7,8 @@ evidence references enter persisted state.
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import asyncio
 import json
 import os
@@ -479,7 +481,14 @@ class MissionRuntime:
                 event_payload=started_payload,
                 idempotency_key="run:started",
             )
-        except ConflictError:
+        except ConflictError as caught_error:
+            record_caught_exception(
+                "missions",
+                "missions.orchestration.caught_failure_001",
+                "A handled missions operation raised an exception.",
+                caught_error,
+                stage="orchestration",
+            )
             existing = self.store.get(AgentRun, run.id)
             if existing.status in {
                 RunStatus.COMPLETE,
@@ -581,6 +590,13 @@ class MissionRuntime:
             try:
                 self.store.create(candidate)
             except ConflictError as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.orchestration.caught_failure_002",
+                    "A handled missions operation raised an exception.",
+                    exc,
+                    stage="orchestration",
+                )
                 existing = self.store.get(Task, candidate.id)
                 stable_fields = {
                     "id",
@@ -634,6 +650,13 @@ class MissionRuntime:
         try:
             self._enforce_budget(state)
         except BudgetExceeded as exc:
+            record_caught_exception(
+                "missions",
+                "missions.orchestration.caught_failure_003",
+                "A handled missions operation raised an exception.",
+                exc,
+                stage="orchestration",
+            )
             errors = dict(state.get("errors", {}))
             for task in plan.tasks:
                 if statuses.get(task.id) in {
@@ -749,7 +772,14 @@ class MissionRuntime:
                         started_at=utc_now(),
                     )
                 )
-            except ConflictError:
+            except ConflictError as caught_error:
+                record_caught_exception(
+                    "missions",
+                    "missions.orchestration.caught_failure_004",
+                    "A handled missions operation raised an exception.",
+                    caught_error,
+                    stage="orchestration",
+                )
                 existing_attempt = self.store.get(AgentAttempt, attempt_id)
                 self.store.update(
                     AgentAttempt,
@@ -848,6 +878,13 @@ class MissionRuntime:
                     context_cost,
                 )
             except ApprovalRequired as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.orchestration.caught_failure_005",
+                    "A handled missions operation raised an exception.",
+                    exc,
+                    stage="orchestration",
+                )
                 approval_usage = getattr(exc, "usage", ChatTokenUsage())
                 approval_cost = float(getattr(exc, "cost_usd", 0.0))
                 context_usage = self._add_context_usage(context_usage, approval_usage)
@@ -861,6 +898,13 @@ class MissionRuntime:
                     context_cost,
                 )
             except TimeoutError as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.orchestration.caught_failure_006",
+                    "A handled missions operation raised an exception.",
+                    exc,
+                    stage="orchestration",
+                )
                 elapsed = (
                     utc_now() - datetime.fromisoformat(state["started_at"])
                 ).total_seconds()
@@ -878,6 +922,13 @@ class MissionRuntime:
                     context_cost,
                 )
             except Exception as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.orchestration.caught_failure_007",
+                    "A handled missions operation raised an exception.",
+                    exc,
+                    stage="orchestration",
+                )
                 if isinstance(exc, ContextCompactionError):
                     context_usage = exc.usage
                     context_cost = self._context_usage_cost(specialist, context_usage)
@@ -1232,9 +1283,16 @@ class MissionRuntime:
             return None, ChatTokenUsage(), 0.0
         try:
             profile = self.store.get(ProviderProfile, provider.config.id)
-        except Exception:
+        except Exception as caught_error:
             # Directly constructed test/runtime providers can still use the
             # deterministic summaries already present on SpecialistResult.
+            record_caught_exception(
+                "missions",
+                "missions.orchestration.caught_failure_008",
+                "A handled missions operation raised an exception.",
+                caught_error,
+                stage="orchestration",
+            )
             return None, ChatTokenUsage(), 0.0
         prior_payload = {
             task_id: result.model_dump(mode="json")
@@ -1344,6 +1402,13 @@ class MissionRuntime:
                         target_tokens=limits.target_input_tokens,
                     )
                 except ContextCompactionError as exc:
+                    record_caught_exception(
+                        "missions",
+                        "missions.orchestration.caught_failure_009",
+                        "A handled missions operation raised an exception.",
+                        exc,
+                        stage="orchestration",
+                    )
                     exc.usage = usage
                     raise
                 batch_spend.usage = self._add_context_usage(batch_spend.usage, usage)
@@ -1365,6 +1430,13 @@ class MissionRuntime:
             )
             return assembled_context, usage, cost
         except Exception as exc:
+            record_caught_exception(
+                "missions",
+                "missions.orchestration.caught_failure_010",
+                "A handled missions operation raised an exception.",
+                exc,
+                stage="orchestration",
+            )
             usage = (
                 exc.usage
                 if isinstance(exc, ContextCompactionError)

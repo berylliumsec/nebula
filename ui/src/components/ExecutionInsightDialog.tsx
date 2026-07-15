@@ -7,6 +7,7 @@ import type {
   OperatorExecution,
   ProviderHealth,
 } from "../api/types";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 type InsightAction = "draft" | "chat";
 
@@ -102,6 +103,7 @@ export function ExecutionInsightDialog({
         throw new Error(generated.errorDetail ?? `Draft ended with status ${generated.status}.`);
       }
     } catch (actionError) {
+      void logCaughtDiagnostic("interface.execution_insight_dialog.caught_failure_01", "A handled interface operation failed.", actionError, "execution_insight_dialog");
       setError(actionError instanceof Error ? actionError.message : "The execution AI action failed.");
     } finally {
       setBusy(false);
@@ -118,6 +120,7 @@ export function ExecutionInsightDialog({
       setDraft(accepted);
       onClose();
     } catch (acceptError) {
+      void logCaughtDiagnostic("interface.execution_insight_dialog.caught_failure_02", "A handled interface operation failed.", acceptError, "execution_insight_dialog");
       setError(acceptError instanceof Error ? acceptError.message : "Could not accept the note.");
     } finally {
       setBusy(false);
@@ -132,6 +135,7 @@ export function ExecutionInsightDialog({
       await api.transitionGeneratedDraft(draft.id, "reject", draft.revision);
       onClose();
     } catch (rejectError) {
+      void logCaughtDiagnostic("interface.execution_insight_dialog.caught_failure_03", "A handled interface operation failed.", rejectError, "execution_insight_dialog");
       setError(rejectError instanceof Error ? rejectError.message : "Could not reject the note.");
     } finally {
       setBusy(false);
@@ -157,7 +161,7 @@ export function ExecutionInsightDialog({
           {content.potentialFindings.map((finding, index) => <fieldset key={index}><legend>Unverified hypothesis {index + 1}</legend><label>Title<input value={finding.title} onChange={(event) => setContent({ ...content, potentialFindings: content.potentialFindings.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item) })} /></label><label>Rationale<textarea rows={3} value={finding.rationale} onChange={(event) => setContent({ ...content, potentialFindings: content.potentialFindings.map((item, itemIndex) => itemIndex === index ? { ...item, rationale: event.target.value } : item) })} /></label></fieldset>)}
           <p className="provider-dialog-note">Evidence IDs: {content.evidenceIds.join(", ") || "none"} · Context {draft.contextFingerprint.slice(0, 12)}…</p>
         </section>}
-        {error && <p className="form-error" role="alert">{error}</p>}
+        {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         <footer>{draft?.content ? <><button className="button danger" type="button" disabled={busy} onClick={() => void reject()}>Reject draft</button><button className="button primary" type="button" disabled={busy || !content?.title.trim()} onClick={() => void accept()}>{busy ? <LoaderCircle className="spin" size={15} /> : <NotebookPen size={15} />} Accept as observation</button></> : <><button className="button secondary" type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={!canSubmit}>{busy ? <LoaderCircle className="spin" size={15} /> : action === "draft" ? <NotebookPen size={15} /> : <MessageSquare size={15} />} {busy ? action === "draft" ? "Generating…" : "Attaching…" : action === "draft" ? "Generate draft" : "Create chat"}</button></>}</footer>
       </form>
     </div>

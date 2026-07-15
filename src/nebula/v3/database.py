@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import fcntl
 import os
 import threading
@@ -228,7 +230,14 @@ class Database:
         if bootstrap:
             try:
                 self.bootstrap()
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "storage",
+                    "storage.database.caught_failure_001",
+                    "A handled storage operation raised an exception.",
+                    caught_error,
+                    stage="database",
+                )
                 self.engine.dispose()
                 raise
 
@@ -399,7 +408,14 @@ class Database:
                 )
             )
             connection.commit()
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.database.caught_failure_002",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="database",
+            )
             connection.rollback()
             raise
         finally:
@@ -439,7 +455,14 @@ class Database:
         try:
             yield session
             session.commit()
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.database.caught_failure_003",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="database",
+            )
             session.rollback()
             raise
         finally:

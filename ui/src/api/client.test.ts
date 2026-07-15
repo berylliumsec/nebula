@@ -92,7 +92,11 @@ describe("ApiClient", () => {
 
     const error = await client.decideApproval("approval-1", { decision: "approve" }).catch((value) => value);
     expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ status: 409, requestId: "request-42", message: "Approval expired" });
+    expect(error).toMatchObject({
+      status: 409,
+      requestId: "request-42",
+      message: "Approval expired Reference: request-42.",
+    });
   });
 
   it("maps zero-setup readiness and refreshes runtime detection idempotently", async () => {

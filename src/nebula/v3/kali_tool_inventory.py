@@ -6,6 +6,8 @@ source can be copied into the workstation image and executed during its build.
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import argparse
 import json
 import os
@@ -188,7 +190,14 @@ def executable_tools(
                 continue
             try:
                 executable = path.is_file() and os.access(path, os.X_OK)
-            except OSError:
+            except OSError as caught_error:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.kali_tool_inventory.caught_failure_001",
+                    "A handled toolbox operation raised an exception.",
+                    caught_error,
+                    stage="kali_tool_inventory",
+                )
                 executable = False
             if executable:
                 provenance.setdefault(name, set()).add(package)

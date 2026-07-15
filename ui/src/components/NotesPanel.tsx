@@ -6,6 +6,7 @@ import type { ApiClient } from "../api/client";
 import type { ObservationSummary } from "../api/types";
 import { useConfirmation } from "./DialogSystem";
 import type { SelectionActionDraft } from "./selection";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 interface LinkOption {
   id: string;
@@ -68,6 +69,7 @@ export function NotesPanel({
         ? current
         : next[0]?.id);
     } catch (loadError) {
+      void logCaughtDiagnostic("interface.notes_panel.caught_failure_01", "A handled interface operation failed.", loadError, "notes_panel");
       if (!signal?.aborted) {
         setError(loadError instanceof Error ? loadError.message : "Could not load notes.");
       }
@@ -147,6 +149,7 @@ export function NotesPanel({
         setNotes((current) => current.map((item) => item.id === updated.id ? updated : item));
       }
     } catch (saveError) {
+      void logCaughtDiagnostic("interface.notes_panel.caught_failure_02", "A handled interface operation failed.", saveError, "notes_panel");
       setError(saveError instanceof Error ? saveError.message : "Could not save the note.");
     } finally {
       setSaving(false);
@@ -168,6 +171,7 @@ export function NotesPanel({
       setNotes(next);
       setSelectedId(next[0]?.id);
     } catch (deleteError) {
+      void logCaughtDiagnostic("interface.notes_panel.caught_failure_03", "A handled interface operation failed.", deleteError, "notes_panel");
       setError(deleteError instanceof Error ? deleteError.message : "Could not delete the note.");
     }
   };
@@ -195,7 +199,7 @@ export function NotesPanel({
         {!notes.length && !loading && <p>No notes yet.</p>}
       </aside>
       <section className={`note-editor${creating || selected ? "" : " is-empty"}`} aria-label={creating ? "New note" : selected ? `Edit ${selected.title}` : "Note editor"}>
-        {error && <p className="form-error" role="alert">{error}</p>}
+        {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         {(creating || selected) ? <>
           <header>
             <input aria-label="Note title" value={draft.title} placeholder="Note title" maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />

@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from .diagnostics import (
+    create_diagnostic_task,
+    gather_diagnostic,
+    record_caught_exception,
+    record_diagnostic,
+)
+
 import asyncio
 import base64
 import codecs
@@ -272,9 +279,34 @@ class ExecutionService:
                 output_truncated=False,
                 workspace_changes=[],
             )
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_001",
+                "A handled executions operation raised an exception.",
+                caught_error,
+                stage="executions",
+            )
             return False
-        shutil.rmtree(spool_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(spool_dir)
+        except FileNotFoundError:
+            record_diagnostic(
+                "debug",
+                "executions",
+                "executions.spool.cleanup_absent",
+                "An execution spool was already absent during cleanup.",
+                stage="spool-cleanup",
+                outcome="expected",
+            )
+        except OSError as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.spool.cleanup_failed",
+                "An execution spool could not be removed after recovery.",
+                caught_error,
+                stage="spool-cleanup",
+            )
         return True
 
     async def shutdown(self) -> None:
@@ -283,7 +315,13 @@ class ExecutionService:
         for task in tasks:
             task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await gather_diagnostic(
+                *tasks,
+                feature="executions",
+                event_code="executions.shutdown.task_failed",
+                failure_message="An execution task failed during shutdown.",
+                stage="shutdown",
+            )
         self._tasks.clear()
 
     def capabilities(self, engagement_id: str) -> ExecutionCapabilities:
@@ -301,6 +339,13 @@ class ExecutionService:
                     self._resolve(engagement_id, language, network=network)
                     results[network] = None
                 except (ToolPlatformError, ExecutionServiceError) as exc:
+                    record_caught_exception(
+                        "executions",
+                        "executions.executions.caught_failure_002",
+                        "A handled executions operation raised an exception.",
+                        exc,
+                        stage="executions",
+                    )
                     results[network] = str(exc)
             runtime_rows.append(
                 ExecutionCapability(
@@ -361,12 +406,26 @@ class ExecutionService:
                 expires_at=expires,
             )
         except ExecutionServiceError as exc:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_003",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="executions",
+            )
             return ExecutionPreflightResponse(
                 allowed=False,
                 error_code=exc.code,
                 detail=exc.detail,
             )
         except ToolPlatformError as exc:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_004",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="executions",
+            )
             return ExecutionPreflightResponse(
                 allowed=False,
                 error_code="runtime_unavailable",
@@ -460,7 +519,14 @@ class ExecutionService:
             )
             try:
                 self.store.create_many([stored_source.artifact, execution])
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "executions",
+                    "executions.executions.caught_failure_005",
+                    "A handled executions operation raised an exception.",
+                    caught_error,
+                    stage="executions",
+                )
                 self.artifact_store.discard_new_blob(stored_source)
                 raise
             self._event(
@@ -469,8 +535,12 @@ class ExecutionService:
                 {"status": execution.status.value},
                 key="queued",
             )
-            task = asyncio.create_task(
-                self._execute(execution.id), name=f"operator-execution-{execution.id}"
+            task = create_diagnostic_task(
+                self._execute(execution.id),
+                feature="executions",
+                event_code="executions.reviewed_run",
+                failure_message="A reviewed execution task stopped unexpectedly.",
+                name=f"operator-execution-{execution.id}",
             )
             self._tasks[execution.id] = task
             task.add_done_callback(lambda _task: self._tasks.pop(execution.id, None))
@@ -493,6 +563,13 @@ class ExecutionService:
             limits = ExecutionLimitsSnapshot.model_validate(signed_binding["limits"])
             source_sha256 = str(signed_binding["source_sha256"])
         except (KeyError, ValueError) as exc:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_006",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="executions",
+            )
             raise ExecutionServiceError(
                 "preview_stale", "execution preview binding is incomplete"
             ) from exc
@@ -538,7 +615,14 @@ class ExecutionService:
         )
         try:
             self.store.create_many([stored_source.artifact, execution])
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_007",
+                "A handled executions operation raised an exception.",
+                caught_error,
+                stage="executions",
+            )
             self.artifact_store.discard_new_blob(stored_source)
             raise
         self._event(
@@ -673,6 +757,13 @@ class ExecutionService:
             try:
                 message = self.store.get(ChatMessage, request.origin.message_id)
             except NotFoundError as exc:
+                record_caught_exception(
+                    "executions",
+                    "executions.executions.caught_failure_008",
+                    "A handled executions operation raised an exception.",
+                    exc,
+                    stage="executions",
+                )
                 raise ExecutionServiceError(
                     "origin_mismatch", "originating assistant message was not found"
                 ) from exc
@@ -706,6 +797,13 @@ class ExecutionService:
                     request.origin.selection_end_byte,
                 )
             except ValueError as exc:
+                record_caught_exception(
+                    "executions",
+                    "executions.executions.caught_failure_009",
+                    "A handled executions operation raised an exception.",
+                    exc,
+                    stage="executions",
+                )
                 raise ExecutionServiceError(
                     "origin_mismatch", str(exc), status_code=422
                 ) from exc
@@ -714,6 +812,13 @@ class ExecutionService:
             try:
                 parent = self.store.get(OperatorExecution, request.origin.execution_id)
             except NotFoundError as exc:
+                record_caught_exception(
+                    "executions",
+                    "executions.executions.caught_failure_010",
+                    "A handled executions operation raised an exception.",
+                    exc,
+                    stage="executions",
+                )
                 raise ExecutionServiceError(
                     "origin_mismatch", "rerun execution was not found"
                 ) from exc
@@ -732,12 +837,8 @@ class ExecutionService:
             source = self.artifact_store.read(artifact).decode("utf-8", errors="strict")
         else:
             assert request.origin.source_sha256 is not None
-            observed_sha256 = hashlib.sha256(
-                request.source.encode("utf-8")
-            ).hexdigest()
-            if not hmac.compare_digest(
-                observed_sha256, request.origin.source_sha256
-            ):
+            observed_sha256 = hashlib.sha256(request.source.encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(observed_sha256, request.origin.source_sha256):
                 raise ExecutionServiceError(
                     "origin_mismatch",
                     "selected source does not match its reviewed SHA-256",
@@ -837,7 +938,14 @@ class ExecutionService:
                     )
                     return
                 await self._run_isolated(current)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_011",
+                "A handled executions operation raised an exception.",
+                caught_error,
+                stage="executions",
+            )
             current = self.store.get(OperatorExecution, execution_id)
             status = (
                 OperatorExecutionStatus.INTERRUPTED
@@ -850,6 +958,13 @@ class ExecutionService:
                     current, status, code, f"execution {code}"
                 )
         except Exception as exc:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_012",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="executions",
+            )
             current = self.store.get(OperatorExecution, execution_id)
             if current.status not in TERMINAL_EXECUTION_STATUSES:
                 await self._terminal_without_output(
@@ -981,6 +1096,7 @@ class ExecutionService:
         )
         source_artifact = self.store.get(Artifact, execution.source_artifact_id)
         source = self.artifact_store.read(source_artifact)
+        # diagnostic-expected: both child tasks are awaited and classified below.
         runner_task = asyncio.create_task(
             resolution.runner.run_stream(
                 sandbox_request,
@@ -989,6 +1105,7 @@ class ExecutionService:
                 container_name=f"nebula-exec-{execution.id.replace('-', '')}",
             )
         )
+        # diagnostic-expected: the paired monitor is awaited and classified below.
         monitor_task = asyncio.create_task(
             self._monitor_workspace(resolution.workspace, runner_task)
         )
@@ -1003,18 +1120,50 @@ class ExecutionService:
                 monitor_error = monitor_task.exception()
                 if monitor_error is not None:
                     runner_task.cancel()
-                    await asyncio.gather(runner_task, return_exceptions=True)
+                    await gather_diagnostic(
+                        runner_task,
+                        feature="executions",
+                        event_code="executions.runner.cancellation_failed",
+                        failure_message="An execution runner did not cancel cleanly.",
+                        stage="cancellation",
+                    )
                     raise monitor_error
             result = await runner_task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_013",
+                "A handled executions operation raised an exception.",
+                caught_error,
+                stage="executions",
+            )
             cancelled = True
             runner_task.cancel()
-            await asyncio.gather(runner_task, return_exceptions=True)
+            await gather_diagnostic(
+                runner_task,
+                feature="executions",
+                event_code="executions.runner.cancellation_failed",
+                failure_message="An execution runner did not cancel cleanly.",
+                stage="cancellation",
+            )
         except Exception as exc:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_014",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="executions",
+            )
             failure = exc
         finally:
             monitor_task.cancel()
-            await asyncio.gather(monitor_task, return_exceptions=True)
+            await gather_diagnostic(
+                monitor_task,
+                feature="workspace",
+                event_code="workspace.execution_monitor.cleanup_failed",
+                failure_message="Execution workspace monitoring did not stop cleanly.",
+                stage="cleanup",
+            )
             async with event_lock:
                 for stream in ("stdout", "stderr"):
                     tail = decoders[stream].decode(b"", final=True)
@@ -1084,7 +1233,25 @@ class ExecutionService:
                 workspace_changes=changes,
             )
         )
-        shutil.rmtree(spool_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(spool_dir)
+        except FileNotFoundError:
+            record_diagnostic(
+                "debug",
+                "executions",
+                "executions.spool.cleanup_absent",
+                "An execution spool was already absent during cleanup.",
+                stage="spool-cleanup",
+                outcome="expected",
+            )
+        except OSError as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.spool.cleanup_failed",
+                "An execution spool could not be removed after persistence.",
+                caught_error,
+                stage="spool-cleanup",
+            )
         if cancelled:
             raise asyncio.CancelledError
 
@@ -1228,7 +1395,14 @@ class ExecutionService:
                     changes,
                     expected_revision=execution.revision,
                 )
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_015",
+                "A handled executions operation raised an exception.",
+                caught_error,
+                stage="executions",
+            )
             for item in stored:
                 self.artifact_store.discard_new_blob(item)
             raise
@@ -1280,7 +1454,14 @@ class ExecutionService:
             await asyncio.sleep(1)
             try:
                 await asyncio.to_thread(_assert_workspace_limits, workspace)
-            except _WorkspaceLimitError:
+            except _WorkspaceLimitError as caught_error:
+                record_caught_exception(
+                    "executions",
+                    "executions.executions.caught_failure_016",
+                    "A handled executions operation raised an exception.",
+                    caught_error,
+                    stage="executions",
+                )
                 raise
 
     def _assert_workspace_limits(self, engagement_id: str) -> None:
@@ -1291,6 +1472,13 @@ class ExecutionService:
         try:
             _assert_workspace_limits(self.tool_platform.workspace_for(engagement_id))
         except _WorkspaceLimitError as exc:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_017",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="executions",
+            )
             raise ExecutionServiceError("workspace_limit", str(exc)) from exc
 
     def _event(
@@ -1334,6 +1522,13 @@ class ExecutionService:
             expected = hmac.new(self._preview_secret, payload, hashlib.sha256).digest()
             decoded = json.loads(payload)
         except Exception as exc:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_018",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="executions",
+            )
             raise ExecutionServiceError(
                 "preview_stale", "execution preview token is invalid"
             ) from exc
@@ -1391,7 +1586,14 @@ class ExecutionService:
             await resolution.runner._force_remove(
                 f"nebula-exec-{execution.id.replace('-', '')}"
             )
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.executions.caught_failure_019",
+                "A handled executions operation raised an exception.",
+                caught_error,
+                stage="executions",
+            )
             return
 
 
@@ -1432,7 +1634,14 @@ def _resolve_target(value: str) -> list[str]:
         raise ExecutionServiceError("policy_denied", "network target is invalid")
     try:
         return [str(ipaddress.ip_address(host))]
-    except ValueError:
+    except ValueError as caught_error:
+        record_caught_exception(
+            "executions",
+            "executions.executions.caught_failure_020",
+            "A handled executions operation raised an exception.",
+            caught_error,
+            stage="executions",
+        )
         pass
     try:
         addresses = {
@@ -1442,6 +1651,13 @@ def _resolve_target(value: str) -> list[str]:
             )
         }
     except socket.gaierror as exc:
+        record_caught_exception(
+            "executions",
+            "executions.executions.caught_failure_021",
+            "A handled executions operation raised an exception.",
+            exc,
+            stage="executions",
+        )
         raise ExecutionServiceError(
             "policy_denied", "network target could not be resolved"
         ) from exc

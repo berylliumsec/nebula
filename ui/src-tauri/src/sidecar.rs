@@ -13,6 +13,8 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use crate::diagnostics::{DiagnosticLevel, DiagnosticsState, ERROR_MIRROR_PREFIX};
+
 const SIDECAR_PROTOCOL: &str = "nebula-sidecar-v1";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -352,36 +354,60 @@ fn read_handshake(
 
 fn redact_startup_log(input: &[u8], ipc_token: &str) -> Vec<u8> {
     let replaced = String::from_utf8_lossy(input).replace(ipc_token, "[REDACTED]");
-    let markers = [
-        "authorization:",
-        "x-api-key:",
-        "api_key=",
-        "api-key=",
-        "token=",
-        "\"api_key\":",
-        "\"apikey\":",
-        "\"token\":",
-        "\"authorization\":",
-    ];
-    let mut redacted = String::with_capacity(replaced.len());
-
+    let mut redacted = String::new();
     for line in replaced.split_inclusive('\n') {
-        let lower = line.to_ascii_lowercase();
-        let sensitive = markers
+        let value = line.trim_end_matches(['\r', '\n']);
+        let candidate = value.split_once(':').map_or(value, |(prefix, _)| prefix);
+        let exception_type = (candidate.len() <= 128
+            && candidate.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '.')
+            })
+            && [
+                "Error",
+                "Exception",
+                "Warning",
+                "Interrupt",
+                "Exit",
+                "Panic",
+            ]
             .iter()
-            .filter_map(|marker| lower.find(marker).map(|index| (index, marker.len())))
-            .min_by_key(|(index, _)| *index);
-        if let Some((index, marker_len)) = sensitive {
-            redacted.push_str(&line[..index + marker_len]);
-            redacted.push_str(" [REDACTED]");
-            if line.ends_with('\n') {
-                redacted.push('\n');
-            }
-        } else {
-            redacted.push_str(line);
+            .any(|suffix| candidate.ends_with(suffix)))
+        .then_some(candidate);
+        redacted.push_str("[nebula] Core stderr line redacted; bytes=");
+        redacted.push_str(value.len().to_string().as_str());
+        if let Some(exception_type) = exception_type {
+            redacted.push_str("; exception_type=");
+            redacted.push_str(exception_type);
+        }
+        if line.ends_with('\n') {
+            redacted.push('\n');
         }
     }
     redacted.into_bytes()
+}
+
+fn sanitize_startup_line(input: &[u8], ipc_token: &str, diagnostics: &DiagnosticsState) -> Vec<u8> {
+    let text = String::from_utf8_lossy(input);
+    if let Some(frame) = text.trim_end().strip_prefix(ERROR_MIRROR_PREFIX) {
+        match diagnostics.aggregate_core_error(frame) {
+            Ok(sanitized) => {
+                let newline = if input.ends_with(b"\n") { "\n" } else { "" };
+                return format!("{ERROR_MIRROR_PREFIX}{sanitized}{newline}").into_bytes();
+            }
+            Err(_) => {
+                diagnostics.record_desktop(
+                    DiagnosticLevel::Error,
+                    "desktop.core_error_aggregation.failed",
+                    "A sanitized Core error frame could not be added to the aggregate error log.",
+                    Some("failure"),
+                    Some("stderr-aggregation"),
+                    Some(true),
+                    serde_json::Map::new(),
+                );
+            }
+        }
+    }
+    redact_startup_log(input, ipc_token)
 }
 
 fn write_bounded_log(
@@ -410,6 +436,7 @@ fn capture_startup_log(
     mut stderr: ChildStderr,
     mut file: File,
     ipc_token: String,
+    diagnostics: DiagnosticsState,
 ) -> Result<(), String> {
     let mut written = 0;
     let mut truncated = false;
@@ -434,7 +461,7 @@ fn capture_startup_log(
 
         while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=newline).collect();
-            let line = redact_startup_log(&line, &ipc_token);
+            let line = sanitize_startup_line(&line, &ipc_token, &diagnostics);
             write_bounded_log(&mut file, &line, &mut written, &mut truncated).map_err(|error| {
                 format!("cannot write Nebula Core startup diagnostics: {error}")
             })?;
@@ -445,7 +472,7 @@ fn capture_startup_log(
             let guard = ipc_token.len().saturating_sub(1).clamp(32, 512);
             let flush_len = pending.len().saturating_sub(guard);
             let fragment: Vec<u8> = pending.drain(..flush_len).collect();
-            let fragment = redact_startup_log(&fragment, &ipc_token);
+            let fragment = sanitize_startup_line(&fragment, &ipc_token, &diagnostics);
             write_bounded_log(&mut file, &fragment, &mut written, &mut truncated).map_err(
                 |error| format!("cannot write Nebula Core startup diagnostics: {error}"),
             )?;
@@ -453,7 +480,7 @@ fn capture_startup_log(
     }
 
     if !pending.is_empty() {
-        let fragment = redact_startup_log(&pending, &ipc_token);
+        let fragment = sanitize_startup_line(&pending, &ipc_token, &diagnostics);
         write_bounded_log(&mut file, &fragment, &mut written, &mut truncated)
             .map_err(|error| format!("cannot write Nebula Core startup diagnostics: {error}"))?;
     }
@@ -480,6 +507,26 @@ fn open_startup_log(path: &std::path::Path) -> Result<File, String> {
                 parent.display()
             )
         })?;
+    }
+    let oldest = path.with_file_name(format!(
+        "{}.2",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    if oldest.exists() {
+        fs::remove_file(&oldest)
+            .map_err(|error| format!("cannot prune the oldest Core startup log: {error}"))?;
+    }
+    let first = path.with_file_name(format!(
+        "{}.1",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    if first.exists() {
+        fs::rename(&first, &oldest)
+            .map_err(|error| format!("cannot advance the Core startup log rotation: {error}"))?;
+    }
+    if path.exists() {
+        fs::rename(path, &first)
+            .map_err(|error| format!("cannot rotate the Core startup log: {error}"))?;
     }
     let mut options = OpenOptions::new();
     options.create(true).truncate(true).write(true);
@@ -530,11 +577,16 @@ fn verify_writable_storage(data_dir: &std::path::Path) -> Result<(), String> {
     drop(file);
     let remove_result = fs::remove_file(&probe);
     if let Err(error) = write_result {
-        let _ = remove_result;
-        return Err(format!(
-            "cannot write to the Nebula data directory {}: {error}",
-            data_dir.display()
-        ));
+        return match remove_result {
+            Ok(()) => Err(format!(
+                "cannot write to the Nebula data directory {}: {error}",
+                data_dir.display()
+            )),
+            Err(cleanup_error) => Err(format!(
+                "cannot write to the Nebula data directory {}: {error}; storage probe cleanup also failed: {cleanup_error}",
+                data_dir.display()
+            )),
+        };
     }
     remove_result.map_err(|error| {
         format!(
@@ -719,7 +771,26 @@ fn startup_failure(
 }
 
 fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
+    let diagnostics = DiagnosticsState::clone(&*app.state::<DiagnosticsState>());
+    diagnostics.record_desktop(
+        DiagnosticLevel::Info,
+        "desktop.sidecar.launch_started",
+        "Nebula Core sidecar launch started.",
+        Some("started"),
+        Some("discovery"),
+        None,
+        serde_json::Map::new(),
+    );
     let sidecar = sibling_sidecar_path()?;
+    diagnostics.record_desktop(
+        DiagnosticLevel::Debug,
+        "desktop.sidecar.discovered",
+        "The fixed Nebula Core sidecar was discovered.",
+        Some("success"),
+        Some("discovery"),
+        None,
+        serde_json::Map::new(),
+    );
     let app_data_dir = app
         .path()
         .app_data_dir()
@@ -744,7 +815,9 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
     verify_writable_storage(&data_dir)?;
 
     let token = secure_token()?;
-    let startup_log_path = app_data_dir.join("logs").join(STARTUP_LOG_NAME);
+    let log_dir = app_data_dir.join("logs");
+    let settings_path = app_data_dir.join("diagnostics-settings.json");
+    let startup_log_path = log_dir.join(STARTUP_LOG_NAME);
     let mut startup_log_file = open_startup_log(&startup_log_path)?;
 
     let mut command = Command::new(sidecar);
@@ -752,6 +825,9 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
         .env_clear()
         .env("PATH", TRUSTED_SYSTEM_PATH)
         .env("NEBULA_V3_DATA_DIR", &data_dir)
+        .env("NEBULA_V3_LOG_DIR", &log_dir)
+        .env("NEBULA_V3_DIAGNOSTICS_SETTINGS", &settings_path)
+        .env("NEBULA_V3_DIAGNOSTICS_PARENT", "desktop")
         .args([
             "serve",
             "--host",
@@ -786,13 +862,25 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
         let message = format!("cannot start Nebula Core: {error}");
         let mut written = 0;
         let mut truncated = false;
-        let _ = write_bounded_log(
+        let write_result = write_bounded_log(
             &mut startup_log_file,
             message.as_bytes(),
             &mut written,
             &mut truncated,
-        );
-        let _ = startup_log_file.flush();
+        )
+        .and_then(|_| startup_log_file.flush());
+        if let Err(log_error) = write_result {
+            diagnostics.record_desktop(
+                DiagnosticLevel::Critical,
+                "desktop.sidecar.emergency_log_failed",
+                "Nebula Core failed to start and its emergency startup log was unavailable.",
+                Some("failure"),
+                Some("spawn"),
+                Some(true),
+                serde_json::Map::new(),
+            );
+            eprintln!("NEBULA_DIAGNOSTICS_UNAVAILABLE sidecar spawn: {log_error}");
+        }
         format!(
             "{message}; redacted startup diagnostics: {}",
             startup_log_path.display()
@@ -812,8 +900,10 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
         }
     };
     let log_token = token.clone();
-    let log_thread =
-        std::thread::spawn(move || capture_startup_log(stderr, startup_log_file, log_token));
+    let log_diagnostics = diagnostics.clone();
+    let log_thread = std::thread::spawn(move || {
+        capture_startup_log(stderr, startup_log_file, log_token, log_diagnostics)
+    });
     let mut startup_log = StartupLogCapture {
         path: startup_log_path,
         thread: Some(log_thread),
@@ -849,6 +939,15 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
             return Err(startup_failure(&mut child, &mut startup_log, error));
         }
     };
+    diagnostics.record_desktop(
+        DiagnosticLevel::Info,
+        "desktop.sidecar.handshake_completed",
+        "Nebula Core completed the supervised startup handshake.",
+        Some("success"),
+        Some("handshake"),
+        None,
+        serde_json::Map::new(),
+    );
     if handshake.protocol != SIDECAR_PROTOCOL
         || handshake.host != "127.0.0.1"
         || handshake.port == 0
@@ -864,6 +963,15 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
     {
         return Err(startup_failure(&mut child, &mut startup_log, error));
     }
+    diagnostics.record_desktop(
+        DiagnosticLevel::Info,
+        "desktop.sidecar.health_verified",
+        "Nebula Core passed authenticated health verification.",
+        Some("success"),
+        Some("health"),
+        None,
+        serde_json::Map::new(),
+    );
 
     Ok(ManagedBackend {
         child,
@@ -886,20 +994,50 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
 /// entry point can expose it through a command-line flag or a diagnostic command.
 #[allow(dead_code)]
 pub(crate) fn self_test_local_backend(app: &AppHandle) -> Result<(), String> {
-    let mut managed = launch(app)?;
-    terminate_managed(&mut managed)
-        .map_err(|error| format!("Nebula Core self-test passed but cleanup failed: {error}"))
+    let diagnostics = app.state::<DiagnosticsState>();
+    let mut managed = launch(app).inspect_err(|_error| {
+        diagnostics.record_desktop(
+            DiagnosticLevel::Error,
+            "desktop.self_test.startup_failed",
+            "The installed Core self-test could not start Nebula Core.",
+            Some("failure"),
+            Some("self-test-startup"),
+            Some(true),
+            serde_json::Map::new(),
+        );
+    })?;
+    terminate_managed(&mut managed).map_err(|error| {
+        diagnostics.record_desktop(
+            DiagnosticLevel::Error,
+            "desktop.self_test.cleanup_failed",
+            "The installed Core self-test passed but cleanup failed.",
+            Some("failure"),
+            Some("self-test-cleanup"),
+            Some(true),
+            serde_json::Map::new(),
+        );
+        format!("Nebula Core self-test passed but cleanup failed: {error}")
+    })
 }
 
 #[tauri::command]
 pub(crate) fn start_local_backend(
     app: AppHandle,
     state: State<'_, BackendState>,
+    diagnostics: State<'_, DiagnosticsState>,
 ) -> Result<BackendSession, String> {
-    let mut process = state
-        .process
-        .lock()
-        .map_err(|_| "the Nebula Core supervisor is unavailable".to_string())?;
+    let mut process = state.process.lock().map_err(|_| {
+        diagnostics.record_desktop(
+            DiagnosticLevel::Critical,
+            "desktop.sidecar.supervisor_unavailable",
+            "The Nebula Core supervisor lock is unavailable.",
+            Some("failure"),
+            Some("supervisor-lock"),
+            Some(false),
+            serde_json::Map::new(),
+        );
+        "the Nebula Core supervisor is unavailable".to_string()
+    })?;
     if let Some(mut managed) = process.take() {
         match managed.child.try_wait() {
             Ok(None) => {
@@ -908,22 +1046,73 @@ pub(crate) fn start_local_backend(
                 return Ok(session);
             }
             Ok(Some(_)) => {
-                let _ = managed.startup_log.finish();
+                if managed.startup_log.finish().is_err() {
+                    diagnostics.record_desktop(
+                        DiagnosticLevel::Error,
+                        "desktop.sidecar.log_capture_cleanup_failed",
+                        "The stopped Core diagnostic capture could not be joined.",
+                        Some("failure"),
+                        Some("restart-cleanup"),
+                        Some(true),
+                        serde_json::Map::new(),
+                    );
+                }
             }
             Err(_) => {
-                let _ = terminate_managed(&mut managed);
+                if terminate_managed(&mut managed).is_err() {
+                    diagnostics.record_desktop(
+                        DiagnosticLevel::Error,
+                        "desktop.sidecar.restart_cleanup_failed",
+                        "A prior Core process could not be cleaned up before restart.",
+                        Some("failure"),
+                        Some("restart-cleanup"),
+                        Some(true),
+                        serde_json::Map::new(),
+                    );
+                }
             }
         }
     }
-    let managed = launch(&app)?;
+    let managed = launch(&app).inspect_err(|_error| {
+        diagnostics.record_desktop(
+            DiagnosticLevel::Error,
+            "desktop.sidecar.launch_failed",
+            "Nebula Core could not complete supervised startup.",
+            Some("failure"),
+            Some("startup"),
+            Some(true),
+            serde_json::Map::new(),
+        );
+    })?;
     let session = managed.session.clone();
     *process = Some(managed);
+    diagnostics.record_desktop(
+        DiagnosticLevel::Info,
+        "desktop.sidecar.started",
+        "Nebula Core is ready.",
+        Some("success"),
+        Some("startup"),
+        None,
+        serde_json::Map::new(),
+    );
     Ok(session)
 }
 
 #[tauri::command]
-pub(crate) fn backend_status(state: State<'_, BackendState>) -> BackendStatus {
+pub(crate) fn backend_status(
+    state: State<'_, BackendState>,
+    diagnostics: State<'_, DiagnosticsState>,
+) -> BackendStatus {
     let Ok(mut process) = state.process.lock() else {
+        diagnostics.record_desktop(
+            DiagnosticLevel::Critical,
+            "desktop.sidecar.status_unavailable",
+            "Nebula Core status could not be inspected.",
+            Some("failure"),
+            Some("supervisor-lock"),
+            Some(false),
+            serde_json::Map::new(),
+        );
         return BackendStatus {
             state: "unavailable",
             endpoint: None,
@@ -942,24 +1131,53 @@ pub(crate) fn backend_status(state: State<'_, BackendState>) -> BackendStatus {
                 };
             }
             Ok(Some(status)) => {
-                let diagnostics = managed.startup_log.path.display().to_string();
-                let _ = managed.startup_log.finish();
+                let diagnostic_path = managed.startup_log.path.display().to_string();
+                if managed.startup_log.finish().is_err() {
+                    diagnostics.record_desktop(
+                        DiagnosticLevel::Error,
+                        "desktop.sidecar.log_capture_cleanup_failed",
+                        "The stopped Core diagnostic capture could not be joined.",
+                        Some("failure"),
+                        Some("status-cleanup"),
+                        Some(true),
+                        serde_json::Map::new(),
+                    );
+                }
                 return BackendStatus {
                     state: "stopped",
                     endpoint: None,
                     message: Some(format!(
-                        "Nebula Core exited with {status}; redacted diagnostics: {diagnostics}"
+                        "Nebula Core exited with {status}; redacted diagnostics: {diagnostic_path}"
                     )),
                 };
             }
             Err(error) => {
-                let diagnostics = managed.startup_log.path.display().to_string();
-                let _ = terminate_managed(&mut managed);
+                let diagnostic_path = managed.startup_log.path.display().to_string();
+                if terminate_managed(&mut managed).is_err() {
+                    diagnostics.record_desktop(
+                        DiagnosticLevel::Error,
+                        "desktop.sidecar.status_cleanup_failed",
+                        "Nebula Core cleanup failed after status inspection failed.",
+                        Some("failure"),
+                        Some("status-cleanup"),
+                        Some(true),
+                        serde_json::Map::new(),
+                    );
+                }
+                diagnostics.record_desktop(
+                    DiagnosticLevel::Error,
+                    "desktop.sidecar.status_failed",
+                    "Nebula Core status inspection failed.",
+                    Some("failure"),
+                    Some("status"),
+                    Some(true),
+                    serde_json::Map::new(),
+                );
                 return BackendStatus {
                     state: "unavailable",
                     endpoint: None,
                     message: Some(format!(
-                        "cannot inspect Nebula Core: {error}; redacted diagnostics: {diagnostics}"
+                        "cannot inspect Nebula Core: {error}; redacted diagnostics: {diagnostic_path}"
                     )),
                 };
             }
@@ -973,16 +1191,43 @@ pub(crate) fn backend_status(state: State<'_, BackendState>) -> BackendStatus {
 }
 
 #[tauri::command]
-pub(crate) fn stop_local_backend(state: State<'_, BackendState>) {
-    stop_managed_backend(&state);
+pub(crate) fn stop_local_backend(
+    state: State<'_, BackendState>,
+    diagnostics: State<'_, DiagnosticsState>,
+) -> Result<(), String> {
+    stop_managed_backend(&state, &diagnostics)
 }
 
-pub(crate) fn stop_managed_backend(state: &State<'_, BackendState>) {
-    if let Ok(mut process) = state.process.lock()
-        && let Some(mut managed) = process.take()
-    {
-        let _ = terminate_managed(&mut managed);
+pub(crate) fn stop_managed_backend(
+    state: &State<'_, BackendState>,
+    diagnostics: &DiagnosticsState,
+) -> Result<(), String> {
+    let mut process = state.process.lock().map_err(|_| {
+        diagnostics.record_desktop(
+            DiagnosticLevel::Critical,
+            "desktop.sidecar.shutdown_lock_failed",
+            "Nebula Core shutdown could not acquire the supervisor lock.",
+            Some("failure"),
+            Some("shutdown"),
+            Some(false),
+            serde_json::Map::new(),
+        );
+        "the Nebula Core supervisor is unavailable during shutdown".to_string()
+    })?;
+    if let Some(mut managed) = process.take() {
+        return terminate_managed(&mut managed).inspect_err(|_error| {
+            diagnostics.record_desktop(
+                DiagnosticLevel::Error,
+                "desktop.sidecar.shutdown_failed",
+                "Nebula Core did not shut down cleanly.",
+                Some("failure"),
+                Some("shutdown"),
+                Some(true),
+                serde_json::Map::new(),
+            );
+        });
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1020,15 +1265,15 @@ mod tests {
     fn startup_logs_redact_ipc_tokens_and_credential_fields() {
         let token = "secret-sidecar-token";
         let input = format!(
-            "starting with {token}\nAuthorization: Bearer another-secret\napi_key=hunter2\nsafe line\n"
+            "starting with {token}\nRuntimeError: canary-prompt-command-output\n-----BEGIN PRIVATE KEY-----canary-key\n"
         );
         let output = String::from_utf8(redact_startup_log(input.as_bytes(), token))
             .expect("redacted logs should be UTF-8");
         assert!(!output.contains(token));
-        assert!(!output.contains("another-secret"));
-        assert!(!output.contains("hunter2"));
-        assert!(output.contains("safe line"));
-        assert!(output.contains("[REDACTED]"));
+        assert!(!output.contains("canary-prompt-command-output"));
+        assert!(!output.contains("canary-key"));
+        assert!(output.contains("exception_type=RuntimeError"));
+        assert_eq!(output.matches("Core stderr line redacted").count(), 3);
     }
 
     #[test]

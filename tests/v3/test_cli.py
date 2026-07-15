@@ -105,7 +105,9 @@ def test_doctor_reports_corrupt_persisted_artifacts(tmp_path, monkeypatch):
     assert report["artifacts"]["corrupt_ids"] == [artifact.id]
 
 
-def test_doctor_verifies_terminal_audit_hashes_artifacts_and_events(tmp_path, monkeypatch):
+def test_doctor_verifies_terminal_audit_hashes_artifacts_and_events(
+    tmp_path, monkeypatch
+):
     async def unavailable(_self):
         return False, "not configured"
 
@@ -137,9 +139,7 @@ def test_doctor_verifies_terminal_audit_hashes_artifacts_and_events(tmp_path, mo
         ),
     )
 
-    healthy = CliRunner().invoke(
-        app, ["doctor", "--json", "--data-dir", str(data_dir)]
-    )
+    healthy = CliRunner().invoke(app, ["doctor", "--json", "--data-dir", str(data_dir)])
     assert healthy.exit_code == 0, healthy.stdout
     assert json.loads(healthy.stdout)["terminal_audit"] == {
         "checked": 1,

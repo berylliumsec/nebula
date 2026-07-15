@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import json
 import os
 import tempfile
@@ -45,6 +47,13 @@ def parse_json(
     try:
         payload = json.loads(_bounded_text(stdout))
     except (json.JSONDecodeError, UnicodeError) as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolparsers.caught_failure_001",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolparsers",
+        )
         raise ToolOutputParseError("tool output is not valid JSON") from exc
     if not isinstance(payload, dict):
         raise ToolOutputParseError("JSON tool output must contain one object")
@@ -59,6 +68,13 @@ def _jsonl_records(stdout: str) -> list[dict[str, Any]]:
         try:
             record = json.loads(line)
         except json.JSONDecodeError as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolparsers.caught_failure_002",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolparsers",
+            )
             raise ToolOutputParseError(
                 f"invalid JSONL record on line {number}"
             ) from exc
@@ -99,6 +115,13 @@ def parse_nmap_xml(
     try:
         root = ET.fromstring(source)
     except ET.ParseError as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolparsers.caught_failure_003",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolparsers",
+        )
         raise ToolOutputParseError("tool output is not valid Nmap XML") from exc
     if root.tag != "nmaprun":
         raise ToolOutputParseError("Nmap XML root must be nmaprun")
@@ -125,6 +148,13 @@ def parse_nmap_xml(
             try:
                 port_number = int(port.attrib["portid"])
             except (KeyError, TypeError, ValueError) as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.toolparsers.caught_failure_004",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="toolparsers",
+                )
                 raise ToolOutputParseError(
                     "Nmap XML contains an invalid port number"
                 ) from exc
@@ -171,6 +201,13 @@ def parse_nikto(
     try:
         payload = json.loads(_bounded_text(stdout))
     except json.JSONDecodeError as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolparsers.caught_failure_005",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolparsers",
+        )
         raise ToolOutputParseError("Nikto output is not valid JSON") from exc
     if isinstance(payload, list):
         if any(not isinstance(item, dict) for item in payload):
@@ -204,6 +241,13 @@ def parse_tool_output(
     try:
         implementation = BUILTIN_PARSERS[parser]
     except KeyError as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolparsers.caught_failure_006",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolparsers",
+        )
         raise ToolOutputParseError(f"unknown built-in parser: {parser}") from exc
     return implementation(stdout, stderr, exit_code)
 
@@ -253,6 +297,13 @@ class ParserContainerContract(BaseModel):
         try:
             Draft202012Validator.check_schema(self.output_schema)
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolparsers.caught_failure_007",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolparsers",
+            )
             raise ValueError("parser output_schema is not valid JSON Schema") from exc
         if self.output_schema.get("type") != "object":
             raise ValueError("parser output_schema must describe one object")
@@ -277,6 +328,13 @@ class ParserContainerContract(BaseModel):
         try:
             Draft202012Validator(self.output_schema).validate(payload)
         except ValidationError as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolparsers.caught_failure_008",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolparsers",
+            )
             raise ToolOutputParseError(
                 f"parser container output violates its schema: {exc.message}"
             ) from exc
@@ -342,6 +400,13 @@ class SandboxParserExecutor:
             try:
                 payload = json.loads(_bounded_text(result.stdout))
             except json.JSONDecodeError as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.toolparsers.caught_failure_009",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="toolparsers",
+                )
                 raise ToolOutputParseError(
                     "parser container stdout is not valid JSON"
                 ) from exc

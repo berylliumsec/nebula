@@ -8,6 +8,8 @@ scope.
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import ipaddress
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -92,6 +94,13 @@ def _normalize_target(value: str, explicit_port: int | None) -> _Target:
         try:
             parsed_port = parsed.port
         except ValueError as exc:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.policy.caught_failure_001",
+                "A handled sandbox operation raised an exception.",
+                exc,
+                stage="policy",
+            )
             raise ValueError("target contains an invalid port") from exc
         port = explicit_port or parsed_port or (443 if parsed.scheme == "https" else 80)
         normalized_path = parsed.path or "/"
@@ -117,7 +126,14 @@ def _normalize_target(value: str, explicit_port: int | None) -> _Target:
         raise ValueError("target port must be between 1 and 65535")
     try:
         address = ipaddress.ip_address(host)
-    except ValueError:
+    except ValueError as caught_error:
+        record_caught_exception(
+            "sandbox",
+            "sandbox.policy.caught_failure_002",
+            "A handled sandbox operation raised an exception.",
+            caught_error,
+            stage="policy",
+        )
         address = None
     return _Target(candidate, host, port, url, address)
 
@@ -228,6 +244,13 @@ class PolicyEngine:
             try:
                 target = _normalize_target(request.target, request.port)
             except ValueError as exc:
+                record_caught_exception(
+                    "sandbox",
+                    "sandbox.policy.caught_failure_003",
+                    "A handled sandbox operation raised an exception.",
+                    exc,
+                    stage="policy",
+                )
                 return PolicyDecision(
                     effect=PolicyEffect.DENY,
                     reason=str(exc),

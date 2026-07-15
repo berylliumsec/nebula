@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { configureBrowserDiagnostics, logDiagnostic } from "../diagnostics";
 
 export interface ApiRuntime {
   baseUrl?: string;
@@ -41,6 +42,13 @@ export async function resolveApiRuntime(): Promise<ApiRuntime> {
   if (isTauriRuntime()) {
     try {
       const session = await invoke<BackendSession>("start_local_backend");
+      void logDiagnostic({
+        level: "info",
+        eventCode: "interface.runtime.desktop_ready",
+        message: "The interface connected to the supervised local Core.",
+        outcome: "success",
+        stage: "runtime-resolution",
+      });
       return {
         baseUrl: session.endpoint,
         token: session.token,
@@ -48,6 +56,16 @@ export async function resolveApiRuntime(): Promise<ApiRuntime> {
         state: "ready",
       };
     } catch (error) {
+      void logDiagnostic({
+        level: "error",
+        eventCode: "interface.runtime.desktop_unavailable",
+        message: "The interface could not connect to the supervised local Core.",
+        outcome: "failure",
+        stage: "runtime-resolution",
+        retryable: true,
+        safeFailureCause: "The local Core did not become ready.",
+        exception: error,
+      });
       return {
         mode: "desktop",
         state: "unavailable",
@@ -56,9 +74,24 @@ export async function resolveApiRuntime(): Promise<ApiRuntime> {
     }
   }
 
+  const baseUrl = import.meta.env.VITE_NEBULA_API_URL;
+  const token = consumeBrowserFragmentToken() ?? import.meta.env.VITE_NEBULA_API_TOKEN;
+  const normalizedBase = (baseUrl?.trim() || globalThis.location?.origin || "http://127.0.0.1")
+    .replace(/\/+$/, "");
+  configureBrowserDiagnostics(
+    normalizedBase.endsWith("/api/v1") ? normalizedBase : `${normalizedBase}/api/v1`,
+    token,
+  );
+  void logDiagnostic({
+    level: "info",
+    eventCode: "interface.runtime.browser_ready",
+    message: "The browser-development API runtime was resolved.",
+    outcome: "success",
+    stage: "runtime-resolution",
+  });
   return {
-    baseUrl: import.meta.env.VITE_NEBULA_API_URL,
-    token: consumeBrowserFragmentToken() ?? import.meta.env.VITE_NEBULA_API_TOKEN,
+    baseUrl,
+    token,
     mode: "browser",
     state: "ready",
   };

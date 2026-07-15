@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 from .domain import Engagement, ScopePolicy
 from .providers import ModelProvider
 from .storage import NebulaStore, NotFoundError
@@ -23,6 +25,13 @@ def validate_engagement_provider_privacy(
     try:
         policy = store.get(ScopePolicy, engagement.scope_policy_id)
     except NotFoundError as exc:
+        record_caught_exception(
+            "providers",
+            "providers.privacy.caught_failure_001",
+            "A handled providers operation raised an exception.",
+            exc,
+            stage="privacy",
+        )
         raise ProviderPrivacyViolation(
             "engagement references a missing scope policy"
         ) from exc

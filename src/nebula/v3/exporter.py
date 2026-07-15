@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import hashlib
 import json
 import os
@@ -137,6 +139,13 @@ def _get_reference(
     try:
         return store.get(model, entity_id)
     except NotFoundError as exc:
+        record_caught_exception(
+            "evidence",
+            "evidence.exporter.caught_failure_001",
+            "A handled evidence operation raised an exception.",
+            exc,
+            stage="exporter",
+        )
         raise ExportError(
             f"{source} references missing {model.entity_kind} entity: {entity_id}"
         ) from exc
@@ -283,7 +292,14 @@ def _include_referenced_globals(
     for operator_id in sorted(possible_operator_ids - required_operator_ids):
         try:
             operator = store.get(OperatorProfile, operator_id)
-        except NotFoundError:
+        except NotFoundError as caught_error:
+            record_caught_exception(
+                "evidence",
+                "evidence.exporter.caught_failure_002",
+                "A handled evidence operation raised an exception.",
+                caught_error,
+                stage="exporter",
+            )
             continue
         _add_entity(entities, operator)
 

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from .diagnostics import (
+    create_diagnostic_task,
+    gather_diagnostic,
+    record_caught_exception,
+)
+
 import asyncio
 import re
 from collections.abc import Callable, Iterator, Mapping
@@ -219,6 +225,13 @@ class MissionService:
         try:
             provider = self.provider_factory(profile)
         except (ProviderError, ValueError) as exc:
+            record_caught_exception(
+                "missions",
+                "missions.missions.caught_failure_001",
+                "A handled missions operation raised an exception.",
+                exc,
+                stage="missions",
+            )
             raise MissionConfigurationError(str(exc)) from exc
         if provider.config.id != profile.id:
             raise MissionConfigurationError(
@@ -291,6 +304,13 @@ class MissionService:
         try:
             validate_engagement_provider_privacy(self.store, engagement, provider)
         except ProviderPrivacyViolation as exc:
+            record_caught_exception(
+                "missions",
+                "missions.missions.caught_failure_002",
+                "A handled missions operation raised an exception.",
+                exc,
+                stage="missions",
+            )
             raise MissionConfigurationError(str(exc)) from exc
 
         run = AgentRun(
@@ -319,9 +339,23 @@ class MissionService:
                 # assignment names and unavailable runners fail as explicit
                 # configuration errors rather than queued background work.
                 self.tool_components_factory(run, provider)
-            except MissionServiceError:
+            except MissionServiceError as caught_error:
+                record_caught_exception(
+                    "missions",
+                    "missions.missions.caught_failure_003",
+                    "A handled missions operation raised an exception.",
+                    caught_error,
+                    stage="missions",
+                )
                 raise
             except Exception as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.missions.caught_failure_004",
+                    "A handled missions operation raised an exception.",
+                    exc,
+                    stage="missions",
+                )
                 raise MissionConfigurationError(
                     f"tool mission preflight failed: {self._safe_error(exc)}"
                 ) from exc
@@ -357,8 +391,11 @@ class MissionService:
                 actor_id=actor_id,
                 idempotency_key="run:queued",
             )
-            task = asyncio.create_task(
+            task = create_diagnostic_task(
                 self._execute(run, provider),
+                feature="missions",
+                event_code="missions.run",
+                failure_message="A mission background task stopped unexpectedly.",
                 name=f"nebula-mission-{run.id}",
             )
             self._tasks[run.id] = task
@@ -400,6 +437,13 @@ class MissionService:
                     idempotency_key="run:stop_requested",
                 )
             except ConflictError as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.missions.caught_failure_005",
+                    "A handled missions operation raised an exception.",
+                    exc,
+                    stage="missions",
+                )
                 latest = self.store.get(AgentRun, run.id)
                 if latest.status in _TERMINAL_RUN_STATUSES:
                     raise MissionStateError(
@@ -419,8 +463,15 @@ class MissionService:
             await asyncio.wait_for(
                 asyncio.shield(task), timeout=self.cancellation_timeout_seconds
             )
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as caught_error:
             # CANCELLING is truthful while a provider ignores cancellation.
+            record_caught_exception(
+                "missions",
+                "missions.missions.caught_failure_006",
+                "A handled missions operation raised an exception.",
+                caught_error,
+                stage="missions",
+            )
             return self.store.get(AgentRun, run.id)
         return self.store.get(AgentRun, run.id)
 
@@ -477,8 +528,11 @@ class MissionService:
                 actor_id=actor_id,
                 idempotency_key=f"run:{run.id}:approval:{approval.id}:resume",
             )
-            task = asyncio.create_task(
+            task = create_diagnostic_task(
                 self._resume_execute(resumed, provider, response),
+                feature="missions",
+                event_code="missions.resume",
+                failure_message="A resumed mission task stopped unexpectedly.",
                 name=f"nebula-mission-resume-{run.id}",
             )
             self._tasks[run.id] = task
@@ -496,7 +550,7 @@ class MissionService:
             ]
         if not run_ids:
             return
-        await asyncio.gather(
+        await gather_diagnostic(
             *(
                 self.stop_mission(
                     run_id,
@@ -505,7 +559,10 @@ class MissionService:
                 )
                 for run_id in run_ids
             ),
-            return_exceptions=True,
+            feature="missions",
+            event_code="missions.shutdown.stop_failed",
+            failure_message="A mission could not be stopped cleanly during shutdown.",
+            stage="shutdown",
         )
 
     async def _execute(self, queued: AgentRun, provider: ModelProvider) -> None:
@@ -551,6 +608,13 @@ class MissionService:
                     # cancellation. It must finish before the saver connection
                     # leaves this context or deferred checkpoint writes race a
                     # closed SQLite handle.
+                    record_caught_exception(
+                        "missions",
+                        "missions.missions.caught_failure_007",
+                        "A handled missions operation raised an exception.",
+                        exc,
+                        stage="missions",
+                    )
                     await self._await_graph_cleanup(exc)
                     raise
             latest = self.store.get(AgentRun, queued.id)
@@ -578,12 +642,26 @@ class MissionService:
                     self._finalize_failed(
                         latest.id, "mission ended without a terminal result"
                     )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "missions",
+                "missions.missions.caught_failure_008",
+                "A handled missions operation raised an exception.",
+                caught_error,
+                stage="missions",
+            )
             reason, actor = self._cancel_reasons.get(
                 queued.id, ("Mission background task was cancelled", "system")
             )
             self._finalize_cancelled(queued.id, reason, actor)
         except Exception as exc:
+            record_caught_exception(
+                "missions",
+                "missions.missions.caught_failure_009",
+                "A handled missions operation raised an exception.",
+                exc,
+                stage="missions",
+            )
             latest = self.store.get(AgentRun, queued.id)
             if latest.status == RunStatus.CANCELLING:
                 reason, actor = self._cancel_reasons.get(
@@ -617,6 +695,13 @@ class MissionService:
                 try:
                     state = await runtime.resume(run.id, response)
                 except asyncio.CancelledError as exc:
+                    record_caught_exception(
+                        "missions",
+                        "missions.missions.caught_failure_010",
+                        "A handled missions operation raised an exception.",
+                        exc,
+                        stage="missions",
+                    )
                     await self._await_graph_cleanup(exc)
                     raise
             latest = self.store.get(AgentRun, run.id)
@@ -648,12 +733,26 @@ class MissionService:
                     self._finalize_failed(
                         latest.id, "resumed mission ended without a terminal result"
                     )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "missions",
+                "missions.missions.caught_failure_011",
+                "A handled missions operation raised an exception.",
+                caught_error,
+                stage="missions",
+            )
             reason, actor = self._cancel_reasons.get(
                 run.id, ("Mission background task was cancelled", "system")
             )
             self._finalize_cancelled(run.id, reason, actor)
         except Exception as exc:
+            record_caught_exception(
+                "missions",
+                "missions.missions.caught_failure_012",
+                "A handled missions operation raised an exception.",
+                exc,
+                stage="missions",
+            )
             latest = self.store.get(AgentRun, run.id)
             if latest.status == RunStatus.CANCELLING:
                 reason, actor = self._cancel_reasons.get(
@@ -750,7 +849,14 @@ class MissionService:
                 return current
             try:
                 return self._finalize_failed(run_id, error)
-            except ConflictError:
+            except ConflictError as caught_error:
+                record_caught_exception(
+                    "missions",
+                    "missions.missions.caught_failure_013",
+                    "A handled missions operation raised an exception.",
+                    caught_error,
+                    stage="missions",
+                )
                 continue
         raise MissionServiceUnavailable(
             f"could not reconcile interrupted API mission {run_id!r}"
@@ -892,9 +998,16 @@ class MissionService:
                 continue
             try:
                 await asyncio.shield(value)
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception) as caught_error:
                 # Cancellation remains authoritative; cleanup failures are
                 # handled by durable run/task terminalization below.
+                record_caught_exception(
+                    "missions",
+                    "missions.missions.caught_failure_014",
+                    "A handled missions operation raised an exception.",
+                    caught_error,
+                    stage="missions",
+                )
                 pass
 
     def _validate_budget(self, budget: RunBudget, *, tool_names: list[str]) -> None:

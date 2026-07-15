@@ -14,6 +14,7 @@ import {
   type TerminalPngCapture,
   type XtermViewportTerminal,
 } from "./terminalCapture";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 const MAX_EVIDENCE_BYTES = 25 * 1024 * 1024;
 const MAX_EDIT_RECIPE_BYTES = 16 * 1024;
@@ -132,6 +133,7 @@ export function TerminalScreenshotAction({
       setEditor({ capturedAt, capture: png, evidence, sourceContext });
       setMessage("Original terminal screenshot preserved as immutable evidence.");
     } catch (captureError) {
+      void logCaughtDiagnostic("interface.terminal_screenshot_action.caught_failure_01", "A handled interface operation failed.", captureError, "terminal_screenshot_action");
       setError(captureError instanceof Error ? captureError.message : "The terminal screenshot could not be preserved.");
     } finally {
       setBusy(false);
@@ -186,7 +188,7 @@ export function TerminalScreenshotAction({
       title="Capture the visible terminal viewport as immutable evidence"
       onClick={() => void capture()}
     ><Camera size={15} /> {busy ? "Preserving…" : "Screenshot"}</button>
-    {error && <span className="terminal-capture-feedback error" role="alert">{error}</span>}
+    {error && <DiagnosticErrorNotice error={error} fallback="The terminal capture could not be completed." compact />}
     {message && <span className="terminal-capture-feedback" role="status">{message}</span>}
     {editor && createPortal(<ModalSurface
       labelledBy="terminal-screenshot-editor-title"

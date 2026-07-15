@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from .diagnostics import (
+    create_diagnostic_task,
+    gather_diagnostic,
+    record_caught_exception,
+)
+
 import asyncio
 import json
 from collections.abc import Callable
@@ -88,7 +94,13 @@ class _StdioMcpClient(_McpClient):
         super().__init__()
         self.process = process
         self.stderr_tail = ""
-        self.stderr_task = asyncio.create_task(self._stderr())
+        self.stderr_task = create_diagnostic_task(
+            self._stderr(),
+            feature="harnesses",
+            event_code="harnesses.mcp.stderr_reader",
+            failure_message="The MCP stderr supervisor stopped unexpectedly.",
+            name="nebula-mcp-stderr",
+        )
 
     async def exchange(
         self, message: dict[str, Any], *, notification: bool = False
@@ -110,6 +122,13 @@ class _StdioMcpClient(_McpClient):
             try:
                 response = json.loads(line)
             except json.JSONDecodeError as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.mcp.caught_failure_001",
+                    "A handled harnesses operation raised an exception.",
+                    exc,
+                    stage="mcp",
+                )
                 raise McpProbeError("MCP stdio server returned malformed JSON") from exc
             # Ignore protocol notifications while waiting for the correlated response.
             if isinstance(response, dict) and response.get("id") == message.get("id"):
@@ -120,8 +139,7 @@ class _StdioMcpClient(_McpClient):
             return
         while chunk := await self.process.stderr.read(4096):
             self.stderr_tail = (
-                self.stderr_tail
-                + redact_text(chunk.decode("utf-8", errors="replace"))
+                self.stderr_tail + redact_text(chunk.decode("utf-8", errors="replace"))
             )[-8_000:]
 
     async def close(self) -> None:
@@ -129,12 +147,25 @@ class _StdioMcpClient(_McpClient):
             self.process.terminate()
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=3)
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.mcp.caught_failure_002",
+                    "A handled harnesses operation raised an exception.",
+                    caught_error,
+                    stage="mcp",
+                )
                 self.process.kill()
                 await self.process.wait()
         if not self.stderr_task.done():
             self.stderr_task.cancel()
-        await asyncio.gather(self.stderr_task, return_exceptions=True)
+        await gather_diagnostic(
+            self.stderr_task,
+            feature="harnesses",
+            event_code="harnesses.mcp.stderr_cleanup_failed",
+            failure_message="The MCP stderr supervisor did not stop cleanly.",
+            stage="cleanup",
+        )
 
 
 class _HttpMcpClient(_McpClient):
@@ -184,13 +215,29 @@ class _HttpMcpClient(_McpClient):
                     try:
                         value = json.loads(data)
                     except json.JSONDecodeError as exc:
-                        raise McpProbeError("MCP HTTP returned malformed SSE JSON") from exc
+                        record_caught_exception(
+                            "harnesses",
+                            "harnesses.mcp.caught_failure_003",
+                            "A handled harnesses operation raised an exception.",
+                            exc,
+                            stage="mcp",
+                        )
+                        raise McpProbeError(
+                            "MCP HTTP returned malformed SSE JSON"
+                        ) from exc
                     if isinstance(value, dict) and value.get("id") == message.get("id"):
                         return value
             raise McpProbeError("MCP HTTP SSE response omitted the correlated result")
         try:
             return response.json()
         except json.JSONDecodeError as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.mcp.caught_failure_004",
+                "A handled harnesses operation raised an exception.",
+                exc,
+                stage="mcp",
+            )
             raise McpProbeError("MCP HTTP returned malformed JSON") from exc
 
     async def close(self) -> None:
@@ -204,7 +251,14 @@ class _HttpMcpClient(_McpClient):
                         "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
                     },
                 )
-            except httpx.HTTPError:
+            except httpx.HTTPError as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.mcp.caught_failure_005",
+                    "A handled harnesses operation raised an exception.",
+                    caught_error,
+                    stage="mcp",
+                )
                 pass
         await self.client.aclose()
 
@@ -289,6 +343,13 @@ class McpProbeService:
                 capabilities=snapshot,
             )
         except Exception as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.mcp.caught_failure_006",
+                "A handled harnesses operation raised an exception.",
+                exc,
+                stage="mcp",
+            )
             detail = _safe(exc)
             failed = McpCapabilitySnapshot(checked_at=utc_now(), detail=detail)
             latest = self.store.get(McpServerProfile, profile.id)
@@ -355,6 +416,13 @@ class McpProbeService:
         try:
             return self.credential_store.resolve(reference).get_secret_value()
         except (CredentialError, ValueError) as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.mcp.caught_failure_007",
+                "A handled harnesses operation raised an exception.",
+                exc,
+                stage="mcp",
+            )
             raise McpProbeError(str(exc)) from exc
 
     @staticmethod
@@ -362,6 +430,13 @@ class McpProbeService:
         try:
             result = await client.request(method, {})
         except McpProbeError as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.mcp.caught_failure_008",
+                "A handled harnesses operation raised an exception.",
+                exc,
+                stage="mcp",
+            )
             if "-32601" in str(exc) or "not found" in str(exc).lower():
                 return {}
             raise
@@ -387,6 +462,13 @@ class McpProbeService:
             try:
                 Draft202012Validator.check_schema(schema)
             except SchemaError as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.mcp.caught_failure_009",
+                    "A handled harnesses operation raised an exception.",
+                    exc,
+                    stage="mcp",
+                )
                 raise McpProbeError(f"MCP tool {name!r} has an invalid schema") from exc
             annotations = raw.get("annotations")
             annotations = annotations if isinstance(annotations, dict) else {}

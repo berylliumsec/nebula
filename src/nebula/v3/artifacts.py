@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import hashlib
 import io
 import mimetypes
@@ -123,6 +125,13 @@ class ArtifactStore:
         try:
             descriptor = os.open(source_path, flags)
         except OSError as exc:
+            record_caught_exception(
+                "storage",
+                "storage.artifacts.caught_failure_001",
+                "A handled storage operation raised an exception.",
+                exc,
+                stage="artifacts",
+            )
             raise FileNotFoundError(source_path) from exc
         metadata_result = os.fstat(descriptor)
         if not stat.S_ISREG(metadata_result.st_mode):
@@ -201,7 +210,14 @@ class ArtifactStore:
                 os.link(temporary_path, destination_path)
                 created = True
                 destination_path.chmod(0o400)
-            except FileExistsError:
+            except FileExistsError as caught_error:
+                record_caught_exception(
+                    "storage",
+                    "storage.artifacts.caught_failure_002",
+                    "A handled storage operation raised an exception.",
+                    caught_error,
+                    stage="artifacts",
+                )
                 if destination_path.stat().st_size != size:
                     raise ArtifactIntegrityError(
                         f"existing blob size does not match digest {digest_value}"

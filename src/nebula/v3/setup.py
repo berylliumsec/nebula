@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from .diagnostics import (
+    create_diagnostic_task,
+    gather_diagnostic,
+    record_caught_exception,
+)
+
 import asyncio
 import hashlib
 import os
@@ -313,7 +319,14 @@ def bootstrap_scratch_project(store: NebulaStore) -> str | None:
         )
         connection.commit()
         return engagement_id
-    except Exception:
+    except Exception as caught_error:
+        record_caught_exception(
+            "setup",
+            "setup.setup.caught_failure_001",
+            "A handled setup operation raised an exception.",
+            caught_error,
+            stage="setup",
+        )
         connection.rollback()
         raise
     finally:
@@ -382,7 +395,13 @@ class SetupService:
         if self._image_preparation.operation_id is not None:
             return
         if self._refresh_task is None:
-            self._refresh_task = asyncio.create_task(self._refresh())
+            self._refresh_task = create_diagnostic_task(
+                self._refresh(),
+                feature="setup",
+                event_code="setup.runtime_refresh",
+                failure_message="Background runner detection stopped unexpectedly.",
+                name="nebula-setup-runtime-refresh",
+            )
 
     async def shutdown(self) -> None:
         tasks = [self._refresh_task, self._preparation_task]
@@ -390,7 +409,13 @@ class SetupService:
         for task in pending:
             task.cancel()
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+            await gather_diagnostic(
+                *pending,
+                feature="setup",
+                event_code="setup.shutdown.task_failed",
+                failure_message="A setup background task failed during shutdown.",
+                stage="shutdown",
+            )
 
     async def status(self) -> SetupStatus:
         self.start()
@@ -434,7 +459,14 @@ class SetupService:
                     profile = self._stored_profile(selected)
                     try:
                         profile = self.store.create(profile)
-                    except ConflictError:
+                    except ConflictError as caught_error:
+                        record_caught_exception(
+                            "setup",
+                            "setup.setup.caught_failure_002",
+                            "A handled setup operation raised an exception.",
+                            caught_error,
+                            stage="setup",
+                        )
                         existing = self.store.get(StoredRunnerProfile, "local")
                         if not self._same_runner(existing, profile):
                             self._set_terminal(
@@ -487,9 +519,23 @@ class SetupService:
                         )
                     )
                 self._emit(SetupEventReason.RUNTIME_DETECTION_COMPLETED)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as caught_error:
+                record_caught_exception(
+                    "setup",
+                    "setup.setup.caught_failure_003",
+                    "A handled setup operation raised an exception.",
+                    caught_error,
+                    stage="setup",
+                )
                 raise
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "setup",
+                    "setup.setup.caught_failure_004",
+                    "A handled setup operation raised an exception.",
+                    caught_error,
+                    stage="setup",
+                )
                 self._set_terminal(
                     TerminalSetupStatus(
                         status=TerminalSetupState.ERROR,
@@ -571,7 +617,14 @@ class SetupService:
             idempotent = False
             try:
                 profile = self.store.create(profile)
-            except ConflictError:
+            except ConflictError as caught_error:
+                record_caught_exception(
+                    "setup",
+                    "setup.setup.caught_failure_005",
+                    "A handled setup operation raised an exception.",
+                    caught_error,
+                    stage="setup",
+                )
                 existing = self.store.get(StoredRunnerProfile, "local")
                 if not self._same_runner(existing, profile):
                     raise SetupServiceError(
@@ -651,7 +704,13 @@ class SetupService:
                 task.cancel()
 
         if task is not None:
-            await asyncio.gather(task, return_exceptions=True)
+            await gather_diagnostic(
+                task,
+                feature="setup",
+                event_code="setup.image_preparation.cancellation_failed",
+                failure_message="Image preparation did not cancel cleanly.",
+                stage="cancellation",
+            )
         if self._image_preparation.phase == ImagePreparationPhase.CANCELLING:
             self._mark_preparation_cancelled(request.operation_id)
         return SetupControlResponse(
@@ -704,7 +763,14 @@ class SetupService:
                     event = await asyncio.wait_for(
                         queue.get(), timeout=keepalive_seconds
                     )
-                except asyncio.TimeoutError:
+                except asyncio.TimeoutError as caught_error:
+                    record_caught_exception(
+                        "setup",
+                        "setup.setup.caught_failure_006",
+                        "A handled setup operation raised an exception.",
+                        caught_error,
+                        stage="setup",
+                    )
                     yield None
                     continue
                 if event.sequence <= cursor:
@@ -730,6 +796,13 @@ class SetupService:
         try:
             profile = self.tool_platform.resolve_human_terminal_profile(project_id)
         except (NotFoundError, ToolPlatformError) as exc:
+            record_caught_exception(
+                "setup",
+                "setup.setup.caught_failure_007",
+                "A handled setup operation raised an exception.",
+                exc,
+                stage="setup",
+            )
             raise SetupServiceError(
                 "runner_unavailable", str(exc), status_code=409
             ) from exc
@@ -791,8 +864,12 @@ class SetupService:
                 terminal_state=TerminalSetupState.PREPARING_IMAGE,
             )
             self._emit(SetupEventReason.IMAGE_PREPARATION_QUEUED)
-            self._preparation_task = asyncio.create_task(
-                self._run_image_preparation(operation_id, project_id)
+            self._preparation_task = create_diagnostic_task(
+                self._run_image_preparation(operation_id, project_id),
+                feature="setup",
+                event_code="setup.image_preparation",
+                failure_message="Workstation image preparation stopped unexpectedly.",
+                name=f"nebula-image-preparation-{operation_id}",
             )
             return SetupControlResponse(
                 operation=operation,
@@ -849,10 +926,24 @@ class SetupService:
             )
             self._transition_preparation(ready, terminal_state=TerminalSetupState.READY)
             self._emit(SetupEventReason.IMAGE_PREPARATION_READY)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "setup",
+                "setup.setup.caught_failure_008",
+                "A handled setup operation raised an exception.",
+                caught_error,
+                stage="setup",
+            )
             self._mark_preparation_cancelled(operation_id)
             raise
         except Exception as exc:
+            record_caught_exception(
+                "setup",
+                "setup.setup.caught_failure_009",
+                "A handled setup operation raised an exception.",
+                exc,
+                stage="setup",
+            )
             if self._image_preparation.operation_id != operation_id:
                 return
             failed = self._image_preparation.model_copy(
@@ -897,6 +988,13 @@ class SetupService:
             try:
                 return self.store.get(Engagement, requested).id
             except NotFoundError as exc:
+                record_caught_exception(
+                    "setup",
+                    "setup.setup.caught_failure_010",
+                    "A handled setup operation raised an exception.",
+                    exc,
+                    stage="setup",
+                )
                 raise SetupServiceError(
                     "project_not_found",
                     "the requested Project does not exist",
@@ -950,7 +1048,14 @@ class SetupService:
             if queue.full():
                 try:
                     queue.get_nowait()
-                except asyncio.QueueEmpty:
+                except asyncio.QueueEmpty as caught_error:
+                    record_caught_exception(
+                        "setup",
+                        "setup.setup.caught_failure_011",
+                        "A handled setup operation raised an exception.",
+                        caught_error,
+                        stage="setup",
+                    )
                     pass
             queue.put_nowait(event)
         return event
@@ -975,6 +1080,13 @@ class SetupService:
                 refreshed = await self.tool_platform.verify_runner(profile.id)
                 detail = refreshed.last_health_detail
             except Exception as exc:
+                record_caught_exception(
+                    "setup",
+                    "setup.setup.caught_failure_012",
+                    "A handled setup operation raised an exception.",
+                    exc,
+                    stage="setup",
+                )
                 detail = str(exc)[:1_000]
                 try:
                     refreshed = self.store.update(
@@ -987,7 +1099,14 @@ class SetupService:
                         },
                         expected_revision=profile.revision,
                     )
-                except (ConflictError, NotFoundError):
+                except (ConflictError, NotFoundError) as caught_error:
+                    record_caught_exception(
+                        "setup",
+                        "setup.setup.caught_failure_013",
+                        "A handled setup operation raised an exception.",
+                        caught_error,
+                        stage="setup",
+                    )
                     refreshed = self.store.get(StoredRunnerProfile, profile.id)
         return RunnerCandidate(
             candidate_id=self._candidate_id_for_executable(refreshed.executable),
@@ -1101,8 +1220,10 @@ class SetupService:
 
     def _selected_runner_detail(self, runner_detail: str | None) -> str:
         if self._image_preparation.phase == ImagePreparationPhase.READY:
-            return self._image_preparation.detail or runner_detail or (
-                "Verified workstation image is ready."
+            return (
+                self._image_preparation.detail
+                or runner_detail
+                or ("Verified workstation image is ready.")
             )
         if self._image_preparation.detail:
             return self._image_preparation.detail

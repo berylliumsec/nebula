@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from .diagnostics import (
+    create_diagnostic_task,
+    gather_diagnostic,
+    record_caught_exception,
+)
+
 import asyncio
 import hashlib
 import json
@@ -118,7 +124,13 @@ class ExecutionAIService:
         for task in tasks:
             task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await gather_diagnostic(
+                *tasks,
+                feature="executions",
+                event_code="executions.draft.shutdown_failed",
+                failure_message="An execution draft task failed during shutdown.",
+                stage="shutdown",
+            )
         self._tasks.clear()
 
     async def generate(
@@ -175,8 +187,11 @@ class ExecutionAIService:
                     "context_fingerprint": fingerprint,
                 },
             )
-            task = asyncio.create_task(
+            task = create_diagnostic_task(
                 self._generate(draft.id, provider, context),
+                feature="executions",
+                event_code="executions.note_draft",
+                failure_message="The execution-note draft task stopped unexpectedly.",
                 name=f"execution-note-{draft.id}",
             )
             self._tasks[draft.id] = task
@@ -364,6 +379,13 @@ class ExecutionAIService:
                     raise ValueError("structured response is not an object")
                 content = GeneratedDraftContent.model_validate(decoded)
             except Exception as exc:
+                record_caught_exception(
+                    "executions",
+                    "executions.execution_ai.caught_failure_001",
+                    "A handled executions operation raised an exception.",
+                    exc,
+                    stage="execution_ai",
+                )
                 raise ExecutionAIError(
                     "structured_response_invalid",
                     "provider did not return the required strict draft schema",
@@ -392,7 +414,14 @@ class ExecutionAIService:
                     else None,
                 },
             )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.execution_ai.caught_failure_002",
+                "A handled executions operation raised an exception.",
+                caught_error,
+                stage="execution_ai",
+            )
             current = self.store.get(GeneratedDraft, draft_id)
             if current.status == GeneratedDraftStatus.GENERATING:
                 failed = self.store.update(
@@ -411,6 +440,13 @@ class ExecutionAIService:
                 self._event(failed, "generated_draft.failed", {"reason": "cancelled"})
             raise
         except Exception as exc:
+            record_caught_exception(
+                "executions",
+                "executions.execution_ai.caught_failure_003",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="execution_ai",
+            )
             current = self.store.get(GeneratedDraft, draft_id)
             if current.status == GeneratedDraftStatus.GENERATING:
                 detail = (
@@ -477,8 +513,22 @@ class ExecutionAIService:
             provider = self.provider_factory(profile)
             validate_engagement_provider_privacy(self.store, engagement, provider)
         except ProviderPrivacyViolation as exc:
+            record_caught_exception(
+                "executions",
+                "executions.execution_ai.caught_failure_004",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="execution_ai",
+            )
             raise ExecutionAIError("privacy_denied", str(exc)) from exc
         except (ProviderError, ValueError) as exc:
+            record_caught_exception(
+                "executions",
+                "executions.execution_ai.caught_failure_005",
+                "A handled executions operation raised an exception.",
+                exc,
+                stage="execution_ai",
+            )
             raise ExecutionAIError(
                 "provider_unavailable", str(exc), status_code=422
             ) from exc

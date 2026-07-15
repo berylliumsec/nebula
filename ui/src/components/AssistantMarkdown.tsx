@@ -10,6 +10,7 @@ import {
   utf8Length,
   type ExactFence,
 } from "./assistantCode";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 export interface FencedRunCandidate {
   source: string;
@@ -31,7 +32,8 @@ function safeUrl(value: string): string {
   try {
     const parsed = new URL(value);
     return ["http:", "https:", "mailto:"].includes(parsed.protocol) ? value : "";
-  } catch {
+  } catch (caughtError) {
+    void logCaughtDiagnostic("interface.assistant_markdown.caught_failure_01", "A handled interface operation failed.", caughtError, "assistant_markdown");
     return "";
   }
 }

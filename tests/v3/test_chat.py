@@ -322,7 +322,9 @@ def test_chat_retrieves_bundled_operator_help_without_project_documents(
     assert persisted[-1].citations[0].source_id == "nebula-help:runner-setup"
 
 
-def test_selected_context_is_bounded_hashed_sent_as_data_and_persisted(tmp_path, monkeypatch):
+def test_selected_context_is_bounded_hashed_sent_as_data_and_persisted(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "selected-context.db")
     engagement = store.create(Engagement(id="eng-a", name="Selected context"))
     profile = store.create(_profile(local=True))

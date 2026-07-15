@@ -122,18 +122,24 @@ def operator_help_articles() -> tuple[OperatorHelpArticle, ...]:
         .read_text(encoding="utf-8")
     )
     if f"Corpus: `{CORPUS_ID}`" not in text:
-        raise RuntimeError("bundled operator-help corpus version is invalid")  # pragma: no cover
+        raise RuntimeError(
+            "bundled operator-help corpus version is invalid"
+        )  # pragma: no cover
     articles: list[OperatorHelpArticle] = []
     for block in text.split("\n## ")[1:]:
         header, remainder = block.split("\n\n", 1)
         match = _ARTICLE_HEADER.fullmatch(header.strip())
         if match is None:
-            raise RuntimeError("bundled operator-help article header is invalid")  # pragma: no cover
+            raise RuntimeError(
+                "bundled operator-help article header is invalid"
+            )  # pragma: no cover
         keywords_line, sources_line, body = remainder.split("\n\n", 2)
         if not keywords_line.startswith("Keywords:") or not sources_line.startswith(
             "Sources:"
         ):
-            raise RuntimeError("bundled operator-help metadata is invalid")  # pragma: no cover
+            raise RuntimeError(
+                "bundled operator-help metadata is invalid"
+            )  # pragma: no cover
         keywords = tuple(
             item.strip() for item in keywords_line.removeprefix("Keywords:").split(",")
         )
@@ -151,7 +157,9 @@ def operator_help_articles() -> tuple[OperatorHelpArticle, ...]:
         )
     identifiers = [article.article_id for article in articles]
     if not identifiers or len(set(identifiers)) != len(identifiers):
-        raise RuntimeError("bundled operator-help identifiers are invalid")  # pragma: no cover
+        raise RuntimeError(
+            "bundled operator-help identifiers are invalid"
+        )  # pragma: no cover
     return tuple(articles)
 
 

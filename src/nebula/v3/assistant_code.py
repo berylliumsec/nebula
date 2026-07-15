@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import hashlib
 import re
 from dataclasses import dataclass
@@ -97,6 +99,13 @@ def utf8_slice(value: str, start: int | None, end: int | None) -> str:
     try:
         return encoded[start:end].decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
+        record_caught_exception(
+            "chat",
+            "chat.assistant_code.caught_failure_001",
+            "A handled chat operation raised an exception.",
+            exc,
+            stage="assistant_code",
+        )
         raise ValueError("selection offsets split a UTF-8 character") from exc
 
 

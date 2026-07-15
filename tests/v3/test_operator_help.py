@@ -33,8 +33,7 @@ def test_bundled_operator_help_is_complete_auditable_and_documented():
     assert len({article.chunk_id for article in articles}) == len(articles)
     assert all(article.keywords and article.sources for article in articles)
     assert all(
-        "Implementation references:" in article.reference_text
-        for article in articles
+        "Implementation references:" in article.reference_text for article in articles
     )
 
     guide = (ROOT / "docs/NEBULA3.md").read_text(encoding="utf-8")

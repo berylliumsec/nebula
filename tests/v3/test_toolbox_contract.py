@@ -413,9 +413,7 @@ def test_catalog_canonicalizes_model_command_paths_without_ambiguous_guessing(
     gobuster["commands"].append(directory_command)
 
     assert catalog.canonical_command_path("gobuster", ["dir"]) == ["dir"]
-    assert catalog.canonical_command_path("gobuster", ["gobuster", "dir"]) == [
-        "dir"
-    ]
+    assert catalog.canonical_command_path("gobuster", ["gobuster", "dir"]) == ["dir"]
     with pytest.raises(ToolInterfaceError, match="no command path 'invented'"):
         catalog.canonical_command_path("gobuster", ["invented"])
     with pytest.raises(ToolInterfaceError, match="invalid command path"):

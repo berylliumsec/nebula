@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import asyncio
 import base64
 import binascii
@@ -10,10 +12,11 @@ import json
 import re
 import secrets
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable, Literal, Mapping
 from urllib.parse import quote
 from uuid import NAMESPACE_URL, uuid5
 
@@ -30,6 +33,7 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -69,6 +73,20 @@ from .container_terminal import (
     TERMINAL_MAX_DURATION_SECONDS,
 )
 from .database import Database
+from .diagnostics import (
+    DiagnosticManager,
+    current_operation_id,
+    current_request_id,
+    diagnostic_context,
+    diagnostic_error_feature,
+    diagnostic_error_id,
+    gather_diagnostic,
+    get_diagnostics,
+    install_asyncio_exception_hook,
+    new_error_id,
+    new_request_id,
+    record_diagnostic,
+)
 from .context import (
     DEFAULT_CONTEXT_WINDOW,
     ContextCompactor,
@@ -287,7 +305,14 @@ def _websocket_protocol_secret(
         return base64.urlsafe_b64decode(
             matches[0] + "=" * (-len(matches[0]) % 4)
         ).decode("utf-8")
-    except (ValueError, UnicodeDecodeError, binascii.Error):
+    except (ValueError, UnicodeDecodeError, binascii.Error) as caught_error:
+        record_caught_exception(
+            "api",
+            "api.api.caught_failure_001",
+            "A handled api operation raised an exception.",
+            caught_error,
+            stage="api",
+        )
         return None
 
 
@@ -298,6 +323,13 @@ class SpaStaticFiles(StaticFiles):
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_002",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             is_navigation = (
                 exc.status_code == 404
                 and scope.get("method") in {"GET", "HEAD"}
@@ -405,10 +437,18 @@ class MissionStartRequest(NebulaModel):
         if self.backend == RunBackend.NATIVE:
             if not self.provider_id or not self.model:
                 raise ValueError("native missions require provider_id and model")
-            if self.harness_profile_id or self.harness_session_id or self.mcp_server_ids:
-                raise ValueError("native missions cannot include harness runtime fields")
+            if (
+                self.harness_profile_id
+                or self.harness_session_id
+                or self.mcp_server_ids
+            ):
+                raise ValueError(
+                    "native missions cannot include harness runtime fields"
+                )
             if self.allow_cloud_tool_results:
-                raise ValueError("native missions use their existing tool-result policy")
+                raise ValueError(
+                    "native missions use their existing tool-result policy"
+                )
         elif not self.harness_profile_id or self.provider_id:
             raise ValueError(
                 "harness missions require harness_profile_id and no provider_id"
@@ -516,6 +556,98 @@ class ReportRenderRequest(NebulaModel):
     report_revision: int = Field(ge=1)
 
 
+class DiagnosticsSettingsRequest(NebulaModel):
+    schema_: Literal["nebula.diagnostics-settings/v1"] = Field(
+        default="nebula.diagnostics-settings/v1", alias="schema"
+    )
+    global_level: Literal["debug", "info", "warning", "error", "critical"]
+    feature_levels: dict[
+        str, Literal["debug", "info", "warning", "error", "critical"]
+    ] = Field(default_factory=dict, max_length=64)
+
+
+class BrowserDiagnosticStackFrame(NebulaModel):
+    module: str = Field(min_length=1, max_length=128)
+    function: str = Field(min_length=1, max_length=128)
+    line: int = Field(ge=0, le=10_000_000)
+
+
+class BrowserDiagnosticEvent(NebulaModel):
+    schema_: Literal["nebula.diagnostic/v1"] = Field(
+        default="nebula.diagnostic/v1", alias="schema"
+    )
+    level: Literal["debug", "info", "warning", "error", "critical"]
+    feature: Literal["interface"] = "interface"
+    event_code: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$",
+    )
+    message: str = Field(min_length=1, max_length=2_048)
+    request_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    operation_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    parent_operation_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    error_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    project_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    run_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    execution_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    session_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    outcome: str | None = Field(default=None, max_length=64)
+    stage: str | None = Field(default=None, max_length=128)
+    duration_ms: float | None = Field(default=None, ge=0, le=86_400_000)
+    retryable: bool | None = None
+    safe_failure_cause: str | None = Field(default=None, max_length=2_048)
+    exception_type: str | None = Field(default=None, min_length=1, max_length=128)
+    stack_frames: list[BrowserDiagnosticStackFrame] = Field(
+        default_factory=list, max_length=32
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict, max_length=64)
+
+
+class BrowserDiagnosticBatch(NebulaModel):
+    events: list[BrowserDiagnosticEvent] = Field(min_length=1, max_length=100)
+
+
 def create_app(
     store: NebulaStore | None = None,
     *,
@@ -539,6 +671,8 @@ def create_app(
     execution_ai_service: ExecutionAIService | None = None,
     credential_store: CredentialStore | None = None,
     bootstrap_workspace: bool = False,
+    diagnostic_manager: DiagnosticManager | None = None,
+    allow_browser_diagnostic_events: bool = False,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -558,6 +692,79 @@ def create_app(
         raise ValueError(
             "pass either mission_service or mission_checkpoint_path, not both"
         )
+    diagnostics = diagnostic_manager or get_diagnostics()
+
+    def emit_diagnostic(
+        level: str,
+        feature: str,
+        event_code: str,
+        message: str,
+        **fields: Any,
+    ) -> str | None:
+        if diagnostics is not None:
+            return diagnostics.record(level, feature, event_code, message, **fields)
+        return record_diagnostic(level, feature, event_code, message, **fields)
+
+    def stream_error_frame(
+        *,
+        feature: str,
+        code: str,
+        detail: str,
+        exception: BaseException | None = None,
+        retryable: bool = False,
+        expected: bool = False,
+        request_id: str | None = None,
+        session_id: str | None = None,
+        execution_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record and return the compatible safe WebSocket/SSE error envelope."""
+
+        level = "warning" if expected else "error"
+        existing_error_id = (
+            diagnostic_error_id(exception)
+            if exception is not None and level == "error"
+            else None
+        )
+        error_id = existing_error_id
+        if existing_error_id is None:
+            error_id = emit_diagnostic(
+                level,
+                feature,
+                f"{feature}.stream.rejected"
+                if expected
+                else f"{feature}.stream.failed",
+                f"A {feature.replace('-', ' ')} stream could not continue.",
+                outcome="denied" if expected else "failure",
+                stage="stream",
+                retryable=retryable,
+                safe_failure_cause=(
+                    "The stream frame was rejected safely."
+                    if expected
+                    else "The streaming operation failed."
+                ),
+                exception=exception,
+                request_id=request_id or current_request_id(),
+                session_id=session_id,
+                execution_id=execution_id,
+                run_id=run_id,
+                metadata={"code": code},
+            )
+        frame: dict[str, Any] = {
+            "type": "error",
+            "code": code,
+            "detail": detail,
+            "feature": feature,
+            "retryable": retryable,
+            "help_article": help_article_for(feature, code),
+        }
+        correlation_request = request_id or current_request_id()
+        if correlation_request:
+            frame["request_id"] = correlation_request
+        if error_id:
+            frame["error_id"] = error_id
+        return frame
+
     if bootstrap_workspace:
         bootstrap_scratch_project(store)
     executable_missions_enabled = (
@@ -596,6 +803,13 @@ def create_app(
                 return provider_from_profile(profile, credentials.resolve)
             return provider_from_profile(profile)
         except CredentialError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_003",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise ProviderError(str(exc)) from exc
 
     def chat_provider_factory(profile: ProviderProfile):
@@ -713,31 +927,123 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        setup.start()
-        if container_terminals is not None:
-            await container_terminals.startup()
-        if executions is not None:
-            await executions.startup()
-        if report_renders is not None:
-            await report_renders.startup()
-        if execution_ai is not None:
-            await execution_ai.startup()
-        await harness_runtime.startup()
-        await missions.startup()
+        install_asyncio_exception_hook()
+        started: list[tuple[str, str, Callable[[], Any]]] = []
+
+        async def start_component(
+            feature: str,
+            component: str,
+            startup: Callable[[], Any],
+            shutdown: Callable[[], Any],
+        ) -> None:
+            try:
+                result = startup()
+                if asyncio.iscoroutine(result):
+                    await result
+            except BaseException as exc:
+                emit_diagnostic(
+                    "critical",
+                    feature,
+                    f"{feature}.{component}.startup_failed",
+                    f"{component.replace('-', ' ').title()} could not start.",
+                    outcome="failure",
+                    stage="startup",
+                    retryable=True,
+                    exception=exc,
+                    metadata={"component": component},
+                )
+                raise
+            started.append((feature, component, shutdown))
+            emit_diagnostic(
+                "info",
+                feature,
+                f"{feature}.{component}.started",
+                f"{component.replace('-', ' ').title()} started.",
+                outcome="success",
+                stage="startup",
+                metadata={"component": component},
+            )
+
+        async def stop_components() -> list[BaseException]:
+            failures: list[BaseException] = []
+            while started:
+                feature, component, shutdown = started.pop()
+                try:
+                    result = shutdown()
+                    if asyncio.iscoroutine(result):
+                        await result
+                except BaseException as exc:
+                    failures.append(exc)
+                    emit_diagnostic(
+                        "error",
+                        feature,
+                        f"{feature}.{component}.cleanup_failed",
+                        f"{component.replace('-', ' ').title()} cleanup did not complete.",
+                        outcome="failure",
+                        stage="shutdown",
+                        retryable=True,
+                        exception=exc,
+                        metadata={"component": component},
+                    )
+                else:
+                    emit_diagnostic(
+                        "info",
+                        feature,
+                        f"{feature}.{component}.stopped",
+                        f"{component.replace('-', ' ').title()} stopped.",
+                        outcome="success",
+                        stage="shutdown",
+                        metadata={"component": component},
+                    )
+            return failures
+
+        try:
+            await start_component("setup", "coordinator", setup.start, setup.shutdown)
+            if container_terminals is not None:
+                await start_component(
+                    "terminal",
+                    "container-service",
+                    container_terminals.startup,
+                    container_terminals.shutdown,
+                )
+            if executions is not None:
+                await start_component(
+                    "executions", "service", executions.startup, executions.shutdown
+                )
+            if report_renders is not None:
+                await start_component(
+                    "reports",
+                    "renderer",
+                    report_renders.startup,
+                    report_renders.shutdown,
+                )
+            if execution_ai is not None:
+                await start_component(
+                    "executions",
+                    "ai-service",
+                    execution_ai.startup,
+                    execution_ai.shutdown,
+                )
+            await start_component(
+                "harnesses",
+                "runtime",
+                harness_runtime.startup,
+                harness_runtime.shutdown,
+            )
+            await start_component(
+                "missions", "service", missions.startup, missions.shutdown
+            )
+        except BaseException:
+            await stop_components()
+            raise
         try:
             yield
         finally:
-            if executions is not None:
-                await executions.shutdown()
-            if container_terminals is not None:
-                await container_terminals.shutdown()
-            await harness_runtime.shutdown()
-            await missions.shutdown()
-            if report_renders is not None:
-                await report_renders.shutdown()
-            if execution_ai is not None:
-                await execution_ai.shutdown()
-            await setup.shutdown()
+            failures = await stop_components()
+            if failures:
+                raise RuntimeError(
+                    f"{len(failures)} Nebula Core service cleanup operation(s) failed"
+                ) from failures[0]
 
     app = FastAPI(
         title="Nebula 3 Core API",
@@ -749,6 +1055,8 @@ def create_app(
     app.state.artifact_store = artifact_store
     app.state.auth_token = token
     app.state.allow_unauthenticated = allow_unauthenticated
+    app.state.diagnostics = diagnostics
+    app.state.allow_browser_diagnostic_events = allow_browser_diagnostic_events
     app.state.mission_service = missions
     app.state.harness_runtime_service = harness_runtime
     app.state.mcp_probe_service = mcp_probes
@@ -779,9 +1087,343 @@ def create_app(
             "Content-Type",
             "If-Match",
             "Last-Event-ID",
+            "X-Nebula-Operation-ID",
             "X-Nebula-Sensitive-Data-Acknowledged",
         ],
+        expose_headers=["X-Request-ID"],
     )
+
+    route_feature_by_tag = {
+        "administration": "storage",
+        "approvals": "missions",
+        "artifacts": "evidence",
+        "chat": "chat",
+        "chat-messages": "chat",
+        "chat-sessions": "chat",
+        "chat-turns": "chat",
+        "container-terminal": "terminal",
+        "context-snapshots": "knowledge",
+        "credentials": "providers",
+        "diagnostics": "diagnostics",
+        "engagement-tool-assignments": "toolbox",
+        "engagements": "projects",
+        "evidence": "evidence",
+        "execution-ai": "executions",
+        "executions": "executions",
+        "exports": "storage",
+        "findings": "findings",
+        "generated-drafts": "executions",
+        "harness-sessions": "harnesses",
+        "harness-turns": "harnesses",
+        "harnesses": "harnesses",
+        "knowledge": "knowledge",
+        "mcp": "harnesses",
+        "mcp-servers": "harnesses",
+        "observations": "notes",
+        "operator-executions": "executions",
+        "operator-profiles": "projects",
+        "overview": "projects",
+        "providers": "providers",
+        "report-renders": "reports",
+        "reports": "reports",
+        "runner-profiles": "sandbox",
+        "runners": "sandbox",
+        "runs": "missions",
+        "setup": "setup",
+        "source-snapshots": "knowledge",
+        "system": "api",
+        "tasks": "missions",
+        "agent-attempts": "missions",
+        "tool-calls": "missions",
+        "tool-pack-installations": "toolbox",
+        "tool-packs": "toolbox",
+        "workspace": "workspace",
+        **{
+            tag: "projects"
+            for tag in (
+                "advisories",
+                "assets",
+                "correlations",
+                "identities",
+                "remediations",
+                "scope-policies",
+                "services",
+                "software-components",
+            )
+        },
+    }
+
+    def request_feature(request: Request) -> str:
+        route = request.scope.get("route")
+        for tag in getattr(route, "tags", ()):
+            feature = route_feature_by_tag.get(str(tag))
+            if feature:
+                return feature
+        return "api"
+
+    def exception_feature(exc: BaseException, request: Request | None = None) -> str:
+        if isinstance(
+            exc,
+            (
+                MissionConfigurationError,
+                MissionCapacityError,
+                MissionStateError,
+                MissionServiceUnavailable,
+            ),
+        ):
+            return "missions"
+        if isinstance(exc, (HarnessError, McpProbeError)):
+            return "harnesses"
+        if isinstance(exc, ToolPlatformError):
+            return "toolbox"
+        if isinstance(exc, ContainerTerminalError):
+            return "terminal"
+        if isinstance(exc, (ExecutionServiceError, ExecutionAIError)):
+            return "executions"
+        if isinstance(exc, ReportRenderError):
+            return "reports"
+        if isinstance(exc, ArtifactStoreError):
+            return "storage"
+        if isinstance(exc, ExportError):
+            return "evidence"
+        if isinstance(exc, ChatError):
+            return "chat"
+        if isinstance(exc, ProviderError):
+            return "providers"
+        if isinstance(exc, (NotFoundError, ConflictError)):
+            return request_feature(request) if request is not None else "projects"
+        if request is not None and isinstance(
+            exc,
+            (HTTPException, RequestValidationError, ValidationError, ValueError),
+        ):
+            return request_feature(request)
+        return "api"
+
+    def exception_code(exc: BaseException, feature: str) -> str:
+        supplied = getattr(exc, "code", None)
+        if isinstance(supplied, str) and re.fullmatch(
+            r"[a-z][a-z0-9._-]{2,159}", supplied
+        ):
+            return supplied
+        name = re.sub(r"(?<!^)(?=[A-Z])", "_", type(exc).__name__).lower()
+        return f"{feature}.{name}"
+
+    def help_article_for(feature: str, code: str) -> str | None:
+        if feature in {"storage", "diagnostics", "evidence"}:
+            return "diagnostics"
+        if feature == "terminal":
+            return "human-terminal"
+        if feature == "setup":
+            return "runner-setup"
+        if feature == "toolbox":
+            return "toolbox"
+        if feature == "harnesses":
+            return "harnesses"
+        if code.startswith("api."):
+            return "core-startup"
+        return None
+
+    def diagnostic_error_response(
+        request: Request,
+        exc: BaseException,
+        *,
+        status_code: int,
+        detail: Any,
+        code: str | None = None,
+        retryable: bool = False,
+        headers: Mapping[str, str] | None = None,
+    ) -> JSONResponse:
+        feature = diagnostic_error_feature(exc) or exception_feature(exc, request)
+        explicit_code = code is not None
+        stable_code = code or exception_code(exc, feature)
+        severity = "error" if status_code >= 500 else "warning"
+        request_id = getattr(request.state, "request_id", None)
+        existing_error_id = diagnostic_error_id(exc) if severity == "error" else None
+        error_id = existing_error_id or (
+            new_error_id() if severity == "error" else None
+        )
+        recorded_id = existing_error_id
+        if existing_error_id is None:
+            recorded_id = emit_diagnostic(
+                severity,
+                feature,
+                f"{stable_code}.request_failed",
+                f"A {feature.replace('-', ' ')} request could not complete.",
+                error_id=error_id,
+                request_id=request_id,
+                outcome="failure" if severity == "error" else "denied",
+                stage="request",
+                retryable=retryable,
+                safe_failure_cause=(
+                    "A service dependency or internal operation failed."
+                    if status_code >= 500
+                    else "The request was rejected safely."
+                ),
+                exception=exc,
+                metadata={"http_status": status_code, "code": stable_code},
+            )
+        request.state.diagnostic_error_recorded = True
+        request.state.diagnostic_error_id = recorded_id or error_id
+        content: dict[str, Any] = {"detail": detail}
+        if explicit_code:
+            content["code"] = stable_code
+        # Keep direct embedding/tests compatible when no diagnostics owner was
+        # configured. Production Core always has one.
+        if diagnostics is not None:
+            content.update(
+                {
+                    "code": stable_code,
+                    "feature": feature,
+                    "request_id": request_id,
+                    "retryable": retryable,
+                    "help_article": help_article_for(feature, stable_code),
+                }
+            )
+            if recorded_id or error_id:
+                content["error_id"] = recorded_id or error_id
+        elif retryable:
+            content["retryable"] = True
+        return JSONResponse(
+            status_code=status_code,
+            content=jsonable_encoder(content),
+            headers=dict(headers or {}),
+        )
+
+    @app.middleware("http")
+    async def diagnostic_request_middleware(
+        request: Request, call_next: Callable[[Request], Any]
+    ) -> Response:
+        request_id = new_request_id()
+        request.state.request_id = request_id
+        request.state.diagnostic_error_recorded = False
+        operation_id = request.headers.get("X-Nebula-Operation-ID")
+        started = time.monotonic()
+        with diagnostic_context(request_id=request_id, operation_id=operation_id):
+            emit_diagnostic(
+                "info",
+                "api",
+                "api.request.started",
+                "An API request started.",
+                outcome="started",
+                metadata={"method": request.method},
+            )
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                error_id = diagnostic_error_id(exc)
+                failure_feature = diagnostic_error_feature(exc) or request_feature(
+                    request
+                )
+                if error_id is None:
+                    error_id = new_error_id()
+                    emit_diagnostic(
+                        "error",
+                        failure_feature,
+                        f"{failure_feature}.request.unhandled_exception",
+                        "An API request failed because of an unhandled exception.",
+                        error_id=error_id,
+                        outcome="failure",
+                        stage="dispatch",
+                        duration_ms=(time.monotonic() - started) * 1000,
+                        retryable=False,
+                        exception=exc,
+                        metadata={"method": request.method, "http_status": 500},
+                    )
+                content: dict[str, Any] = {
+                    "detail": "The operation failed unexpectedly. No verified recovery procedure is available.",
+                }
+                if diagnostics is not None:
+                    content.update(
+                        {
+                            "code": "api.unhandled_exception",
+                            "feature": failure_feature,
+                            "request_id": request_id,
+                            "error_id": error_id,
+                            "retryable": False,
+                            "help_article": None,
+                        }
+                    )
+                response = JSONResponse(status_code=500, content=content)
+                request.state.diagnostic_error_recorded = True
+                request.state.diagnostic_error_id = error_id
+            route = request.scope.get("route")
+            route_template = getattr(route, "path", "unmatched")
+            feature = request_feature(request)
+            status_code = response.status_code
+            if status_code >= 400:
+                emit_diagnostic(
+                    "error" if status_code >= 500 else "warning",
+                    "api",
+                    "api.request.failed"
+                    if status_code >= 500
+                    else "api.request.rejected",
+                    "An API request returned a failure response.",
+                    outcome="failure" if status_code >= 500 else "denied",
+                    stage="response",
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    retryable=status_code >= 500,
+                    error_id=(
+                        getattr(request.state, "diagnostic_error_id", None)
+                        if status_code >= 500
+                        else None
+                    ),
+                    metadata={
+                        "method": request.method,
+                        "route": route_template,
+                        "http_status": status_code,
+                    },
+                )
+            else:
+                emit_diagnostic(
+                    "info",
+                    "api",
+                    "api.request.completed",
+                    "An API request completed.",
+                    outcome="success" if status_code < 400 else "failure",
+                    stage="response",
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    metadata={
+                        "method": request.method,
+                        "route": route_template,
+                        "http_status": status_code,
+                    },
+                )
+            if feature not in {"api", "diagnostics"}:
+                if status_code < 400:
+                    emit_diagnostic(
+                        "info",
+                        feature,
+                        f"{feature}.request.completed",
+                        f"A {feature.replace('-', ' ')} operation completed.",
+                        outcome="success",
+                        stage="response",
+                        duration_ms=(time.monotonic() - started) * 1000,
+                        metadata={
+                            "method": request.method,
+                            "route": route_template,
+                            "http_status": status_code,
+                        },
+                    )
+                elif not request.state.diagnostic_error_recorded:
+                    emit_diagnostic(
+                        "error" if status_code >= 500 else "warning",
+                        feature,
+                        f"{feature}.request.failed"
+                        if status_code >= 500
+                        else f"{feature}.request.rejected",
+                        f"A {feature.replace('-', ' ')} operation could not complete.",
+                        outcome="failure" if status_code >= 500 else "denied",
+                        stage="response",
+                        duration_ms=(time.monotonic() - started) * 1000,
+                        retryable=status_code >= 500,
+                        metadata={
+                            "method": request.method,
+                            "route": route_template,
+                            "http_status": status_code,
+                        },
+                    )
+            response.headers["X-Request-ID"] = request_id
+            return response
 
     bearer = HTTPBearer(auto_error=False)
 
@@ -803,156 +1445,370 @@ def create_app(
         return credentials.credentials
 
     @app.exception_handler(NotFoundError)
-    async def not_found_handler(_: Request, exc: NotFoundError) -> JSONResponse:
-        return JSONResponse(status_code=404, content={"detail": str(exc)})
+    async def not_found_handler(request: Request, exc: NotFoundError) -> JSONResponse:
+        return diagnostic_error_response(request, exc, status_code=404, detail=str(exc))
 
     @app.exception_handler(ConflictError)
-    async def conflict_handler(_: Request, exc: ConflictError) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    async def conflict_handler(request: Request, exc: ConflictError) -> JSONResponse:
+        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=422,
+            detail=jsonable_encoder(exc.errors()),
+            code="api.request_validation",
+        )
 
     @app.exception_handler(ValidationError)
-    async def validation_handler(_: Request, exc: ValidationError) -> JSONResponse:
-        return JSONResponse(
+    async def validation_handler(
+        request: Request, exc: ValidationError
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request,
+            exc,
             status_code=422,
-            content={"detail": jsonable_encoder(exc.errors(include_url=False))},
+            detail=jsonable_encoder(exc.errors(include_url=False)),
+            code="api.model_validation",
         )
 
     @app.exception_handler(ValueError)
-    async def value_error_handler(_: Request, exc: ValueError) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"detail": str(exc)})
+    async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+        return diagnostic_error_response(request, exc, status_code=422, detail=str(exc))
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(
+        request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=f"api.http_{exc.status_code}",
+            retryable=exc.status_code >= 500,
+            headers=exc.headers,
+        )
 
     @app.exception_handler(ArtifactStoreError)
     async def artifact_error_handler(
-        _: Request, exc: ArtifactStoreError
+        request: Request, exc: ArtifactStoreError
     ) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
 
     @app.exception_handler(MissionConfigurationError)
     async def mission_configuration_handler(
-        _: Request, exc: MissionConfigurationError
+        request: Request, exc: MissionConfigurationError
     ) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"detail": str(exc)})
+        return diagnostic_error_response(request, exc, status_code=422, detail=str(exc))
 
     @app.exception_handler(MissionCapacityError)
     async def mission_capacity_handler(
-        _: Request, exc: MissionCapacityError
+        request: Request, exc: MissionCapacityError
     ) -> JSONResponse:
-        return JSONResponse(status_code=429, content={"detail": str(exc)})
+        return diagnostic_error_response(
+            request, exc, status_code=429, detail=str(exc), retryable=True
+        )
 
     @app.exception_handler(MissionStateError)
-    async def mission_state_handler(_: Request, exc: MissionStateError) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    async def mission_state_handler(
+        request: Request, exc: MissionStateError
+    ) -> JSONResponse:
+        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
 
     @app.exception_handler(MissionServiceUnavailable)
     async def mission_unavailable_handler(
-        _: Request, exc: MissionServiceUnavailable
+        request: Request, exc: MissionServiceUnavailable
     ) -> JSONResponse:
-        return JSONResponse(status_code=503, content={"detail": str(exc)})
+        return diagnostic_error_response(
+            request, exc, status_code=503, detail=str(exc), retryable=True
+        )
 
     @app.exception_handler(HarnessConfigurationError)
     async def harness_configuration_handler(
-        _: Request, exc: HarnessConfigurationError
+        request: Request, exc: HarnessConfigurationError
     ) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"detail": str(exc)})
+        return diagnostic_error_response(request, exc, status_code=422, detail=str(exc))
 
     @app.exception_handler(HarnessStateError)
     async def harness_state_handler(
-        _: Request, exc: HarnessStateError
+        request: Request, exc: HarnessStateError
     ) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
 
     @app.exception_handler(HarnessUnavailableError)
     async def harness_unavailable_handler(
-        _: Request, exc: HarnessUnavailableError
+        request: Request, exc: HarnessUnavailableError
     ) -> JSONResponse:
-        return JSONResponse(status_code=503, content={"detail": str(exc)})
+        return diagnostic_error_response(
+            request, exc, status_code=503, detail=str(exc), retryable=True
+        )
 
     @app.exception_handler(HarnessError)
-    async def harness_error_handler(_: Request, exc: HarnessError) -> JSONResponse:
-        return JSONResponse(status_code=502, content={"detail": str(exc)})
+    async def harness_error_handler(
+        request: Request, exc: HarnessError
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request, exc, status_code=502, detail=str(exc), retryable=True
+        )
 
     @app.exception_handler(McpProbeError)
-    async def mcp_probe_error_handler(_: Request, exc: McpProbeError) -> JSONResponse:
-        return JSONResponse(status_code=502, content={"detail": str(exc)})
+    async def mcp_probe_error_handler(
+        request: Request, exc: McpProbeError
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request, exc, status_code=502, detail=str(exc), retryable=True
+        )
 
     @app.exception_handler(ToolPlatformError)
     async def tool_platform_error_handler(
-        _: Request, exc: ToolPlatformError
+        request: Request, exc: ToolPlatformError
     ) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
 
     @app.exception_handler(ExecutionServiceError)
     async def execution_error_handler(
-        _: Request, exc: ExecutionServiceError
+        request: Request, exc: ExecutionServiceError
     ) -> JSONResponse:
-        return JSONResponse(
+        return diagnostic_error_response(
+            request,
+            exc,
             status_code=exc.status_code,
-            content={"detail": exc.detail, "code": exc.code},
+            detail=exc.detail,
+            code=exc.code,
+            retryable=exc.status_code >= 500,
         )
 
     @app.exception_handler(ContainerTerminalError)
     async def container_terminal_error_handler(
-        _: Request, exc: ContainerTerminalError
+        request: Request, exc: ContainerTerminalError
     ) -> JSONResponse:
-        return JSONResponse(
+        return diagnostic_error_response(
+            request,
+            exc,
             status_code=exc.status_code,
-            content={"detail": exc.detail, "code": exc.code},
+            detail=exc.detail,
+            code=exc.code,
+            retryable=exc.status_code >= 500,
         )
 
     @app.exception_handler(ReportRenderError)
     async def report_render_error_handler(
-        _: Request, exc: ReportRenderError
+        request: Request, exc: ReportRenderError
     ) -> JSONResponse:
-        return JSONResponse(
+        return diagnostic_error_response(
+            request,
+            exc,
             status_code=exc.status_code,
-            content={"detail": exc.detail, "code": exc.code},
+            detail=exc.detail,
+            code=exc.code,
+            retryable=exc.status_code >= 500,
         )
 
     @app.exception_handler(ExecutionAIError)
     async def execution_ai_error_handler(
-        _: Request, exc: ExecutionAIError
+        request: Request, exc: ExecutionAIError
     ) -> JSONResponse:
-        return JSONResponse(
+        return diagnostic_error_response(
+            request,
+            exc,
             status_code=exc.status_code,
-            content={"detail": exc.detail, "code": exc.code},
+            detail=exc.detail,
+            code=exc.code,
+            retryable=exc.status_code >= 500,
         )
 
     @app.exception_handler(ExportError)
-    async def export_error_handler(_: Request, exc: ExportError) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    async def export_error_handler(request: Request, exc: ExportError) -> JSONResponse:
+        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
 
     @app.exception_handler(ChatHistoryConflict)
     @app.exception_handler(ChatPrivacyError)
-    async def chat_conflict_handler(_: Request, exc: ChatError) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    async def chat_conflict_handler(request: Request, exc: ChatError) -> JSONResponse:
+        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
 
     @app.exception_handler(ChatConfigurationError)
     async def chat_configuration_handler(
-        _: Request, exc: ChatConfigurationError
+        request: Request, exc: ChatConfigurationError
     ) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"detail": str(exc)})
+        return diagnostic_error_response(request, exc, status_code=422, detail=str(exc))
 
     @app.exception_handler(ChatCompactionError)
     async def chat_compaction_handler(
-        _: Request, exc: ChatCompactionError
+        request: Request, exc: ChatCompactionError
     ) -> JSONResponse:
-        return JSONResponse(
+        return diagnostic_error_response(
+            request,
+            exc,
             status_code=503,
-            content={"detail": str(exc), "retryable": True},
+            detail=str(exc),
+            retryable=True,
             headers={"Retry-After": "1"},
         )
 
     @app.exception_handler(ChatError)
     @app.exception_handler(ProviderError)
-    async def chat_provider_handler(_: Request, exc: Exception) -> JSONResponse:
-        return JSONResponse(status_code=502, content={"detail": str(exc)})
+    async def chat_provider_handler(request: Request, exc: Exception) -> JSONResponse:
+        return diagnostic_error_response(
+            request, exc, status_code=502, detail=str(exc), retryable=True
+        )
+
+    def require_diagnostic_manager() -> DiagnosticManager:
+        if diagnostics is None:
+            raise HTTPException(
+                status_code=503,
+                detail="local diagnostics are not initialized for this embedded Core",
+            )
+        return diagnostics
+
+    @app.get(
+        f"{API_PREFIX}/diagnostics/settings",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_diagnostics_settings() -> dict[str, Any]:
+        return require_diagnostic_manager().settings.as_dict()
+
+    @app.put(
+        f"{API_PREFIX}/diagnostics/settings",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def put_diagnostics_settings(
+        request: DiagnosticsSettingsRequest,
+    ) -> dict[str, Any]:
+        manager = require_diagnostic_manager()
+        settings = manager.update_settings(
+            request.model_dump(mode="json", by_alias=True)
+        )
+        return settings.as_dict()
+
+    @app.get(
+        f"{API_PREFIX}/diagnostics/files",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_diagnostics_files() -> dict[str, Any]:
+        manager = require_diagnostic_manager()
+        return {"files": manager.list_files(), "health": manager.status()}
+
+    @app.get(
+        f"{API_PREFIX}/diagnostics/errors",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_diagnostics_errors(
+        feature: str | None = Query(default=None, min_length=1, max_length=64),
+        after: str | None = Query(default=None, min_length=1, max_length=64),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> dict[str, Any]:
+        records = require_diagnostic_manager().recent_errors(
+            feature=feature, after=after, limit=limit
+        )
+        return {"errors": records}
+
+    @app.post(
+        f"{API_PREFIX}/diagnostics/events",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def post_browser_diagnostics(
+        batch: BrowserDiagnosticBatch,
+    ) -> dict[str, Any]:
+        if not allow_browser_diagnostic_events:
+            raise HTTPException(
+                status_code=403,
+                detail="browser diagnostic ingress is disabled outside development mode",
+            )
+        manager = require_diagnostic_manager()
+        error_ids: list[str] = []
+        for event in batch.events:
+            error_id = manager.record(
+                event.level,
+                event.feature,
+                event.event_code,
+                event.message,
+                source="browser",
+                error_id=event.error_id,
+                request_id=event.request_id,
+                operation_id=event.operation_id,
+                parent_operation_id=event.parent_operation_id,
+                project_id=event.project_id,
+                run_id=event.run_id,
+                execution_id=event.execution_id,
+                session_id=event.session_id,
+                outcome=event.outcome,
+                stage=event.stage,
+                duration_ms=event.duration_ms,
+                retryable=event.retryable,
+                safe_failure_cause=event.safe_failure_cause,
+                exception_type=event.exception_type,
+                stack_frames=[frame.model_dump() for frame in event.stack_frames],
+                metadata=event.metadata,
+            )
+            if error_id:
+                error_ids.append(error_id)
+        return {"accepted": len(batch.events), "error_ids": error_ids}
+
+    @app.post(
+        f"{API_PREFIX}/diagnostics/export",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def export_diagnostics() -> FileResponse:
+        manager = require_diagnostic_manager()
+        export_dir = manager.data_dir / "diagnostics-exports"
+        export_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destination = export_dir / f"nebula-diagnostics-{secrets.token_hex(8)}.zip"
+        manager.export(destination)
+
+        def remove_temporary_export() -> None:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError as exc:
+                record_caught_exception(
+                    "api",
+                    "api.api.caught_failure_007",
+                    "A handled api operation raised an exception.",
+                    exc,
+                    stage="api",
+                )
+                manager.record(
+                    "error",
+                    "diagnostics",
+                    "diagnostics.export_cleanup_failed",
+                    "A temporary diagnostics export could not be removed.",
+                    outcome="failure",
+                    stage="export-cleanup",
+                    retryable=True,
+                    exception=exc,
+                )
+
+        return FileResponse(
+            destination,
+            media_type="application/zip",
+            filename="nebula-diagnostics.zip",
+            background=BackgroundTask(remove_temporary_export),
+        )
 
     @app.get(f"{API_PREFIX}/health", tags=["system"])
     async def health(_: str = Depends(require_auth)) -> dict[str, Any]:
         identity = build_metadata()
         setup_status = await setup.status()
+        diagnostic_health = (
+            diagnostics.status()
+            if diagnostics is not None
+            else {
+                "writable": False,
+                "degraded": True,
+            }
+        )
         return {
-            "status": "ok",
+            "status": "degraded" if diagnostic_health["degraded"] else "ok",
             **identity,
             "mode": (
                 "local" if store.database.engine.dialect.name == "sqlite" else "team"
@@ -974,6 +1830,7 @@ def create_app(
                 else "unavailable"
             ),
             "api_version": "v1",
+            "diagnostics": diagnostic_health,
             **store.database.health(),
         }
 
@@ -1011,9 +1868,7 @@ def create_app(
     async def probe_mcp_server(
         profile_id: str, request: McpProbeRequest
     ) -> McpProbeReport:
-        return await mcp_probes.probe(
-            profile_id, engagement_id=request.engagement_id
-        )
+        return await mcp_probes.probe(profile_id, engagement_id=request.engagement_id)
 
     @app.get(
         f"{API_PREFIX}/setup/status",
@@ -1039,6 +1894,13 @@ def create_app(
             try:
                 cursor = max(cursor, int(last_event_id))
             except ValueError as exc:
+                record_caught_exception(
+                    "api",
+                    "api.api.caught_failure_008",
+                    "A handled api operation raised an exception.",
+                    exc,
+                    stage="api",
+                )
                 raise HTTPException(
                     status_code=400,
                     detail="Last-Event-ID must be a non-negative integer",
@@ -1050,14 +1912,65 @@ def create_app(
                 )
 
         async def event_stream() -> Any:
-            async for event in setup.events(cursor, follow=follow):
-                if event is None:
-                    yield b": keep-alive\n\n"
-                else:
-                    yield _setup_server_sent_event(event)
+            started_at = time.monotonic()
+            event_count = 0
+            outcome = "success"
+            emit_diagnostic(
+                "info",
+                "setup",
+                "setup.stream.started",
+                "The setup event stream started.",
+                outcome="started",
+                stage="stream",
+                metadata={"sequence_start": cursor},
+            )
+            try:
+                async for event in setup.events(cursor, follow=follow):
+                    if event is None:
+                        yield b": keep-alive\n\n"
+                    else:
+                        event_count += 1
+                        yield _setup_server_sent_event(event)
+            except asyncio.CancelledError as exc:
+                outcome = "cancelled"
+                record_caught_exception(
+                    "setup",
+                    "setup.stream.cancelled",
+                    "The setup event stream disconnected.",
+                    exc,
+                    stage="stream",
+                )
+                raise
+            except Exception as exc:
+                outcome = "failure"
+                yield _server_sent_event(
+                    "error",
+                    stream_error_frame(
+                        feature="setup",
+                        code="setup_stream_failed",
+                        detail="setup event stream failed",
+                        exception=exc,
+                        retryable=True,
+                    ),
+                )
+            finally:
+                emit_diagnostic(
+                    "info",
+                    "setup",
+                    "setup.stream.ended",
+                    "The setup event stream ended.",
+                    outcome=outcome,
+                    stage="stream",
+                    duration_ms=(time.monotonic() - started_at) * 1000,
+                    metadata={"count": event_count, "sequence_start": cursor},
+                )
 
         return StreamingResponse(
-            event_stream(),
+            _correlated_stream(
+                event_stream(),
+                request_id=current_request_id(),
+                operation_id=current_operation_id(),
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-store",
@@ -1078,6 +1991,13 @@ def create_app(
         try:
             return await operation
         except SetupServiceError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_009",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(
                 status_code=exc.status_code,
                 detail={"code": exc.code, "message": str(exc)},
@@ -1211,6 +2131,13 @@ def create_app(
                 actor_id=active_operator_id(),
             )
         except TerminalRecordingToolsConflict as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_010",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise ContainerTerminalError(exc.code, str(exc)) from exc
 
     @app.get(
@@ -1327,6 +2254,13 @@ def create_app(
         try:
             return terminal_commands.set_enabled(engagement_id, enabled=request.enabled)
         except TerminalAuditImmutableError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_011",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise ContainerTerminalError(exc.code, str(exc)) from exc
 
     @app.delete(
@@ -1341,6 +2275,13 @@ def create_app(
         try:
             cleared = terminal_commands.clear(engagement_id)
         except TerminalAuditImmutableError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_012",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise ContainerTerminalError(exc.code, str(exc)) from exc
         return TerminalCommandHistoryClearResult(
             engagement_id=engagement_id, cleared=cleared
@@ -1389,9 +2330,24 @@ def create_app(
 
     @app.websocket(f"{API_PREFIX}/container-terminals/{{session_id}}/ws")
     async def container_terminal_socket(websocket: WebSocket, session_id: str) -> None:
+        request_id = new_request_id()
         service = container_terminals
         if service is None:
-            await websocket.close(code=4503, reason="container terminal unavailable")
+            error_id = emit_diagnostic(
+                "error",
+                "terminal",
+                "terminal.stream.unavailable",
+                "The container terminal stream is unavailable.",
+                outcome="failure",
+                stage="stream-negotiation",
+                retryable=True,
+                request_id=request_id,
+                session_id=session_id,
+            )
+            reason = "container terminal unavailable"
+            if error_id:
+                reason = f"{reason}; reference {error_id}"[:120]
+            await websocket.close(code=4503, reason=reason)
             return
         offered_protocols = [
             value.strip()
@@ -1400,6 +2356,17 @@ def create_app(
         ]
         terminal_protocol = "nebula.container-terminal.v1"
         if terminal_protocol not in offered_protocols:
+            emit_diagnostic(
+                "warning",
+                "terminal",
+                "terminal.stream.protocol_rejected",
+                "A terminal stream requested an unsupported protocol.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                session_id=session_id,
+                metadata={"reason_code": "protocol-required"},
+            )
             await websocket.close(code=4406, reason="terminal protocol required")
             return
 
@@ -1415,18 +2382,51 @@ def create_app(
             and subprotocol_token
             and not hmac.compare_digest(supplied, subprotocol_token)
         ):
+            emit_diagnostic(
+                "warning",
+                "terminal",
+                "terminal.stream.authentication_denied",
+                "Terminal stream authentication was denied.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                session_id=session_id,
+                metadata={"reason_code": "conflicting-authentication"},
+            )
             await websocket.close(code=4401, reason="conflicting authentication tokens")
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
             not supplied or not hmac.compare_digest(supplied, token)
         ):
+            emit_diagnostic(
+                "warning",
+                "terminal",
+                "terminal.stream.authentication_denied",
+                "Terminal stream authentication was denied.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                session_id=session_id,
+                metadata={"reason_code": "authentication-required"},
+            )
             await websocket.close(code=4401, reason="valid bearer token required")
             return
         ticket = _websocket_protocol_secret(
             offered_protocols, "nebula.ticket.", decode_base64=False
         )
         if not ticket:
+            emit_diagnostic(
+                "warning",
+                "terminal",
+                "terminal.stream.ticket_rejected",
+                "A terminal stream did not provide a valid one-use ticket.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                session_id=session_id,
+                metadata={"reason_code": "ticket-required"},
+            )
             await websocket.close(code=4401, reason="terminal ticket required")
             return
         raw_after_sequence = websocket.query_params.get("after_sequence", "0")
@@ -1435,10 +2435,30 @@ def create_app(
             or not raw_after_sequence.isdecimal()
             or len(raw_after_sequence) > 16
         ):
+            emit_diagnostic(
+                "warning",
+                "terminal",
+                "terminal.stream.replay_rejected",
+                "A terminal replay cursor was malformed.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                session_id=session_id,
+            )
             await websocket.close(code=4400, reason="invalid terminal replay sequence")
             return
         after_sequence = int(raw_after_sequence)
         if after_sequence > 9_007_199_254_740_991:
+            emit_diagnostic(
+                "warning",
+                "terminal",
+                "terminal.stream.replay_rejected",
+                "A terminal replay cursor exceeded the supported range.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                session_id=session_id,
+            )
             await websocket.close(code=4400, reason="invalid terminal replay sequence")
             return
         try:
@@ -1448,6 +2468,16 @@ def create_app(
                 after_sequence=after_sequence,
             )
         except ContainerTerminalError as exc:
+            frame = stream_error_frame(
+                feature="terminal",
+                code=exc.code,
+                detail=exc.detail,
+                exception=exc,
+                retryable=exc.status_code >= 500,
+                expected=exc.status_code < 500,
+                request_id=request_id,
+                session_id=session_id,
+            )
             if exc.status_code == 404:
                 close_code = 4404
             elif exc.code == "terminal_attached":
@@ -1458,11 +2488,33 @@ def create_app(
                 close_code = 4503
             else:
                 close_code = 4400
-            await websocket.close(code=close_code, reason=exc.detail[:120])
+            reference = frame.get("error_id")
+            reason = exc.detail
+            if reference:
+                reason = f"{reason}; reference {reference}"
+            await websocket.close(code=close_code, reason=reason[:120])
             return
 
         await websocket.accept(subprotocol=terminal_protocol)
         tasks: list[asyncio.Task[Any]] = []
+        started_at = time.monotonic()
+        output_count = 0
+        input_count = 0
+        last_sequence = after_sequence
+        emit_diagnostic(
+            "info",
+            "terminal",
+            "terminal.stream.connected",
+            "A terminal stream connected.",
+            outcome="started",
+            stage="stream",
+            request_id=request_id,
+            session_id=session_id,
+            metadata={
+                "sequence_start": after_sequence,
+                "truncated": attachment.replay_truncated,
+            },
+        )
         try:
             await websocket.send_json(
                 {
@@ -1480,9 +2532,12 @@ def create_app(
             )
 
             async def send_events() -> None:
+                nonlocal output_count, last_sequence
                 while True:
                     event = await service.next_event(attachment)
                     if isinstance(event, ContainerTerminalOutput):
+                        output_count += 1
+                        last_sequence = event.sequence
                         await websocket.send_json(
                             {
                                 "type": "output",
@@ -1496,11 +2551,14 @@ def create_app(
                         raise RuntimeError("unsupported terminal broker event")
                     if event.error_code is not None:
                         await websocket.send_json(
-                            {
-                                "type": "error",
-                                "code": event.error_code,
-                                "detail": event.detail or "terminal session ended",
-                            }
+                            stream_error_frame(
+                                feature="terminal",
+                                code=event.error_code,
+                                detail=event.detail or "terminal session ended",
+                                retryable=False,
+                                request_id=request_id,
+                                session_id=session_id,
+                            )
                         )
                     await websocket.send_json(
                         {
@@ -1512,38 +2570,50 @@ def create_app(
                     return
 
             async def receive_input() -> str:
+                nonlocal input_count
                 while True:
                     encoded_message = await websocket.receive_text()
+                    input_count += 1
                     if (
                         len(encoded_message.encode("utf-8", errors="replace"))
                         > MAX_TERMINAL_INPUT_BYTES + 16_384
                     ):
                         await websocket.send_json(
-                            {
-                                "type": "error",
-                                "code": "input_limit",
-                                "detail": "terminal frame exceeds the 1 MiB input boundary",
-                            }
+                            stream_error_frame(
+                                feature="terminal",
+                                code="input_limit",
+                                detail="terminal frame exceeds the 1 MiB input boundary",
+                                expected=True,
+                                request_id=request_id,
+                                session_id=session_id,
+                            )
                         )
                         continue
                     try:
                         message = json.loads(encoded_message)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as caught_error:
                         await websocket.send_json(
-                            {
-                                "type": "error",
-                                "code": "invalid_frame",
-                                "detail": "terminal frame must be valid JSON",
-                            }
+                            stream_error_frame(
+                                feature="terminal",
+                                code="invalid_frame",
+                                detail="terminal frame must be valid JSON",
+                                exception=caught_error,
+                                expected=True,
+                                request_id=request_id,
+                                session_id=session_id,
+                            )
                         )
                         continue
                     if not isinstance(message, dict):
                         await websocket.send_json(
-                            {
-                                "type": "error",
-                                "code": "invalid_frame",
-                                "detail": "terminal frame must be an object",
-                            }
+                            stream_error_frame(
+                                feature="terminal",
+                                code="invalid_frame",
+                                detail="terminal frame must be an object",
+                                expected=True,
+                                request_id=request_id,
+                                session_id=session_id,
+                            )
                         )
                         continue
                     frame_type = message.get("type")
@@ -1551,36 +2621,58 @@ def create_app(
                         value = message.get("data")
                         if not isinstance(value, str):
                             await websocket.send_json(
-                                {
-                                    "type": "error",
-                                    "code": "invalid_frame",
-                                    "detail": "terminal input must be text",
-                                }
+                                stream_error_frame(
+                                    feature="terminal",
+                                    code="invalid_frame",
+                                    detail="terminal input must be text",
+                                    expected=True,
+                                    request_id=request_id,
+                                    session_id=session_id,
+                                )
                             )
                             continue
                         try:
                             data = value.encode("utf-8", errors="strict")
-                        except UnicodeEncodeError:
+                        except UnicodeEncodeError as caught_error:
                             await websocket.send_json(
-                                {
-                                    "type": "error",
-                                    "code": "invalid_frame",
-                                    "detail": "terminal input must be valid UTF-8",
-                                }
+                                stream_error_frame(
+                                    feature="terminal",
+                                    code="invalid_frame",
+                                    detail="terminal input must be valid UTF-8",
+                                    exception=caught_error,
+                                    expected=True,
+                                    request_id=request_id,
+                                    session_id=session_id,
+                                )
                             )
                             continue
                         if len(data) > MAX_TERMINAL_INPUT_BYTES:
                             await websocket.send_json(
-                                {
-                                    "type": "error",
-                                    "code": "input_limit",
-                                    "detail": "terminal input frame exceeds 1 MiB",
-                                }
+                                stream_error_frame(
+                                    feature="terminal",
+                                    code="input_limit",
+                                    detail="terminal input frame exceeds 1 MiB",
+                                    expected=True,
+                                    request_id=request_id,
+                                    session_id=session_id,
+                                )
                             )
                             continue
                         try:
                             await service.write_input(attachment, data)
-                        except ContainerTerminalError:
+                        except ContainerTerminalError as caught_error:
+                            await websocket.send_json(
+                                stream_error_frame(
+                                    feature="terminal",
+                                    code=caught_error.code,
+                                    detail=caught_error.detail,
+                                    exception=caught_error,
+                                    retryable=caught_error.status_code >= 500,
+                                    expected=caught_error.status_code < 500,
+                                    request_id=request_id,
+                                    session_id=session_id,
+                                )
+                            )
                             return "ended"
                     elif frame_type == "resize":
                         columns = message.get("columns")
@@ -1592,41 +2684,66 @@ def create_app(
                             or not isinstance(rows, int)
                         ):
                             await websocket.send_json(
-                                {
-                                    "type": "error",
-                                    "code": "invalid_frame",
-                                    "detail": "terminal dimensions must be integers",
-                                }
+                                stream_error_frame(
+                                    feature="terminal",
+                                    code="invalid_frame",
+                                    detail="terminal dimensions must be integers",
+                                    expected=True,
+                                    request_id=request_id,
+                                    session_id=session_id,
+                                )
                             )
                             continue
                         try:
                             await service.resize(attachment, columns, rows)
                         except ValueError as exc:
                             await websocket.send_json(
-                                {
-                                    "type": "error",
-                                    "code": "invalid_frame",
-                                    "detail": str(exc),
-                                }
+                                stream_error_frame(
+                                    feature="terminal",
+                                    code="invalid_frame",
+                                    detail=str(exc),
+                                    exception=exc,
+                                    expected=True,
+                                    request_id=request_id,
+                                    session_id=session_id,
+                                )
                             )
                             continue
-                        except ContainerTerminalError:
+                        except ContainerTerminalError as caught_error:
+                            await websocket.send_json(
+                                stream_error_frame(
+                                    feature="terminal",
+                                    code=caught_error.code,
+                                    detail=caught_error.detail,
+                                    exception=caught_error,
+                                    retryable=caught_error.status_code >= 500,
+                                    expected=caught_error.status_code < 500,
+                                    request_id=request_id,
+                                    session_id=session_id,
+                                )
+                            )
                             return "ended"
                     elif frame_type == "close":
                         await service.close_attachment(attachment)
                         return "closed"
                     else:
                         await websocket.send_json(
-                            {
-                                "type": "error",
-                                "code": "invalid_frame",
-                                "detail": "unsupported terminal frame type",
-                            }
+                            stream_error_frame(
+                                feature="terminal",
+                                code="invalid_frame",
+                                detail="unsupported terminal frame type",
+                                expected=True,
+                                request_id=request_id,
+                                session_id=session_id,
+                            )
                         )
 
+            # diagnostic-expected: both WebSocket pumps are awaited, their
+            # terminal result is inspected, and cleanup is classified below.
             output_task = asyncio.create_task(
                 send_events(), name=f"container-terminal-output-{session_id}"
             )
+            # diagnostic-expected: paired with output_task in the same wait set.
             input_task = asyncio.create_task(
                 receive_input(), name=f"container-terminal-input-{session_id}"
             )
@@ -1645,25 +2762,101 @@ def create_app(
                             asyncio.shield(output_task),
                             timeout=1,
                         )
-                    except (asyncio.TimeoutError, WebSocketDisconnect, RuntimeError):
+                    except (
+                        asyncio.TimeoutError,
+                        WebSocketDisconnect,
+                        RuntimeError,
+                    ) as caught_error:
+                        emit_diagnostic(
+                            "debug",
+                            "terminal",
+                            "terminal.stream.output_drain_ended",
+                            "Terminal output draining ended during disconnect.",
+                            outcome="disconnected",
+                            stage="stream-cleanup",
+                            exception=caught_error,
+                        )
                         return
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
             # ASGI servers may cancel the endpoint task as the peer closes the
             # WebSocket. Treat that as a disconnect so attachment cleanup is
             # completed and reconnect grace is established deterministically.
+            record_caught_exception(
+                "terminal",
+                "terminal.stream.cancelled",
+                "A terminal stream was cancelled during disconnect.",
+                caught_error,
+                stage="stream",
+            )
             pass
-        except WebSocketDisconnect:
+        except WebSocketDisconnect as caught_error:
+            record_caught_exception(
+                "terminal",
+                "terminal.stream.disconnected",
+                "A terminal stream disconnected.",
+                caught_error,
+                stage="stream",
+            )
             pass
-        except RuntimeError:
+        except RuntimeError as caught_error:
             # Starlette raises RuntimeError when a peer disappears between
             # receive/send calls; treat it as a disconnect, not a Core failure.
+            if str(caught_error) == "unsupported terminal broker event":
+                frame = stream_error_frame(
+                    feature="terminal",
+                    code="terminal_protocol_failure",
+                    detail="terminal broker returned an unsupported event",
+                    exception=caught_error,
+                    retryable=False,
+                    request_id=request_id,
+                    session_id=session_id,
+                )
+                try:
+                    await websocket.send_json(frame)
+                except (RuntimeError, WebSocketDisconnect):
+                    # diagnostic-expected: the protocol failure is already recorded.
+                    pass
+            else:
+                emit_diagnostic(
+                    "debug",
+                    "terminal",
+                    "terminal.stream.transport_disconnected",
+                    "A terminal stream transport disappeared during I/O.",
+                    outcome="disconnected",
+                    stage="stream",
+                    exception=caught_error,
+                )
             pass
         finally:
             for task in tasks:
                 task.cancel()
             if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+                await gather_diagnostic(
+                    *tasks,
+                    feature="terminal",
+                    event_code="terminal.stream.cleanup_task_failed",
+                    failure_message="A terminal stream pump did not stop cleanly.",
+                    stage="stream-cleanup",
+                )
             await service.detach(attachment)
+            emit_diagnostic(
+                "info",
+                "terminal",
+                "terminal.stream.disconnected",
+                "A terminal stream ended.",
+                outcome="stopped",
+                stage="stream",
+                duration_ms=(time.monotonic() - started_at) * 1000,
+                request_id=request_id,
+                session_id=session_id,
+                metadata={
+                    "count": output_count,
+                    "item_count": input_count,
+                    "sequence_start": after_sequence,
+                    "sequence_end": last_sequence,
+                    "truncated": attachment.replay_truncated,
+                },
+            )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/execution-capabilities",
@@ -1829,6 +3022,7 @@ def create_app(
         execution_id: str,
         after: int = Query(default=0, ge=0),
     ) -> None:
+        request_id = new_request_id()
         supplied: str | None = None
         authorization = websocket.headers.get("authorization", "")
         if authorization.lower().startswith("bearer "):
@@ -1847,7 +3041,14 @@ def create_app(
                 subprotocol_token = base64.urlsafe_b64decode(
                     encoded + "=" * (-len(encoded) % 4)
                 ).decode("utf-8")
-            except (ValueError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError) as caught_error:
+                record_caught_exception(
+                    "executions",
+                    "executions.stream.authentication_rejected",
+                    "An execution stream authentication value was malformed.",
+                    caught_error,
+                    stage="stream-negotiation",
+                )
                 subprotocol_token = None
             break
         if (
@@ -1855,30 +3056,95 @@ def create_app(
             and subprotocol_token
             and not hmac.compare_digest(supplied, subprotocol_token)
         ):
+            emit_diagnostic(
+                "warning",
+                "executions",
+                "executions.stream.authentication_denied",
+                "Execution event stream authentication was denied.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                execution_id=execution_id,
+                metadata={"reason_code": "conflicting-authentication"},
+            )
             await websocket.close(code=4401, reason="conflicting authentication tokens")
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
             not supplied or not hmac.compare_digest(supplied, token)
         ):
+            emit_diagnostic(
+                "warning",
+                "executions",
+                "executions.stream.authentication_denied",
+                "Execution event stream authentication was denied.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                execution_id=execution_id,
+                metadata={"reason_code": "authentication-required"},
+            )
             await websocket.close(code=4401, reason="valid bearer token required")
             return
         try:
             store.get(OperatorExecution, execution_id)
-        except NotFoundError:
+        except NotFoundError as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.stream.not_found",
+                "The requested execution stream did not exist.",
+                caught_error,
+                stage="stream-negotiation",
+            )
             await websocket.close(code=4404, reason="execution not found")
             return
         event_protocol = (
             "nebula.events.v1" if "nebula.events.v1" in offered_protocols else None
         )
         await websocket.accept(subprotocol=event_protocol)
+        started_at = time.monotonic()
+        event_count = 0
         cursor = after
+        emit_diagnostic(
+            "info",
+            "executions",
+            "executions.stream.connected",
+            "An execution event stream connected.",
+            outcome="started",
+            stage="stream",
+            request_id=request_id,
+            execution_id=execution_id,
+            metadata={"sequence_start": after},
+        )
         try:
             while True:
                 events = store.replay_operation_events(
                     execution_id, after_sequence=cursor, limit=1000
                 )
+                if events and events[0].sequence > cursor + 1:
+                    emit_diagnostic(
+                        "warning",
+                        "executions",
+                        "executions.stream.sequence_gap",
+                        "An execution event sequence gap was detected.",
+                        outcome="degraded",
+                        stage="replay",
+                        request_id=request_id,
+                        execution_id=execution_id,
+                        metadata={
+                            "sequence_start": cursor,
+                            "sequence_end": events[0].sequence,
+                        },
+                    )
+                    await websocket.send_json(
+                        {
+                            "kind": "replay_gap",
+                            "after_sequence": cursor,
+                            "next_sequence": events[0].sequence,
+                        }
+                    )
                 for event in events:
+                    event_count += 1
                     await websocket.send_json(
                         {"kind": "event", "event": event.model_dump(mode="json")}
                     )
@@ -1896,8 +3162,31 @@ def create_app(
                     execution_id, after_sequence=cursor, limit=1000
                 )
                 if events:
+                    if events[0].sequence > cursor + 1:
+                        emit_diagnostic(
+                            "warning",
+                            "executions",
+                            "executions.stream.sequence_gap",
+                            "An execution event sequence gap was detected.",
+                            outcome="degraded",
+                            stage="replay",
+                            request_id=request_id,
+                            execution_id=execution_id,
+                            metadata={
+                                "sequence_start": cursor,
+                                "sequence_end": events[0].sequence,
+                            },
+                        )
+                        await websocket.send_json(
+                            {
+                                "kind": "replay_gap",
+                                "after_sequence": cursor,
+                                "next_sequence": events[0].sequence,
+                            }
+                        )
                     idle_ticks = 0
                     for event in events:
+                        event_count += 1
                         await websocket.send_json(
                             {
                                 "kind": "event",
@@ -1912,8 +3201,48 @@ def create_app(
                             {"kind": "heartbeat", "after_sequence": cursor}
                         )
                         idle_ticks = 0
-        except WebSocketDisconnect:
+        except WebSocketDisconnect as caught_error:
+            record_caught_exception(
+                "executions",
+                "executions.stream.disconnected",
+                "An execution event stream disconnected.",
+                caught_error,
+                stage="stream",
+            )
             return
+        except Exception as exc:
+            frame = stream_error_frame(
+                feature="executions",
+                code="execution_stream_failed",
+                detail="execution event stream failed",
+                exception=exc,
+                retryable=True,
+                request_id=request_id,
+                execution_id=execution_id,
+            )
+            frame["kind"] = "error"
+            try:
+                await websocket.send_json(frame)
+            except (RuntimeError, WebSocketDisconnect):
+                # diagnostic-expected: the stream failure is already recorded.
+                pass
+        finally:
+            emit_diagnostic(
+                "info",
+                "executions",
+                "executions.stream.disconnected",
+                "An execution event stream ended.",
+                outcome="stopped",
+                stage="stream",
+                duration_ms=(time.monotonic() - started_at) * 1000,
+                request_id=request_id,
+                execution_id=execution_id,
+                metadata={
+                    "count": event_count,
+                    "sequence_start": after,
+                    "sequence_end": cursor,
+                },
+            )
 
     @app.post(
         f"{API_PREFIX}/executions/{{execution_id}}/draft-notes",
@@ -2010,8 +3339,65 @@ def create_app(
         path: str = Query(min_length=1, max_length=4096),
     ) -> StreamingResponse:
         download = require_workspace_service().download(engagement_id, path)
+
+        async def download_chunks() -> Any:
+            started_at = time.monotonic()
+            chunk_count = 0
+            byte_count = 0
+            outcome = "success"
+            emit_diagnostic(
+                "info",
+                "workspace",
+                "workspace.download_stream.started",
+                "A workspace download stream started.",
+                outcome="started",
+                stage="stream",
+                project_id=engagement_id,
+            )
+            try:
+                for chunk in download.chunks():
+                    chunk_count += 1
+                    byte_count += len(chunk)
+                    yield chunk
+            except asyncio.CancelledError as exc:
+                outcome = "cancelled"
+                record_caught_exception(
+                    "workspace",
+                    "workspace.download_stream.cancelled",
+                    "A workspace download stream disconnected.",
+                    exc,
+                    stage="stream",
+                )
+                raise
+            except Exception as exc:
+                outcome = "failure"
+                record_caught_exception(
+                    "workspace",
+                    "workspace.download_stream.failed",
+                    "A workspace download stream failed.",
+                    exc,
+                    stage="stream",
+                )
+                raise
+            finally:
+                emit_diagnostic(
+                    "info",
+                    "workspace",
+                    "workspace.download_stream.ended",
+                    "A workspace download stream ended.",
+                    outcome=outcome,
+                    stage="stream",
+                    duration_ms=(time.monotonic() - started_at) * 1000,
+                    project_id=engagement_id,
+                    metadata={"chunk_count": chunk_count, "byte_count": byte_count},
+                )
+
         return StreamingResponse(
-            download.chunks(),
+            _correlated_stream(
+                download_chunks(),
+                request_id=current_request_id(),
+                operation_id=current_operation_id(),
+            ),
             media_type=download.media_type,
             headers={
                 "Cache-Control": "private, no-store",
@@ -2166,7 +3552,14 @@ def create_app(
                 artifact_store=artifact_store,
                 overwrite=True,
             )
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_026",
+                "A handled api operation raised an exception.",
+                caught_error,
+                stage="api",
+            )
             destination.unlink(missing_ok=True)
             raise
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", engagement.name).strip("-")
@@ -2415,6 +3808,14 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def upload_evidence_artifact(request: EvidenceUploadRequest) -> Evidence:
+        capture_operation = (
+            request.evidence_type == "terminal-screenshot"
+            or request.source
+            in {
+                "terminal-screenshot",
+                "terminal-screenshot-edit",
+            }
+        )
         if artifact_store is None:
             raise HTTPException(
                 status_code=503,
@@ -2424,6 +3825,13 @@ def create_app(
             try:
                 operators.get_profile(request.captured_by)
             except NotFoundError as exc:
+                record_caught_exception(
+                    "api",
+                    "api.api.caught_failure_027",
+                    "A handled api operation raised an exception.",
+                    exc,
+                    stage="api",
+                )
                 raise HTTPException(
                     status_code=422,
                     detail=(
@@ -2432,18 +3840,88 @@ def create_app(
                     ),
                 ) from exc
         try:
-            return await asyncio.to_thread(
+            evidence = await asyncio.to_thread(
                 upload_evidence,
                 store=store,
                 artifact_store=artifact_store,
                 request=request,
             )
         except EvidenceTooLargeError as exc:
+            if capture_operation:
+                record_caught_exception(
+                    "capture",
+                    "capture.upload.size_rejected",
+                    "A screenshot exceeded the protected evidence size limit.",
+                    exc,
+                    stage="upload-validation",
+                )
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_028",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except InvalidEvidenceUploadError as exc:
+            if capture_operation:
+                record_caught_exception(
+                    "capture",
+                    "capture.upload.validation_rejected",
+                    "A screenshot failed safe validation.",
+                    exc,
+                    stage="upload-validation",
+                )
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_029",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except EvidenceReferenceError as exc:
+            if capture_operation:
+                record_caught_exception(
+                    "capture",
+                    "capture.lineage.rejected",
+                    "Screenshot lineage validation failed safely.",
+                    exc,
+                    stage="lineage-validation",
+                )
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_030",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            if capture_operation:
+                record_caught_exception(
+                    "capture",
+                    "capture.persistence.failed",
+                    "A screenshot could not be preserved.",
+                    exc,
+                    stage="persistence",
+                )
+            raise
+        if capture_operation:
+            emit_diagnostic(
+                "info",
+                "capture",
+                "capture.persistence.completed",
+                "A screenshot was preserved with immutable lineage.",
+                outcome="success",
+                stage="derived-save" if request.parent_artifact_id else "original-save",
+                project_id=request.engagement_id,
+                metadata={
+                    "entity_id": evidence.id,
+                    "kind": "derived" if request.parent_artifact_id else "original",
+                },
+            )
+        return evidence
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope",
@@ -2495,7 +3973,14 @@ def create_app(
         )
         try:
             scope = store.create(candidate)
-        except ConflictError:
+        except ConflictError as caught_error:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_031",
+                "A handled api operation raised an exception.",
+                caught_error,
+                stage="api",
+            )
             scope = store.get(ScopePolicy, scope_id)
             if scope.engagement_id != engagement.id:
                 raise
@@ -2682,6 +4167,13 @@ def create_app(
         try:
             bundle = base64.b64decode(request.bundle_base64, validate=True)
         except (ValueError, binascii.Error) as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_032",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(
                 status_code=422, detail="tool-pack bundle is not valid base64"
             ) from exc
@@ -2737,6 +4229,7 @@ def create_app(
         websocket: WebSocket,
         after_sequence: int = Query(default=0, ge=0),
     ) -> None:
+        request_id = new_request_id()
         supplied: str | None = None
         authorization = websocket.headers.get("authorization", "")
         if authorization.lower().startswith("bearer "):
@@ -2756,7 +4249,14 @@ def create_app(
                 subprotocol_token = base64.urlsafe_b64decode(encoded + padding).decode(
                     "utf-8"
                 )
-            except (ValueError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError) as caught_error:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.stream.authentication_rejected",
+                    "A Toolbox stream authentication value was malformed.",
+                    caught_error,
+                    stage="stream-negotiation",
+                )
                 subprotocol_token = None
             break
         if (
@@ -2764,15 +4264,45 @@ def create_app(
             and subprotocol_token
             and not hmac.compare_digest(supplied, subprotocol_token)
         ):
+            emit_diagnostic(
+                "warning",
+                "toolbox",
+                "toolbox.stream.authentication_denied",
+                "Toolbox event stream authentication was denied.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                metadata={"reason_code": "conflicting-authentication"},
+            )
             await websocket.close(code=4401, reason="conflicting authentication tokens")
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
             not supplied or not hmac.compare_digest(supplied, token)
         ):
+            emit_diagnostic(
+                "warning",
+                "toolbox",
+                "toolbox.stream.authentication_denied",
+                "Toolbox event stream authentication was denied.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                metadata={"reason_code": "authentication-required"},
+            )
             await websocket.close(code=4401, reason="valid bearer token required")
             return
         if tool_platform is None:
+            emit_diagnostic(
+                "error",
+                "toolbox",
+                "toolbox.stream.unavailable",
+                "The Toolbox event stream is unavailable.",
+                outcome="failure",
+                stage="stream-negotiation",
+                retryable=True,
+                request_id=request_id,
+            )
             await websocket.close(
                 code=4501, reason="tool-pack platform is not configured"
             )
@@ -2783,10 +4313,24 @@ def create_app(
             else None
         )
         await websocket.accept(subprotocol=event_protocol)
+        started_at = time.monotonic()
+        event_count = 0
+        gap_count = 0
         cursor = after_sequence
+        emit_diagnostic(
+            "info",
+            "toolbox",
+            "toolbox.stream.connected",
+            "A Toolbox event stream connected.",
+            outcome="started",
+            stage="stream",
+            request_id=request_id,
+            metadata={"sequence_start": after_sequence},
+        )
         try:
             replay = tool_platform.events.replay(cursor)
             for event in replay.events:
+                event_count += 1
                 await websocket.send_json(
                     {"kind": "event", "event": event.model_dump(mode="json")}
                 )
@@ -2808,6 +4352,21 @@ def create_app(
                 if replay.events:
                     idle_ticks = 0
                     if replay.truncated:
+                        gap_count += 1
+                        emit_diagnostic(
+                            "warning",
+                            "toolbox",
+                            "toolbox.stream.sequence_gap",
+                            "A Toolbox stream replay gap was detected.",
+                            outcome="degraded",
+                            stage="replay",
+                            request_id=request_id,
+                            retryable=False,
+                            metadata={
+                                "sequence_start": cursor,
+                                "sequence_end": replay.oldest_sequence,
+                            },
+                        )
                         await websocket.send_json(
                             {
                                 "kind": "replay_gap",
@@ -2817,6 +4376,7 @@ def create_app(
                             }
                         )
                     for event in replay.events:
+                        event_count += 1
                         await websocket.send_json(
                             {
                                 "kind": "event",
@@ -2836,8 +4396,47 @@ def create_app(
                             }
                         )
                         idle_ticks = 0
-        except WebSocketDisconnect:
+        except WebSocketDisconnect as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.stream.disconnected",
+                "A Toolbox event stream disconnected.",
+                caught_error,
+                stage="stream",
+            )
             return
+        except Exception as exc:
+            frame = stream_error_frame(
+                feature="toolbox",
+                code="toolbox_stream_failed",
+                detail="Toolbox event stream failed",
+                exception=exc,
+                retryable=True,
+                request_id=request_id,
+            )
+            frame["kind"] = "error"
+            try:
+                await websocket.send_json(frame)
+            except (RuntimeError, WebSocketDisconnect):
+                # diagnostic-expected: the stream failure is already recorded.
+                pass
+        finally:
+            emit_diagnostic(
+                "info",
+                "toolbox",
+                "toolbox.stream.disconnected",
+                "A Toolbox event stream ended.",
+                outcome="stopped",
+                stage="stream",
+                duration_ms=(time.monotonic() - started_at) * 1000,
+                request_id=request_id,
+                metadata={
+                    "count": event_count,
+                    "warning_count": gap_count,
+                    "sequence_start": after_sequence,
+                    "sequence_end": cursor,
+                },
+            )
 
     @app.get(
         f"{API_PREFIX}/runner-profiles",
@@ -2860,7 +4459,14 @@ def create_app(
         payload = request.model_dump(exclude={"expected_revision"})
         try:
             existing = store.get(RunnerProfile, profile_id)
-        except NotFoundError:
+        except NotFoundError as caught_error:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_035",
+                "A handled api operation raised an exception.",
+                caught_error,
+                stage="api",
+            )
             profile = store.create(RunnerProfile(id=profile_id, **payload))
         else:
             profile = store.update(
@@ -3027,6 +4633,13 @@ def create_app(
         try:
             content = base64.b64decode(request.content_base64, validate=True)
         except (binascii.Error, ValueError) as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_036",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(
                 status_code=422,
                 detail="content_base64 must be valid base64",
@@ -3051,10 +4664,31 @@ def create_app(
             )
             return knowledge_summary(created)
         except DocumentTooLargeError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_037",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except UnsupportedDocumentError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_038",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=415, detail=str(exc)) from exc
         except InvalidDocumentError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_039",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post(
@@ -3078,10 +4712,31 @@ def create_app(
             )
             return knowledge_summary(updated)
         except DocumentTooLargeError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_040",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except UnsupportedDocumentError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_041",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=415, detail=str(exc)) from exc
         except InvalidDocumentError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_042",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.delete(
@@ -3145,6 +4800,13 @@ def create_app(
         try:
             return credentials.create(request)
         except CredentialUnavailableError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_043",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get(
@@ -3157,6 +4819,13 @@ def create_app(
         try:
             return credentials.status(reference)
         except ValueError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_044",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.delete(
@@ -3169,6 +4838,13 @@ def create_app(
         try:
             credentials.delete(reference)
         except CredentialError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_045",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return Response(status_code=204)
 
@@ -3268,7 +4944,9 @@ def create_app(
                     engagement_id, prompt
                 )
                 if knowledge.text:
-                    profile = store.get(HarnessProfile, request.harness_profile_id or "")
+                    profile = store.get(
+                        HarnessProfile, request.harness_profile_id or ""
+                    )
                     harness_is_local = profile.privacy.local_only
                     engagement = store.get(Engagement, engagement_id)
                     if engagement.scope_policy_id:
@@ -3322,7 +5000,9 @@ def create_app(
                     return
                 completed_turn = store.get(ChatTurn, chat_turn.id)
                 if not completed_turn.final_message_id:
-                    raise HarnessError("harness turn completed without a durable message")
+                    raise HarnessError(
+                        "harness turn completed without a durable message"
+                    )
                 message = store.get(ChatMessage, completed_turn.final_message_id)
                 response = ChatCompletionResponse(
                     turn_id=completed_turn.id,
@@ -3360,21 +5040,68 @@ def create_app(
                 return completion
 
             async def harness_event_stream() -> Any:
+                started_at = time.monotonic()
+                event_count = 0
+                outcome = "success"
+                emit_diagnostic(
+                    "info",
+                    "harnesses",
+                    "harnesses.chat_stream.started",
+                    "A harness chat stream started.",
+                    outcome="started",
+                    stage="stream",
+                    run_id=harness_turn.run_id,
+                )
                 try:
                     async for event_name, payload in harness_events():
+                        event_count += 1
                         yield _server_sent_event(event_name, payload)
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as caught_error:
+                    outcome = "cancelled"
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.chat_stream.cancelled",
+                        "A harness chat stream disconnected.",
+                        caught_error,
+                        stage="stream",
+                    )
                     await harness_runtime.cancel_turn(
                         harness_turn.id, reason="Chat stream disconnected"
                     )
                     raise
                 except (HarnessError, ConflictError) as exc:
+                    outcome = "failure"
                     yield _server_sent_event(
-                        "error", {"type": "error", "detail": str(exc)}
+                        "error",
+                        stream_error_frame(
+                            feature="harnesses",
+                            code="harness_stream_failed",
+                            detail=str(exc),
+                            exception=exc,
+                            retryable=not isinstance(exc, ConflictError),
+                            expected=isinstance(exc, ConflictError),
+                            run_id=harness_turn.run_id,
+                        ),
+                    )
+                finally:
+                    emit_diagnostic(
+                        "info",
+                        "harnesses",
+                        "harnesses.chat_stream.ended",
+                        "A harness chat stream ended.",
+                        outcome=outcome,
+                        stage="stream",
+                        duration_ms=(time.monotonic() - started_at) * 1000,
+                        run_id=harness_turn.run_id,
+                        metadata={"count": event_count},
                     )
 
             return StreamingResponse(
-                harness_event_stream(),
+                _correlated_stream(
+                    harness_event_stream(),
+                    request_id=current_request_id(),
+                    operation_id=current_operation_id(),
+                ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
             )
@@ -3385,21 +5112,80 @@ def create_app(
             return await service.complete(prepared)
 
         async def event_stream() -> Any:
+            started_at = time.monotonic()
+            event_count = 0
+            outcome = "success"
+            chat_session = prepared.session or prepared.pending_session
+            emit_diagnostic(
+                "info",
+                "chat",
+                "chat.stream.started",
+                "A chat response stream started.",
+                outcome="started",
+                stage="stream",
+                session_id=chat_session.id if chat_session else None,
+            )
             try:
                 async for event, payload in service.stream(prepared):
+                    event_count += 1
                     yield _server_sent_event(event, payload)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as caught_error:
+                outcome = "cancelled"
+                record_caught_exception(
+                    "chat",
+                    "chat.stream.cancelled",
+                    "A chat response stream disconnected.",
+                    caught_error,
+                    stage="stream",
+                )
                 raise
             except (ChatError, ProviderError, ConflictError) as exc:
-                yield _server_sent_event("error", {"type": "error", "detail": str(exc)})
-            except Exception:
+                outcome = "failure"
+                feature = "providers" if isinstance(exc, ProviderError) else "chat"
                 yield _server_sent_event(
                     "error",
-                    {"type": "error", "detail": "chat stream failed"},
+                    stream_error_frame(
+                        feature=feature,
+                        code="chat_stream_failed",
+                        detail=str(exc),
+                        exception=exc,
+                        retryable=isinstance(exc, ProviderError),
+                        expected=isinstance(exc, ConflictError),
+                        session_id=chat_session.id if chat_session else None,
+                    ),
+                )
+            except Exception as caught_error:
+                outcome = "failure"
+                yield _server_sent_event(
+                    "error",
+                    stream_error_frame(
+                        feature="chat",
+                        code="chat_stream_failed",
+                        detail="chat stream failed",
+                        exception=caught_error,
+                        retryable=True,
+                        session_id=chat_session.id if chat_session else None,
+                    ),
+                )
+            finally:
+                emit_diagnostic(
+                    "info",
+                    "chat",
+                    "chat.stream.ended",
+                    "A chat response stream ended.",
+                    outcome=outcome,
+                    stage="stream",
+                    duration_ms=(time.monotonic() - started_at) * 1000,
+                    session_id=chat_session.id if chat_session else None,
+                    metadata={"count": event_count},
                 )
 
         return StreamingResponse(
-            event_stream(),
+            _correlated_stream(
+                event_stream(),
+                request_id=current_request_id(),
+                operation_id=current_operation_id(),
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-store",
@@ -3417,16 +5203,67 @@ def create_app(
         prepared = service.prepare_resume(turn_id)
 
         async def event_stream() -> Any:
+            started_at = time.monotonic()
+            event_count = 0
+            outcome = "success"
+            chat_session = prepared.session or prepared.pending_session
+            emit_diagnostic(
+                "info",
+                "chat",
+                "chat.resume_stream.started",
+                "A resumed chat stream started.",
+                outcome="started",
+                stage="stream",
+                session_id=chat_session.id if chat_session else None,
+            )
             try:
                 async for event, payload in service.stream(prepared):
+                    event_count += 1
                     yield _server_sent_event(event, payload)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as caught_error:
+                outcome = "cancelled"
+                record_caught_exception(
+                    "chat",
+                    "chat.resume_stream.cancelled",
+                    "A resumed chat stream disconnected.",
+                    caught_error,
+                    stage="stream",
+                )
                 raise
             except (ChatError, ProviderError, ConflictError) as exc:
-                yield _server_sent_event("error", {"type": "error", "detail": str(exc)})
+                outcome = "failure"
+                feature = "providers" if isinstance(exc, ProviderError) else "chat"
+                yield _server_sent_event(
+                    "error",
+                    stream_error_frame(
+                        feature=feature,
+                        code="chat_resume_failed",
+                        detail=str(exc),
+                        exception=exc,
+                        retryable=isinstance(exc, ProviderError),
+                        expected=isinstance(exc, ConflictError),
+                        session_id=chat_session.id if chat_session else None,
+                    ),
+                )
+            finally:
+                emit_diagnostic(
+                    "info",
+                    "chat",
+                    "chat.resume_stream.ended",
+                    "A resumed chat stream ended.",
+                    outcome=outcome,
+                    stage="stream",
+                    duration_ms=(time.monotonic() - started_at) * 1000,
+                    session_id=chat_session.id if chat_session else None,
+                    metadata={"count": event_count},
+                )
 
         return StreamingResponse(
-            event_stream(),
+            _correlated_stream(
+                event_stream(),
+                request_id=current_request_id(),
+                operation_id=current_operation_id(),
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
@@ -3711,6 +5548,7 @@ def create_app(
         run_id: str,
         after: int = Query(default=0, ge=0),
     ) -> None:
+        request_id = new_request_id()
         supplied: str | None = None
         authorization = websocket.headers.get("authorization", "")
         if authorization.lower().startswith("bearer "):
@@ -3730,7 +5568,14 @@ def create_app(
                 subprotocol_token = base64.urlsafe_b64decode(encoded + padding).decode(
                     "utf-8"
                 )
-            except (ValueError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError) as caught_error:
+                record_caught_exception(
+                    "missions",
+                    "missions.stream.authentication_rejected",
+                    "A mission stream authentication value was malformed.",
+                    caught_error,
+                    stage="stream-negotiation",
+                )
                 subprotocol_token = None
             break
         if (
@@ -3738,30 +5583,95 @@ def create_app(
             and subprotocol_token
             and not hmac.compare_digest(supplied, subprotocol_token)
         ):
+            emit_diagnostic(
+                "warning",
+                "missions",
+                "missions.stream.authentication_denied",
+                "Mission event stream authentication was denied.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                run_id=run_id,
+                metadata={"reason_code": "conflicting-authentication"},
+            )
             await websocket.close(code=4401, reason="conflicting authentication tokens")
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
             not supplied or not hmac.compare_digest(supplied, token)
         ):
+            emit_diagnostic(
+                "warning",
+                "missions",
+                "missions.stream.authentication_denied",
+                "Mission event stream authentication was denied.",
+                outcome="denied",
+                stage="stream-negotiation",
+                request_id=request_id,
+                run_id=run_id,
+                metadata={"reason_code": "authentication-required"},
+            )
             await websocket.close(code=4401, reason="valid bearer token required")
             return
         try:
             store.get(AgentRun, run_id)
-        except NotFoundError:
+        except NotFoundError as caught_error:
+            record_caught_exception(
+                "missions",
+                "missions.stream.not_found",
+                "The requested mission stream did not exist.",
+                caught_error,
+                stage="stream-negotiation",
+            )
             await websocket.close(code=4404, reason="agent run not found")
             return
         event_protocol = (
             "nebula.events.v1" if "nebula.events.v1" in offered_protocols else None
         )
         await websocket.accept(subprotocol=event_protocol)
+        started_at = time.monotonic()
+        event_count = 0
         cursor = after
+        emit_diagnostic(
+            "info",
+            "missions",
+            "missions.stream.connected",
+            "A mission event stream connected.",
+            outcome="started",
+            stage="stream",
+            request_id=request_id,
+            run_id=run_id,
+            metadata={"sequence_start": after},
+        )
         try:
             while True:
                 events = store.replay_events(run_id, after_sequence=cursor, limit=1000)
                 if not events:
                     break
+                if events[0].sequence > cursor + 1:
+                    emit_diagnostic(
+                        "warning",
+                        "missions",
+                        "missions.stream.sequence_gap",
+                        "A mission event sequence gap was detected.",
+                        outcome="degraded",
+                        stage="replay",
+                        request_id=request_id,
+                        run_id=run_id,
+                        metadata={
+                            "sequence_start": cursor,
+                            "sequence_end": events[0].sequence,
+                        },
+                    )
+                    await websocket.send_json(
+                        {
+                            "kind": "replay_gap",
+                            "after_sequence": cursor,
+                            "next_sequence": events[0].sequence,
+                        }
+                    )
                 for event in events:
+                    event_count += 1
                     await websocket.send_json(
                         {"kind": "event", "event": event.model_dump(mode="json")}
                     )
@@ -3775,8 +5685,31 @@ def create_app(
                 await asyncio.sleep(0.25)
                 events = store.replay_events(run_id, after_sequence=cursor, limit=1000)
                 if events:
+                    if events[0].sequence > cursor + 1:
+                        emit_diagnostic(
+                            "warning",
+                            "missions",
+                            "missions.stream.sequence_gap",
+                            "A mission event sequence gap was detected.",
+                            outcome="degraded",
+                            stage="replay",
+                            request_id=request_id,
+                            run_id=run_id,
+                            metadata={
+                                "sequence_start": cursor,
+                                "sequence_end": events[0].sequence,
+                            },
+                        )
+                        await websocket.send_json(
+                            {
+                                "kind": "replay_gap",
+                                "after_sequence": cursor,
+                                "next_sequence": events[0].sequence,
+                            }
+                        )
                     idle_ticks = 0
                     for event in events:
+                        event_count += 1
                         await websocket.send_json(
                             {"kind": "event", "event": event.model_dump(mode="json")}
                         )
@@ -3788,8 +5721,48 @@ def create_app(
                             {"kind": "heartbeat", "after_sequence": cursor}
                         )
                         idle_ticks = 0
-        except WebSocketDisconnect:
+        except WebSocketDisconnect as caught_error:
+            record_caught_exception(
+                "missions",
+                "missions.stream.disconnected",
+                "A mission event stream disconnected.",
+                caught_error,
+                stage="stream",
+            )
             return
+        except Exception as exc:
+            frame = stream_error_frame(
+                feature="missions",
+                code="mission_stream_failed",
+                detail="mission event stream failed",
+                exception=exc,
+                retryable=True,
+                request_id=request_id,
+                run_id=run_id,
+            )
+            frame["kind"] = "error"
+            try:
+                await websocket.send_json(frame)
+            except (RuntimeError, WebSocketDisconnect):
+                # diagnostic-expected: the stream failure is already recorded.
+                pass
+        finally:
+            emit_diagnostic(
+                "info",
+                "missions",
+                "missions.stream.disconnected",
+                "A mission event stream ended.",
+                outcome="stopped",
+                stage="stream",
+                duration_ms=(time.monotonic() - started_at) * 1000,
+                request_id=request_id,
+                run_id=run_id,
+                metadata={
+                    "count": event_count,
+                    "sequence_start": after,
+                    "sequence_end": cursor,
+                },
+            )
 
     if artifact_store is not None:
 
@@ -3857,6 +5830,19 @@ def _server_sent_event(event: str, payload: dict[str, Any]) -> bytes:
     return f"event: {event}\ndata: {encoded}\n\n".encode()
 
 
+async def _correlated_stream(
+    stream: AsyncIterator[bytes],
+    *,
+    request_id: str | None,
+    operation_id: str | None,
+) -> AsyncIterator[bytes]:
+    """Preserve request correlation after the HTTP response starts streaming."""
+
+    with diagnostic_context(request_id=request_id, operation_id=operation_id):
+        async for item in stream:
+            yield item
+
+
 def _setup_server_sent_event(event: SetupEvent) -> bytes:
     payload = event.model_dump(mode="json")
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -3900,7 +5886,14 @@ async def _discover_local_provider_services(
             health = await asyncio.wait_for(
                 _provider_health(profile, provider_factory), timeout=2.0
             )
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as caught_error:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_056",
+                "A handled api operation raised an exception.",
+                caught_error,
+                stage="api",
+            )
             return None
         if not health.healthy:
             return None
@@ -3935,12 +5928,26 @@ async def _provider_health(
     try:
         health = await (provider_factory or provider_from_profile)(profile).health()
     except (ProviderError, ValueError) as exc:
+        record_caught_exception(
+            "api",
+            "api.api.caught_failure_057",
+            "A handled api operation raised an exception.",
+            exc,
+            stage="api",
+        )
         return ProviderHealth(
             provider_id=profile.id,
             healthy=False,
             detail=str(exc),
         )
     except Exception as exc:
+        record_caught_exception(
+            "api",
+            "api.api.caught_failure_058",
+            "A handled api operation raised an exception.",
+            exc,
+            stage="api",
+        )
         return ProviderHealth(
             provider_id=profile.id,
             healthy=False,
@@ -4046,6 +6053,13 @@ async def _verify_provider_capability(
             status=ProviderVerificationStatus.VERIFIED,
         )
     except Exception as exc:
+        record_caught_exception(
+            "api",
+            "api.api.caught_failure_059",
+            "A handled api operation raised an exception.",
+            exc,
+            stage="api",
+        )
         verification = ProviderCapabilityVerification(
             model=model,
             status=ProviderVerificationStatus.FAILED,

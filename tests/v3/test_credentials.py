@@ -48,7 +48,9 @@ def test_vault_and_session_credentials_are_write_only_references():
         CredentialCreateRequest(secret=SecretStr("vault-secret"), persistence="vault")
     )
     session = store.create(
-        CredentialCreateRequest(secret=SecretStr("session-secret"), persistence="session")
+        CredentialCreateRequest(
+            secret=SecretStr("session-secret"), persistence="session"
+        )
     )
 
     assert vault.reference.startswith("vault:")
@@ -70,7 +72,9 @@ def test_unavailable_vault_fails_closed_and_environment_is_external(monkeypatch)
         store.create(CredentialCreateRequest(secret=SecretStr("secret")))
 
     monkeypatch.setenv("NEBULA_TEST_KEY", "environment-secret")
-    assert store.resolve("env:NEBULA_TEST_KEY").get_secret_value() == "environment-secret"
+    assert (
+        store.resolve("env:NEBULA_TEST_KEY").get_secret_value() == "environment-secret"
+    )
     with pytest.raises(CredentialError, match="outside Nebula"):
         store.delete("env:NEBULA_TEST_KEY")
     assert os.environ["NEBULA_TEST_KEY"] == "environment-secret"

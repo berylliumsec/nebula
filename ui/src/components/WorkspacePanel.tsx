@@ -3,6 +3,7 @@ import { Download, File, FileCheck2, Folder, Link2, MessageSquareText, RefreshCw
 import { ApiError, type ApiClient } from "../api/client";
 import type { WorkspaceEntry, WorkspacePreview } from "../api/types";
 import { useConfirmation } from "./DialogSystem";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 interface WorkspacePanelProps {
   api: ApiClient;
@@ -50,6 +51,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       setNextOffset(listing.nextOffset);
       setTotal(listing.total);
     } catch (loadError) {
+      void logCaughtDiagnostic("interface.workspace_panel.caught_failure_01", "A handled interface operation failed.", loadError, "workspace_panel");
       if (!signal?.aborted) setError(loadError instanceof Error ? loadError.message : "Could not list the workspace.");
     } finally {
       if (!signal?.aborted) setLoading(false);
@@ -79,6 +81,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       try {
         result = await api.uploadWorkspaceFile(engagementId, destination, file, false, controller.signal);
       } catch (uploadError) {
+        void logCaughtDiagnostic("interface.workspace_panel.caught_failure_02", "A handled interface operation failed.", uploadError, "workspace_panel");
         if (!(uploadError instanceof ApiError) || uploadError.status !== 409 || controller.signal.aborted) throw uploadError;
         const approved = await confirm({
           title: `Replace ${file.name}?`,
@@ -95,6 +98,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       setNotice(`${result.overwritten ? "Replaced" : "Uploaded"} ${result.path} · ${sizeLabel(result.size)} · SHA-256 ${result.sha256}.`);
       await load(0);
     } catch (uploadError) {
+      void logCaughtDiagnostic("interface.workspace_panel.caught_failure_03", "A handled interface operation failed.", uploadError, "workspace_panel");
       if (controller.signal.aborted || (uploadError instanceof DOMException && uploadError.name === "AbortError")) {
         setNotice(`Upload of ${file.name} was cancelled.`);
       } else {
@@ -126,6 +130,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
     try {
       setPreview(await api.previewWorkspaceFile(engagementId, entry.path));
     } catch (previewError) {
+      void logCaughtDiagnostic("interface.workspace_panel.caught_failure_04", "A handled interface operation failed.", previewError, "workspace_panel");
       setError(previewError instanceof Error ? previewError.message : "This file cannot be previewed.");
     }
   };
@@ -141,6 +146,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (downloadError) {
+      void logCaughtDiagnostic("interface.workspace_panel.caught_failure_05", "A handled interface operation failed.", downloadError, "workspace_panel");
       setError(downloadError instanceof Error ? downloadError.message : "Could not download the file.");
     }
   };
@@ -157,6 +163,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       const evidence = await api.promoteWorkspaceFile(engagementId, selected.path, selected.name);
       setNotice(`Promoted as evidence ${evidence.id.slice(0, 8)} with SHA-256 ${evidence.sha256}.`);
     } catch (promoteError) {
+      void logCaughtDiagnostic("interface.workspace_panel.caught_failure_06", "A handled interface operation failed.", promoteError, "workspace_panel");
       setError(promoteError instanceof Error ? promoteError.message : "Could not promote the file.");
     }
   };
@@ -179,6 +186,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       setNotice(`Removed ${result.removedEntries} workspace entr${result.removedEntries === 1 ? "y" : "ies"}. Promoted evidence was retained.`);
       await load(0);
     } catch (resetError) {
+      void logCaughtDiagnostic("interface.workspace_panel.caught_failure_07", "A handled interface operation failed.", resetError, "workspace_panel");
       setError(resetError instanceof Error ? resetError.message : "Could not reset the workspace.");
     }
   };
@@ -195,7 +203,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
           <button className="button quiet" type="button" disabled={loading} onClick={() => void load(0)}><RefreshCw className={loading ? "spin" : undefined} size={14} /> Refresh</button>
         </div>
       </header>
-      {error && <p className="form-error" role="alert">{error}</p>}
+      {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
       {notice && <p className="workspace-notice" role="status">{notice}</p>}
       <div className="workspace-browser-layout">
         <section

@@ -492,9 +492,11 @@ def _parse_literal(value: str) -> str | int | float | bool:
     try:
         return int(cleaned)
     except ValueError:
+        # diagnostic-expected: literal-type probing continues with float.
         try:
             return float(cleaned)
         except ValueError:
+            # diagnostic-expected: non-numeric defaults remain strings.
             return cleaned
 
 
@@ -933,6 +935,7 @@ def _inventory(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
             try:
                 resolved = candidate.resolve(strict=True)
             except OSError:
+                # diagnostic-expected: PATH entries can disappear during inventory.
                 continue
             if not candidate.is_file() or not os.access(candidate, os.X_OK):
                 continue

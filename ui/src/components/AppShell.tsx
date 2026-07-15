@@ -12,6 +12,7 @@ import { TopBar } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
 import { ZeroLayerDeck } from "./ZeroLayerDeck";
 import { deriveZeroModules } from "./zeroLayerModules";
+import { DiagnosticErrorNotice, DiagnosticsAvailabilityBanner, logDiagnostic } from "../diagnostics";
 
 export function AppShell() {
   const navigate = useNavigate();
@@ -102,11 +103,21 @@ export function AppShell() {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void import("@tauri-apps/api/event").then(async ({ listen }) => {
-      const stop = await listen<string>("nebula-menu-command", (event) => runCommand(event.payload));
-      if (disposed) stop();
-      else unlisten = stop;
-    });
+    void import("@tauri-apps/api/event")
+      .then(async ({ listen }) => {
+        const stop = await listen<string>("nebula-menu-command", (event) => runCommand(event.payload));
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch((error: unknown) => logDiagnostic({
+        level: "error",
+        eventCode: "interface.menu.listener_failed",
+        message: "The interface could not listen for native menu actions.",
+        outcome: "failure",
+        stage: "menu-listener",
+        retryable: true,
+        exception: error,
+      }));
     return () => {
       disposed = true;
       unlisten?.();
@@ -157,10 +168,11 @@ export function AppShell() {
           />
           {zero && <ZeroLayerDeck modules={zeroModules} onOpenActivity={openActivityView} />}
           <main id="main-content" className="main-content" tabIndex={-1}>
+            {workspaceState !== "failed" && <DiagnosticsAvailabilityBanner />}
             {zero && <span className="zero-route-flare" aria-hidden="true" key={`${location.pathname}${location.search}`} />}
             {workspaceState === "starting" && <div className="workspace-state-banner starting" role="status">Starting Nebula…</div>}
             {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><span><strong>Nebula is ready with limited features.</strong>{coreError && <small>{coreError}</small>}</span><button className="button quiet" type="button" onClick={reconnect}>Retry</button></div>}
-            {workspaceState === "failed" && <div className="workspace-state-banner failed" role="alert"><span><strong>Nebula Core could not start.</strong><small>{coreError ?? "Check the local service and try again."}</small></span><button className="button primary" type="button" onClick={reconnect}>Try again</button></div>}
+            {workspaceState === "failed" && <div className="workspace-state-banner failed"><DiagnosticErrorNotice error={coreError ?? "Check the local service and try again."} title="Nebula Core could not start." fallback="Check the local service and try again." compact /><button className="button primary" type="button" onClick={reconnect}>Try again</button></div>}
             <UpdateBanner />
             <Outlet />
           </main>

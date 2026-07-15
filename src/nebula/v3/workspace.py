@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import asyncio
 import hashlib
 import mimetypes
@@ -203,6 +205,13 @@ class WorkspaceService:
         try:
             text = visible.decode("utf-8", errors="strict")
         except UnicodeDecodeError as exc:
+            record_caught_exception(
+                "workspace",
+                "workspace.workspace.caught_failure_001",
+                "A handled workspace operation raised an exception.",
+                exc,
+                stage="workspace",
+            )
             raise ExecutionServiceError(
                 "unsupported_preview",
                 "file is not valid UTF-8 plain text",
@@ -264,7 +273,14 @@ class WorkspaceService:
         )
         try:
             self.store.create_many([stored.artifact, evidence])
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "workspace",
+                "workspace.workspace.caught_failure_002",
+                "A handled workspace operation raised an exception.",
+                caught_error,
+                stage="workspace",
+            )
             self.artifact_store.discard_new_blob(stored)
             raise
         self.store.append_operation_event(
@@ -320,10 +336,7 @@ class WorkspaceService:
         try:
             descriptor = os.open(
                 temporary_name,
-                os.O_WRONLY
-                | os.O_CREAT
-                | os.O_EXCL
-                | getattr(os, "O_NOFOLLOW", 0),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
                 0o600,
                 dir_fd=parent,
             )
@@ -350,7 +363,14 @@ class WorkspaceService:
                 destination = os.stat(
                     relative[-1], dir_fd=parent, follow_symlinks=False
                 )
-            except FileNotFoundError:
+            except FileNotFoundError as caught_error:
+                record_caught_exception(
+                    "workspace",
+                    "workspace.workspace.caught_failure_003",
+                    "A handled workspace operation raised an exception.",
+                    caught_error,
+                    stage="workspace",
+                )
                 destination = None
             if destination is not None:
                 if not stat.S_ISREG(destination.st_mode):
@@ -373,9 +393,7 @@ class WorkspaceService:
                 root,
                 exclude={PurePosixPath(*relative).as_posix(), temporary_path},
             )
-            uploaded = os.stat(
-                temporary_name, dir_fd=parent, follow_symlinks=False
-            )
+            uploaded = os.stat(temporary_name, dir_fd=parent, follow_symlinks=False)
             allocated += uploaded.st_blocks * 512
             entries += 1
             if entries > WORKSPACE_MAX_ENTRIES:
@@ -409,6 +427,13 @@ class WorkspaceService:
                 os.unlink(temporary_name, dir_fd=parent)
             os.fsync(parent)
         except FileExistsError as exc:
+            record_caught_exception(
+                "workspace",
+                "workspace.workspace.caught_failure_004",
+                "A handled workspace operation raised an exception.",
+                exc,
+                stage="workspace",
+            )
             raise ExecutionServiceError(
                 "workspace_file_exists",
                 "workspace file already exists; confirm overwrite to replace it",
@@ -419,7 +444,14 @@ class WorkspaceService:
                 os.close(descriptor)
             try:
                 os.unlink(temporary_name, dir_fd=parent)
-            except FileNotFoundError:
+            except FileNotFoundError as caught_error:
+                record_caught_exception(
+                    "workspace",
+                    "workspace.workspace.caught_failure_005",
+                    "A handled workspace operation raised an exception.",
+                    caught_error,
+                    stage="workspace",
+                )
                 pass
             os.close(parent)
 
@@ -514,6 +546,13 @@ class WorkspaceService:
                 descriptor = child
             return descriptor
         except (OSError, ValueError) as exc:
+            record_caught_exception(
+                "workspace",
+                "workspace.workspace.caught_failure_006",
+                "A handled workspace operation raised an exception.",
+                exc,
+                stage="workspace",
+            )
             os.close(descriptor)
             raise ExecutionServiceError(
                 "workspace_path_invalid",
@@ -532,6 +571,13 @@ class WorkspaceService:
                 dir_fd=parent,
             )
         except OSError as exc:
+            record_caught_exception(
+                "workspace",
+                "workspace.workspace.caught_failure_007",
+                "A handled workspace operation raised an exception.",
+                exc,
+                stage="workspace",
+            )
             raise ExecutionServiceError(
                 "workspace_path_invalid",
                 "workspace file is missing, invalid, or a symlink",

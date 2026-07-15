@@ -7,6 +7,8 @@ bounded, cited context without trusting instructions embedded in a document.
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import hashlib
 import json
 import re
@@ -153,6 +155,13 @@ def extract_document(
             try:
                 json.loads(text)
             except json.JSONDecodeError as exc:
+                record_caught_exception(
+                    "knowledge",
+                    "knowledge.knowledge.caught_failure_001",
+                    "A handled knowledge operation raised an exception.",
+                    exc,
+                    stage="knowledge",
+                )
                 raise InvalidDocumentError(f"invalid JSON document: {exc.msg}") from exc
         elif source_type == "jsonl":
             _validate_json_lines(text)
@@ -248,7 +257,14 @@ def ingest_document(
     )
     try:
         store.create_many([stored.artifact, source])
-    except Exception:
+    except Exception as caught_error:
+        record_caught_exception(
+            "knowledge",
+            "knowledge.knowledge.caught_failure_002",
+            "A handled knowledge operation raised an exception.",
+            caught_error,
+            stage="knowledge",
+        )
         artifact_store.discard_new_blob(stored)
         raise
     return source
@@ -335,6 +351,13 @@ def _decode_text(data: bytes) -> str:
     try:
         text = data.decode(encoding)
     except UnicodeDecodeError as exc:
+        record_caught_exception(
+            "knowledge",
+            "knowledge.knowledge.caught_failure_003",
+            "A handled knowledge operation raised an exception.",
+            exc,
+            stage="knowledge",
+        )
         raise InvalidDocumentError("text documents must use UTF-8 or UTF-16") from exc
     if "\x00" in text:
         raise InvalidDocumentError("text document contains binary NUL bytes")
@@ -348,6 +371,13 @@ def _validate_json_lines(text: str) -> None:
         try:
             json.loads(line)
         except json.JSONDecodeError as exc:
+            record_caught_exception(
+                "knowledge",
+                "knowledge.knowledge.caught_failure_004",
+                "A handled knowledge operation raised an exception.",
+                exc,
+                stage="knowledge",
+            )
             raise InvalidDocumentError(
                 f"invalid JSON Lines document at line {line_number}: {exc.msg}"
             ) from exc
@@ -395,6 +425,13 @@ def _extract_html(text: str) -> str:
         parser.feed(text)
         parser.close()
     except Exception as exc:
+        record_caught_exception(
+            "knowledge",
+            "knowledge.knowledge.caught_failure_005",
+            "A handled knowledge operation raised an exception.",
+            exc,
+            stage="knowledge",
+        )
         raise InvalidDocumentError("invalid HTML document") from exc
     return "".join(parser.parts)
 
@@ -406,15 +443,36 @@ def _extract_docx(data: bytes) -> tuple[ExtractedSection, ...]:
             if info.file_size > MAX_EXTRACTED_CHARACTERS * 4:
                 raise DocumentTooLargeError("DOCX document XML exceeds the index limit")
             document_xml = archive.read(info)
-    except DocumentTooLargeError:
+    except DocumentTooLargeError as caught_error:
+        record_caught_exception(
+            "knowledge",
+            "knowledge.knowledge.caught_failure_006",
+            "A handled knowledge operation raised an exception.",
+            caught_error,
+            stage="knowledge",
+        )
         raise
     except (KeyError, zipfile.BadZipFile, RuntimeError) as exc:
+        record_caught_exception(
+            "knowledge",
+            "knowledge.knowledge.caught_failure_007",
+            "A handled knowledge operation raised an exception.",
+            exc,
+            stage="knowledge",
+        )
         raise InvalidDocumentError("invalid or encrypted DOCX document") from exc
     if re.search(rb"<!\s*(?:DOCTYPE|ENTITY)\b", document_xml, flags=re.IGNORECASE):
         raise InvalidDocumentError("DOCX document XML declarations are not supported")
     try:
         root = ElementTree.fromstring(document_xml)
     except ElementTree.ParseError as exc:
+        record_caught_exception(
+            "knowledge",
+            "knowledge.knowledge.caught_failure_008",
+            "A handled knowledge operation raised an exception.",
+            exc,
+            stage="knowledge",
+        )
         raise InvalidDocumentError("invalid DOCX document XML") from exc
 
     paragraphs: list[str] = []
@@ -445,9 +503,23 @@ def _extract_pdf(data: bytes) -> tuple[ExtractedSection, ...]:
                     "extracted document text exceeds the 4 MiB index limit"
                 )
             sections.append(ExtractedSection(text=text, page=index))
-    except KnowledgeIngestionError:
+    except KnowledgeIngestionError as caught_error:
+        record_caught_exception(
+            "knowledge",
+            "knowledge.knowledge.caught_failure_009",
+            "A handled knowledge operation raised an exception.",
+            caught_error,
+            stage="knowledge",
+        )
         raise
     except Exception as exc:
+        record_caught_exception(
+            "knowledge",
+            "knowledge.knowledge.caught_failure_010",
+            "A handled knowledge operation raised an exception.",
+            exc,
+            stage="knowledge",
+        )
         raise InvalidDocumentError("PDF text extraction failed") from exc
     return tuple(sections)
 

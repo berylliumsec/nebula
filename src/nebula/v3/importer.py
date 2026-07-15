@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import hashlib
 import ipaddress
 import json
@@ -112,6 +114,13 @@ def _load_json(path: Path, *, required: bool = False) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        record_caught_exception(
+            "storage",
+            "storage.importer.caught_failure_001",
+            "A handled storage operation raised an exception.",
+            exc,
+            stage="importer",
+        )
         raise LegacyImportError(f"cannot read {path.name}: {exc}") from exc
     if not isinstance(value, dict):
         raise LegacyImportError(f"{path.name} must contain a JSON object")
@@ -139,7 +148,14 @@ def _targets(details: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
             continue
         try:
             cidrs.add(str(ipaddress.ip_network(value, strict=False)))
-        except ValueError:
+        except ValueError as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.importer.caught_failure_002",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="importer",
+            )
             domains.add(value.lower().rstrip("."))
 
     raw_urls = details.get("urls", [])
@@ -156,7 +172,14 @@ def _targets(details: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
         try:
             address = ipaddress.ip_address(parsed.hostname)
             cidrs.add(str(ipaddress.ip_network(address.exploded, strict=False)))
-        except ValueError:
+        except ValueError as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.importer.caught_failure_003",
+                "A handled storage operation raised an exception.",
+                caught_error,
+                stage="importer",
+            )
             domains.add(parsed.hostname.lower().rstrip("."))
     return sorted(cidrs), sorted(domains), sorted(urls)
 
@@ -478,10 +501,24 @@ class LegacyEngagementImporter:
             report.imported_counts = dict(sorted(counts.items()))
             report.status = "completed"
         except Exception as exc:
+            record_caught_exception(
+                "storage",
+                "storage.importer.caught_failure_004",
+                "A handled storage operation raised an exception.",
+                exc,
+                stage="importer",
+            )
             for stored in reversed(stored_blobs):
                 try:
                     self.artifact_store.discard_new_blob(stored)
                 except Exception as cleanup_error:
+                    record_caught_exception(
+                        "storage",
+                        "storage.importer.caught_failure_005",
+                        "A handled storage operation raised an exception.",
+                        cleanup_error,
+                        stage="importer",
+                    )
                     report.warnings.append(f"artifact cleanup failed: {cleanup_error}")
             report.status = "failed"
             report.errors.append(str(exc))
@@ -493,6 +530,13 @@ class LegacyEngagementImporter:
                             current == report.source_file_checksums
                         )
                 except Exception as verify_error:
+                    record_caught_exception(
+                        "storage",
+                        "storage.importer.caught_failure_006",
+                        "A handled storage operation raised an exception.",
+                        verify_error,
+                        stage="importer",
+                    )
                     report.warnings.append(
                         f"could not verify source after failure: {verify_error}"
                     )

@@ -247,9 +247,7 @@ async def test_terminal_selection_enters_the_same_mandatory_review_path(tmp_path
 
     tampered = selected.model_copy(
         update={
-            "origin": selected.origin.model_copy(
-                update={"source_sha256": "0" * 64}
-            )
+            "origin": selected.origin.model_copy(update={"source_sha256": "0" * 64})
         }
     )
     denied = await service.preflight(tampered)

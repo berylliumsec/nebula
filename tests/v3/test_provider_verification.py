@@ -131,7 +131,9 @@ def test_probe_fails_closed_and_revision_conflicts(tmp_path, monkeypatch):
     assert conflict.status_code == 409
 
 
-def test_compatibility_edit_invalidates_until_explicit_reverification(tmp_path, monkeypatch):
+def test_compatibility_edit_invalidates_until_explicit_reverification(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "verification-invalidation.db")
     profile = _profile(store)
     monkeypatch.setattr(

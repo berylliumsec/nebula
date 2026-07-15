@@ -6,6 +6,8 @@ can enable that bounded runtime but can never supply or broaden capabilities.
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import asyncio
 import hashlib
 import json
@@ -154,7 +156,11 @@ class ChatCompletionRequest(NebulaModel):
         if self.backend == ChatBackend.PROVIDER:
             if not self.provider_id:
                 raise ValueError("provider chat requires provider_id")
-            if self.harness_profile_id or self.harness_session_id or self.mcp_server_ids:
+            if (
+                self.harness_profile_id
+                or self.harness_session_id
+                or self.mcp_server_ids
+            ):
                 raise ValueError("provider chat cannot include harness runtime fields")
         else:
             if not self.harness_profile_id or self.provider_id:
@@ -294,9 +300,7 @@ def _context_attachment_metadata(
     if not attachments:
         return {}
     return {
-        "context_attachments": [
-            item.model_dump(mode="json") for item in attachments
-        ]
+        "context_attachments": [item.model_dump(mode="json") for item in attachments]
     }
 
 
@@ -337,14 +341,17 @@ bash (or shell), sh, or python (or python3 or py). Never use an unlabeled fence
 for executable source. Text outside that fence must explain what the operator
 should verify before choosing Nebula's separate reviewed Run action."""
 
-_CHAT_INSTRUCTIONS = """You are Nebula's analysis-only analyst assistant.
+_CHAT_INSTRUCTIONS = (
+    """You are Nebula's analysis-only analyst assistant.
 Never claim to execute a command, access a target, or use a tool: no executable
 tools are available in this chat turn. Do not invent a tool failure, Toolbox
 configuration, package, log path, or troubleshooting step. If the operator asks
 you to run a tool, state only that no executable capability is available in this
 turn.
 
-""" + _CHAT_BASE_INSTRUCTIONS
+"""
+    + _CHAT_BASE_INSTRUCTIONS
+)
 
 _CHAT_TOOL_INSTRUCTIONS = """You are Nebula's analyst assistant with a bounded
 Toolbox. For each routing step, call exactly one supplied function and return no
@@ -354,7 +361,8 @@ target, argument, observation, or result. After a capability fails or returns a
 nonzero exit code, do not repeat the same call unchanged. Finish unless the exact
 result justifies a specific corrected invocation."""
 
-_CHAT_TOOL_RESULT_INSTRUCTIONS = """You are Nebula's analyst assistant after a
+_CHAT_TOOL_RESULT_INSTRUCTIONS = (
+    """You are Nebula's analyst assistant after a
 bounded Toolbox turn. Synthesize the final answer from the supplied bounded tool
 results. Accurately identify capabilities that ran, distinguish their observations
 from assumptions, and do not expose routing markup or successful raw command
@@ -363,7 +371,9 @@ report the exact capability, status or exit code, and supplied error detail or
 stderr. Do not replace the observed error with generic troubleshooting, and never
 invent configuration, packages, dependencies, commands, files, or log paths.
 
-""" + _CHAT_BASE_INSTRUCTIONS
+"""
+    + _CHAT_BASE_INSTRUCTIONS
+)
 
 _RETRIEVAL_AGENT_INSTRUCTIONS = """You are a document-retrieval planning agent.
 Turn the operator's question into one to four concise, standalone searches over
@@ -583,8 +593,22 @@ class ChatService:
                 instructions=instructions,
             )
         except ContextCapacityError as exc:
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_001",
+                "A handled chat operation raised an exception.",
+                exc,
+                stage="chat",
+            )
             raise ChatConfigurationError(str(exc)) from exc
         except ContextCompactionError as exc:
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_002",
+                "A handled chat operation raised an exception.",
+                exc,
+                stage="chat",
+            )
             raise ChatCompactionError(str(exc)) from exc
 
         model_request = ModelRequest(
@@ -649,6 +673,13 @@ class ChatService:
                     model=selected_model,
                 )
             except ToolPlatformError as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.chat.caught_failure_003",
+                    "A handled chat operation raised an exception.",
+                    exc,
+                    stage="chat",
+                )
                 raise ChatConfigurationError(str(exc)) from exc
             session_id = (
                 session.id
@@ -679,6 +710,13 @@ class ChatService:
         try:
             resolved_model = provider.require(model_request)
         except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_004",
+                "A handled chat operation raised an exception.",
+                exc,
+                stage="chat",
+            )
             raise ChatConfigurationError(str(exc)) from exc
         prepared = PreparedChat(
             provider=provider,
@@ -877,6 +915,13 @@ class ChatService:
                         invocation, components.scope
                     )
                 except ApprovalRequired as paused:
+                    record_caught_exception(
+                        "chat",
+                        "chat.chat.caught_failure_005",
+                        "A handled chat operation raised an exception.",
+                        paused,
+                        stage="chat",
+                    )
                     entry.update(
                         {
                             "status": "waiting_approval",
@@ -900,6 +945,13 @@ class ChatService:
                     )
                     return
                 except PolicyDenied as exc:
+                    record_caught_exception(
+                        "chat",
+                        "chat.chat.caught_failure_006",
+                        "A handled chat operation raised an exception.",
+                        exc,
+                        stage="chat",
+                    )
                     provider_result = self._bounded_tool_error(
                         "denied", exc.decision.reason
                     )
@@ -907,6 +959,13 @@ class ChatService:
                         {"status": "denied", "provider_result": provider_result}
                     )
                 except Exception as exc:
+                    record_caught_exception(
+                        "chat",
+                        "chat.chat.caught_failure_007",
+                        "A handled chat operation raised an exception.",
+                        exc,
+                        stage="chat",
+                    )
                     provider_result = self._bounded_tool_error(
                         "failed", f"{type(exc).__name__}: {str(exc)}"
                     )
@@ -1017,7 +1076,14 @@ class ChatService:
                     completed = True
             if not completed:
                 raise ChatError("provider stream ended before final synthesis")
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_008",
+                "A handled chat operation raised an exception.",
+                caught_error,
+                stage="chat",
+            )
             latest = self._refresh_turn(turn)
             if latest.status not in {
                 ChatTurnStatus.COMPLETE,
@@ -1032,6 +1098,13 @@ class ChatService:
             raise
 
         except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_009",
+                "A handled chat operation raised an exception.",
+                exc,
+                stage="chat",
+            )
             latest = self._refresh_turn(turn)
             if latest.status not in {
                 ChatTurnStatus.COMPLETE,
@@ -1099,7 +1172,14 @@ class ChatService:
                 output = persisted
                 try:
                     decoded = json.loads(persisted)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as caught_error:
+                    record_caught_exception(
+                        "chat",
+                        "chat.chat.caught_failure_010",
+                        "A handled chat operation raised an exception.",
+                        caught_error,
+                        stage="chat",
+                    )
                     pass
                 else:
                     if isinstance(decoded, dict):
@@ -1261,6 +1341,13 @@ class ChatService:
                 invocation, components.scope, approval=approval
             )
         except PolicyDenied as exc:
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_011",
+                "A handled chat operation raised an exception.",
+                exc,
+                stage="chat",
+            )
             entry.update(
                 {
                     "status": "denied",
@@ -1270,6 +1357,13 @@ class ChatService:
                 }
             )
         except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_012",
+                "A handled chat operation raised an exception.",
+                exc,
+                stage="chat",
+            )
             entry.update(
                 {
                     "status": "failed",
@@ -1325,6 +1419,8 @@ class ChatService:
                 f"chat turn cannot resume from {turn.status.value}"
             )
         session = self.store.get(ChatSession, turn.session_id)
+        if turn.provider_profile_id is None:
+            raise ChatConfigurationError("chat turn no longer identifies a provider")
         profile = self.store.get(ProviderProfile, turn.provider_profile_id)
         if not profile.enabled or not profile.tools_verified_for(turn.model):
             raise ChatConfigurationError(
@@ -1343,6 +1439,13 @@ class ChatService:
                 model=turn.model,
             )
         except ToolPlatformError as exc:
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_013",
+                "A handled chat operation raised an exception.",
+                exc,
+                stage="chat",
+            )
             raise ChatConfigurationError(str(exc)) from exc
         if (
             list(components.tool_pack_digests) != turn.tool_pack_digests
@@ -1419,7 +1522,14 @@ class ChatService:
         if turn.tool_call_ids:
             try:
                 call = self.store.get(ToolCall, turn.tool_call_ids[-1])
-            except NotFoundError:
+            except NotFoundError as caught_error:
+                record_caught_exception(
+                    "chat",
+                    "chat.chat.caught_failure_014",
+                    "A handled chat operation raised an exception.",
+                    caught_error,
+                    stage="chat",
+                )
                 call = None
             if call is not None and call.status not in {
                 ToolCallStatus.COMPLETE,
@@ -1461,6 +1571,8 @@ class ChatService:
 
     def context_status(self, session_id: str) -> ContextStatus:
         session = self.store.get(ChatSession, session_id)
+        if session.provider_profile_id is None:
+            raise ChatConfigurationError("chat session does not identify a provider")
         profile = self.store.get(ProviderProfile, session.provider_profile_id)
         messages = self._session_messages(session)
         limits = resolve_context_limits(profile)
@@ -1745,6 +1857,13 @@ class ChatService:
         try:
             validate_engagement_provider_privacy(self.store, engagement, provider)
         except ProviderPrivacyViolation as exc:
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_015",
+                "A handled chat operation raised an exception.",
+                exc,
+                stage="chat",
+            )
             raise ChatPrivacyError(str(exc)) from exc
 
     async def _plan_retrieval(
@@ -1777,11 +1896,21 @@ class ChatService:
                 payload = re.sub(r"^```(?:json)?\s*|\s*```$", "", payload)
             plan = _RetrievalPlan.model_validate_json(payload)
         except Exception as exc:
-            logger.info("retrieval agent planning failed; using original query: %s", exc)
+            record_caught_exception(
+                "chat",
+                "chat.chat.caught_failure_016",
+                "A handled chat operation raised an exception.",
+                exc,
+                stage="chat",
+            )
+            logger.info(
+                "retrieval agent planning failed; using original query: %s", exc
+            )
             return fallback
-        return [query, *[item for item in plan.queries if item.casefold() != query.casefold()]][
-            :4
-        ]
+        return [
+            query,
+            *[item for item in plan.queries if item.casefold() != query.casefold()],
+        ][:4]
 
     def _has_ready_knowledge(self, engagement_id: str) -> bool:
         offset = 0

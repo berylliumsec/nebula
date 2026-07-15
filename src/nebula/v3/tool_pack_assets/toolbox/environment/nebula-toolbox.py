@@ -428,6 +428,8 @@ def _execute(
             metadata=_metadata(guidance=guidance, script=script),
         )
     except subprocess.TimeoutExpired as exc:
+        # diagnostic-expected: timeout is a structured result consumed and
+        # classified by the supervising sandbox/execution service.
         return _envelope(
             operation,
             tool=tool,
@@ -634,9 +636,12 @@ def main(argv: list[str] | None = None) -> int:
                 script=script,
             )
     except Exception as exc:
+        # diagnostic-expected: this isolated adapter returns a bounded failure
+        # envelope; Core records it without protocol payloads or tool output.
         try:
             metadata = _metadata(guidance=False)
         except Exception:
+            # diagnostic-expected: safe empty metadata is the fail-closed fallback.
             metadata = {
                 "catalog_digest": None,
                 "catalogued_guidance": False,

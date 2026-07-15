@@ -11,6 +11,7 @@ import type {
 import { ModalSurface } from "./DialogSystem";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { visibleSource } from "./assistantCode";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 interface ExecutionReviewDialogProps {
   api: ApiClient;
@@ -71,6 +72,7 @@ export function ExecutionReviewDialog({
       setPreview(result);
       if (!result.allowed) setError(result.detail);
     } catch (reviewError) {
+      void logCaughtDiagnostic("interface.execution_review_dialog.caught_failure_01", "A handled interface operation failed.", reviewError, "execution_review_dialog");
       if (!signal?.aborted) setError(reviewError instanceof Error ? reviewError.message : "Execution review failed.");
     } finally {
       if (!signal?.aborted) setLoading(false);
@@ -99,6 +101,7 @@ export function ExecutionReviewDialog({
       onStarted(execution);
       onClose();
     } catch (startError) {
+      void logCaughtDiagnostic("interface.execution_review_dialog.caught_failure_02", "A handled interface operation failed.", startError, "execution_review_dialog");
       setError(startError instanceof Error ? startError.message : "Execution could not be started.");
       setPreview(undefined);
     } finally {
@@ -129,7 +132,7 @@ export function ExecutionReviewDialog({
           </div>
           {mode === "scoped" && <div className="execution-network-fields"><label>Approved target<input value={target} placeholder="host.example or 192.0.2.10" onChange={(event) => setTarget(event.target.value)} /></label><label>Ports<input value={portText} placeholder="443, 8443" onChange={(event) => setPortText(event.target.value)} /></label></div>}
         </section>
-        {error && <p className="form-error" role="alert">{error}</p>}
+        {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         {preview?.allowed && preview.runtime && preview.network && (
           <section className="execution-preview-facts" aria-label="Validated execution preview">
             {!preview.runtime.trusted && <p className="execution-warning"><AlertTriangle size={15} /> Developer Toolbox is unsigned; its exact digest is pinned for this run.</p>}

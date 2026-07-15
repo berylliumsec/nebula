@@ -12,6 +12,7 @@ import {
 import type { ApprovalDecisionRequest, RunEventKind } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { ModalSurface } from "./DialogSystem";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 export type ActivityCenterView = "activity" | "approvals";
 
@@ -58,6 +59,7 @@ export function ActivityCenter({ open, onClose, view, onViewChange }: ActivityCe
       setEditingId(undefined);
       setSelectedApprovalId(undefined);
     } catch (error) {
+      void logCaughtDiagnostic("interface.activity_center.caught_failure_01", "A handled interface operation failed.", error, "activity_center");
       setDecisionError(error instanceof Error ? error.message : "Could not record the approval decision.");
     } finally {
       setBusyId(undefined);
@@ -68,7 +70,8 @@ export function ActivityCenter({ open, onClose, view, onViewChange }: ActivityCe
     let parsed: unknown;
     try {
       parsed = JSON.parse(editedArguments);
-    } catch {
+    } catch (caughtError) {
+      void logCaughtDiagnostic("interface.activity_center.caught_failure_02", "A handled interface operation failed.", caughtError, "activity_center");
       setDecisionError("Edited arguments must be valid JSON.");
       return;
     }
@@ -144,7 +147,7 @@ export function ActivityCenter({ open, onClose, view, onViewChange }: ActivityCe
           </ol>
         ) : (
           <div className="approval-list">
-            {decisionError && <p className="activity-error" role="alert">{decisionError}</p>}
+            {decisionError && <DiagnosticErrorNotice error={decisionError} fallback="The approval decision could not be saved." compact />}
             {approvals.map((approval) => (
               <article className="approval-card" key={approval.id}>
                 <div className="approval-card-heading">
@@ -206,7 +209,7 @@ export function ActivityCenter({ open, onClose, view, onViewChange }: ActivityCe
           <button className="icon-button subtle" type="button" aria-label="Close approval review" onClick={() => setSelectedApprovalId(undefined)}><X size={17} /></button>
         </header>
         <div className="approval-review-body">
-          {decisionError && <p className="activity-error" role="alert">{decisionError}</p>}
+          {decisionError && <DiagnosticErrorNotice error={decisionError} fallback="The approval decision could not be saved." compact />}
           <dl className="approval-review-facts">
             <div><dt>Agent</dt><dd>{selectedApproval.agentName}</dd></div>
             <div><dt>Target</dt><dd>{selectedApproval.target}</dd></div>

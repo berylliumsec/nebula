@@ -40,15 +40,11 @@ def test_native_launcher_and_admin_command_contract():
     assert scripts["nebula-core"] == "nebula.v3.cli:main"
     assert scripts["nebula3"] == scripts["nebula-core"]
 
-    linux_launcher = (ROOT / "packaging/linux/nebula").read_text(
-        encoding="utf-8"
-    )
-    assert "exec /usr/bin/nebula-ui \"$@\"" in linux_launcher
+    linux_launcher = (ROOT / "packaging/linux/nebula").read_text(encoding="utf-8")
+    assert 'exec /usr/bin/nebula-ui "$@"' in linux_launcher
     assert "exec /usr/bin/nebula-core" not in linux_launcher
 
-    cask = (ROOT / "packaging/homebrew/nebula.rb.in").read_text(
-        encoding="utf-8"
-    )
+    cask = (ROOT / "packaging/homebrew/nebula.rb.in").read_text(encoding="utf-8")
     assert 'Contents/MacOS/nebula-ui", target: "nebula"' in cask
     assert 'Contents/MacOS/nebula-core", target: "nebula-core"' in cask
 

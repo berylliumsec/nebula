@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import hashlib
 import json
 import re
@@ -157,6 +159,13 @@ def _option(value: Any, *, field: str) -> dict[str, Any]:
             try:
                 re.compile(descriptor["pattern"])
             except re.error as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.tool_interfaces.caught_failure_001",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="tool_interfaces",
+                )
                 raise ToolInterfaceError(f"{field}.value pattern is invalid") from exc
     return option
 
@@ -344,6 +353,13 @@ def load_interface_catalog(payload: bytes) -> ToolInterfaceCatalog:
     try:
         decoded = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.tool_interfaces.caught_failure_002",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="tool_interfaces",
+        )
         raise ToolInterfaceError("Toolbox interface catalog is invalid JSON") from exc
     if not isinstance(decoded, dict) or set(decoded) != {
         "protocol",

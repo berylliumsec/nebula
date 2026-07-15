@@ -82,6 +82,16 @@ import type {
   WorkspaceResetResult,
   WorkspaceUploadResult,
 } from "./types";
+import {
+  logDiagnostic,
+  newOperationId,
+  rememberDiagnosticErrorPresentation,
+  type DiagnosticFile,
+  type DiagnosticRecord,
+  type DiagnosticSettings,
+  type DiagnosticStatus,
+} from "../diagnostics";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 type JsonObject = Record<string, unknown>;
 
@@ -921,13 +931,33 @@ export class ApiError extends Error {
   readonly status: number;
   readonly requestId?: string;
   readonly details?: unknown;
+  readonly errorId?: string;
+  readonly code?: string;
+  readonly feature?: string;
+  readonly retryable?: boolean;
+  readonly helpArticle?: string;
 
   constructor(message: string, status: number, requestId?: string, details?: unknown) {
-    super(message);
+    const envelope = details && typeof details === "object"
+      ? details as Record<string, unknown>
+      : undefined;
+    const errorId = stringField(envelope?.error_id);
+    const correlatedRequestId = requestId ?? stringField(envelope?.request_id);
+    const reference = errorId ?? correlatedRequestId;
+    super(reference ? `${message} Reference: ${reference}.` : message);
     this.name = "ApiError";
     this.status = status;
-    this.requestId = requestId;
+    this.requestId = correlatedRequestId;
     this.details = details;
+    this.errorId = errorId;
+    this.code = stringField(envelope?.code);
+    this.feature = stringField(envelope?.feature);
+    this.retryable = typeof envelope?.retryable === "boolean" ? envelope.retryable : undefined;
+    this.helpArticle = stringField(envelope?.help_article);
+    rememberDiagnosticErrorPresentation(reference, {
+      retryable: this.retryable,
+      code: this.code,
+    });
   }
 }
 
@@ -2060,7 +2090,8 @@ async function responseError(response: Response): Promise<ApiError> {
   if (text) {
     try {
       details = JSON.parse(text);
-    } catch {
+    } catch (caughtError) {
+      void logCaughtDiagnostic("interface.client.caught_failure_01", "A handled interface operation failed.", caughtError, "client");
       // Preserve a non-JSON Core/proxy response verbatim.
     }
   }
@@ -2161,21 +2192,119 @@ export class ApiClient {
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);
     }
+    if (!headers.has("X-Nebula-Operation-ID")) {
+      headers.set("X-Nebula-Operation-ID", newOperationId());
+    }
 
-    const response = await this.fetchImpl(`${this.baseUrl}/${path.replace(/^\//, "")}`, {
-      ...init,
-      headers,
-      credentials: "same-origin",
-    });
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/${path.replace(/^\//, "")}`, {
+        ...init,
+        headers,
+        credentials: "same-origin",
+      });
+    } catch (error) {
+      void logDiagnostic({
+        level: "error",
+        eventCode: "interface.api.transport_failed",
+        message: "The interface could not reach Nebula Core.",
+        outcome: "failure",
+        stage: "request",
+        retryable: true,
+        safeFailureCause: "The local API transport was unavailable.",
+        exception: error,
+        metadata: { method: init.method ?? "GET" },
+      });
+      throw error;
+    }
 
     if (!response.ok) {
-      throw await responseError(response);
+      const error = await responseError(response);
+      void logDiagnostic({
+        level: response.status >= 500 ? "error" : "warning",
+        eventCode: "interface.api.request_failed",
+        message: "A user interface API action could not complete.",
+        outcome: response.status >= 500 ? "failure" : "denied",
+        stage: "response",
+        retryable: error.retryable,
+        safeFailureCause: response.status >= 500
+          ? "Nebula Core reported an operation failure."
+          : "Nebula Core rejected the request safely.",
+        exception: error,
+        requestId: error.requestId,
+        errorId: error.errorId,
+        metadata: { method: init.method ?? "GET", http_status: response.status, code: error.code },
+      });
+      throw error;
     }
 
     if (response.status === 204) {
       return undefined as T;
     }
-    return (await response.json()) as T;
+    try {
+      return (await response.json()) as T;
+    } catch (error) {
+      void logDiagnostic({
+        level: "error",
+        eventCode: "interface.api.response_parse_failed",
+        message: "The interface could not parse a Nebula Core response.",
+        outcome: "failure",
+        stage: "response-parse",
+        retryable: true,
+        exception: error,
+        metadata: { method: init.method ?? "GET", http_status: response.status },
+      });
+      throw error;
+    }
+  }
+
+  diagnosticsSettings(signal?: AbortSignal): Promise<DiagnosticSettings> {
+    return this.request<DiagnosticSettings>("diagnostics/settings", { signal });
+  }
+
+  updateDiagnosticsSettings(
+    settings: DiagnosticSettings,
+    signal?: AbortSignal,
+  ): Promise<DiagnosticSettings> {
+    return this.request<DiagnosticSettings>("diagnostics/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+      signal,
+    });
+  }
+
+  diagnosticsFiles(signal?: AbortSignal): Promise<{ files: DiagnosticFile[]; health: DiagnosticStatus }> {
+    return this.request<{ files: DiagnosticFile[]; health: DiagnosticStatus }>("diagnostics/files", { signal });
+  }
+
+  diagnosticErrors(
+    feature?: string,
+    after?: string,
+    limit = 100,
+    signal?: AbortSignal,
+  ): Promise<DiagnosticRecord[]> {
+    const parameters = new URLSearchParams({ limit: String(limit) });
+    if (feature) parameters.set("feature", feature);
+    if (after) parameters.set("after", after);
+    return this.request<{ errors: DiagnosticRecord[] }>(`diagnostics/errors?${parameters}` , { signal })
+      .then((result) => result.errors);
+  }
+
+  async exportDiagnostics(signal?: AbortSignal): Promise<Blob> {
+    const token = this.getToken();
+    const headers = new Headers({
+      Accept: "application/zip",
+      "X-Nebula-Operation-ID": newOperationId(),
+    });
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await this.fetchImpl(`${this.baseUrl}/diagnostics/export`, {
+      method: "POST",
+      headers,
+      credentials: "same-origin",
+      signal,
+    });
+    if (!response.ok) throw await responseError(response);
+    return response.blob();
   }
 
   private async listAll<T>(resource: string, signal?: AbortSignal, engagementId?: string): Promise<T[]> {
@@ -2198,6 +2327,7 @@ export class ApiClient {
         api_version?: string;
         dialect?: string;
         container_terminal?: "configured" | "unavailable";
+        diagnostics?: { degraded?: boolean };
       }
     >("health", { signal }).then((health) => ({
       status: health.status === "degraded" ? "degraded" : "ok",
@@ -2205,6 +2335,7 @@ export class ApiClient {
       mode: health.mode ?? (health.dialect?.startsWith("postgres") ? "team" : "local"),
       runner: health.runner ?? "unavailable",
       containerTerminal: health.container_terminal ?? "unavailable",
+      diagnosticsDegraded: health.diagnostics?.degraded === true,
     }));
   }
 
@@ -3668,7 +3799,8 @@ export class ApiClient {
       let wire: WireChatStreamEvent;
       try {
         wire = JSON.parse(data) as WireChatStreamEvent;
-      } catch {
+      } catch (caughtError) {
+        void logCaughtDiagnostic("interface.client.caught_failure_02", "A handled interface operation failed.", caughtError, "client");
         throw new ApiError("Nebula Core returned a malformed chat stream frame.", 502, undefined, data);
       }
       if (wire.type === "error") {

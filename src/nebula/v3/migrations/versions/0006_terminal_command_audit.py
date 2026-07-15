@@ -120,8 +120,7 @@ def downgrade() -> None:
     )
     op.execute(
         sa.text(
-            "UPDATE terminal_command_records SET exit_code = -1 "
-            "WHERE exit_code IS NULL"
+            "UPDATE terminal_command_records SET exit_code = -1 WHERE exit_code IS NULL"
         )
     )
     with op.batch_alter_table("terminal_command_records") as batch:

@@ -3,6 +3,7 @@ import { Check, ChevronDown, LockKeyhole, Orbit, Plus, ShieldCheck, X } from "lu
 import { NavLink } from "react-router-dom";
 import { navigationGroups, navigationItems } from "../navigation";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 interface SideNavProps {
   collapsed: boolean;
@@ -46,6 +47,7 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
       setCreating(false);
       setOpen(false);
     } catch (createError) {
+      void logCaughtDiagnostic("interface.side_nav.caught_failure_01", "A handled interface operation failed.", createError, "side_nav");
       setError(createError instanceof Error ? createError.message : "Could not create the project.");
     } finally {
       setSaving(false);
@@ -76,7 +78,7 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
             {engagements.map((item) => <button type="button" key={item.id} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { selectEngagement(item.id); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>)}
             {engagements.length === 0 && <p>No projects yet.</p>}
           </div>}
-          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label>{error && <p className="form-error" role="alert">{error}</p>}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}
+          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label>{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}
         </div>}
       </div>
 

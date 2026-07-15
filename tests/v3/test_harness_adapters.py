@@ -117,9 +117,7 @@ class FixtureCodexRpc:
                     "params": {
                         "threadId": "thread-fixture",
                         "turnId": "turn-fixture",
-                        "tokenUsage": {
-                            "last": {"inputTokens": 3, "outputTokens": 2}
-                        },
+                        "tokenUsage": {"last": {"inputTokens": 3, "outputTokens": 2}},
                     },
                 }
             )
@@ -135,9 +133,7 @@ class FixtureCodexRpc:
             return {"turn": {"id": "turn-fixture"}}
         return {}
 
-    async def notify(
-        self, method: str, params: dict[str, Any] | None = None
-    ) -> None:
+    async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         self.notifications.append((method, params))
 
     async def respond(self, request_id: Any, result: dict[str, Any]) -> None:
@@ -162,9 +158,7 @@ def _mcp_profile() -> McpServerProfile:
         transport=McpTransport.STREAMABLE_HTTP,
         url="https://mcp.invalid/api",
         enabled=True,
-        capabilities=McpCapabilitySnapshot(
-            tools=[McpToolSnapshot(name="read_file")]
-        ),
+        capabilities=McpCapabilitySnapshot(tools=[McpToolSnapshot(name="read_file")]),
     )
 
 
@@ -206,8 +200,7 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
             )
         )
         events = [
-            event
-            async for event in connection.run_turn("inspect", model="gpt-test")
+            event async for event in connection.run_turn("inspect", model="gpt-test")
         ]
 
         assert [method for method, _ in rpc.calls[:3]] == [
@@ -321,7 +314,10 @@ class FakeClaudeClient:
 
     async def receive_response(self) -> AsyncIterator[Any]:
         yield StreamEvent(
-            {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}}
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "ok"},
+            }
         )
         yield AssistantMessage(
             [
@@ -337,11 +333,7 @@ class FakeClaudeClient:
         yield ResultMessage()
 
     async def get_mcp_status(self) -> dict[str, Any]:
-        return {
-            "mcpServers": [
-                {"name": "workspace_server", "status": "connected"}
-            ]
-        }
+        return {"mcpServers": [{"name": "workspace_server", "status": "connected"}]}
 
     async def interrupt(self) -> None:
         self.interrupted = True

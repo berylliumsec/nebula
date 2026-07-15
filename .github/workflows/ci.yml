@@ -43,6 +43,9 @@ jobs:
         run: poetry run ruff check src/nebula/v3 tests/v3
       - name: Check Nebula 3 formatting
         run: poetry run ruff format --check src/nebula/v3 tests/v3
+      - name: Audit diagnostic blind spots
+        if: matrix.python-version == '3.12'
+        run: poetry run python scripts/audit_diagnostic_blind_spots.py --python --rust
       - name: Type-check Nebula 3
         if: matrix.python-version == '3.12'
         run: poetry run mypy src/nebula/v3
@@ -127,6 +130,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run lint --if-present
+      - run: npm run audit:diagnostics
       - run: npm test
       - run: npm run test:e2e
       - run: npm run build
@@ -206,7 +210,9 @@ jobs:
           "$sidecar" doctor --data-dir "$RUNNER_TEMP/nebula-sidecar-smoke"
           poetry run python scripts/package_audit.py "$sidecar"
       - name: Test managed desktop shell
-        run: cargo test --locked --manifest-path ui/src-tauri/Cargo.toml
+        run: |
+          cargo clippy --locked --manifest-path ui/src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path ui/src-tauri/Cargo.toml
       - name: Compile direct updater boundary
         env:
           NEBULA_UPDATE_CHANNEL: prerelease

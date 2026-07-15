@@ -22,6 +22,7 @@ import {
   type PresentSelectionInput,
   type SelectionActionDraft,
 } from "./selectionActions";
+import { logCaughtDiagnostic } from "../../diagnostics";
 
 interface SelectionActionsContextValue {
   presentSelection(selection: PresentSelectionInput): void;
@@ -150,6 +151,7 @@ export function SelectionActionsProvider({
       <button className={styles.action} type="button" onClick={() => {
         dismissSelectionElegantly();
         void copySelectionText(draft.text).catch((reason: unknown) => {
+          void logCaughtDiagnostic("interface.selection_actions_provider.caught_failure_01", "A handled interface operation failed.", reason, "selection_actions_provider");
           onCopyError?.(reason instanceof Error ? reason : new Error("The selected text could not be copied."));
         });
       }}><Clipboard size={14} /> Copy</button>

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from .diagnostics import (
+    create_diagnostic_task,
+    gather_diagnostic,
+    record_caught_exception,
+)
+
 import asyncio
 import hashlib
 import io
@@ -135,7 +141,13 @@ class ReportRenderService:
         for task in tasks:
             task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await gather_diagnostic(
+                *tasks,
+                feature="reports",
+                event_code="reports.shutdown.render_failed",
+                failure_message="A report render task failed during shutdown.",
+                stage="shutdown",
+            )
         self._tasks.clear()
 
     async def request_render(
@@ -184,7 +196,14 @@ class ReportRenderService:
             )
             try:
                 self.store.create_many([snapshot_artifact.artifact, render])
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "reports",
+                    "reports.reporting.caught_failure_001",
+                    "A handled reports operation raised an exception.",
+                    caught_error,
+                    stage="reporting",
+                )
                 self.artifact_store.discard_new_blob(snapshot_artifact)
                 raise
             self._event(
@@ -197,8 +216,12 @@ class ReportRenderService:
                     "input_fingerprint": fingerprint,
                 },
             )
-            task = asyncio.create_task(
-                self._render(render.id, snapshot), name=f"report-render-{render.id}"
+            task = create_diagnostic_task(
+                self._render(render.id, snapshot),
+                feature="reports",
+                event_code="reports.pdf_render",
+                failure_message="The report renderer stopped unexpectedly.",
+                name=f"report-render-{render.id}",
             )
             self._tasks[render.id] = task
             task.add_done_callback(lambda _task: self._tasks.pop(render.id, None))
@@ -266,7 +289,14 @@ class ReportRenderService:
                     "warnings": warnings,
                 },
             )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "reports",
+                "reports.reporting.caught_failure_002",
+                "A handled reports operation raised an exception.",
+                caught_error,
+                stage="reporting",
+            )
             current = self.store.get(ReportRender, render_id)
             if current.status in {
                 ReportRenderStatus.QUEUED,
@@ -292,6 +322,13 @@ class ReportRenderService:
                 )
             raise
         except Exception as exc:
+            record_caught_exception(
+                "reports",
+                "reports.reporting.caught_failure_003",
+                "A handled reports operation raised an exception.",
+                exc,
+                stage="reporting",
+            )
             current = self.store.get(ReportRender, render_id)
             if current.status in {
                 ReportRenderStatus.QUEUED,
@@ -415,6 +452,13 @@ class ReportRenderService:
         try:
             entity = self.store.get(model, entity_id)
         except NotFoundError as exc:
+            record_caught_exception(
+                "reports",
+                "reports.reporting.caught_failure_004",
+                "A handled reports operation raised an exception.",
+                exc,
+                stage="reporting",
+            )
             raise ReportRenderError(
                 "missing_report_content",
                 f"{source} references missing {model.entity_kind}: {entity_id}",

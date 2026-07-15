@@ -1,4 +1,5 @@
 import { websocketAuthProtocol, type StreamState } from "./events";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 export type ToolPackOperation = "install_catalog" | "install_local" | "verify" | "update" | "disable";
 export type ToolPackProgressPhase = "pending" | "pulling" | "verifying" | "ready" | "failed";
@@ -128,7 +129,8 @@ export class ToolPackEventStream {
         if (!event || event.sequence <= this.cursor) return;
         this.cursor = event.sequence;
         this.options.onEvent(event);
-      } catch {
+      } catch (caughtError) {
+        void logCaughtDiagnostic("interface.tool_pack_events.caught_failure_01", "A handled interface operation failed.", caughtError, "tool_pack_events");
         // Ignore malformed frames. Only the fixed sanitized event contract is surfaced.
       }
     });

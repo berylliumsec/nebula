@@ -75,9 +75,7 @@ class FakeConnection(HarnessConnection):
         self.steering: list[str] = []
         self.prompts: list[str] = []
 
-    async def run_turn(
-        self, prompt: str, *, model: str
-    ) -> AsyncIterator[HarnessEvent]:
+    async def run_turn(self, prompt: str, *, model: str) -> AsyncIterator[HarnessEvent]:
         self.prompts.append(prompt)
         self.external_session_id = self.external_session_id or "vendor-session-1"
         yield HarnessEvent(
@@ -223,7 +221,9 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
             "usage",
             "completed",
         ]
-        assert store.get(HarnessTurn, harness_turn.id).status == HarnessTurnStatus.COMPLETE
+        assert (
+            store.get(HarnessTurn, harness_turn.id).status == HarnessTurnStatus.COMPLETE
+        )
         assert store.get(ChatTurn, chat_turn.id).status.value == "complete"
         session = store.get(HarnessSession, chat.harness_session_id or "")
         assert session.external_session_id == "vendor-session-1"
@@ -248,7 +248,10 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         finished = store.get(AgentRun, run.id)
         assert finished.status == RunStatus.COMPLETE
         assert finished.harness_session_id == session.id
-        assert finished.runtime_snapshot["mcp_snapshot"][0]["url"] == "https://mcp.invalid/api"
+        assert (
+            finished.runtime_snapshot["mcp_snapshot"][0]["url"]
+            == "https://mcp.invalid/api"
+        )
         assert len(adapter.opens) == 1
         assert adapter.opens[0].mcp_profiles[0].url == "https://mcp.invalid/api"
 
@@ -294,7 +297,10 @@ def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
         )
         assert (await safe.decision).allowed is True
         assert safe.approval_id is None
-        assert store.get(ToolCall, safe.tool_call_id or "").status == ToolCallStatus.APPROVED
+        assert (
+            store.get(ToolCall, safe.tool_call_id or "").status
+            == ToolCallStatus.APPROVED
+        )
 
         destructive = await runtime._request_permission(
             turn.id,
@@ -457,7 +463,9 @@ def test_streamable_http_mcp_probe_injects_bearer_and_closes_session(tmp_path):
         def do_POST(self):
             length = int(self.headers.get("Content-Length", "0"))
             request = json.loads(self.rfile.read(length))
-            observed.append((request.get("method", ""), self.headers.get("Authorization")))
+            observed.append(
+                (request.get("method", ""), self.headers.get("Authorization"))
+            )
             method = request.get("method")
             if "id" not in request:
                 self.send_response(202)
@@ -558,9 +566,7 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
             "codex_app_server",
             "claude_agent_sdk",
         }
-        health = client.post(
-            f"/api/v1/harnesses/{profile.id}/health", headers=headers
-        )
+        health = client.post(f"/api/v1/harnesses/{profile.id}/health", headers=headers)
         assert health.status_code == 200
         assert health.json()["harness_version"] == "fixture-1"
         assert (
@@ -608,9 +614,7 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
             time.sleep(0.01)
         assert store.get(AgentRun, run_id).status == RunStatus.COMPLETE
 
-        discussed = client.post(
-            f"/api/v1/runs/{run_id}/discuss", headers=headers
-        )
+        discussed = client.post(f"/api/v1/runs/{run_id}/discuss", headers=headers)
         assert discussed.status_code == 200
         assert discussed.json()["id"] == body["session_id"]
         assert len(adapter.opens) == 1
@@ -651,9 +655,7 @@ def test_harness_export_closes_references_without_machine_credentials(tmp_path):
     with zipfile.ZipFile(destination) as archive:
         harness = json.loads(archive.read("entities/harnesses.json"))[0]
         server = json.loads(archive.read("entities/mcp_servers.json"))[0]
-        exported_session = json.loads(
-            archive.read("entities/harness_sessions.json")
-        )[0]
+        exported_session = json.loads(archive.read("entities/harness_sessions.json"))[0]
     assert harness["secret_ref"] is None
     assert server["bearer_secret_ref"] is None
     assert exported_session["id"] == session.id
@@ -701,9 +703,7 @@ def test_harness_chat_reuses_bounded_knowledge_with_privacy_confirmation(tmp_pat
     }
 
     with TestClient(app) as client:
-        blocked = client.post(
-            "/api/v1/chat/completions", headers=headers, json=payload
-        )
+        blocked = client.post("/api/v1/chat/completions", headers=headers, json=payload)
         assert blocked.status_code == 409
         assert "explicit operator confirmation" in blocked.json()["detail"]
 

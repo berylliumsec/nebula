@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from .diagnostics import (
+    create_diagnostic_task,
+    gather_diagnostic,
+    record_caught_exception,
+)
+
 import asyncio
 import base64
 import hashlib
@@ -458,7 +464,7 @@ class ContainerTerminalService:
         self._shutting_down = True
         async with self._lock:
             session_ids = list(self._sessions)
-        await asyncio.gather(
+        await gather_diagnostic(
             *(
                 self.finish(
                     session_id,
@@ -467,7 +473,10 @@ class ContainerTerminalService:
                 )
                 for session_id in session_ids
             ),
-            return_exceptions=True,
+            feature="terminal",
+            event_code="terminal.shutdown.session_failed",
+            failure_message="A terminal session did not shut down cleanly.",
+            stage="shutdown",
         )
 
     def capabilities(self, engagement_id: str) -> ContainerTerminalCapabilities:
@@ -481,6 +490,13 @@ class ContainerTerminalService:
                 self.tool_platform.resolve_human_terminal_profile(engagement_id)
                 ready = True
             except ToolPlatformError as exc:
+                record_caught_exception(
+                    "terminal",
+                    "terminal.container_terminal.caught_failure_001",
+                    "A handled terminal operation raised an exception.",
+                    exc,
+                    stage="container_terminal",
+                )
                 detail = str(exc)
         return ContainerTerminalCapabilities(
             engagement_id=engagement_id,
@@ -496,12 +512,26 @@ class ContainerTerminalService:
             response, _prepared = await self._create_preview(request)
             return response
         except ContainerTerminalError as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_002",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             return ContainerTerminalPreflightResponse(
                 allowed=False,
                 error_code=exc.code,
                 detail=exc.detail,
             )
         except ToolPlatformError as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_003",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             return ContainerTerminalPreflightResponse(
                 allowed=False,
                 error_code="runtime_unavailable",
@@ -629,8 +659,11 @@ class ContainerTerminalService:
                 )
                 self._sessions[session_id] = reservation
                 self._idempotency[key] = (request_fingerprint, session_id)
-                reservation.expiry_task = asyncio.create_task(
+                reservation.expiry_task = create_diagnostic_task(
                     self._expire_ticket(session_id),
+                    feature="terminal",
+                    event_code="terminal.ticket_expiry",
+                    failure_message="Terminal ticket expiry supervision failed.",
                     name=f"container-terminal-ticket-{session_id}",
                 )
         finally:
@@ -713,8 +746,11 @@ class ContainerTerminalService:
         if session.state == "pending":
             ticket_expires_at = now + timedelta(seconds=TICKET_TTL_SECONDS)
             self._cancel_session_task_locked(session, "expiry_task")
-            session.expiry_task = asyncio.create_task(
+            session.expiry_task = create_diagnostic_task(
                 self._expire_ticket(session.id),
+                feature="terminal",
+                event_code="terminal.ticket_expiry",
+                failure_message="Terminal ticket expiry supervision failed.",
                 name=f"container-terminal-ticket-{session.id}",
             )
         elif session.attachment is None and session.ticket_expires_at is not None:
@@ -730,8 +766,11 @@ class ContainerTerminalService:
         if session.attachment is not None:
             session.attachment.reconnect_ticket = ticket
         elif session.state == "running" and session.grace_task is None:
-            session.grace_task = asyncio.create_task(
+            session.grace_task = create_diagnostic_task(
                 self._expire_reconnect_grace(session.id),
+                feature="terminal",
+                event_code="terminal.reconnect_grace",
+                failure_message="Terminal reconnect-grace supervision failed.",
                 name=f"container-terminal-grace-{session.id}",
             )
 
@@ -847,7 +886,14 @@ class ContainerTerminalService:
             )
             try:
                 await self._launch_session(session_id, expected_state="launching")
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "terminal",
+                    "terminal.container_terminal.caught_failure_004",
+                    "A handled terminal operation raised an exception.",
+                    caught_error,
+                    stage="container_terminal",
+                )
                 await self.detach(attachment)
                 raise
         return attachment
@@ -906,8 +952,11 @@ class ContainerTerminalService:
                 session.ticket_expires_at = utc_now() + timedelta(
                     seconds=self.reconnect_grace_seconds
                 )
-                session.grace_task = asyncio.create_task(
+                session.grace_task = create_diagnostic_task(
                     self._expire_reconnect_grace(session.id),
+                    feature="terminal",
+                    event_code="terminal.reconnect_grace",
+                    failure_message="Terminal reconnect-grace supervision failed.",
                     name=f"container-terminal-grace-{session.id}",
                 )
 
@@ -973,6 +1022,13 @@ class ContainerTerminalService:
                 self.tool_platform.workspace_for(engagement_id),
             )
         except _WorkspaceLimitError as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_005",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             raise ContainerTerminalError("workspace_limit", str(exc)) from exc
 
     async def finish(
@@ -1005,7 +1061,13 @@ class ContainerTerminalService:
             if session.attachment is not None:
                 session.attachment.terminal_finishing = True
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await gather_diagnostic(
+                *tasks,
+                feature="terminal",
+                event_code="terminal.session.cleanup_task_failed",
+                failure_message="A terminal supervision task failed during cleanup.",
+                stage="cleanup",
+            )
         async with session.parser_lock:
             tail, unfinished_capture = await asyncio.to_thread(
                 _finish_terminal_parser,
@@ -1027,6 +1089,13 @@ class ContainerTerminalService:
             if session.process is not None:
                 await session.process.close()
         except Exception as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_006",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             cleanup_error = exc
         if cleanup_error is not None and detail is None:
             detail = f"terminal cleanup reported: {type(cleanup_error).__name__}"
@@ -1035,7 +1104,13 @@ class ContainerTerminalService:
             if unfinished_capture is not None:
                 await session.audit_queue.put(unfinished_capture)
             await session.audit_queue.put(None)
-            await asyncio.gather(session.audit_task, return_exceptions=True)
+            await gather_diagnostic(
+                session.audit_task,
+                feature="terminal-audit",
+                event_code="terminal-audit.writer.cleanup_failed",
+                failure_message="The terminal audit writer did not stop cleanly.",
+                stage="cleanup",
+            )
             session.audit_task = None
         elif unfinished_capture is not None:
             await self._persist_capture(session, unfinished_capture)
@@ -1103,6 +1178,13 @@ class ContainerTerminalService:
                 rows=session.request.rows,
             )
         except (SandboxError, ToolPlatformError) as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_007",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             await self.finish(
                 session_id,
                 outcome="failed",
@@ -1113,6 +1195,13 @@ class ContainerTerminalService:
                 "runner_unavailable", str(exc), status_code=503
             ) from exc
         except ContainerTerminalError as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_008",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             await self.finish(
                 session_id,
                 outcome="failed",
@@ -1121,6 +1210,13 @@ class ContainerTerminalService:
             )
             raise
         except Exception as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_009",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             detail = f"terminal launch failed ({type(exc).__name__})"
             await self.finish(
                 session_id,
@@ -1142,20 +1238,32 @@ class ContainerTerminalService:
                 current.process = process
                 current.state = "running"
                 current.last_activity = monotonic()
-                current.reader_task = asyncio.create_task(
+                current.reader_task = create_diagnostic_task(
                     self._read_process_output(current.id, process),
+                    feature="terminal",
+                    event_code="terminal.output_reader",
+                    failure_message="Terminal output supervision stopped unexpectedly.",
                     name=f"container-terminal-reader-{current.id}",
                 )
-                current.audit_task = asyncio.create_task(
+                current.audit_task = create_diagnostic_task(
                     self._audit_writer(current),
+                    feature="terminal-audit",
+                    event_code="terminal-audit.writer",
+                    failure_message="Terminal audit persistence stopped unexpectedly.",
                     name=f"container-terminal-audit-{current.id}",
                 )
-                current.monitor_task = asyncio.create_task(
+                current.monitor_task = create_diagnostic_task(
                     self._monitor_process(current.id, process),
+                    feature="terminal",
+                    event_code="terminal.process_monitor",
+                    failure_message="Terminal process monitoring stopped unexpectedly.",
                     name=f"container-terminal-monitor-{current.id}",
                 )
-                current.watchdog_task = asyncio.create_task(
+                current.watchdog_task = create_diagnostic_task(
                     self._watchdog(current.id),
+                    feature="terminal",
+                    event_code="terminal.idle_watchdog",
+                    failure_message="Terminal idle supervision stopped unexpectedly.",
                     name=f"container-terminal-watchdog-{current.id}",
                 )
                 session = current
@@ -1223,15 +1331,36 @@ class ContainerTerminalService:
                                 exit_code=command_record.exit_code,
                             )
                         except Exception as exc:
+                            record_caught_exception(
+                                "terminal",
+                                "terminal.container_terminal.caught_failure_010",
+                                "A handled terminal operation raised an exception.",
+                                exc,
+                                stage="container_terminal",
+                            )
                             LOGGER.warning(
                                 "terminal command history write failed (%s)",
                                 type(exc).__name__,
                             )
                 if not still_active:
                     return
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_011",
+                "A handled terminal operation raised an exception.",
+                caught_error,
+                stage="container_terminal",
+            )
             raise
         except Exception as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_012",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             await self.finish(
                 session_id,
                 outcome="failed",
@@ -1265,6 +1394,13 @@ class ContainerTerminalService:
                 capture=capture,
             )
         except Exception as exc:
+            record_caught_exception(
+                "terminal-audit",
+                "terminal-audit.persistence.caught_failure_013",
+                "A handled terminal audit operation raised an exception.",
+                exc,
+                stage="audit-persistence",
+            )
             LOGGER.error(
                 "terminal audit persistence failed for session %s (%s)",
                 session.id,
@@ -1285,7 +1421,14 @@ class ContainerTerminalService:
                     },
                     key=f"audit-gap-{capture.shell_sequence}",
                 )
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "terminal-audit",
+                    "terminal-audit.gap_event.caught_failure_014",
+                    "A terminal audit integrity gap could not be persisted.",
+                    caught_error,
+                    stage="audit-integrity",
+                )
                 LOGGER.exception("terminal audit-gap event persistence also failed")
 
     def _publish_output_locked(
@@ -1321,16 +1464,37 @@ class ContainerTerminalService:
             if reader is not None and reader is not asyncio.current_task():
                 try:
                     await asyncio.wait_for(asyncio.shield(reader), timeout=1)
-                except asyncio.TimeoutError:
+                except asyncio.TimeoutError as caught_error:
+                    record_caught_exception(
+                        "terminal",
+                        "terminal.container_terminal.caught_failure_015",
+                        "A handled terminal operation raised an exception.",
+                        caught_error,
+                        stage="container_terminal",
+                    )
                     pass
             await self.finish(
                 session_id,
                 outcome="completed",
                 exit_code=exit_code,
             )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_016",
+                "A handled terminal operation raised an exception.",
+                caught_error,
+                stage="container_terminal",
+            )
             raise
         except Exception as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_017",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             await self.finish(
                 session_id,
                 outcome="failed",
@@ -1345,6 +1509,13 @@ class ContainerTerminalService:
                 try:
                     await self.enforce_workspace_limits(session_id)
                 except ContainerTerminalError as exc:
+                    record_caught_exception(
+                        "terminal",
+                        "terminal.container_terminal.caught_failure_018",
+                        "A handled terminal operation raised an exception.",
+                        exc,
+                        stage="container_terminal",
+                    )
                     await self.finish(
                         session_id,
                         outcome="workspace_limit",
@@ -1360,7 +1531,14 @@ class ContainerTerminalService:
                         detail="terminal closed after 30 minutes without input or output",
                     )
                     return
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_019",
+                "A handled terminal operation raised an exception.",
+                caught_error,
+                stage="container_terminal",
+            )
             raise
 
     async def _expire_ticket(self, session_id: str) -> None:
@@ -1372,7 +1550,14 @@ class ContainerTerminalService:
                 detail="terminal WebSocket ticket expired before use",
                 error_code="ticket_expired",
             )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_020",
+                "A handled terminal operation raised an exception.",
+                caught_error,
+                stage="container_terminal",
+            )
             return
 
     async def _expire_reconnect_grace(self, session_id: str) -> None:
@@ -1384,7 +1569,14 @@ class ContainerTerminalService:
                 detail="terminal reconnect grace expired",
                 error_code="reconnect_timeout",
             )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_021",
+                "A handled terminal operation raised an exception.",
+                caught_error,
+                stage="container_terminal",
+            )
             return
 
     def _require_session_locked(self, session_id: str) -> _TerminalReservation:
@@ -1488,10 +1680,24 @@ class ContainerTerminalService:
                 self.tool_platform.workspace_for(request.engagement_id)
             )
         except _WorkspaceLimitError as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_022",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             raise ContainerTerminalError("workspace_limit", str(exc)) from exc
         try:
             self.tool_platform.resolve_human_terminal_profile(request.engagement_id)
         except ToolPlatformError as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_023",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             raise ContainerTerminalError(
                 "runner_unavailable", str(exc), status_code=503
             ) from exc
@@ -1500,6 +1706,13 @@ class ContainerTerminalService:
                 request.engagement_id
             )
         except ToolPlatformError as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_024",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             raise ContainerTerminalError(
                 "image_unavailable", str(exc), status_code=503
             ) from exc
@@ -1636,6 +1849,13 @@ class ContainerTerminalService:
             expected = hmac.new(self._preview_secret, payload, hashlib.sha256).digest()
             decoded = json.loads(payload)
         except Exception as exc:
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_025",
+                "A handled terminal operation raised an exception.",
+                exc,
+                stage="container_terminal",
+            )
             raise ContainerTerminalError(
                 "preview_stale", "terminal preview token is invalid"
             ) from exc
@@ -1679,12 +1899,21 @@ async def _feed_terminal_parser(
 ) -> TerminalCommandParseResult:
     """Finish an in-flight durable spool write before honoring cancellation."""
 
+    # diagnostic-expected: this filesystem worker is shielded, awaited, and
+    # cancellation is classified below before the durable write completes.
     worker = asyncio.create_task(asyncio.to_thread(parser.feed, data))
     try:
         return await asyncio.shield(worker)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as caught_error:
         # ``to_thread`` cannot stop the underlying filesystem operation. Wait
         # for it so the parser is never mutated after its session lock is freed.
+        record_caught_exception(
+            "terminal",
+            "terminal.container_terminal.caught_failure_026",
+            "A handled terminal operation raised an exception.",
+            caught_error,
+            stage="container_terminal",
+        )
         return await worker
 
 

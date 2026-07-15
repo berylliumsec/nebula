@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -103,6 +105,13 @@ class OperatorProfileService:
                     )
                 )
         except IntegrityError as exc:
+            record_caught_exception(
+                "projects",
+                "projects.operators.caught_failure_001",
+                "A handled projects operation raised an exception.",
+                exc,
+                stage="operators",
+            )
             raise ConflictError(f"entity already exists: {candidate.id}") from exc
         return candidate
 
@@ -224,7 +233,14 @@ class OperatorProfileService:
                 )
             yield connection
             connection.commit()
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "projects",
+                "projects.operators.caught_failure_002",
+                "A handled projects operation raised an exception.",
+                caught_error,
+                stage="operators",
+            )
             connection.rollback()
             raise
         finally:

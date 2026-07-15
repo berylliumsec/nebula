@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import os
 import re
 from dataclasses import dataclass
@@ -73,9 +75,16 @@ class CredentialStore:
         if self.keyring_backend is None:
             try:
                 self.keyring_backend = cast(KeyringBackend, keyring.get_keyring())
-            except Exception:
+            except Exception as caught_error:
                 # The package is a required Core dependency, but an OS vault
                 # backend may still be absent, disabled, or fail to initialize.
+                record_caught_exception(
+                    "providers",
+                    "providers.credentials.caught_failure_001",
+                    "A handled providers operation raised an exception.",
+                    caught_error,
+                    stage="credentials",
+                )
                 self.keyring_backend = None
 
     @property
@@ -92,7 +101,14 @@ class CredentialStore:
         try:
             priority = self.keyring_backend.priority
             return bool(priority and priority > 0)
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "providers",
+                "providers.credentials.caught_failure_002",
+                "A handled providers operation raised an exception.",
+                caught_error,
+                stage="credentials",
+            )
             return False
 
     def create(self, request: CredentialCreateRequest) -> CredentialStatus:
@@ -114,6 +130,13 @@ class CredentialStore:
         try:
             self.keyring_backend.set_password(_SERVICE_NAME, identifier, value)
         except Exception as exc:
+            record_caught_exception(
+                "providers",
+                "providers.credentials.caught_failure_003",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="credentials",
+            )
             raise CredentialUnavailableError(
                 "the operating-system credential vault could not save the credential"
             ) from exc
@@ -176,6 +199,13 @@ class CredentialStore:
             )
         except Exception as exc:
             # Deletion stays idempotent for backends that report a missing item.
+            record_caught_exception(
+                "providers",
+                "providers.credentials.caught_failure_004",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="credentials",
+            )
             if self._vault_value(reference) is not None:
                 raise CredentialUnavailableError(
                     "the operating-system credential vault could not delete the credential"
@@ -188,7 +218,14 @@ class CredentialStore:
             return self.keyring_backend.get_password(
                 _SERVICE_NAME, reference.removeprefix("vault:")
             )
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "providers",
+                "providers.credentials.caught_failure_005",
+                "A handled providers operation raised an exception.",
+                caught_error,
+                stage="credentials",
+            )
             return None
 
     @staticmethod

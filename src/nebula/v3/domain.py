@@ -6,6 +6,8 @@ by the API, providers, policy engine, importers, and future GUI clients.
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import ipaddress
 import re
 from datetime import datetime, timezone
@@ -394,6 +396,13 @@ class ScopePolicy(Entity):
                 parsed = urlsplit(value)
                 port = parsed.port
             except ValueError as exc:
+                record_caught_exception(
+                    "projects",
+                    "projects.domain.caught_failure_001",
+                    "A handled projects operation raised an exception.",
+                    exc,
+                    stage="domain",
+                )
                 raise ValueError(f"invalid scoped URL: {value}") from exc
             if parsed.scheme.lower() not in {"http", "https"}:
                 raise ValueError("scoped URLs must use http or https")
@@ -408,6 +417,13 @@ class ScopePolicy(Entity):
             try:
                 host = parsed.hostname.encode("idna").decode("ascii").lower()
             except UnicodeError as exc:
+                record_caught_exception(
+                    "projects",
+                    "projects.domain.caught_failure_002",
+                    "A handled projects operation raised an exception.",
+                    exc,
+                    stage="domain",
+                )
                 raise ValueError(f"invalid scoped URL hostname: {value}") from exc
             if ":" in host:
                 host = f"[{host}]"
@@ -1033,9 +1049,7 @@ class ProviderProfile(Entity):
             r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
             value,
         ):
-            raise ValueError(
-                "secret_ref must use env:NAME, vault:ID, or session:ID"
-            )
+            raise ValueError("secret_ref must use env:NAME, vault:ID, or session:ID")
         return value
 
     @field_validator("model_allowlist")
@@ -1144,7 +1158,9 @@ class HarnessProfile(Entity):
         if self.auth_mode != HarnessAuthMode.EXISTING_SESSION and not self.secret_ref:
             raise ValueError("selected harness authentication requires secret_ref")
         if self.auth_mode == HarnessAuthMode.EXISTING_SESSION and self.secret_ref:
-            raise ValueError("existing-session authentication cannot store a secret_ref")
+            raise ValueError(
+                "existing-session authentication cannot store a secret_ref"
+            )
         if self.connection_mode == HarnessConnectionMode.SPAWN:
             if self.endpoint is not None:
                 raise ValueError("spawned harnesses cannot define endpoint")
@@ -1158,8 +1174,13 @@ class HarnessProfile(Entity):
             if self.kind != HarnessKind.CODEX_APP_SERVER:
                 raise ValueError("endpoint mode is currently supported only for Codex")
             if self.executable is not None or not self.endpoint:
-                raise ValueError("endpoint harnesses require endpoint and no executable")
-            if self.transport not in {HarnessTransport.UNIX, HarnessTransport.WEBSOCKET}:
+                raise ValueError(
+                    "endpoint harnesses require endpoint and no executable"
+                )
+            if self.transport not in {
+                HarnessTransport.UNIX,
+                HarnessTransport.WEBSOCKET,
+            }:
                 raise ValueError("Codex endpoints must use unix or websocket")
             if self.transport == HarnessTransport.UNIX:
                 if not self.endpoint.startswith("unix://"):
@@ -1176,13 +1197,22 @@ class HarnessProfile(Entity):
                     "::1",
                     "localhost",
                 }:
-                    raise ValueError("websocket harness endpoints must be loopback ws://")
-                if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                    raise ValueError(
+                        "websocket harness endpoints must be loopback ws://"
+                    )
+                if (
+                    parsed.username
+                    or parsed.password
+                    or parsed.query
+                    or parsed.fragment
+                ):
                     raise ValueError(
                         "websocket harness endpoints cannot embed credentials or query data"
                     )
             if self.auth_mode == HarnessAuthMode.SECRET_REF:
-                raise ValueError("endpoint harnesses use endpoint_bearer authentication")
+                raise ValueError(
+                    "endpoint harnesses use endpoint_bearer authentication"
+                )
         return self
 
 
@@ -1254,7 +1284,9 @@ class McpServerProfile(Entity):
                 r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
                 item,
             ):
-                raise ValueError("MCP secrets must use env:, vault:, or session: references")
+                raise ValueError(
+                    "MCP secrets must use env:, vault:, or session: references"
+                )
         return value
 
     @field_validator("arguments")
@@ -1268,8 +1300,7 @@ class McpServerProfile(Entity):
     @classmethod
     def header_names_are_valid(cls, value: dict[str, str]) -> dict[str, str]:
         if any(
-            not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name)
-            for name in value
+            not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name) for name in value
         ):
             raise ValueError("MCP secret header names must be valid HTTP field names")
         return value
@@ -1280,14 +1311,14 @@ class McpServerProfile(Entity):
         cls, value: dict[str, str]
     ) -> dict[str, str]:
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in value):
-            raise ValueError("MCP secret environment names must be portable identifiers")
+            raise ValueError(
+                "MCP secret environment names must be portable identifiers"
+            )
         return value
 
     @field_validator("environment")
     @classmethod
-    def literal_environment_is_nonsecret(
-        cls, value: dict[str, str]
-    ) -> dict[str, str]:
+    def literal_environment_is_nonsecret(cls, value: dict[str, str]) -> dict[str, str]:
         for name, item in value.items():
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
                 raise ValueError("MCP environment names must be portable identifiers")
@@ -1299,7 +1330,9 @@ class McpServerProfile(Entity):
                     "credential-like MCP environment values require environment_secret_refs"
                 )
             if len(item) > 8_192:
-                raise ValueError("MCP environment values must be at most 8192 characters")
+                raise ValueError(
+                    "MCP environment values must be at most 8192 characters"
+                )
         return value
 
     @model_validator(mode="after")
@@ -1317,16 +1350,13 @@ class McpServerProfile(Entity):
                 raise ValueError("workspace MCP cwd policy cannot define cwd")
         else:
             if self.command is not None or self.arguments or not self.url:
-                raise ValueError("HTTP MCP servers require URL and no command arguments")
+                raise ValueError(
+                    "HTTP MCP servers require URL and no command arguments"
+                )
             parsed = urlsplit(self.url)
             if parsed.scheme not in {"http", "https"} or not parsed.hostname:
                 raise ValueError("MCP URL must use http or https")
-            if (
-                parsed.username
-                or parsed.password
-                or parsed.query
-                or parsed.fragment
-            ):
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
                 raise ValueError(
                     "MCP URLs cannot embed credentials, query data, or fragments"
                 )
@@ -1526,13 +1556,17 @@ class ChatSession(Entity):
                 value is not None
                 for value in (self.harness_profile_id, self.harness_session_id)
             ):
-                raise ValueError("provider chat sessions require only provider_profile_id")
+                raise ValueError(
+                    "provider chat sessions require only provider_profile_id"
+                )
         elif (
             not self.harness_profile_id
             or not self.harness_session_id
             or self.provider_profile_id is not None
         ):
-            raise ValueError("harness chat sessions require harness profile and session")
+            raise ValueError(
+                "harness chat sessions require harness profile and session"
+            )
         return self
 
 
@@ -1607,9 +1641,7 @@ class ExecutionOrigin(NebulaModel):
     selection_start_byte: int | None = Field(default=None, ge=0, le=1_000_000)
     selection_end_byte: int | None = Field(default=None, ge=0, le=1_000_000)
     execution_id: str | None = Field(default=None, max_length=200)
-    source_kind: str | None = Field(
-        default=None, pattern=r"^[a-z0-9._-]{1,100}$"
-    )
+    source_kind: str | None = Field(default=None, pattern=r"^[a-z0-9._-]{1,100}$")
     source_id: str | None = Field(default=None, max_length=200)
     source_label: str | None = Field(default=None, min_length=1, max_length=500)
     source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")

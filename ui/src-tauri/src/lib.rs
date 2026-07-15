@@ -1,6 +1,14 @@
+#![deny(unused_must_use)]
+
+mod diagnostics;
 mod release;
 mod sidecar;
 
+use diagnostics::{
+    DiagnosticLevel, DiagnosticsState, diagnostics_files, diagnostics_get_settings,
+    diagnostics_log_frontend, diagnostics_recent_errors, diagnostics_reveal_logs,
+    diagnostics_status, diagnostics_update_settings, install_panic_hook,
+};
 use release::{check_for_update, install_available_update, release_info, restart_application};
 use sidecar::{BackendState, backend_status, start_local_backend, stop_local_backend};
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -9,6 +17,28 @@ use tauri::{Emitter, Manager, Wry};
 fn build_app() -> tauri::App<Wry> {
     let builder = tauri::Builder::default()
         .manage(BackendState::default())
+        .manage(DiagnosticsState::default())
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let app_data_dir = app.path().app_data_dir()?;
+            let diagnostics = DiagnosticsState::clone(&*app.state::<DiagnosticsState>());
+            if let Err(error) = diagnostics.initialize(&app_data_dir) {
+                // The application remains usable so the interface can show its
+                // persistent diagnostics-unavailable state and emergency detail.
+                eprintln!("NEBULA_DIAGNOSTICS_UNAVAILABLE {error}");
+            }
+            install_panic_hook(diagnostics.clone());
+            diagnostics.record_desktop(
+                DiagnosticLevel::Info,
+                "desktop.application.starting",
+                "Nebula desktop is starting.",
+                Some("started"),
+                Some("bootstrap"),
+                None,
+                serde_json::Map::new(),
+            );
+            Ok(())
+        })
         .menu(|app| {
             let home = MenuItemBuilder::with_id("home", "Home")
                 .accelerator("CmdOrCtrl+1")
@@ -89,8 +119,17 @@ fn build_app() -> tauri::App<Wry> {
                     | "new-contextual"
                     | "toggle-sidebar"
                     | "toggle-inspector"
-            ) {
-                let _ = app.emit("nebula-menu-command", command);
+            ) && app.emit("nebula-menu-command", command).is_err()
+            {
+                app.state::<DiagnosticsState>().record_desktop(
+                    DiagnosticLevel::Error,
+                    "desktop.menu.dispatch_failed",
+                    "A native menu action could not be delivered to the interface.",
+                    Some("failure"),
+                    Some("menu-dispatch"),
+                    Some(true),
+                    serde_json::Map::new(),
+                );
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -100,7 +139,14 @@ fn build_app() -> tauri::App<Wry> {
             release_info,
             check_for_update,
             install_available_update,
-            restart_application
+            restart_application,
+            diagnostics_get_settings,
+            diagnostics_update_settings,
+            diagnostics_log_frontend,
+            diagnostics_files,
+            diagnostics_recent_errors,
+            diagnostics_status,
+            diagnostics_reveal_logs
         ]);
 
     #[cfg(feature = "direct-updater")]
@@ -123,7 +169,12 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::Exit) {
-            sidecar::stop_managed_backend(&app_handle.state::<BackendState>());
+            let diagnostics = app_handle.state::<DiagnosticsState>();
+            if let Err(error) =
+                sidecar::stop_managed_backend(&app_handle.state::<BackendState>(), &diagnostics)
+            {
+                eprintln!("NEBULA_DIAGNOSTICS_UNAVAILABLE desktop shutdown: {error}");
+            }
         }
     });
 }

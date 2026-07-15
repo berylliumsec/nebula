@@ -34,6 +34,8 @@ def build_metadata() -> BuildMetadata:
     try:
         payload = json.loads(resource.read_text(encoding="utf-8"))
     except FileNotFoundError:
+        # diagnostic-expected: source checkouts intentionally have no baked
+        # BUILD_INFO resource; frozen builds fail closed below.
         if getattr(sys, "frozen", False):
             raise RuntimeError("frozen Nebula Core is missing BUILD_INFO.json")
         payload = {
@@ -46,6 +48,8 @@ def build_metadata() -> BuildMetadata:
             ),
         }
     except (json.JSONDecodeError, OSError) as exc:
+        # diagnostic-expected: callers classify this startup integrity failure
+        # because diagnostics imports this dependency while bootstrapping.
         raise RuntimeError("Nebula Core build metadata is unreadable") from exc
 
     required = (

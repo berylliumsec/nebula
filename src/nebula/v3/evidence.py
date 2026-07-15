@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import base64
 import binascii
 from io import BytesIO
@@ -137,6 +139,13 @@ class EvidenceUploadRequest(NebulaModel):
                 separators=(",", ":"),
             ).encode("utf-8")
         except (TypeError, ValueError) as exc:
+            record_caught_exception(
+                "evidence",
+                "evidence.evidence.caught_failure_001",
+                "A handled evidence operation raised an exception.",
+                exc,
+                stage="evidence",
+            )
             raise ValueError("evidence metadata must be valid JSON") from exc
         if len(encoded) > MAX_EVIDENCE_METADATA_BYTES:
             raise ValueError("evidence metadata exceeds the 16 KiB limit")
@@ -156,6 +165,13 @@ class EvidenceUploadRequest(NebulaModel):
                 separators=(",", ":"),
             ).encode("utf-8")
         except (TypeError, ValueError) as exc:
+            record_caught_exception(
+                "evidence",
+                "evidence.evidence.caught_failure_002",
+                "A handled evidence operation raised an exception.",
+                exc,
+                stage="evidence",
+            )
             raise ValueError("edit_recipe must be valid JSON") from exc
         if len(encoded) > MAX_EVIDENCE_METADATA_BYTES:
             raise ValueError("edit_recipe exceeds the 16 KiB limit")
@@ -166,6 +182,13 @@ class EvidenceUploadRequest(NebulaModel):
         try:
             data = base64.b64decode(self.content_base64, validate=True)
         except (binascii.Error, ValueError) as exc:
+            record_caught_exception(
+                "evidence",
+                "evidence.evidence.caught_failure_003",
+                "A handled evidence operation raised an exception.",
+                exc,
+                stage="evidence",
+            )
             raise InvalidEvidenceUploadError(
                 "content_base64 must be valid base64"
             ) from exc
@@ -263,7 +286,14 @@ def _verify_image_decode(data: bytes, media_type: str, width: int, height: int) 
                         "image decoder metadata does not match the raster header"
                     )
                 image.load()
-    except InvalidEvidenceUploadError:
+    except InvalidEvidenceUploadError as caught_error:
+        record_caught_exception(
+            "evidence",
+            "evidence.evidence.caught_failure_004",
+            "A handled evidence operation raised an exception.",
+            caught_error,
+            stage="evidence",
+        )
         raise
     except (
         Image.DecompressionBombError,
@@ -273,6 +303,13 @@ def _verify_image_decode(data: bytes, media_type: str, width: int, height: int) 
         SyntaxError,
         ValueError,
     ) as exc:
+        record_caught_exception(
+            "evidence",
+            "evidence.evidence.caught_failure_005",
+            "A handled evidence operation raised an exception.",
+            exc,
+            stage="evidence",
+        )
         raise InvalidEvidenceUploadError(
             "image evidence is truncated or corrupt"
         ) from exc
@@ -587,7 +624,14 @@ def upload_evidence(
                     },
                     expected_revision=finding.revision,
                 )
-    except Exception:
+    except Exception as caught_error:
+        record_caught_exception(
+            "evidence",
+            "evidence.evidence.caught_failure_006",
+            "A handled evidence operation raised an exception.",
+            caught_error,
+            stage="evidence",
+        )
         artifact_store.discard_new_blob(stored)
         raise
     return evidence

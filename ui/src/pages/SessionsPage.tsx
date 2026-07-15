@@ -50,6 +50,7 @@ import { WorkspacePanel } from "../components/WorkspacePanel";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { AgentsPage } from "./AgentsPage";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 type SessionView = "chat" | "terminal" | "missions" | "activity" | "workspace" | "notes";
 type MessageState = "complete" | "streaming" | "waiting_approval" | "error" | "cancelled";
@@ -213,7 +214,7 @@ export function SessionsPage() {
     const key = `${selectedProvider.id}:${model.trim()}`;
     if (attemptedToolVerificationRef.current.has(key)) return;
     attemptedToolVerificationRef.current.add(key);
-    void reverifyProvider(selectedProvider.id, model).catch(() => undefined);
+    void reverifyProvider(selectedProvider.id, model).catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_01", "A handled interface operation failed.", caughtError, "sessions_page"); return undefined; });
   }, [coreState, model, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
 
   useEffect(() => {
@@ -263,7 +264,8 @@ export function SessionsPage() {
       if (!active) return;
       setAssignedToolCount(tools.length);
       setToolRuntimeReason(unavailableReason);
-    }).catch(() => {
+    }).catch((caughtError) => {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_02", "A handled interface operation failed.", caughtError, "sessions_page");
       if (!active) return;
       setAssignedToolCount(0);
       setToolRuntimeReason("Toolbox configuration is unavailable.");
@@ -290,7 +292,8 @@ export function SessionsPage() {
       setHarnessSessions(nextSessions.filter((item) => item.status !== "closed"));
       setMcpServers(nextServers.filter((item) => item.enabled));
       setHarnessId((current) => enabled.some((item) => item.id === current) ? current : enabled[0]?.id ?? "");
-    }).catch(() => {
+    }).catch((caughtError) => {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_03", "A handled interface operation failed.", caughtError, "sessions_page");
       if (active) { setHarnesses([]); setHarnessSessions([]); setMcpServers([]); }
     });
     return () => { active = false; };
@@ -371,7 +374,7 @@ export function SessionsPage() {
     const controller = new AbortController();
     void api.executionCapabilities(engagement.id, controller.signal)
       .then(setExecutionCapabilities)
-      .catch(() => setExecutionCapabilities(undefined));
+      .catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_04", "A handled interface operation failed.", caughtError, "sessions_page"); return setExecutionCapabilities(undefined); });
     return () => controller.abort();
   }, [api, coreState, engagement]);
 
@@ -384,6 +387,7 @@ export function SessionsPage() {
     void api.listChatSessions(engagement.id, controller.signal)
       .then((page) => setSessions(page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))))
       .catch((error) => {
+        void logCaughtDiagnostic("interface.sessions_page.caught_failure_05", "A handled interface operation failed.", error, "sessions_page");
         if (!controller.signal.aborted) setChatError(error instanceof Error ? error.message : "Could not load conversations.");
       });
     return () => controller.abort();
@@ -434,6 +438,7 @@ export function SessionsPage() {
       setSessions((current) => current.filter((item) => item.id !== session.id));
       if (sessionId === session.id) newConversation();
     } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_06", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not delete the conversation.");
     } finally {
       setDeletingSessionId(undefined);
@@ -479,6 +484,7 @@ export function SessionsPage() {
       setRenamingSessionId(undefined);
       setRenameDraft("");
     } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_07", "A handled interface operation failed.", error, "sessions_page");
       setRenameError(error instanceof Error ? error.message : "Could not rename the conversation.");
     }
   };
@@ -512,7 +518,7 @@ export function SessionsPage() {
       const summary = sessions.find((session) => session.id === id);
       const [history, pendingTurn] = await Promise.all([
         api.listChatMessages(id),
-        api.getPendingChatTurn(id).catch(() => undefined),
+        api.getPendingChatTurn(id).catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_08", "A handled interface operation failed.", caughtError, "sessions_page"); return undefined; }),
       ]);
       setSessionId(id);
       setMessages(history.map(persistedMessage));
@@ -571,6 +577,7 @@ export function SessionsPage() {
           ).then(async (response) => {
             if (response?.sessionId) await refreshSessions(response.sessionId);
           }).catch((error) => {
+            void logCaughtDiagnostic("interface.sessions_page.caught_failure_09", "A handled interface operation failed.", error, "sessions_page");
             setChatError(error instanceof Error ? error.message : "Could not restore the pending response.");
           }).finally(() => setSending(false));
         }
@@ -581,6 +588,7 @@ export function SessionsPage() {
       setView("chat");
       setMobileListOpen(false);
     } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_10", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not load the selected conversation.");
     } finally {
       setLoadingHistory(false);
@@ -616,6 +624,7 @@ export function SessionsPage() {
       setView("chat");
       setMobileListOpen(false);
     } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_11", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not open the execution conversation.");
     } finally {
       setLoadingHistory(false);
@@ -741,6 +750,7 @@ export function SessionsPage() {
         ? [await createHashedSelectionAttachment(assistantDraft)]
         : undefined;
     } catch (attachmentError) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_12", "A handled interface operation failed.", attachmentError, "sessions_page");
       setChatError(attachmentError instanceof Error ? attachmentError.message : "Could not attach the selected text.");
       return;
     }
@@ -809,6 +819,7 @@ export function SessionsPage() {
         await refreshSessions(returnedSessionId);
       }
     } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_13", "A handled interface operation failed.", error, "sessions_page");
       const cancelled = controller.signal.aborted;
       const detail = cancelled ? "Response stopped by the operator." : error instanceof Error ? error.message : "Chat completion failed.";
       setMessages((current) => current.map((message) => message.id === assistantId
@@ -820,7 +831,8 @@ export function SessionsPage() {
           const authoritative = await api.listChatMessages(returnedSessionId);
           if (authoritative.length) setMessages(authoritative.map(persistedMessage));
           await refreshSessions(returnedSessionId);
-        } catch {
+        } catch (caughtError) {
+          void logCaughtDiagnostic("interface.sessions_page.caught_failure_14", "A handled interface operation failed.", caughtError, "sessions_page");
           // Keep the visible safe error when Core history cannot be refreshed.
           setSessionId(initialSessionId ?? "");
         }
@@ -902,6 +914,7 @@ export function SessionsPage() {
         await refreshSessions(response.sessionId);
       }
     } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_15", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not resume the response.");
     } finally {
       setSending(false);
@@ -949,6 +962,7 @@ export function SessionsPage() {
       });
       setView("missions");
     } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_16", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not continue this chat as a mission.");
     }
   };
@@ -988,7 +1002,7 @@ export function SessionsPage() {
           <nav>
             <button className={!sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
             {sessions.map((session) => <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" type="button" onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><button className="icon-button subtle" type="button" aria-label={`Rename conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Rename ${session.title}`} onClick={() => startRenamingConversation(session)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Delete ${session.title}`} onClick={() => void deleteConversation(session)}>{deletingSessionId === session.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></>}</div>)}
-            {renameError && <p className="session-list-error" role="alert">{renameError}</p>}
+            {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
         </aside>}
         <section className="session-workspace">
@@ -1041,12 +1055,12 @@ export function SessionsPage() {
                     tabIndex={-1}
                   >
                     <span className="chat-avatar">{message.role === "user" ? "You" : "N"}</span>
-                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}</div>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}{message.detail && <p className="chat-message-error" role="alert">{message.detail}</p>}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
+                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}</div>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}{message.detail && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
                   </article>
                 )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use project-assigned Toolbox capabilities when the exact model is verified.</p></div>}
               </div>
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
-              {chatError && <p className="chat-error" role="alert">{chatError}</p>}
+              {chatError && <DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />}
               <form className="chat-composer" onSubmit={(event) => void submit(event)}>
                 {assistantDraft && <div className="chat-context-attachment" role="group" aria-label="Selected context attachment">
                   <div><strong>{assistantDraft.source.label}</strong><small>{assistantDraft.text.length.toLocaleString()} characters{assistantDraft.truncated ? " · truncated to the first 20,000" : ""}</small></div>

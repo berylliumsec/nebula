@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import asyncio
 import hashlib
 import ipaddress
@@ -27,6 +29,12 @@ from sqlalchemy.engine import make_url
 from .api import create_app
 from .artifacts import ArtifactStore
 from .database import Database
+from .diagnostics import (
+    configure_diagnostics,
+    get_diagnostics,
+    install_exception_hooks,
+    record_diagnostic,
+)
 from .domain import (
     AgentRun,
     Artifact,
@@ -69,7 +77,13 @@ tools_app = typer.Typer(
     help="Install, verify, and author isolated Nebula tool packs.",
     no_args_is_help=True,
 )
+diagnostics_app = typer.Typer(
+    name="diagnostics",
+    help="Inspect and configure privacy-preserving local diagnostics.",
+    no_args_is_help=True,
+)
 app.add_typer(tools_app, name="tools")
+app.add_typer(diagnostics_app, name="diagnostics")
 
 
 @tools_app.callback()
@@ -100,8 +114,25 @@ def _data_dir(value: Path | None = None) -> Path:
     return path
 
 
-def _services(value: Path | None = None) -> tuple[Path, NebulaStore, ArtifactStore]:
+def _diagnostic_manager(root: Path, *, level_override: str | None = None):
+    current = get_diagnostics()
+    expected_log_dir = Path(os.getenv("NEBULA_V3_LOG_DIR", root / "logs")).resolve()
+    if (
+        current is None
+        or current.data_dir != root
+        or current.log_dir != expected_log_dir
+        or level_override is not None
+    ):
+        current = configure_diagnostics(root, level_override=level_override)
+        install_exception_hooks()
+    return current
+
+
+def _services(
+    value: Path | None = None, *, diagnostics_level: str | None = None
+) -> tuple[Path, NebulaStore, ArtifactStore]:
     root = _data_dir(value)
+    _diagnostic_manager(root, level_override=diagnostics_level)
     database_url = os.getenv("NEBULA_V3_DATABASE_URL")
     database = Database(database_url or root / "nebula.db")
     artifact_root = Path(os.getenv("NEBULA_V3_ARTIFACT_DIR", root / "artifacts"))
@@ -127,7 +158,14 @@ def _is_loopback(host: str) -> bool:
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
-    except ValueError:
+    except ValueError as caught_error:
+        record_caught_exception(
+            "diagnostics",
+            "diagnostics.cli.caught_failure_001",
+            "A handled diagnostics operation raised an exception.",
+            caught_error,
+            stage="cli",
+        )
         pass
     try:
         addresses = {
@@ -138,7 +176,14 @@ def _is_loopback(host: str) -> bool:
                 type=socket.SOCK_STREAM,
             )
         }
-    except (socket.gaierror, ValueError):
+    except (socket.gaierror, ValueError) as caught_error:
+        record_caught_exception(
+            "diagnostics",
+            "diagnostics.cli.caught_failure_002",
+            "A handled diagnostics operation raised an exception.",
+            caught_error,
+            stage="cli",
+        )
         return False
     return bool(addresses) and all(address.is_loopback for address in addresses)
 
@@ -165,6 +210,13 @@ def serve(
         typer.Option(help="Serve a built browser workspace from this directory."),
     ] = None,
     open_browser: Annotated[bool, typer.Option(hidden=True)] = False,
+    diagnostics_level: Annotated[
+        str | None,
+        typer.Option(
+            "--diagnostics-level",
+            help="Process-only diagnostics level override (debug, info, warning, error, critical).",
+        ),
+    ] = None,
 ) -> None:
     """Run the versioned REST/WebSocket API."""
 
@@ -181,6 +233,13 @@ def serve(
         try:
             bootstrap = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            record_caught_exception(
+                "diagnostics",
+                "diagnostics.cli.caught_failure_003",
+                "A handled diagnostics operation raised an exception.",
+                exc,
+                stage="cli",
+            )
             raise typer.BadParameter("malformed desktop bootstrap frame") from exc
         if (
             not isinstance(bootstrap, dict)
@@ -192,7 +251,15 @@ def serve(
         auth_token = bootstrap["ipc_token"]
     else:
         auth_token = token or secrets.token_urlsafe(32)
-    root, store, artifacts = _services(data_dir)
+    root, store, artifacts = _services(data_dir, diagnostics_level=diagnostics_level)
+    record_diagnostic(
+        "info",
+        "api",
+        "api.process.starting",
+        "Nebula Core API is starting.",
+        outcome="started",
+        metadata={"mode": "desktop" if handshake_stdout else "headless"},
+    )
     tool_platform = default_tool_platform(
         store=store, artifact_store=artifacts, data_root=root
     )
@@ -204,10 +271,18 @@ def serve(
         tool_platform=tool_platform,
         execution_data_root=root,
         bootstrap_workspace=True,
+        allow_browser_diagnostic_events=(not handshake_stdout and static_dir is None),
     )
     try:
         bind_address = ipaddress.ip_address(host)
-    except ValueError:
+    except ValueError as caught_error:
+        record_caught_exception(
+            "diagnostics",
+            "diagnostics.cli.caught_failure_004",
+            "A handled diagnostics operation raised an exception.",
+            caught_error,
+            stage="cli",
+        )
         bind_address = None
     family = (
         socket.AF_INET6
@@ -245,7 +320,11 @@ def serve(
         )
     if open_browser:
         webbrowser.open(f"http://127.0.0.1:{port}/#token={auth_token}")
-    config = uvicorn.Config(api, host=host, port=port, log_level="info")
+    # Request summaries are emitted by the sanitizing API middleware. Raw
+    # server access logs can include untrusted path/query data and stay off.
+    config = uvicorn.Config(
+        api, host=host, port=port, log_level="error", access_log=False
+    )
     server = uvicorn.Server(config)
     if handshake_stdout:
 
@@ -261,7 +340,35 @@ def serve(
             name="nebula-desktop-lifetime",
             daemon=True,
         ).start()
-    server.run(sockets=[listener])
+    try:
+        server.run(sockets=[listener])
+    except BaseException as exc:
+        record_caught_exception(
+            "diagnostics",
+            "diagnostics.cli.caught_failure_005",
+            "A handled diagnostics operation raised an exception.",
+            exc,
+            stage="cli",
+        )
+        record_diagnostic(
+            "critical",
+            "api",
+            "api.process.failed",
+            "Nebula Core API stopped unexpectedly.",
+            outcome="failure",
+            stage="server",
+            retryable=True,
+            exception=exc,
+        )
+        raise
+    finally:
+        record_diagnostic(
+            "info",
+            "api",
+            "api.process.stopped",
+            "Nebula Core API stopped.",
+            outcome="success",
+        )
 
 
 @app.command()
@@ -807,6 +914,7 @@ def migrate(
     """Upgrade the configured SQLite/PostgreSQL schema with Alembic."""
 
     root = _data_dir(data_dir)
+    _diagnostic_manager(root)
     database_url = os.getenv("NEBULA_V3_DATABASE_URL") or (
         f"sqlite:///{(root / 'nebula.db').as_posix()}"
     )
@@ -815,9 +923,106 @@ def migrate(
         "script_location", str(Path(__file__).with_name("migrations"))
     )
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
-    command.upgrade(config, "head")
+    try:
+        command.upgrade(config, "head")
+    except Exception as exc:
+        record_caught_exception(
+            "diagnostics",
+            "diagnostics.cli.caught_failure_006",
+            "A handled diagnostics operation raised an exception.",
+            exc,
+            stage="cli",
+        )
+        record_diagnostic(
+            "critical",
+            "storage",
+            "storage.migration.failed",
+            "The Nebula database migration failed.",
+            outcome="failure",
+            stage="migration",
+            retryable=False,
+            exception=exc,
+        )
+        raise
+    record_diagnostic(
+        "info",
+        "storage",
+        "storage.migration.completed",
+        "The Nebula database migration completed.",
+        outcome="success",
+        stage="migration",
+    )
     safe_url = make_url(database_url).render_as_string(hide_password=True)
     _print({"status": "ok", "revision": "head", "database": safe_url})
+
+
+@diagnostics_app.command("status")
+def diagnostics_status(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Show logger health, active levels, rotation, queue, and disk usage."""
+
+    root = _data_dir(data_dir)
+    _print(_diagnostic_manager(root).status())
+
+
+@diagnostics_app.command("set-level")
+def diagnostics_set_level(
+    level: Annotated[
+        str, typer.Argument(help="debug, info, warning, error, or critical")
+    ],
+    feature: Annotated[
+        str | None,
+        typer.Option("--feature", help="Optional feature-domain override."),
+    ] = None,
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Persist a global or per-feature local diagnostics level."""
+
+    root = _data_dir(data_dir)
+    manager = _diagnostic_manager(root)
+    payload = manager.settings.as_dict()
+    if feature is None:
+        payload["global_level"] = level
+    else:
+        feature_levels = dict(payload["feature_levels"])
+        feature_levels[feature] = level
+        payload["feature_levels"] = feature_levels
+    try:
+        settings = manager.update_settings(payload)
+    except ValueError as exc:
+        record_caught_exception(
+            "diagnostics",
+            "diagnostics.cli.caught_failure_007",
+            "A handled diagnostics operation raised an exception.",
+            exc,
+            stage="cli",
+        )
+        raise typer.BadParameter(str(exc)) from exc
+    _print({"status": "ok", "settings": settings.as_dict()})
+
+
+@diagnostics_app.command("reset-levels")
+def diagnostics_reset_levels(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Restore errors-only diagnostics and remove feature overrides."""
+
+    root = _data_dir(data_dir)
+    settings = _diagnostic_manager(root).reset_settings()
+    _print({"status": "ok", "settings": settings.as_dict()})
+
+
+@diagnostics_app.command("export")
+def diagnostics_export(
+    output: Annotated[Path, typer.Argument(help="Destination .zip file.")],
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Generate a local, redacted diagnostics support bundle."""
+
+    root = _data_dir(data_dir)
+    destination = _diagnostic_manager(root).export(output)
+    _print({"status": "ok", "path": str(destination)})
 
 
 @app.command()
@@ -862,7 +1067,14 @@ def doctor(
             referenced_digests.add(artifact.sha256)
             try:
                 valid = artifacts.verify(artifact)
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "diagnostics",
+                    "diagnostics.cli.caught_failure_008",
+                    "A handled diagnostics operation raised an exception.",
+                    caught_error,
+                    stage="cli",
+                )
                 valid = False
             if not valid:
                 corrupt_artifacts.append(artifact.id)
@@ -909,7 +1121,14 @@ def doctor(
                     terminal_audit_errors.append(f"{row.id}:{field_name}_project")
                 if artifact.metadata.get("terminal_command_id") != row.id:
                     terminal_audit_errors.append(f"{row.id}:{field_name}_metadata")
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "diagnostics",
+                    "diagnostics.cli.caught_failure_009",
+                    "A handled diagnostics operation raised an exception.",
+                    caught_error,
+                    stage="cli",
+                )
                 terminal_audit_errors.append(f"{row.id}:{field_name}_missing")
         if row.capture_decision == "legacy_metadata_only":
             continue
@@ -946,7 +1165,14 @@ def doctor(
             terminal_audit_errors.append(f"{row.id}:classification_failed")
         try:
             matched_tools = json.loads(row.matched_tools)
-        except (TypeError, json.JSONDecodeError):
+        except (TypeError, json.JSONDecodeError) as caught_error:
+            record_caught_exception(
+                "diagnostics",
+                "diagnostics.cli.caught_failure_010",
+                "A handled diagnostics operation raised an exception.",
+                caught_error,
+                stage="cli",
+            )
             matched_tools = None
             terminal_audit_errors.append(f"{row.id}:matched_tools_invalid")
         if row.capture_decision == "selected_tool" and not matched_tools:
@@ -997,12 +1223,20 @@ def doctor(
         ):
             terminal_audit_errors.append(f"{row.id}:command_event_mismatch")
     api = create_app(store, artifact_store=artifacts, auth_token="doctor")
-    healthy = artifact_ok and not corrupt_artifacts and not terminal_audit_errors
+    diagnostics_health = _diagnostic_manager(root).status()
+    healthy = (
+        artifact_ok
+        and not corrupt_artifacts
+        and not terminal_audit_errors
+        and diagnostics_health["writable"]
+        and not diagnostics_health["degraded"]
+    )
     report = {
         "status": "ok" if healthy else "error",
         **build_metadata(),
         "data_dir": str(root),
         "database": store.database.health(),
+        "diagnostics": diagnostics_health,
         "artifacts": {
             "writable": artifact_ok,
             "path": str(artifacts.root),

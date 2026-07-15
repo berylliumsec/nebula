@@ -179,9 +179,7 @@ def test_local_install_events_are_sanitized_and_ordered(tmp_path, monkeypatch):
         expected_revision=assignment.revision,
     )
     assert platform.enable_default_local_packs(engagement.id) == []
-    assert (
-        platform.store.get(EngagementToolAssignment, assignment.id).enabled is False
-    )
+    assert platform.store.get(EngagementToolAssignment, assignment.id).enabled is False
 
     future = platform.store.create(Engagement(name="Future engagement"))
     [future_assignment] = platform.enable_default_local_packs(future.id)

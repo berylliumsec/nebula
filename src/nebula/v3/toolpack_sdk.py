@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import json
 import re
 import stat
@@ -167,6 +169,13 @@ def validate_tool_pack_directory(
     try:
         source = manifest_path.read_text(encoding="utf-8")
     except OSError as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpack_sdk.caught_failure_001",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolpack_sdk",
+        )
         raise ToolPackSDKError("cannot read nebula-tool-pack.yaml") from exc
     if allow_digest_placeholders:
         source = _PLACEHOLDER.sub("sha256:" + "0" * 64, source)
@@ -175,6 +184,13 @@ def validate_tool_pack_directory(
     try:
         manifest = compile_manifest_yaml(source)
     except ToolPackValidationError as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpack_sdk.caught_failure_002",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolpack_sdk",
+        )
         raise ToolPackSDKError("source manifest is invalid") from exc
     _validate_source_tree(root)
     return manifest
@@ -216,7 +232,14 @@ def pack_tool_pack(directory: Path, destination: Path) -> Path:
             for path in files:
                 relative = path.relative_to(root).as_posix()
                 _write_deterministic(archive, f"source/{relative}", path.read_bytes())
-    except Exception:
+    except Exception as caught_error:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpack_sdk.caught_failure_003",
+            "A handled toolbox operation raised an exception.",
+            caught_error,
+            stage="toolpack_sdk",
+        )
         destination.unlink(missing_ok=True)
         raise
     return destination
@@ -259,6 +282,13 @@ def read_tool_pack(path: Path) -> ToolPackArchive:
                     )
                 files[member.filename] = archive.read(member)
     except (OSError, zipfile.BadZipFile) as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpack_sdk.caught_failure_004",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolpack_sdk",
+        )
         raise ToolPackSDKError("tool-pack archive is unreadable") from exc
     try:
         manifest_payload = json.loads(files.pop("manifest.json"))
@@ -270,9 +300,23 @@ def read_tool_pack(path: Path) -> ToolPackArchive:
             raise ToolPackSDKError(
                 "tool-pack source and canonical manifests do not match"
             )
-    except ToolPackSDKError:
+    except ToolPackSDKError as caught_error:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpack_sdk.caught_failure_005",
+            "A handled toolbox operation raised an exception.",
+            caught_error,
+            stage="toolpack_sdk",
+        )
         raise
     except Exception as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.toolpack_sdk.caught_failure_006",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="toolpack_sdk",
+        )
         raise ToolPackSDKError("tool-pack archive has no valid manifest") from exc
     return ToolPackArchive(
         manifest=manifest,

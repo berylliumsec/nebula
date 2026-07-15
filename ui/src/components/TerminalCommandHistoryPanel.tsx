@@ -4,6 +4,7 @@ import type { ApiClient } from "../api/client";
 import type { TerminalCommandHistoryStatus, TerminalCommandRecord, TerminalRecordingTools } from "../api/types";
 import { useConfirmation } from "./DialogSystem";
 import "./TerminalCommandHistoryPanel.css";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 interface TerminalCommandHistoryPanelProps {
   api: ApiClient;
@@ -71,6 +72,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
       setRecords((current) => offset ? [...current, ...page.records] : page.records);
       setNextOffset(page.nextOffset);
     } catch (loadError) {
+      void logCaughtDiagnostic("interface.terminal_command_history_panel.caught_failure_01", "A handled interface operation failed.", loadError, "terminal_command_history_panel");
       if (!signal?.aborted) setError(loadError instanceof Error ? loadError.message : "Could not load terminal audit records.");
     } finally {
       if (!signal?.aborted) setLoading(false);
@@ -136,6 +138,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
         expectedManifestSha256: tools.manifestSha256,
       }));
     } catch (saveError) {
+      void logCaughtDiagnostic("interface.terminal_command_history_panel.caught_failure_02", "A handled interface operation failed.", saveError, "terminal_command_history_panel");
       setError(saveError instanceof Error ? saveError.message : "Could not save recorded security tools.");
     } finally {
       setSavingTools(false);
@@ -156,6 +159,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
       const text = await blob.text();
       setOutputs((current) => ({ ...current, [record.id]: text }));
     } catch (outputError) {
+      void logCaughtDiagnostic("interface.terminal_command_history_panel.caught_failure_03", "A handled interface operation failed.", outputError, "terminal_command_history_panel");
       setError(outputError instanceof Error ? outputError.message : "Could not load the recorded result.");
     } finally {
       setOutputLoading(undefined);
@@ -165,7 +169,8 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
   const copyText = async (value: string, label: string) => {
     try {
       await navigator.clipboard.writeText(value);
-    } catch {
+    } catch (caughtError) {
+      void logCaughtDiagnostic("interface.terminal_command_history_panel.caught_failure_04", "A handled interface operation failed.", caughtError, "terminal_command_history_panel");
       setError(`Could not copy ${label}.`);
     }
   };
@@ -187,6 +192,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (downloadError) {
+      void logCaughtDiagnostic("interface.terminal_command_history_panel.caught_failure_05", "A handled interface operation failed.", downloadError, "terminal_command_history_panel");
       setError(downloadError instanceof Error ? downloadError.message : "Could not download the raw result.");
     }
   };
@@ -225,7 +231,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
       <div className="terminal-tool-add"><label><span className="sr-only">Custom executable name</span><input value={newTool} placeholder="Add executable name" maxLength={128} onChange={(event) => setNewTool(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addCustomTool(); } }} /></label><button className="button secondary" type="button" disabled={!newTool.trim()} onClick={addCustomTool}><Plus size={13} /> Add custom</button></div>
     </section>
     <form className="history-search" onSubmit={submitSearch}><label><History size={14} /><span className="sr-only">Search terminal audit commands</span><input type="search" value={query} placeholder="Search exact commands" onChange={(event) => setQuery(event.target.value)} /></label><button className="button secondary" type="submit" disabled={loading}>Search</button></form>
-    {error && <p className="form-error" role="alert">{error}</p>}
+    {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
     {warningCount ? <p className="workspace-notice audit-warning" role="alert"><AlertTriangle size={14} /> One or more selected captures were interrupted, truncated, could not be classified, recovered after restart, or could not be durably persisted. Inspect the marked records before relying on the audit.</p> : null}
     <div className="terminal-command-list" aria-busy={loading}>
       {records.map((record, index) => <div className="terminal-audit-record" key={record.id}>

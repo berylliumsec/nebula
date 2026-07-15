@@ -246,9 +246,7 @@ def test_workspace_upload_rejects_escape_and_symlink_destination(tmp_path):
 
     for path in ("../escape", "linked"):
         try:
-            asyncio.run(
-                workspace.upload(engagement.id, path, chunks(), overwrite=True)
-            )
+            asyncio.run(workspace.upload(engagement.id, path, chunks(), overwrite=True))
         except Exception as exc:
             assert getattr(exc, "code", None) in {
                 "workspace_path_invalid",
@@ -290,4 +288,6 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
         assert replaced.status_code == 201
         assert replaced.json()["overwritten"] is True
 
-    assert (platform.workspace_for(engagement.id) / "result.bin").read_bytes() == b"second payload"
+    assert (
+        platform.workspace_for(engagement.id) / "result.bin"
+    ).read_bytes() == b"second payload"

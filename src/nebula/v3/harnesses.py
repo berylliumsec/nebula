@@ -6,6 +6,12 @@ records contain only normalized, bounded events and credential-free snapshots.
 
 from __future__ import annotations
 
+from .diagnostics import (
+    create_diagnostic_task,
+    gather_diagnostic,
+    record_caught_exception,
+)
+
 import asyncio
 import inspect
 import json
@@ -188,9 +194,7 @@ class HarnessConnection(ABC):
     adapter_version: str
 
     @abstractmethod
-    def run_turn(
-        self, prompt: str, *, model: str
-    ) -> AsyncIterator[HarnessEvent]: ...
+    def run_turn(self, prompt: str, *, model: str) -> AsyncIterator[HarnessEvent]: ...
 
     @abstractmethod
     async def steer(self, text: str) -> None: ...
@@ -264,7 +268,10 @@ def _bounded(value: Any, *, limit: int) -> Any:
                 result["_truncated"] = True
                 break
             lowered = str(key).lower()
-            if any(token in lowered for token in ("authorization", "token", "secret", "password")):
+            if any(
+                token in lowered
+                for token in ("authorization", "token", "secret", "password")
+            ):
                 result[str(key)] = "[REDACTED]"
             else:
                 result[str(key)] = _bounded(item, limit=limit)
@@ -303,6 +310,13 @@ def _resolve_secret(store: CredentialStore, reference: str) -> str:
     try:
         return store.resolve(reference).get_secret_value()
     except (CredentialError, ValueError) as exc:
+        record_caught_exception(
+            "harnesses",
+            "harnesses.harnesses.caught_failure_001",
+            "A handled harnesses operation raised an exception.",
+            exc,
+            stage="harnesses",
+        )
         raise HarnessConfigurationError(str(exc)) from exc
 
 
@@ -348,8 +362,8 @@ def _mcp_runtime_config(
             item["url"] = profile.url
             headers: dict[str, str] = {}
             if profile.auth_mode == McpAuthMode.BEARER and profile.bearer_secret_ref:
-                headers["Authorization"] = (
-                    "Bearer " + _resolve_secret(credentials, profile.bearer_secret_ref)
+                headers["Authorization"] = "Bearer " + _resolve_secret(
+                    credentials, profile.bearer_secret_ref
                 )
             for name, reference in profile.header_secret_refs.items():
                 headers[name] = _resolve_secret(credentials, reference)
@@ -377,10 +391,20 @@ class _CodexRpc:
         self.stderr_tail = ""
 
     async def start(self) -> None:
-        self._reader_task = asyncio.create_task(self._reader(), name="codex-app-reader")
+        self._reader_task = create_diagnostic_task(
+            self._reader(),
+            feature="harnesses",
+            event_code="harnesses.codex.reader",
+            failure_message="The Codex protocol reader stopped unexpectedly.",
+            name="codex-app-reader",
+        )
         if self.process is not None and self.process.stderr is not None:
-            self._stderr_task = asyncio.create_task(
-                self._drain_stderr(), name="codex-app-stderr"
+            self._stderr_task = create_diagnostic_task(
+                self._drain_stderr(),
+                feature="harnesses",
+                event_code="harnesses.codex.stderr_reader",
+                failure_message="The Codex stderr supervisor stopped unexpectedly.",
+                name="codex-app-stderr",
             )
 
     async def request(self, method: str, params: dict[str, Any]) -> Any:
@@ -424,13 +448,29 @@ class _CodexRpc:
             else:
                 raise HarnessTransportError("Codex app-server output is unavailable")
             raise HarnessTransportError("Codex app-server transport closed")
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.harnesses.caught_failure_002",
+                "A handled harnesses operation raised an exception.",
+                caught_error,
+                stage="harnesses",
+            )
             raise
         except BaseException as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.harnesses.caught_failure_003",
+                "A handled harnesses operation raised an exception.",
+                exc,
+                stage="harnesses",
+            )
             error = (
                 exc
                 if isinstance(exc, HarnessTransportError)
-                else HarnessTransportError(f"Codex transport failed: {type(exc).__name__}")
+                else HarnessTransportError(
+                    f"Codex transport failed: {type(exc).__name__}"
+                )
             )
             for future in self._pending.values():
                 if not future.done():
@@ -443,6 +483,13 @@ class _CodexRpc:
                 raw = raw.decode("utf-8")
             message = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.harnesses.caught_failure_004",
+                "A handled harnesses operation raised an exception.",
+                exc,
+                stage="harnesses",
+            )
             raise HarnessTransportError("Codex returned malformed JSON") from exc
         if not isinstance(message, dict):
             raise HarnessTransportError("Codex returned a non-object message")
@@ -479,15 +526,25 @@ class _CodexRpc:
             self.process.terminate()
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=3)
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.harnesses.caught_failure_005",
+                    "A handled harnesses operation raised an exception.",
+                    caught_error,
+                    stage="harnesses",
+                )
                 self.process.kill()
                 await self.process.wait()
         for task in (self._reader_task, self._stderr_task):
             if task is not None and not task.done():
                 task.cancel()
-        await asyncio.gather(
+        await gather_diagnostic(
             *(task for task in (self._reader_task, self._stderr_task) if task),
-            return_exceptions=True,
+            feature="harnesses",
+            event_code="harnesses.codex.cleanup_task_failed",
+            failure_message="A Codex harness supervisor did not stop cleanly.",
+            stage="cleanup",
         )
 
 
@@ -506,9 +563,7 @@ class CodexAppServerConnection(HarnessConnection):
         self.permission_handler = permission_handler
         self.active_turn_id: str | None = None
 
-    async def run_turn(
-        self, prompt: str, *, model: str
-    ) -> AsyncIterator[HarnessEvent]:
+    async def run_turn(self, prompt: str, *, model: str) -> AsyncIterator[HarnessEvent]:
         result = await self.rpc.request(
             "turn/start",
             {
@@ -572,7 +627,9 @@ class CodexAppServerConnection(HarnessConnection):
                 if item_type == "mcpToolCall":
                     yield HarnessEvent(
                         type=(
-                            "tool_started" if method == "item/started" else "tool_completed"
+                            "tool_started"
+                            if method == "item/started"
+                            else "tool_completed"
                         ),
                         external_turn_id=self.active_turn_id,
                         server_id=str(item.get("server") or ""),
@@ -582,7 +639,9 @@ class CodexAppServerConnection(HarnessConnection):
                 else:
                     yield HarnessEvent(
                         type=(
-                            "item_started" if method == "item/started" else "item_completed"
+                            "item_started"
+                            if method == "item/started"
+                            else "item_completed"
                         ),
                         external_turn_id=self.active_turn_id,
                         payload=_bounded(item, limit=MAX_TOOL_RESULT_TEXT),
@@ -594,7 +653,10 @@ class CodexAppServerConnection(HarnessConnection):
                 continue
             if method == "turn/completed":
                 completed = params.get("turn")
-                if not isinstance(completed, dict) or completed.get("id") != self.active_turn_id:
+                if (
+                    not isinstance(completed, dict)
+                    or completed.get("id") != self.active_turn_id
+                ):
                     continue
                 status = str(completed.get("status") or "failed")
                 self.active_turn_id = None
@@ -604,7 +666,8 @@ class CodexAppServerConnection(HarnessConnection):
                 if status != "completed":
                     error = completed.get("error")
                     raise HarnessTransportError(
-                        "Codex turn failed: " + str(_bounded(error or status, limit=1_000))
+                        "Codex turn failed: "
+                        + str(_bounded(error or status, limit=1_000))
                     )
                 yield HarnessEvent(type="completed", message="".join(message_parts))
                 return
@@ -624,7 +687,10 @@ class CodexAppServerConnection(HarnessConnection):
             }
         else:
             category = "permission"
-            arguments = {"permissions": params.get("permissions"), "cwd": params.get("cwd")}
+            arguments = {
+                "permissions": params.get("permissions"),
+                "cwd": params.get("cwd"),
+            }
         request = HarnessPermissionRequest(
             vendor_request_id=str(raw.get("id")),
             category=category,
@@ -650,7 +716,9 @@ class CodexAppServerConnection(HarnessConnection):
             response = {"decision": "accept" if allowed else "decline"}
         elif method == "item/permissions/requestApproval":
             response = {
-                "permissions": params.get("permissions") if allowed else {"permissions": "deny"},
+                "permissions": params.get("permissions")
+                if allowed
+                else {"permissions": "deny"},
                 "scope": "turn",
             }
         else:
@@ -707,7 +775,9 @@ class CodexAppServerAdapter(HarnessAdapter):
             initialize = await asyncio.wait_for(
                 self._initialize(rpc), timeout=profile.metadata.get("probe_timeout", 15)
             )
-            version = initialize.get("userAgent") if isinstance(initialize, dict) else None
+            version = (
+                initialize.get("userAgent") if isinstance(initialize, dict) else None
+            )
             return HarnessHealth(
                 profile_id=profile.id,
                 healthy=True,
@@ -727,6 +797,13 @@ class CodexAppServerAdapter(HarnessAdapter):
                 ),
             )
         except Exception as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.harnesses.caught_failure_006",
+                "A handled harnesses operation raised an exception.",
+                exc,
+                stage="harnesses",
+            )
             return HarnessHealth(
                 profile_id=profile.id,
                 healthy=False,
@@ -776,7 +853,9 @@ class CodexAppServerAdapter(HarnessAdapter):
             thread = result.get("thread") if isinstance(result, dict) else None
             external_id = thread.get("id") if isinstance(thread, dict) else None
             if not isinstance(external_id, str) or not external_id:
-                raise HarnessTransportError("Codex thread operation omitted the thread id")
+                raise HarnessTransportError(
+                    "Codex thread operation omitted the thread id"
+                )
             if (
                 request.session.external_session_id
                 and external_id != request.session.external_session_id
@@ -787,7 +866,14 @@ class CodexAppServerAdapter(HarnessAdapter):
                 external_session_id=external_id,
                 permission_handler=request.permission_handler,
             )
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.harnesses.caught_failure_007",
+                "A handled harnesses operation raised an exception.",
+                caught_error,
+                stage="harnesses",
+            )
             await rpc.close()
             raise
 
@@ -822,7 +908,9 @@ class CodexAppServerAdapter(HarnessAdapter):
                 raise HarnessConfigurationError("Codex executable is required")
             executable = Path(profile.executable)
             if not executable.is_absolute() or not executable.is_file():
-                raise HarnessConfigurationError("Codex executable must be an existing absolute file")
+                raise HarnessConfigurationError(
+                    "Codex executable must be an existing absolute file"
+                )
             mcp_config, _ = _mcp_runtime_config(mcp_profiles, credentials, workspace)
             argv = [str(executable), "app-server", "-c", "mcp_servers={}"]
             child_env: dict[str, str] = {}
@@ -848,10 +936,7 @@ class CodexAppServerAdapter(HarnessAdapter):
 
         endpoint = profile.endpoint or ""
         headers: dict[str, str] = {}
-        if (
-            profile.auth_mode == HarnessAuthMode.ENDPOINT_BEARER
-            and profile.secret_ref
-        ):
+        if profile.auth_mode == HarnessAuthMode.ENDPOINT_BEARER and profile.secret_ref:
             headers["Authorization"] = "Bearer " + _resolve_secret(
                 credentials, profile.secret_ref
             )
@@ -884,10 +969,14 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, list):
         return "[" + ",".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):
-        return "{" + ",".join(
-            f"{_toml_key(str(key))}={_toml_value(item)}"
-            for key, item in value.items()
-        ) + "}"
+        return (
+            "{"
+            + ",".join(
+                f"{_toml_key(str(key))}={_toml_value(item)}"
+                for key, item in value.items()
+            )
+            + "}"
+        )
     raise TypeError(f"unsupported TOML override value: {type(value).__name__}")
 
 
@@ -953,9 +1042,7 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         self.external_session_id = external_session_id
         self.active = False
 
-    async def run_turn(
-        self, prompt: str, *, model: str
-    ) -> AsyncIterator[HarnessEvent]:
+    async def run_turn(self, prompt: str, *, model: str) -> AsyncIterator[HarnessEvent]:
         del model  # Locked into ClaudeAgentOptions for the connected session.
         self.active = True
         await self.client.query(prompt)
@@ -977,7 +1064,10 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                 if class_name in {"AssistantMessage", "UserMessage"}:
                     for block in getattr(message, "content", []) or []:
                         block_name = type(block).__name__
-                        if block_name == "TextBlock" and class_name == "AssistantMessage":
+                        if (
+                            block_name == "TextBlock"
+                            and class_name == "AssistantMessage"
+                        ):
                             text = str(getattr(block, "text", ""))
                             if text:
                                 fallback_parts.append(text)
@@ -1040,7 +1130,11 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                     if getattr(message, "is_error", False):
                         raise HarnessTransportError(
                             "Claude turn failed: "
-                            + str(_bounded(getattr(message, "result", "error"), limit=1_000))
+                            + str(
+                                _bounded(
+                                    getattr(message, "result", "error"), limit=1_000
+                                )
+                            )
                         )
             if not parts and fallback_parts:
                 fallback = "".join(fallback_parts)
@@ -1065,7 +1159,9 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             await self.client.interrupt()
 
     async def close(self) -> None:
-        close = getattr(self.client, "disconnect", None) or getattr(self.client, "close", None)
+        close = getattr(self.client, "disconnect", None) or getattr(
+            self.client, "close", None
+        )
         if close is not None:
             result = close()
             if inspect.isawaitable(result):
@@ -1120,6 +1216,13 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                 ),
             )
         except Exception as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.harnesses.caught_failure_008",
+                "A handled harnesses operation raised an exception.",
+                exc,
+                stage="harnesses",
+            )
             return HarnessHealth(
                 profile_id=profile.id,
                 healthy=False,
@@ -1130,7 +1233,10 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
 
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
         sdk = self._sdk()
-        if request.profile.executable and not Path(request.profile.executable).is_file():
+        if (
+            request.profile.executable
+            and not Path(request.profile.executable).is_file()
+        ):
             raise HarnessConfigurationError(
                 "Claude CLI override must be an existing absolute executable"
             )
@@ -1156,9 +1262,20 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             decision = await ticket.decision
             if decision.allowed:
                 allow = getattr(sdk, "PermissionResultAllow", None)
-                return allow(updated_input=input_data) if allow else {"behavior": "allow", "updatedInput": input_data}
+                return (
+                    allow(updated_input=input_data)
+                    if allow
+                    else {"behavior": "allow", "updatedInput": input_data}
+                )
             deny = getattr(sdk, "PermissionResultDeny", None)
-            return deny(message=decision.reason or "Denied by Nebula policy") if deny else {"behavior": "deny", "message": decision.reason or "Denied by Nebula policy"}
+            return (
+                deny(message=decision.reason or "Denied by Nebula policy")
+                if deny
+                else {
+                    "behavior": "deny",
+                    "message": decision.reason or "Denied by Nebula policy",
+                }
+            )
 
         options_kwargs: dict[str, Any] = {
             "model": request.session.model,
@@ -1215,7 +1332,14 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
         if required_servers:
             try:
                 await _wait_for_required_claude_mcp(client, required_servers)
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.harnesses.caught_failure_009",
+                    "A handled harnesses operation raised an exception.",
+                    caught_error,
+                    stage="harnesses",
+                )
                 await client.disconnect()
                 raise
         return ClaudeAgentSdkConnection(
@@ -1234,7 +1358,9 @@ async def _wait_for_required_claude_mcp(
     deadline = asyncio.get_running_loop().time() + max(required_servers.values())
     while True:
         response = await client.get_mcp_status()
-        raw_statuses = response.get("mcpServers", []) if isinstance(response, dict) else []
+        raw_statuses = (
+            response.get("mcpServers", []) if isinstance(response, dict) else []
+        )
         statuses = {
             str(item.get("name")): item
             for item in raw_statuses
@@ -1323,7 +1449,9 @@ class HarnessRuntimeService:
         self._connections: dict[str, HarnessConnection] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._active: dict[str, _ActiveTurn] = {}
-        self._approval_futures: dict[str, asyncio.Future[HarnessPermissionDecision]] = {}
+        self._approval_futures: dict[
+            str, asyncio.Future[HarnessPermissionDecision]
+        ] = {}
         self._mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._closed = False
 
@@ -1361,7 +1489,10 @@ class HarnessRuntimeService:
                 self.store.update(
                     HarnessSession,
                     session.id,
-                    {"status": HarnessSessionStatus.INTERRUPTED, "last_activity_at": utc_now()},
+                    {
+                        "status": HarnessSessionStatus.INTERRUPTED,
+                        "last_activity_at": utc_now(),
+                    },
                     expected_revision=session.revision,
                 )
 
@@ -1371,7 +1502,14 @@ class HarnessRuntimeService:
         for _, item in active:
             try:
                 await item.connection.interrupt()
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.harnesses.caught_failure_010",
+                    "A handled harnesses operation raised an exception.",
+                    caught_error,
+                    stage="harnesses",
+                )
                 pass
             turn = self.store.get(HarnessTurn, item.turn_id)
             if turn.status in {
@@ -1395,14 +1533,30 @@ class HarnessRuntimeService:
         if tasks:
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True),
+                    gather_diagnostic(
+                        *tasks,
+                        feature="harnesses",
+                        event_code="harnesses.shutdown.mission_failed",
+                        failure_message="A harness mission failed during shutdown.",
+                        stage="shutdown",
+                    ),
                     timeout=self.shutdown_timeout_seconds,
                 )
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.harnesses.caught_failure_011",
+                    "A handled harnesses operation raised an exception.",
+                    caught_error,
+                    stage="harnesses",
+                )
                 pass
-        await asyncio.gather(
+        await gather_diagnostic(
             *(connection.close() for connection in self._connections.values()),
-            return_exceptions=True,
+            feature="harnesses",
+            event_code="harnesses.shutdown.connection_failed",
+            failure_message="A harness connection did not close cleanly.",
+            stage="shutdown",
         )
         self._connections.clear()
 
@@ -1466,7 +1620,9 @@ class HarnessRuntimeService:
     async def close_session(self, session_id: str) -> HarnessSession:
         session = self.store.get(HarnessSession, session_id)
         if session_id in self._active:
-            raise HarnessStateError("cannot close a harness session with an active turn")
+            raise HarnessStateError(
+                "cannot close a harness session with an active turn"
+            )
         connection = self._connections.pop(session_id, None)
         if connection is not None:
             await connection.close()
@@ -1501,10 +1657,15 @@ class HarnessRuntimeService:
             chat = self.store.get(ChatSession, chat_session_id)
             if chat.backend != ChatBackend.HARNESS:
                 raise HarnessStateError("provider chats cannot switch to a harness")
-            if chat.engagement_id != engagement_id or chat.harness_profile_id != profile_id:
+            if (
+                chat.engagement_id != engagement_id
+                or chat.harness_profile_id != profile_id
+            ):
                 raise HarnessStateError("chat harness identity cannot change")
             if harness_session_id and harness_session_id != chat.harness_session_id:
-                raise HarnessStateError("chat is attached to a different harness session")
+                raise HarnessStateError(
+                    "chat is attached to a different harness session"
+                )
             session = self.store.get(HarnessSession, chat.harness_session_id or "")
             self._validate_harness_privacy(
                 engagement_id,
@@ -1548,7 +1709,8 @@ class HarnessRuntimeService:
                 ChatSession(
                     id=str(uuid4()),
                     engagement_id=engagement_id,
-                    title=(title or clean_prompt[:80]).strip() or "Harness conversation",
+                    title=(title or clean_prompt[:80]).strip()
+                    or "Harness conversation",
                     backend=ChatBackend.HARNESS,
                     harness_profile_id=profile_id,
                     harness_session_id=session.id,
@@ -1615,9 +1777,7 @@ class HarnessRuntimeService:
     async def stream_turn(self, turn_id: str) -> AsyncIterator[HarnessEvent]:
         turn = self.store.get(HarnessTurn, turn_id)
         if turn.status != HarnessTurnStatus.QUEUED:
-            raise HarnessStateError(
-                f"harness turn is not queued ({turn.status.value})"
-            )
+            raise HarnessStateError(f"harness turn is not queued ({turn.status.value})")
         session = self.store.get(HarnessSession, turn.harness_session_id)
         lock = self._locks.setdefault(session.id, asyncio.Lock())
         if lock.locked() or session.id in self._active:
@@ -1652,7 +1812,9 @@ class HarnessRuntimeService:
             interrupted_reason: str | None = None
             terminal_error: str | None = None
             try:
-                async for event in connection.run_turn(turn.prompt, model=session.model):
+                async for event in connection.run_turn(
+                    turn.prompt, model=session.model
+                ):
                     event = event.model_copy(
                         update={
                             "origin": turn.origin,
@@ -1671,7 +1833,9 @@ class HarnessRuntimeService:
                     elif event.type == "completed" and event.message is not None:
                         final_message = event.message or final_message
                     elif event.type == "interrupted":
-                        interrupted_reason = event.message or "Harness interrupted the turn"
+                        interrupted_reason = (
+                            event.message or "Harness interrupted the turn"
+                        )
                     elif event.type == "error":
                         terminal_error = event.message or "Harness reported an error"
                     elif event.type == "usage" and event.usage is not None:
@@ -1694,7 +1858,9 @@ class HarnessRuntimeService:
                     self._fail_turn(
                         turn.id,
                         HarnessTurnStatus.INTERRUPTED,
-                        interrupted_reason or terminal_error or "Harness turn interrupted",
+                        interrupted_reason
+                        or terminal_error
+                        or "Harness turn interrupted",
                     )
                     return
                 session = self.store.get(HarnessSession, session.id)
@@ -1726,15 +1892,34 @@ class HarnessRuntimeService:
                 self.store.update(
                     HarnessSession,
                     session.id,
-                    {"status": HarnessSessionStatus.IDLE, "last_activity_at": utc_now()},
+                    {
+                        "status": HarnessSessionStatus.IDLE,
+                        "last_activity_at": utc_now(),
+                    },
                     expected_revision=session.revision,
                 )
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.harnesses.caught_failure_012",
+                    "A handled harnesses operation raised an exception.",
+                    caught_error,
+                    stage="harnesses",
+                )
                 await connection.interrupt()
                 self._fail_turn(turn.id, HarnessTurnStatus.CANCELLED, "Turn cancelled")
                 raise
             except Exception as exc:
-                self._fail_turn(turn.id, HarnessTurnStatus.INTERRUPTED, _safe_error(exc))
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.harnesses.caught_failure_013",
+                    "A handled harnesses operation raised an exception.",
+                    exc,
+                    stage="harnesses",
+                )
+                self._fail_turn(
+                    turn.id, HarnessTurnStatus.INTERRUPTED, _safe_error(exc)
+                )
                 yield HarnessEvent(
                     type="error",
                     harness_session_id=session.id,
@@ -1839,8 +2024,12 @@ class HarnessRuntimeService:
             actor_id=actor_id,
             idempotency_key="run:queued",
         )
-        task = asyncio.create_task(
-            self._execute_mission(run.id, turn.id), name=f"harness-mission-{run.id}"
+        task = create_diagnostic_task(
+            self._execute_mission(run.id, turn.id),
+            feature="harnesses",
+            event_code="harnesses.mission",
+            failure_message="A harness mission task stopped unexpectedly.",
+            name=f"harness-mission-{run.id}",
         )
         self._mission_tasks[run.id] = task
         return run
@@ -1858,10 +2047,19 @@ class HarnessRuntimeService:
                         self.store.append_event(
                             run_id,
                             f"harness.{event.type}",
-                            self._activity_payload(durable_turn, durable_session, event),
+                            self._activity_payload(
+                                durable_turn, durable_session, event
+                            ),
                             idempotency_key=None,
                         )
-            except TimeoutError:
+            except TimeoutError as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.harnesses.caught_failure_014",
+                    "A handled harnesses operation raised an exception.",
+                    caught_error,
+                    stage="harnesses",
+                )
                 await self.cancel_turn(
                     turn_id, reason="Harness mission exceeded its duration limit"
                 )
@@ -1949,7 +2147,9 @@ class HarnessRuntimeService:
                     "status": (
                         ToolCallStatus.APPROVED if allowed else ToolCallStatus.DENIED
                     ),
-                    "error": None if allowed else approval.decision_note or "Denied by operator",
+                    "error": None
+                    if allowed
+                    else approval.decision_note or "Denied by operator",
                 },
                 expected_revision=call.revision,
             )
@@ -1969,7 +2169,14 @@ class HarnessRuntimeService:
         for approval_id, future in list(self._approval_futures.items()):
             try:
                 approval = self.store.get(Approval, approval_id)
-            except NotFoundError:
+            except NotFoundError as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.harnesses.caught_failure_015",
+                    "A handled harnesses operation raised an exception.",
+                    caught_error,
+                    stage="harnesses",
+                )
                 continue
             if approval.run_id not in {turn.run_id, turn.chat_turn_id}:
                 continue
@@ -2014,7 +2221,9 @@ class HarnessRuntimeService:
     def attach_run_to_chat(self, run_id: str) -> ChatSession:
         run = self.store.get(AgentRun, run_id)
         if run.backend != RunBackend.HARNESS or not run.harness_session_id:
-            raise HarnessStateError("only harness runs can be discussed in harness chat")
+            raise HarnessStateError(
+                "only harness runs can be discussed in harness chat"
+            )
         existing = [
             item
             for item in self.store.list_entities(
@@ -2034,7 +2243,10 @@ class HarnessRuntimeService:
                 harness_profile_id=run.harness_profile_id,
                 harness_session_id=session.id,
                 model=session.model,
-                metadata={"attached_run_ids": [run.id], "context_management": "runtime_managed"},
+                metadata={
+                    "attached_run_ids": [run.id],
+                    "context_management": "runtime_managed",
+                },
             )
         )
         messages = [
@@ -2137,10 +2349,15 @@ class HarnessRuntimeService:
                 HarnessTurn, engagement_id=session.engagement_id, limit=1_000
             )
         )
-        if session.id in self._active or reserved or session.status in {
-            HarnessSessionStatus.RUNNING,
-            HarnessSessionStatus.WAITING_APPROVAL,
-        }:
+        if (
+            session.id in self._active
+            or reserved
+            or session.status
+            in {
+                HarnessSessionStatus.RUNNING,
+                HarnessSessionStatus.WAITING_APPROVAL,
+            }
+        ):
             raise HarnessStateError("harness session already has active work")
 
     async def _connection(
@@ -2151,7 +2368,8 @@ class HarnessRuntimeService:
             return existing
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
         mcp_profiles = tuple(
-            McpServerProfile.model_validate(snapshot) for snapshot in session.mcp_snapshot
+            McpServerProfile.model_validate(snapshot)
+            for snapshot in session.mcp_snapshot
         )
 
         async def permission_handler(
@@ -2177,7 +2395,9 @@ class HarnessRuntimeService:
     ) -> PermissionTicket:
         turn = self.store.get(HarnessTurn, turn_id)
         session = self.store.get(HarnessSession, turn.harness_session_id)
-        policy, server, tool, risk, rationale = self._permission_policy(session, request)
+        policy, server, tool, risk, rationale = self._permission_policy(
+            session, request
+        )
         if turn.run_id:
             run = self.store.get(AgentRun, turn.run_id)
             if len(turn.tool_call_ids) >= run.budget.max_tool_calls:
@@ -2196,7 +2416,9 @@ class HarnessRuntimeService:
             chat_session_id=turn.chat_session_id,
             chat_turn_id=turn.chat_turn_id,
             tool_name=(
-                f"mcp:{server.id}:{tool.name}" if server and tool else request.vendor_name
+                f"mcp:{server.id}:{tool.name}"
+                if server and tool
+                else request.vendor_name
             ),
             mcp_server_id=server.id if server else None,
             mcp_tool_name=tool.name if tool else None,
@@ -2234,7 +2456,9 @@ class HarnessRuntimeService:
                 {"status": ToolCallStatus.DENIED, "error": rationale},
                 expected_revision=call.revision,
             )
-            future.set_result(HarnessPermissionDecision(allowed=False, reason=rationale))
+            future.set_result(
+                HarnessPermissionDecision(allowed=False, reason=rationale)
+            )
             return PermissionTicket(None, call.id, future)
         approval = Approval(
             id=str(uuid4()),
@@ -2278,7 +2502,10 @@ class HarnessRuntimeService:
         self.store.update(
             HarnessSession,
             session.id,
-            {"status": HarnessSessionStatus.WAITING_APPROVAL, "last_activity_at": utc_now()},
+            {
+                "status": HarnessSessionStatus.WAITING_APPROVAL,
+                "last_activity_at": utc_now(),
+            },
             expected_revision=session.revision,
         )
         self._waiting_owner(turn)
@@ -2297,7 +2524,10 @@ class HarnessRuntimeService:
                 self.store.update(
                     HarnessSession,
                     session.id,
-                    {"status": HarnessSessionStatus.RUNNING, "last_activity_at": utc_now()},
+                    {
+                        "status": HarnessSessionStatus.RUNNING,
+                        "last_activity_at": utc_now(),
+                    },
                     expected_revision=latest_session.revision,
                 )
             self._start_owner(turn)
@@ -2315,7 +2545,11 @@ class HarnessRuntimeService:
         str,
     ]:
         if request.category != "mcp":
-            risk = RiskClass.WORKSPACE_WRITE if request.category == "file" else RiskClass.ACTIVE_SCAN
+            risk = (
+                RiskClass.WORKSPACE_WRITE
+                if request.category == "file"
+                else RiskClass.ACTIVE_SCAN
+            )
             return (
                 McpApprovalMode.ASK,
                 None,
@@ -2323,12 +2557,15 @@ class HarnessRuntimeService:
                 risk,
                 "Harness built-in actions require an exact operator decision",
             )
-        profiles = [McpServerProfile.model_validate(item) for item in session.mcp_snapshot]
+        profiles = [
+            McpServerProfile.model_validate(item) for item in session.mcp_snapshot
+        ]
         server = next(
             (
                 item
                 for item in profiles
-                if request.server_name in {item.name, _claude_server_name(item.name), item.id}
+                if request.server_name
+                in {item.name, _claude_server_name(item.name), item.id}
             ),
             None,
         )
@@ -2341,7 +2578,11 @@ class HarnessRuntimeService:
                 "Unknown MCP server failed closed",
             )
         tool = next(
-            (item for item in server.capabilities.tools if item.name == request.tool_name),
+            (
+                item
+                for item in server.capabilities.tools
+                if item.name == request.tool_name
+            ),
             None,
         )
         if tool is None:
@@ -2353,9 +2594,21 @@ class HarnessRuntimeService:
                 "Unknown MCP tool failed closed",
             )
         if server.enabled_tools and tool.name not in server.enabled_tools:
-            return McpApprovalMode.DENY, server, tool, RiskClass.ACTIVE_SCAN, "Tool is outside the MCP allow list"
+            return (
+                McpApprovalMode.DENY,
+                server,
+                tool,
+                RiskClass.ACTIVE_SCAN,
+                "Tool is outside the MCP allow list",
+            )
         if tool.name in server.disabled_tools:
-            return McpApprovalMode.DENY, server, tool, RiskClass.ACTIVE_SCAN, "Tool is explicitly disabled"
+            return (
+                McpApprovalMode.DENY,
+                server,
+                tool,
+                RiskClass.ACTIVE_SCAN,
+                "Tool is explicitly disabled",
+            )
         override = server.tool_overrides.get(tool.name)
         if override is not None:
             mode = override
@@ -2395,12 +2648,15 @@ class HarnessRuntimeService:
     def _record_tool_event(
         self, turn: HarnessTurn, session: HarnessSession, event: HarnessEvent
     ) -> HarnessEvent:
-        profiles = [McpServerProfile.model_validate(item) for item in session.mcp_snapshot]
+        profiles = [
+            McpServerProfile.model_validate(item) for item in session.mcp_snapshot
+        ]
         server = next(
             (
                 item
                 for item in profiles
-                if event.server_id in {item.id, item.name, _claude_server_name(item.name)}
+                if event.server_id
+                in {item.id, item.name, _claude_server_name(item.name)}
             ),
             None,
         )
@@ -2414,7 +2670,8 @@ class HarnessRuntimeService:
             if call.metadata.get("harness_turn_id") == turn.id
             and call.mcp_server_id == server.id
             and call.mcp_tool_name == event.tool_name
-            and call.status not in {
+            and call.status
+            not in {
                 ToolCallStatus.COMPLETE,
                 ToolCallStatus.FAILED,
                 ToolCallStatus.DENIED,
@@ -2440,7 +2697,9 @@ class HarnessRuntimeService:
                     vendor_tool_name=f"{event.server_id}:{event.tool_name}",
                     status=ToolCallStatus.RUNNING,
                     risk_class=RiskClass.ACTIVE_SCAN,
-                    arguments=_bounded(event.payload.get("arguments", {}), limit=MAX_TOOL_ARGUMENT_TEXT),
+                    arguments=_bounded(
+                        event.payload.get("arguments", {}), limit=MAX_TOOL_ARGUMENT_TEXT
+                    ),
                     started_at=utc_now(),
                     metadata={"harness_turn_id": turn.id},
                 )
@@ -2459,22 +2718,28 @@ class HarnessRuntimeService:
                 ToolCall,
                 call.id,
                 {
-                    "status": ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE,
-                    "result": _bounded(event.payload.get("result"), limit=MAX_TOOL_RESULT_TEXT),
-                    "error": _safe_error(Exception(str(event.payload.get("error")))) if failed else None,
+                    "status": ToolCallStatus.FAILED
+                    if failed
+                    else ToolCallStatus.COMPLETE,
+                    "result": _bounded(
+                        event.payload.get("result"), limit=MAX_TOOL_RESULT_TEXT
+                    ),
+                    "error": _safe_error(Exception(str(event.payload.get("error"))))
+                    if failed
+                    else None,
                     "completed_at": utc_now(),
                 },
                 expected_revision=call.revision,
             )
-        return event.model_copy(update={"tool_call_id": call.id, "server_id": server.id})
+        return event.model_copy(
+            update={"tool_call_id": call.id, "server_id": server.id}
+        )
 
     @staticmethod
     def _activity_payload(
         turn: HarnessTurn, session: HarnessSession, event: HarnessEvent
     ) -> dict[str, Any]:
-        payload = _bounded(
-            event.model_dump(mode="json"), limit=MAX_TOOL_RESULT_TEXT
-        )
+        payload = _bounded(event.model_dump(mode="json"), limit=MAX_TOOL_RESULT_TEXT)
         if not isinstance(payload, dict):
             payload = {}
         identity = (
@@ -2543,7 +2808,11 @@ class HarnessRuntimeService:
     def _complete_owner(
         self, turn: HarnessTurn, final_message: str, usage: ChatTokenUsage
     ) -> None:
-        if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id and turn.chat_session_id:
+        if (
+            turn.origin == HarnessTurnOrigin.CHAT
+            and turn.chat_turn_id
+            and turn.chat_session_id
+        ):
             chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
             existing = [
                 item
@@ -2590,14 +2859,18 @@ class HarnessRuntimeService:
                     expected_revision=run.revision,
                     run_id=run.id,
                     event_type="run.completed",
-                    event_payload={"harness_turn_id": turn.id, "usage": usage.model_dump(mode="json")},
+                    event_payload={
+                        "harness_turn_id": turn.id,
+                        "usage": usage.model_dump(mode="json"),
+                    },
                     idempotency_key="run:completed",
                 )
                 for chat in self._attached_chats(turn.harness_session_id):
                     self._append_chat_handoff(
                         chat,
                         role=ChatRole.ASSISTANT,
-                        content=final_message or "Harness mission completed without a text response.",
+                        content=final_message
+                        or "Harness mission completed without a text response.",
                         run_id=run.id,
                         usage=usage,
                     )
@@ -2632,9 +2905,7 @@ class HarnessRuntimeService:
                     expected_revision=run_owner.revision,
                 )
 
-    def _fail_turn(
-        self, turn_id: str, status: HarnessTurnStatus, error: str
-    ) -> None:
+    def _fail_turn(self, turn_id: str, status: HarnessTurnStatus, error: str) -> None:
         turn = self.store.get(HarnessTurn, turn_id)
         if turn.status not in {
             HarnessTurnStatus.COMPLETE,
@@ -2654,7 +2925,10 @@ class HarnessRuntimeService:
             self.store.update(
                 HarnessSession,
                 session.id,
-                {"status": HarnessSessionStatus.INTERRUPTED, "last_activity_at": utc_now()},
+                {
+                    "status": HarnessSessionStatus.INTERRUPTED,
+                    "last_activity_at": utc_now(),
+                },
                 expected_revision=session.revision,
             )
 

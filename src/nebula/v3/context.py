@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import asyncio
 import hashlib
 import json
@@ -349,6 +351,13 @@ class ContextCompactor:
                 cost_usd=self._cost(provider, usage),
             )
         except Exception as exc:
+            record_caught_exception(
+                "knowledge",
+                "knowledge.context.caught_failure_001",
+                "A handled knowledge operation raised an exception.",
+                exc,
+                stage="context",
+            )
             if isinstance(exc, ContextCompactionError):
                 usage = exc.usage
             safe_error = self._safe_error(exc)
@@ -404,6 +413,13 @@ class ContextCompactor:
                         budget=budget,
                     )
                 except ContextCompactionError as exc:
+                    record_caught_exception(
+                        "knowledge",
+                        "knowledge.context.caught_failure_002",
+                        "A handled knowledge operation raised an exception.",
+                        exc,
+                        stage="context",
+                    )
                     exc.usage = self._add_usage(total, exc.usage)
                     raise
                 total = self._add_usage(total, usage)
@@ -445,6 +461,13 @@ class ContextCompactor:
                 budget=budget,
             )
         except ContextCompactionError as exc:
+            record_caught_exception(
+                "knowledge",
+                "knowledge.context.caught_failure_003",
+                "A handled knowledge operation raised an exception.",
+                exc,
+                stage="context",
+            )
             exc.usage = self._add_usage(total, exc.usage)
             raise
         return memory, self._add_usage(total, call_usage)
@@ -605,6 +628,13 @@ class ContextCompactor:
             try:
                 response = await provider.complete(request)
             except Exception as exc:
+                record_caught_exception(
+                    "knowledge",
+                    "knowledge.context.caught_failure_004",
+                    "A handled knowledge operation raised an exception.",
+                    exc,
+                    stage="context",
+                )
                 raise ContextCompactionError(
                     "context compactor provider request failed", usage=usage
                 ) from exc
@@ -622,6 +652,13 @@ class ContextCompactor:
                 self._validate_memory_sources(memory, allowed)
                 return memory, usage
             except Exception as exc:
+                record_caught_exception(
+                    "knowledge",
+                    "knowledge.context.caught_failure_005",
+                    "A handled knowledge operation raised an exception.",
+                    exc,
+                    stage="context",
+                )
                 last_error = str(exc)[:500]
         raise ContextCompactionError(
             "compactor did not return valid sourced memory", usage=usage
@@ -784,10 +821,24 @@ class ContextCompactor:
                         expected_revision=owner.revision,
                     )
                 return
-            except ConflictError:
+            except ConflictError as caught_error:
+                record_caught_exception(
+                    "knowledge",
+                    "knowledge.context.caught_failure_006",
+                    "A handled knowledge operation raised an exception.",
+                    caught_error,
+                    stage="context",
+                )
                 try:
                     existing = self.store.get(ContextSnapshot, snapshot.id)
-                except NotFoundError:
+                except NotFoundError as caught_error:
+                    record_caught_exception(
+                        "knowledge",
+                        "knowledge.context.caught_failure_007",
+                        "A handled knowledge operation raised an exception.",
+                        caught_error,
+                        stage="context",
+                    )
                     continue
                 if existing.source_sha256 != snapshot.source_sha256:
                     raise

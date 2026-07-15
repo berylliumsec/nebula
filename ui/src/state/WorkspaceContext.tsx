@@ -12,6 +12,7 @@ import { ApiClient } from "../api/client";
 import { NebulaEventStream, type StreamState } from "../api/events";
 import { providerVerificationModel } from "../api/providerCapabilities";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
+import { setDiagnosticsAvailability } from "../diagnostics";
 import type {
   AgentRunSummary,
   ApprovalDecisionRequest,
@@ -44,6 +45,7 @@ import type {
   RunStopRequest,
   SetupStatus,
 } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 type CoreState = "checking" | "online" | "offline";
 export type WorkspaceState = "starting" | "ready" | "degraded" | "failed";
@@ -188,6 +190,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       try {
         const nextHealth = await nextApi.health(controller.signal);
         if (!active) return;
+        setDiagnosticsAvailability(
+          nextHealth.diagnosticsDegraded !== true,
+          nextHealth.diagnosticsDegraded ? "Nebula Core reported degraded local diagnostics." : undefined,
+        );
         setHealth(nextHealth);
         setWorkspaceState(nextHealth.status === "degraded" ? "degraded" : "ready");
 
@@ -298,17 +304,20 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
               if (event.kind === "approval.requested" || event.kind === "approval.resolved") {
                 void nextApi.listApprovals(nextEngagement.id, controller.signal)
                   .then((page) => { if (active) setApprovals(page.items); })
-                  .catch(() => { /* The event remains visible if the authoritative refresh fails. */ });
+                  .catch((caughtError) => {
+                    void logCaughtDiagnostic("interface.workspace_context.caught_failure_01", "A handled interface operation failed.", caughtError, "workspace_context"); /* The event remains visible if the authoritative refresh fails. */ });
               }
               if (event.kind === "finding.created" || event.kind === "finding.updated") {
                 void nextApi.listFindings(nextEngagement.id, controller.signal)
                   .then((page) => { if (active) setFindings(page.items); })
-                  .catch(() => { /* Preserve the last loaded finding list until the next refresh. */ });
+                  .catch((caughtError) => {
+                    void logCaughtDiagnostic("interface.workspace_context.caught_failure_02", "A handled interface operation failed.", caughtError, "workspace_context"); /* Preserve the last loaded finding list until the next refresh. */ });
               }
               if (event.kind === "evidence.created") {
                 void nextApi.listEvidence(nextEngagement.id, controller.signal)
                   .then((page) => { if (active) setEvidence(page.items); })
-                  .catch(() => { /* Preserve the last loaded evidence list until the next refresh. */ });
+                  .catch((caughtError) => {
+                    void logCaughtDiagnostic("interface.workspace_context.caught_failure_03", "A handled interface operation failed.", caughtError, "workspace_context"); /* Preserve the last loaded evidence list until the next refresh. */ });
               }
             },
           });
@@ -317,6 +326,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           setStreamState("unsupported");
         }
       } catch (error) {
+        void logCaughtDiagnostic("interface.workspace_context.caught_failure_04", "A handled interface operation failed.", error, "workspace_context");
         if (active) {
           setCoreError(error instanceof Error ? error.message : "Nebula Core could not be reached.");
           setWorkspaceState("failed");
@@ -359,7 +369,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
             setSetupStatus(next);
             if (["detecting_runner", "preparing_image"].includes(next.terminal.status)) poll();
           })
-          .catch(() => {
+          .catch((caughtError) => {
+            void logCaughtDiagnostic("interface.workspace_context.caught_failure_05", "A handled interface operation failed.", caughtError, "workspace_context");
             if (active) poll();
           });
       }, 1_000);
@@ -442,6 +453,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
             })()
           : provider));
       } catch (error) {
+        void logCaughtDiagnostic("interface.workspace_context.caught_failure_06", "A handled interface operation failed.", error, "workspace_context");
         setProviders((current) => current.map((provider) => provider.id === id
           ? {
               ...provider,

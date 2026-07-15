@@ -1,4 +1,5 @@
 import { Download, PackageCheck, RefreshCw } from "lucide-react";
+import { DiagnosticErrorNotice } from "../diagnostics";
 import { useReleaseUpdate } from "../state/ReleaseUpdateContext";
 
 export function ReleaseSettingsPanel() {
@@ -49,7 +50,7 @@ export function ReleaseSettingsPanel() {
         )}
         {phase === "current" && <p role="status">Nebula is up to date.</p>}
         {phase === "restart" && <p role="status">Update installed. Restart Nebula to finish.</p>}
-        {phase === "error" && <p className="form-error" role="alert">{error}</p>}
+        {phase === "error" && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
       </div>
     </section>
   );

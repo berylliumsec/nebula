@@ -1,4 +1,5 @@
 import type { EventCursor, RunEvent } from "./types";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 export type StreamState = "connecting" | "open" | "reconnecting" | "closed" | "unsupported";
 
@@ -130,7 +131,8 @@ export class NebulaEventStream {
         if (!event || event.sequence <= this.cursor.after) return;
         this.cursor.after = event.sequence;
         this.options.onEvent(event);
-      } catch {
+      } catch (caughtError) {
+        void logCaughtDiagnostic("interface.events.caught_failure_01", "A handled interface operation failed.", caughtError, "events");
         // Malformed or non-event frames are intentionally ignored. The API
         // emits a structured system.notice when operator attention is needed.
       }

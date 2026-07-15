@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import csv
 import gzip
 import hashlib
@@ -176,7 +178,14 @@ def prioritize(factors: PriorityFactors) -> PriorityDecision:
 def _version(value: str) -> Version | tuple[tuple[int, int | str], ...]:
     try:
         return Version(value)
-    except InvalidVersion:
+    except InvalidVersion as caught_error:
+        record_caught_exception(
+            "missions",
+            "missions.intelligence.caught_failure_001",
+            "A handled missions operation raised an exception.",
+            caught_error,
+            stage="intelligence",
+        )
         tokens = re.findall(r"\d+|[a-zA-Z]+", value.lower())
         normalized: list[tuple[int, int | str]] = []
         for token in tokens:
@@ -223,7 +232,14 @@ def _range_is_comparable(
         try:
             for value in values:
                 SemanticVersion(value)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as caught_error:
+            record_caught_exception(
+                "missions",
+                "missions.intelligence.caught_failure_002",
+                "A handled missions operation raised an exception.",
+                caught_error,
+                stage="intelligence",
+            )
             return False
         return True
     if scheme == "ECOSYSTEM":
@@ -234,7 +250,14 @@ def _range_is_comparable(
         try:
             for value in values:
                 Version(value)
-        except InvalidVersion:
+        except InvalidVersion as caught_error:
+            record_caught_exception(
+                "missions",
+                "missions.intelligence.caught_failure_003",
+                "A handled missions operation raised an exception.",
+                caught_error,
+                stage="intelligence",
+            )
             return False
         return True
     # NVD CPE ranges omit a scheme. Confirm only simple dotted numeric values.
@@ -497,7 +520,14 @@ class CorrelationEngine:
             return None
         try:
             observed = parse_purl(component.purl)
-        except ValueError:
+        except ValueError as caught_error:
+            record_caught_exception(
+                "missions",
+                "missions.intelligence.caught_failure_004",
+                "A handled missions operation raised an exception.",
+                caught_error,
+                stage="intelligence",
+            )
             return None
         observed_version = component.version or observed.version
         identity_seen = False
@@ -506,7 +536,14 @@ class CorrelationEngine:
             if product.purl:
                 try:
                     expected = parse_purl(product.purl)
-                except ValueError:
+                except ValueError as caught_error:
+                    record_caught_exception(
+                        "missions",
+                        "missions.intelligence.caught_failure_005",
+                        "A handled missions operation raised an exception.",
+                        caught_error,
+                        stage="intelligence",
+                    )
                     continue
                 identity_match = (
                     observed.ecosystem == expected.ecosystem
@@ -566,7 +603,14 @@ class CorrelationEngine:
                 observed_part, observed_vendor, observed_product, observed_version = (
                     parse_cpe(observed_value)
                 )
-            except ValueError:
+            except ValueError as caught_error:
+                record_caught_exception(
+                    "missions",
+                    "missions.intelligence.caught_failure_006",
+                    "A handled missions operation raised an exception.",
+                    caught_error,
+                    stage="intelligence",
+                )
                 continue
             observed_version = component.version or observed_version
             for product in affected:
@@ -576,7 +620,14 @@ class CorrelationEngine:
                     expected_part, expected_vendor, expected_product, _ = parse_cpe(
                         product.cpe
                     )
-                except ValueError:
+                except ValueError as caught_error:
+                    record_caught_exception(
+                        "missions",
+                        "missions.intelligence.caught_failure_007",
+                        "A handled missions operation raised an exception.",
+                        caught_error,
+                        stage="intelligence",
+                    )
                     continue
                 if (observed_part, observed_vendor, observed_product) != (
                     expected_part,
@@ -988,7 +1039,14 @@ def persist_feed_page(
             transaction.add(stored.artifact)
             transaction.add(snapshot)
             transaction.add_all(advisories)
-    except Exception:
+    except Exception as caught_error:
+        record_caught_exception(
+            "missions",
+            "missions.intelligence.caught_failure_008",
+            "A handled missions operation raised an exception.",
+            caught_error,
+            stage="intelligence",
+        )
         artifact_store.discard_new_blob(stored)
         raise
     return snapshot, advisories

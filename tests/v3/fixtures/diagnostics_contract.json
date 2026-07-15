@@ -1,0 +1,48 @@
+{
+  "record_schema": "nebula.diagnostic/v1",
+  "settings": {
+    "schema": "nebula.diagnostics-settings/v1",
+    "global_level": "error",
+    "feature_levels": {}
+  },
+  "features": [
+    "desktop",
+    "interface",
+    "api",
+    "setup",
+    "storage",
+    "projects",
+    "terminal",
+    "terminal-audit",
+    "workspace",
+    "notes",
+    "capture",
+    "providers",
+    "chat",
+    "knowledge",
+    "harnesses",
+    "missions",
+    "toolbox",
+    "sandbox",
+    "executions",
+    "findings",
+    "evidence",
+    "reports",
+    "diagnostics"
+  ],
+  "metadata_input": {
+    "count": 2,
+    "route": "/api/v1/projects/{id}",
+    "component": "contract",
+    "authorization": "CANARY-AUTHORIZATION",
+    "body": "CANARY-BODY",
+    "prompt": "CANARY-PROMPT",
+    "command": "CANARY-COMMAND",
+    "unknown": "CANARY-UNKNOWN"
+  },
+  "metadata_expected": {
+    "count": 2,
+    "route": "/api/v1/projects/{id}",
+    "component": "contract"
+  }
+}

@@ -41,7 +41,9 @@ def test_signoff_finalizes_review_with_active_operator_and_validated_findings(tm
             finding_ids=[finding.id],
         )
     )
-    operator = OperatorProfileService(store).create_profile(display_name="Alex Reviewer")
+    operator = OperatorProfileService(store).create_profile(
+        display_name="Alex Reviewer"
+    )
 
     signed = sign_off_report(
         store,
@@ -73,7 +75,9 @@ def test_signoff_rejects_draft_stale_and_candidate_finding(tmp_path):
         sign_off_report(
             store,
             draft.id,
-            ReportSignoffRequest(expected_revision=draft.revision, operator_id=operator.id),
+            ReportSignoffRequest(
+                expected_revision=draft.revision, operator_id=operator.id
+            ),
         )
 
     review = store.update(
@@ -92,7 +96,9 @@ def test_signoff_rejects_draft_stale_and_candidate_finding(tmp_path):
         sign_off_report(
             store,
             review.id,
-            ReportSignoffRequest(expected_revision=review.revision, operator_id=operator.id),
+            ReportSignoffRequest(
+                expected_revision=review.revision, operator_id=operator.id
+            ),
         )
 
 

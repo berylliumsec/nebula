@@ -33,31 +33,34 @@ If startup still fails, preserve the exact launcher or Core error and run
 Nebula 2 PyQt launcher, delete application data, or expose Core remotely as a
 recovery step. The native desktop captures redacted Core startup diagnostics in
 `logs/nebula-core-startup.log` below its platform application-data directory; a
-startup failure reports the exact path. Use that reported path rather than guessing
-an operating-system-specific location.
+startup failure reports the exact path and preserves two bounded rotations. Use
+that reported path rather than guessing an operating-system-specific location.
 
 ## diagnostics | Core health, storage, or integrity diagnosis
 
 Keywords: doctor, diagnostics, data directory, database error, artifact corrupt, artifact integrity, terminal audit, sandbox unavailable, logs, health check
 
-Sources: src/nebula/v3/cli.py:doctor, src/nebula/v3/cli.py:_data_dir, ui/src-tauri/src/sidecar.rs:STARTUP_LOG_NAME, docs/MIGRATING-2-TO-3.md#recovery
+Sources: src/nebula/v3/cli.py:doctor, src/nebula/v3/diagnostics.py:DiagnosticManager, ui/src-tauri/src/diagnostics.rs:Diagnostics, docs/NEBULA3_DIAGNOSTICS.md
 
 Run `nebula-core doctor --json` for the active installation. If Nebula uses a copied
 or nondefault application-data directory, run
 `nebula-core doctor --data-dir PATH --json`. The report checks database health,
 artifact-store writability and artifact
 integrity, terminal command-audit integrity, API schema availability, and sandbox
-availability. A sandbox result of `analysis-only` is not permission to use the host;
-the report always declares `host_fallback: false`.
+availability. It also reports diagnostics writability, levels, disk use, rotation,
+dropped records, and degraded state. A sandbox result of `analysis-only` is not
+permission to use the host; the report always declares `host_fallback: false`.
 
 The standalone Core default data root is `~/.local/share/nebula/v3` unless
 `NEBULA_V3_DATA_DIR` is set. The native desktop supplies its platform application
 data `core` directory instead. `NEBULA_V3_DATABASE_URL` may select another database,
 and `NEBULA_V3_ARTIFACT_DIR` may select another artifact root. Record the report's
-own `data_dir`, database, artifact path, corrupt IDs, audit error records, and sandbox
-detail before proposing recovery. For a native startup failure, use the exact
-redacted startup-diagnostic path printed by the desktop; the file is bounded to 256
-KiB and named `nebula-core-startup.log`.
+own `data_dir`, database, artifact path, corrupt IDs, audit error records, diagnostics
+health, and sandbox detail before proposing recovery. In the native application,
+use **Settings → Diagnostics** to inspect an error reference, open only the computed
+log directory, or create a redacted support bundle. For a native startup failure,
+use the exact startup-diagnostic path printed by the desktop; the current file is
+bounded to 256 KiB, named `nebula-core-startup.log`, and retains two prior launches.
 
 Do not tell an operator to use the legacy Nebula 2 `/home/.../logs` location as a
 Nebula 3 path. Do not delete corrupt artifacts, orphan blobs, terminal records, or

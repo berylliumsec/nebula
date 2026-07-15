@@ -3,6 +3,10 @@
 Nebula 3 is the native, local-first desktop workbench. The PyQt-based Nebula 2
 application remains a separately versioned maintenance distribution.
 
+Structured Error-by-default logging, correlation IDs, the Diagnostics viewer,
+and redacted support bundles are documented in the
+[Nebula 3 local diagnostics guide](NEBULA3_DIAGNOSTICS.md).
+
 ## What is available
 
 - UI-independent Pydantic domain contracts and SQLAlchemy storage.

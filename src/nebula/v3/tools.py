@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import asyncio
 import hashlib
 import ipaddress
@@ -143,6 +145,13 @@ class ToolSpec(BaseModel):
         try:
             Draft202012Validator.check_schema(value)
         except SchemaError as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tools.caught_failure_001",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tools",
+            )
             raise ValueError(f"invalid JSON Schema: {exc.message}") from exc
         if value.get("type") != "object":
             raise ValueError("tool schemas must describe an object")
@@ -290,6 +299,13 @@ def build_declared_command(spec: ToolSpec, arguments: dict[str, Any]) -> list[st
                     allow_nan=False,
                 )
             except (TypeError, ValueError) as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.tools.caught_failure_002",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="tools",
+                )
                 raise InvalidToolArguments(
                     f"{binding.argument} must be JSON serializable"
                 ) from exc
@@ -494,6 +510,13 @@ class SandboxCommandTool(ToolPlugin):
         try:
             output = self.output_parser(result.stdout, result.stderr, result.exit_code)
         except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tools.caught_failure_003",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tools",
+            )
             output = {}
             parser_error = _bounded_execution_error(exc)
         return ToolExecutionResult(
@@ -536,6 +559,13 @@ def _egress_ports(
             try:
                 ports.append(parsed.port or (443 if parsed.scheme == "https" else 80))
             except ValueError as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.tools.caught_failure_004",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="tools",
+                )
                 raise InvalidToolArguments(
                     "target URL contains an invalid port"
                 ) from exc
@@ -641,7 +671,14 @@ class StoreToolLedger:
                 idempotency_key=f"tool:{call.id}:proposed",
             )
             return call
-        except ConflictError:
+        except ConflictError as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tools.caught_failure_005",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="tools",
+            )
             existing = await asyncio.to_thread(
                 self.store.get, PersistedToolCall, call_id
             )
@@ -703,7 +740,14 @@ class StoreToolLedger:
         approval_id = str(uuid5(NAMESPACE_URL, f"nebula:approval:{call.id}"))
         try:
             approval = await asyncio.to_thread(self.store.get, Approval, approval_id)
-        except NotFoundError:
+        except NotFoundError as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tools.caught_failure_006",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="tools",
+            )
             exact_request: dict[str, Any] = {
                 "tool_name": invocation.tool_name,
                 "arguments": invocation.arguments,
@@ -876,7 +920,14 @@ class StoreToolEvidenceRecorder:
         )
         try:
             await asyncio.to_thread(self.store.create_many, [stored.artifact, evidence])
-        except Exception:
+        except Exception as caught_error:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tools.caught_failure_007",
+                "A handled toolbox operation raised an exception.",
+                caught_error,
+                stage="tools",
+            )
             await asyncio.to_thread(self.artifact_store.discard_new_blob, stored)
             raise
         return [evidence.id]
@@ -895,6 +946,13 @@ class ToolRegistry:
         try:
             return self._plugins[name]
         except KeyError as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tools.caught_failure_008",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tools",
+            )
             raise UnknownTool(name) from exc
 
     def specs(self) -> list[ToolSpec]:
@@ -1100,10 +1158,24 @@ class ToolBroker:
                         f"tool output parsing failed: {result.parser_error}"
                     )
                 self._validate(plugin.spec.output_schema, result.output, "output")
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as caught_error:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.tools.caught_failure_009",
+                    "A handled toolbox operation raised an exception.",
+                    caught_error,
+                    stage="tools",
+                )
                 await self.ledger.transition(running, ToolCallStatus.CANCELLED)
                 raise
             except Exception as exc:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.tools.caught_failure_010",
+                    "A handled toolbox operation raised an exception.",
+                    exc,
+                    stage="tools",
+                )
                 await self.ledger.transition(
                     running, ToolCallStatus.FAILED, error=str(exc)
                 )
@@ -1192,7 +1264,14 @@ class ToolBroker:
             host = _target_host(target)
             try:
                 resolved_ips = [str(ipaddress.ip_address(host))]
-            except ValueError:
+            except ValueError as caught_error:
+                record_caught_exception(
+                    "toolbox",
+                    "toolbox.tools.caught_failure_011",
+                    "A handled toolbox operation raised an exception.",
+                    caught_error,
+                    stage="tools",
+                )
                 resolved_ips = sorted(
                     {
                         str(ipaddress.ip_address(value))
@@ -1216,6 +1295,13 @@ class ToolBroker:
         try:
             Draft202012Validator(schema).validate(value)
         except ValidationError as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.tools.caught_failure_012",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="tools",
+            )
             path = ".".join(str(part) for part in exc.absolute_path)
             where = f" at {path}" if path else ""
             raise InvalidToolArguments(
@@ -1296,6 +1382,13 @@ async def _resolve_addresses(host: str) -> list[str]:
     try:
         return await asyncio.to_thread(resolve)
     except socket.gaierror as exc:
+        record_caught_exception(
+            "toolbox",
+            "toolbox.tools.caught_failure_013",
+            "A handled toolbox operation raised an exception.",
+            exc,
+            stage="tools",
+        )
         raise InvalidToolArguments(f"could not resolve mapped target {host!r}") from exc
 
 

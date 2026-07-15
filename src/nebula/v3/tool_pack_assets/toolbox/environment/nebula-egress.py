@@ -81,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return serve(options.allow)
     except Exception as exc:
+        # diagnostic-expected: the supervising Core records the helper failure;
+        # this emergency stderr line is bounded and contains no request payload.
         print(f"{exc.__class__.__name__}: {exc}", file=sys.stderr, flush=True)
         return 1
 

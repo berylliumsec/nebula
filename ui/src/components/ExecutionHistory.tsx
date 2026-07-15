@@ -4,6 +4,7 @@ import type { ApiClient } from "../api/client";
 import type { OperatorExecution, ProviderHealth } from "../api/types";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { ExecutionInsightDialog } from "./ExecutionInsightDialog";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 interface ExecutionHistoryProps {
   api: ApiClient;
@@ -61,6 +62,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
       setItems(page.items.sort((left, right) => right.queuedAt.localeCompare(left.queuedAt)));
       setSelectedId((current) => current && !page.items.some((item) => item.id === current) ? "" : current);
     } catch (loadError) {
+      void logCaughtDiagnostic("interface.execution_history.caught_failure_01", "A handled interface operation failed.", loadError, "execution_history");
       if (!signal?.aborted) setError(loadError instanceof Error ? loadError.message : "Could not load execution history.");
     } finally {
       if (!signal?.aborted) setLoading(false);
@@ -102,6 +104,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
     try {
       await navigator.clipboard.writeText(await source(execution));
     } catch (copyError) {
+      void logCaughtDiagnostic("interface.execution_history.caught_failure_02", "A handled interface operation failed.", copyError, "execution_history");
       setError(copyError instanceof Error ? copyError.message : "Could not copy source.");
     }
   };
@@ -115,6 +118,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
         origin: { kind: "rerun", executionId: execution.id },
       });
     } catch (rerunError) {
+      void logCaughtDiagnostic("interface.execution_history.caught_failure_03", "A handled interface operation failed.", rerunError, "execution_history");
       setError(rerunError instanceof Error ? rerunError.message : "Could not load source for review.");
     }
   };
@@ -124,6 +128,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
       const updated = await api.cancelExecution(execution.id);
       setItems((current) => current.map((item) => item.id === updated.id ? updated : item));
     } catch (cancelError) {
+      void logCaughtDiagnostic("interface.execution_history.caught_failure_04", "A handled interface operation failed.", cancelError, "execution_history");
       setError(cancelError instanceof Error ? cancelError.message : "Could not cancel execution.");
     }
   };
@@ -139,6 +144,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
         setStderr((current) => current + next.text); setStderrNext(next.nextOffset); setStderrTotal(next.totalBytes);
       }
     } catch (outputError) {
+      void logCaughtDiagnostic("interface.execution_history.caught_failure_05", "A handled interface operation failed.", outputError, "execution_history");
       setError(outputError instanceof Error ? outputError.message : "Could not load more output.");
     }
   };
@@ -154,7 +160,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
         <label>Through<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
         <button className="button quiet" type="button" disabled={loading} onClick={() => void load()}><RefreshCw className={loading ? "spin" : undefined} size={14} /> Refresh</button>
       </header>
-      {error && <p className="form-error" role="alert">{error}</p>}
+      {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
       <div className="execution-history-layout">
         <aside className={items.length ? undefined : "is-empty"} aria-label="Execution records">
           {loading && !items.length ? <div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading executions…</strong></div> : items.length ? items.map((execution) => (

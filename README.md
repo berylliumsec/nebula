@@ -29,6 +29,8 @@ For a source checkout, see [the Nebula 3 guide](docs/NEBULA3.md). Existing
 Nebula 2 data can be imported without changing its source; see
 [Migrating from Nebula 2](docs/MIGRATING-2-TO-3.md). The
 [Toolbox guide](docs/TOOLBOX.md) documents the isolated automation boundary.
+The [local diagnostics guide](docs/NEBULA3_DIAGNOSTICS.md) documents structured
+feature logs, privacy controls, error references, and support bundles.
 
 Nebula 3 is currently versioned separately from the maintenance-only Nebula 2
 Python distribution. The `nebula3` source command remains as a compatibility

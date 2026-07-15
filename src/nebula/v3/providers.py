@@ -8,6 +8,8 @@ model serialization and repr output.
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import asyncio
 import ipaddress
 import json
@@ -153,7 +155,14 @@ class ProviderConfig(BaseModel):
         host = parsed.hostname.rstrip(".").lower()
         try:
             address = ipaddress.ip_address(host)
-        except ValueError:
+        except ValueError as caught_error:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_001",
+                "A handled providers operation raised an exception.",
+                caught_error,
+                stage="providers",
+            )
             address = None
         is_local_address = host == "localhost" or bool(
             address
@@ -390,9 +399,23 @@ class ModelProvider(ABC):
         yield ModelStreamEvent(type=StreamEventType.STARTED)
         try:
             response = await self.complete(request)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_error:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_002",
+                "A handled providers operation raised an exception.",
+                caught_error,
+                stage="providers",
+            )
             raise
         except Exception as exc:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_003",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
             yield ModelStreamEvent(type=StreamEventType.ERROR, error=str(exc))
             return
         if response.text:
@@ -413,7 +436,14 @@ def _safe_error(response: httpx.Response) -> ProviderError:
     try:
         body = response.json()
         detail = body.get("error", {}).get("message") or body.get("message")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError) as caught_error:
+        record_caught_exception(
+            "providers",
+            "providers.providers.caught_failure_004",
+            "A handled providers operation raised an exception.",
+            caught_error,
+            stage="providers",
+        )
         detail = None
     suffix = f" request_id={request_id}" if request_id else ""
     return ProviderError(
@@ -430,6 +460,13 @@ def _arguments(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(value)
     except (TypeError, json.JSONDecodeError) as exc:
+        record_caught_exception(
+            "providers",
+            "providers.providers.caught_failure_005",
+            "A handled providers operation raised an exception.",
+            exc,
+            stage="providers",
+        )
         raise ProviderError("provider returned malformed tool arguments") from exc
     if not isinstance(parsed, dict):
         raise ProviderError("provider returned non-object tool arguments")
@@ -576,6 +613,13 @@ class OpenAIResponsesProvider(ModelProvider):
                 provider_id=self.config.id, healthy=True, models=models
             )
         except Exception as exc:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_006",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
             return ProviderHealth(
                 provider_id=self.config.id, healthy=False, detail=str(exc)
             )
@@ -717,6 +761,13 @@ class OpenAICompatibleProvider(ModelProvider):
                 provider_id=self.config.id, healthy=True, models=models
             )
         except Exception as exc:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_007",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
             return ProviderHealth(
                 provider_id=self.config.id, healthy=False, detail=str(exc)
             )
@@ -804,9 +855,23 @@ async def _stream_openai_compatible(
             provider_request_id=response_id,
         )
         yield ModelStreamEvent(type=StreamEventType.COMPLETED, response=final)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as caught_error:
+        record_caught_exception(
+            "providers",
+            "providers.providers.caught_failure_008",
+            "A handled providers operation raised an exception.",
+            caught_error,
+            stage="providers",
+        )
         raise
     except Exception as exc:
+        record_caught_exception(
+            "providers",
+            "providers.providers.caught_failure_009",
+            "A handled providers operation raised an exception.",
+            exc,
+            stage="providers",
+        )
         yield ModelStreamEvent(type=StreamEventType.ERROR, error=str(exc))
 
 
@@ -936,6 +1001,13 @@ class AnthropicProvider(ModelProvider):
                 else "no default model configured",
             )
         except Exception as exc:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_010",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
             return ProviderHealth(
                 provider_id=self.config.id, healthy=False, detail=str(exc)
             )
@@ -1112,6 +1184,13 @@ class GeminiProvider(ModelProvider):
                 provider_id=self.config.id, healthy=True, models=models
             )
         except Exception as exc:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_011",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
             return ProviderHealth(
                 provider_id=self.config.id, healthy=False, detail=str(exc)
             )
@@ -1205,6 +1284,13 @@ class BedrockProvider(ModelProvider):
         try:
             data = await asyncio.to_thread(invoke)
         except Exception as exc:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_012",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
             raise ProviderError(
                 f"Bedrock request failed: {type(exc).__name__}"
             ) from exc
@@ -1255,6 +1341,13 @@ class BedrockProvider(ModelProvider):
                 models=list(dict.fromkeys(models)),
             )
         except Exception as exc:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_013",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
             return ProviderHealth(
                 provider_id=self.config.id,
                 healthy=False,
@@ -1468,6 +1561,13 @@ class ProviderRegistry:
         try:
             provider = self._providers[provider_id]
         except KeyError as exc:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_014",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
             raise ProviderError(f"unknown provider {provider_id!r}") from exc
         if not provider.config.enabled:
             raise ProviderError(f"provider {provider_id!r} is disabled")
@@ -1605,6 +1705,13 @@ def provider_from_profile(
     try:
         flavor = ProviderFlavor(provider_type)
     except ValueError as exc:
+        record_caught_exception(
+            "providers",
+            "providers.providers.caught_failure_015",
+            "A handled providers operation raised an exception.",
+            exc,
+            stage="providers",
+        )
         raise ValueError(
             f"unknown provider type {profile.provider_type!r}; "
             "use provider-catalog values"

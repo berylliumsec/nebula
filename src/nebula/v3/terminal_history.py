@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import base64
 import binascii
 import builtins
@@ -392,7 +394,14 @@ class _CaptureAccumulator:
             return
         try:
             executables = command_executables(command)
-        except ValueError:
+        except ValueError as caught_error:
+            record_caught_exception(
+                "terminal-audit",
+                "terminal-audit.terminal_history.caught_failure_001",
+                "A handled terminal audit operation raised an exception.",
+                caught_error,
+                stage="terminal_history",
+            )
             self.classification_failed = True
             executables = ()
         self.matched_tools.update(
@@ -640,6 +649,13 @@ class TerminalCommandHistory:
                 session.add(OperationEventRow(**event.model_dump(mode="python")))
                 session.flush()
         except IntegrityError as exc:
+            record_caught_exception(
+                "terminal-audit",
+                "terminal-audit.terminal_history.caught_failure_002",
+                "A handled terminal audit operation raised an exception.",
+                exc,
+                stage="terminal_history",
+            )
             raise TerminalRecordingToolsConflict(
                 "terminal recording-tool preference revision changed"
             ) from exc
@@ -747,6 +763,13 @@ class TerminalCommandHistory:
             except Exception as exc:
                 # Preserve malformed or temporarily uncommittable spools for
                 # doctor/recovery rather than silently deleting audit bytes.
+                record_caught_exception(
+                    "terminal-audit",
+                    "terminal-audit.terminal_history.caught_failure_003",
+                    "A handled terminal audit operation raised an exception.",
+                    exc,
+                    stage="terminal_history",
+                )
                 if self.store is not None and isinstance(metadata, dict):
                     try:
                         engagement_id = _bounded_identifier(
@@ -773,7 +796,14 @@ class TerminalCommandHistory:
                                 f"terminal-audit-spool-recovery:{metadata_path.stem}"
                             ),
                         )
-                    except Exception:
+                    except Exception as caught_error:
+                        record_caught_exception(
+                            "terminal-audit",
+                            "terminal-audit.terminal_history.caught_failure_004",
+                            "A handled terminal audit operation raised an exception.",
+                            caught_error,
+                            stage="terminal_history",
+                        )
                         LOGGER.error(
                             "terminal audit spool recovery gap could not be persisted (%s)",
                             type(exc).__name__,
@@ -1590,7 +1620,14 @@ class Osc633CommandParser:
                 return None
             cwd = cwd_bytes.decode("utf-8")
             command = command_bytes.decode("utf-8")
-        except (UnicodeDecodeError, ValueError, binascii.Error):
+        except (UnicodeDecodeError, ValueError, binascii.Error) as caught_error:
+            record_caught_exception(
+                "terminal-audit",
+                "terminal-audit.terminal_history.caught_failure_005",
+                "A handled terminal audit operation raised an exception.",
+                caught_error,
+                stage="terminal_history",
+            )
             return None
         record_id = str(uuid4())
         started_at = _aware_utc(self._clock(), field="clock")
@@ -1599,7 +1636,14 @@ class Osc633CommandParser:
         if self.policy_provider is not None:
             try:
                 policy = self.policy_provider()
-            except Exception:
+            except Exception as caught_error:
+                record_caught_exception(
+                    "terminal-audit",
+                    "terminal-audit.terminal_history.caught_failure_006",
+                    "A handled terminal audit operation raised an exception.",
+                    caught_error,
+                    stage="terminal_history",
+                )
                 policy = TerminalRecordingPolicy(
                     revision=0,
                     effective_tools=frozenset(),
@@ -1661,7 +1705,14 @@ class Osc633CommandParser:
             nonce = parts[0].decode("ascii")
             sequence = parts[1].decode("ascii")
             exit_code = int(parts[2].decode("ascii"))
-        except (UnicodeDecodeError, ValueError):
+        except (UnicodeDecodeError, ValueError) as caught_error:
+            record_caught_exception(
+                "terminal-audit",
+                "terminal-audit.terminal_history.caught_failure_007",
+                "A handled terminal audit operation raised an exception.",
+                caught_error,
+                stage="terminal_history",
+            )
             return None
         if nonce != self.nonce or not sequence or len(sequence) > 200:
             return None
@@ -1683,7 +1734,14 @@ class Osc633CommandParser:
             sequence = parts[1].decode("ascii")
             command_bytes = base64.b64decode(parts[2], validate=True)
             command = command_bytes.decode("utf-8")
-        except (UnicodeDecodeError, ValueError, binascii.Error):
+        except (UnicodeDecodeError, ValueError, binascii.Error) as caught_error:
+            record_caught_exception(
+                "terminal-audit",
+                "terminal-audit.terminal_history.caught_failure_008",
+                "A handled terminal audit operation raised an exception.",
+                caught_error,
+                stage="terminal_history",
+            )
             return None
         if nonce != self.nonce or not sequence or len(sequence) > 200:
             return None
@@ -1708,7 +1766,14 @@ class Osc633CommandParser:
                 return None
             cwd = cwd_bytes.decode("utf-8")
             command = command_bytes.decode("utf-8")
-        except (UnicodeDecodeError, ValueError, binascii.Error):
+        except (UnicodeDecodeError, ValueError, binascii.Error) as caught_error:
+            record_caught_exception(
+                "terminal-audit",
+                "terminal-audit.terminal_history.caught_failure_009",
+                "A handled terminal audit operation raised an exception.",
+                caught_error,
+                stage="terminal_history",
+            )
             return None
         return ParsedTerminalCommand(command=command, cwd=cwd, exit_code=exit_code)
 
@@ -1725,6 +1790,13 @@ def command_executables(command: str) -> tuple[str, ...]:
     try:
         tokens = shlex.split(command, posix=True)
     except ValueError as exc:
+        record_caught_exception(
+            "terminal-audit",
+            "terminal-audit.terminal_history.caught_failure_010",
+            "A handled terminal audit operation raised an exception.",
+            exc,
+            stage="terminal_history",
+        )
         raise ValueError("shell command could not be classified") from exc
     index = 0
     while index < len(tokens) and _ASSIGNMENT.fullmatch(tokens[index]):
@@ -1798,6 +1870,13 @@ def _load_tool_names(value: str) -> tuple[str, ...]:
     try:
         decoded = json.loads(value)
     except (TypeError, json.JSONDecodeError) as exc:
+        record_caught_exception(
+            "terminal-audit",
+            "terminal-audit.terminal_history.caught_failure_011",
+            "A handled terminal audit operation raised an exception.",
+            exc,
+            stage="terminal_history",
+        )
         raise ValueError("stored terminal tool preferences are invalid") from exc
     return _normalized_tool_names(decoded)
 

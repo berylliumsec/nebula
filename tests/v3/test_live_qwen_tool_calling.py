@@ -14,9 +14,7 @@ import pytest
 )
 def test_live_qwen_required_probe_safe_call_and_final_response():
     base_url = os.environ["NEBULA_LIVE_QWEN_URL"].rstrip("/")
-    model = os.getenv(
-        "NEBULA_LIVE_QWEN_MODEL", "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"
-    )
+    model = os.getenv("NEBULA_LIVE_QWEN_MODEL", "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ")
     nonce = uuid4().hex
     tool = {
         "type": "function",

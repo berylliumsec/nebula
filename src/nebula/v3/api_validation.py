@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import record_caught_exception
+
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -120,7 +122,9 @@ _REFERENCE_RULES: dict[type[Entity], tuple[ReferenceRule, ...]] = {
     ),
     HarnessSession: (
         ReferenceRule("harness_profile_id", HarnessProfile, same_engagement=False),
-        ReferenceRule("mcp_server_ids", McpServerProfile, many=True, same_engagement=False),
+        ReferenceRule(
+            "mcp_server_ids", McpServerProfile, many=True, same_engagement=False
+        ),
     ),
     HarnessTurn: (
         ReferenceRule("harness_session_id", HarnessSession),
@@ -281,6 +285,13 @@ class ApiEntityValidator:
         try:
             target = self.store.get(target_model, target_id)
         except NotFoundError as exc:
+            record_caught_exception(
+                "api",
+                "api.api_validation.caught_failure_001",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api_validation",
+            )
             raise ApiEntityValidationError(
                 f"{entity.entity_kind}.{field} references missing "
                 f"{target_model.entity_kind} entity: {target_id}"
@@ -351,6 +362,13 @@ class ApiEntityValidator:
         try:
             runtime = provider_from_profile(profile)
         except ValueError as exc:
+            record_caught_exception(
+                "api",
+                "api.api_validation.caught_failure_002",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api_validation",
+            )
             raise ApiEntityValidationError(str(exc)) from exc
         if profile.is_local != runtime.config.local:
             raise ApiEntityValidationError(
