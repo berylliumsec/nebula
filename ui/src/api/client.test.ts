@@ -29,6 +29,7 @@ describe("ApiClient", () => {
       active: true,
       session: {
         session_id: "terminal-1",
+        created_at: "2026-07-15T12:00:00Z",
         websocket_ticket: "fresh-ticket",
         ticket_expires_at: "2026-07-13T18:00:00Z",
         websocket_path: "/api/v1/container-terminals/terminal-1/ws",
@@ -66,6 +67,7 @@ describe("ApiClient", () => {
       active: true,
       session: {
         sessionId: "terminal-1",
+        createdAt: "2026-07-15T12:00:00Z",
         websocketTicket: "fresh-ticket",
         lastSequence: 0,
       },
@@ -78,6 +80,64 @@ describe("ApiClient", () => {
     expect(url).toBe("http://127.0.0.1:8765/api/v1/engagements/project%2Fone/container-terminal/recover");
     expect(init?.method).toBe("POST");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-token");
+  });
+
+  it("maps multi-terminal recovery, capacity, and targeted close contracts", async () => {
+    const runtime = {
+      source_image: "docker.io/kalilinux/kali-rolling:latest",
+      base_image: `docker.io/kalilinux/kali-rolling@sha256:${"b".repeat(64)}`,
+      base_image_digest: `sha256:${"b".repeat(64)}`,
+      image: `sha256:${"c".repeat(64)}`,
+      image_digest: `sha256:${"c".repeat(64)}`,
+      installed_packages: ["kali-linux-headless", "iputils-ping"],
+      interpreter: "/bin/bash",
+      arguments: ["--noprofile", "--norc", "-i"],
+      runner_profile_id: "local",
+      runner_profile_revision: 1,
+      runner_runtime: "podman",
+      runner_isolation: "rootless",
+      runner_executable: "/usr/bin/podman",
+      runner_platform: "linux/amd64",
+    };
+    const session = {
+      session_id: "terminal-1",
+      created_at: "2026-07-15T12:00:00Z",
+      websocket_ticket: "fresh-ticket",
+      ticket_expires_at: "2026-07-15T18:00:00Z",
+      websocket_path: "/api/v1/container-terminals/terminal-1/ws",
+      reconnect_grace_seconds: 600,
+      replay_max_bytes: 1_048_576,
+      last_sequence: 0,
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/container-terminals/recover")) {
+        return new Response(JSON.stringify({ sessions: [{ session, runtime }] }), { status: 200 });
+      }
+      if (path.endsWith("/container-terminal/capacity")) {
+        return new Response(JSON.stringify({ active_sessions: 1, available_sessions: 31, max_active_sessions: 32 }), { status: 200 });
+      }
+      if (path.endsWith("/container-terminals/terminal-1") && init?.method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+      return new Response(JSON.stringify({ detail: "not mocked" }), { status: 500 });
+    });
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", token: "test-token", fetch: fetchMock });
+
+    const recovered = await client.recoverContainerTerminals("project/one");
+    const currentCapacity = await client.containerTerminalCapacity();
+    await client.closeContainerTerminal("terminal-1");
+
+    expect(recovered.sessions[0]).toMatchObject({
+      session: { sessionId: "terminal-1", createdAt: "2026-07-15T12:00:00Z" },
+      runtime: { runnerRuntime: "podman" },
+    });
+    expect(currentCapacity).toEqual({ activeSessions: 1, availableSessions: 31, maxActiveSessions: 32 });
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method ?? "GET"])).toEqual([
+      ["http://127.0.0.1:8765/api/v1/engagements/project%2Fone/container-terminals/recover", "POST"],
+      ["http://127.0.0.1:8765/api/v1/container-terminal/capacity", "GET"],
+      ["http://127.0.0.1:8765/api/v1/container-terminals/terminal-1", "DELETE"],
+    ]);
   });
 
   it("preserves structured API failures and request IDs", async () => {

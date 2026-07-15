@@ -247,12 +247,16 @@ capabilities so it can start under the terminal's empty capability set and use
 its unprivileged connect-scan modes instead of failing during executable
 startup.
 
-One active terminal is retained per Project across Workbench mode changes and
-short webview reconnects. It stops on explicit **Stop**, Core shutdown, or 30
-minutes with no input and no output; a disconnected UI has a 10-minute
-reconnect grace. Core keeps at most 1 MiB of sequenced output for reconnect
-replay. Separately, mandatory shell framing records metadata for every completed
-command as a Project-lifetime audit. The derived image contains a verified,
+Workbench presents active Project terminals as persistent browser-style tabs.
+Each tab owns an independent container, PTY, replay buffer, audit parser, and
+WebSocket while sharing only the Project's `/workspace`. Core admits at most 32
+pending or running human terminals globally. Tabs survive Workbench mode changes
+and short webview reconnects; bulk recovery restores all active tabs in creation
+order. A terminal stops on explicit **Stop**, confirmed tab close, Core shutdown,
+or 30 minutes with no input and no output; a disconnected UI has a 10-minute
+reconnect grace. Core keeps at most 1 MiB of sequenced output per terminal for
+reconnect replay. Separately, mandatory shell framing records metadata for every
+completed command as a Project-lifetime audit. The derived image contains a verified,
 schema-versioned catalog of security executables from the installed Kali
 baseline. Image preparation resolves the installed direct dependencies of
 `kali-linux-headless`, removes Kali core plus the checked-in deployment/system
@@ -393,7 +397,8 @@ to host execution.
 ## Current release boundary
 
 The native desktop is the canonical user path. Scanner import, topology,
-comparison, full-desktop capture, multiple detached terminals, rich HTML notes,
+comparison, full-desktop capture, a manager for intentionally detached or hidden
+terminal containers, rich HTML notes,
 legacy Chroma command search, and always-on AI suggestions remain deliberately
 out of the initial parity release. PostgreSQL team authorization, OIDC/RBAC,
 remote workers, A2A, signed third-party plugins, and advanced specialist

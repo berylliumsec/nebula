@@ -59,12 +59,14 @@ from .chat import (
     ChatService,
 )
 from .container_terminal import (
+    ContainerTerminalCapacity,
     ContainerTerminalCapabilities,
     ContainerTerminalError,
     ContainerTerminalExit,
     ContainerTerminalOutput,
     ContainerTerminalPreflightRequest,
     ContainerTerminalPreflightResponse,
+    ContainerTerminalRecoveryListResponse,
     ContainerTerminalRecoveryResponse,
     ContainerTerminalService,
     ContainerTerminalStartRequest,
@@ -1627,6 +1629,7 @@ def create_app(
             detail=exc.detail,
             code=exc.code,
             retryable=exc.status_code >= 500,
+            headers={"Cache-Control": "private, no-store"},
         )
 
     @app.exception_handler(ReportRenderError)
@@ -2345,6 +2348,18 @@ def create_app(
         response.headers["Cache-Control"] = "private, no-store"
         return await require_container_terminal_service().start(request)
 
+    @app.get(
+        f"{API_PREFIX}/container-terminal/capacity",
+        response_model=ContainerTerminalCapacity,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def container_terminal_capacity(
+        response: Response,
+    ) -> ContainerTerminalCapacity:
+        response.headers["Cache-Control"] = "private, no-store"
+        return await require_container_terminal_service().capacity()
+
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminal/recover",
         response_model=ContainerTerminalRecoveryResponse,
@@ -2360,6 +2375,36 @@ def create_app(
             store.get(Engagement, engagement_id)
             return ContainerTerminalRecoveryResponse(active=False)
         return await container_terminals.recover(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminals/recover",
+        response_model=ContainerTerminalRecoveryListResponse,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def recover_container_terminals(
+        engagement_id: str,
+        response: Response,
+    ) -> ContainerTerminalRecoveryListResponse:
+        response.headers["Cache-Control"] = "private, no-store"
+        if container_terminals is None:
+            store.get(Engagement, engagement_id)
+            return ContainerTerminalRecoveryListResponse()
+        return await container_terminals.recover_all(engagement_id)
+
+    @app.delete(
+        f"{API_PREFIX}/container-terminals/{{session_id}}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def close_container_terminal(
+        session_id: str,
+        response: Response,
+    ) -> None:
+        response.headers["Cache-Control"] = "private, no-store"
+        if container_terminals is not None:
+            await container_terminals.close(session_id)
 
     @app.websocket(f"{API_PREFIX}/container-terminals/{{session_id}}/ws")
     async def container_terminal_socket(websocket: WebSocket, session_id: str) -> None:

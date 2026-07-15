@@ -497,7 +497,9 @@
 
 /* Workbench and terminal keep their existing persistent component tree. */
 :root[data-theme="zero"] .session-workspace { background: rgb(3 4 6 / 76%); }
-:root[data-theme="zero"] :where(.container-terminal-live, .xterm-shell) { background: #050608; }
+:root[data-theme="zero"] :where(.terminal-workspace, .container-terminal-live, .xterm-shell) { background: #050608; }
+:root[data-theme="zero"] :where(.terminal-tab-bar, .terminal-tab-item.active) { border-color: var(--border-soft); background: rgb(13 15 18 / 92%); }
+:root[data-theme="zero"] .terminal-overflow-menu { border-color: var(--border-soft); background: #0d0f12; }
 :root[data-theme="zero"] :where(.container-terminal-live > header, .container-terminal-live > footer, .terminal-live-notices > p:not(.terminal-network-warning)) { border-color: var(--border-soft); background: rgb(13 15 18 / 86%); }
 :root[data-theme="zero"] .xterm-shell { box-shadow: inset 0 0 50px rgb(72 130 205 / 4%); }
 :root[data-theme="zero"] .chat-message.assistant { border-color: rgb(121 178 248 / 15%); background: linear-gradient(110deg, rgb(71 133 213 / 7%), transparent 48%); }

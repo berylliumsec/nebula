@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +12,10 @@ from nebula.v3.container_terminal import terminal_prompt_command, terminal_ps0
 from nebula.v3.domain import Engagement
 from nebula.v3.sandbox import (
     ContainerImagePreparer,
+    ContainerRuntimeType,
     ContainerSandboxRunner,
+    RunnerPlatform,
+    RunnerProfile,
     SandboxContainerUser,
     SandboxExecutionKind,
     SandboxLimits,
@@ -32,10 +37,39 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
+    assert RUNTIME is not None
     workspace = tmp_path / "workspace"
     workspace.mkdir(mode=0o777)
     workspace.chmod(0o777)
-    runner = ContainerSandboxRunner(runtime=RUNTIME, workspace_roots=[tmp_path])
+    profile = RunnerProfile.from_runtime(RUNTIME)
+    if (
+        profile.runtime_type == ContainerRuntimeType.DOCKER
+        and profile.platform == RunnerPlatform.LINUX
+    ):
+        rootless_socket = Path(
+            os.getenv(
+                "NEBULA_TEST_DOCKER_SOCKET",
+                f"/run/user/{os.getuid()}/docker.sock",
+            )
+        )
+        if not rootless_socket.is_socket():
+            pytest.skip(f"rootless Docker socket is unavailable: {rootless_socket}")
+        context_name = "nebula-test-rootless"
+        subprocess.run(
+            [
+                RUNTIME,
+                "context",
+                "create",
+                context_name,
+                "--docker",
+                f"host=unix://{rootless_socket}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        profile = profile.model_copy(update={"context": context_name})
+    runner = ContainerSandboxRunner(profile=profile, workspace_roots=[tmp_path])
     store = NebulaStore(tmp_path / "terminal-audit.db")
     project = store.create(Engagement(name="Real Kali selective recording"))
     artifacts = ArtifactStore(tmp_path / "artifacts")
@@ -129,7 +163,7 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
             b"apt-get update -qq && echo apt-ok\n"
             b"exit\n",
         )
-        assert b"\r\n0\r\n" in first
+        assert b"0" in first.replace(b"\r", b"\n").splitlines()
         assert b"network-ok" in first
         assert b"nmap-ok" in first
         assert b"ping-installed" in first
@@ -156,7 +190,6 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
                 "HISTFILE": "/dev/null",
                 "PS0": terminal_ps0(nonce),
                 "PROMPT_COMMAND": terminal_prompt_command(nonce),
-                "PS1": "",
             },
             parser=parser,
         )

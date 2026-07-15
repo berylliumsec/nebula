@@ -251,6 +251,7 @@ class ContainerTerminalPreflightResponse(NebulaModel):
 
 class ContainerTerminalStartResponse(NebulaModel):
     session_id: str
+    created_at: datetime
     websocket_ticket: str
     ticket_expires_at: datetime
     websocket_path: str
@@ -263,6 +264,21 @@ class ContainerTerminalRecoveryResponse(NebulaModel):
     active: bool
     session: ContainerTerminalStartResponse | None = None
     runtime: ContainerTerminalRuntimeSnapshot | None = None
+
+
+class ContainerTerminalRecoveredSession(NebulaModel):
+    session: ContainerTerminalStartResponse
+    runtime: ContainerTerminalRuntimeSnapshot
+
+
+class ContainerTerminalRecoveryListResponse(NebulaModel):
+    sessions: list[ContainerTerminalRecoveredSession] = Field(default_factory=list)
+
+
+class ContainerTerminalCapacity(NebulaModel):
+    active_sessions: int = Field(ge=0)
+    available_sessions: int = Field(ge=0)
+    max_active_sessions: int = Field(ge=1, le=32)
 
 
 @dataclass(frozen=True)
@@ -304,6 +320,7 @@ class _TerminalReservation:
     last_activity: float = 0.0
     parser: Osc633CommandParser = field(default_factory=Osc633CommandParser)
     parser_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    finished: asyncio.Event = field(default_factory=asyncio.Event)
     replay: deque["ContainerTerminalOutput"] = field(default_factory=deque)
     replay_bytes: int = 0
     next_sequence: int = 1
@@ -356,7 +373,7 @@ class ContainerTerminalService:
         command_history: TerminalCommandHistory | None = None,
         operator_id: Callable[[], str] | None = None,
         audit_nonce_factory: Callable[[], str] | None = None,
-        max_active: int = 2,
+        max_active: int = 32,
         reconnect_grace_seconds: float = TERMINAL_RECONNECT_GRACE_SECONDS,
         idle_timeout_seconds: float = TERMINAL_IDLE_TIMEOUT_SECONDS,
         watchdog_interval_seconds: float = 1.0,
@@ -390,9 +407,10 @@ class ContainerTerminalService:
         self._preview_secret = os.urandom(32)
         self._lock = asyncio.Lock()
         self._sessions: dict[str, _TerminalReservation] = {}
+        self._finishing_sessions: dict[str, _TerminalReservation] = {}
         self._idempotency: dict[tuple[str, str], tuple[str, str]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
-        self._starting_engagements: set[str] = set()
+        self._workspace_operations: set[str] = set()
         self._shutting_down = False
 
     async def startup(self) -> None:
@@ -427,9 +445,21 @@ class ContainerTerminalService:
 
     async def engagement_active(self, engagement_id: str) -> bool:
         async with self._lock:
-            return engagement_id in self._starting_engagements or any(
+            return any(
                 session.request.engagement_id == engagement_id
-                for session in self._sessions.values()
+                for session in (
+                    *self._sessions.values(),
+                    *self._finishing_sessions.values(),
+                )
+            )
+
+    async def capacity(self) -> ContainerTerminalCapacity:
+        async with self._lock:
+            active = len(self._sessions) + len(self._finishing_sessions)
+            return ContainerTerminalCapacity(
+                active_sessions=active,
+                available_sessions=max(0, self.max_active - active),
+                max_active_sessions=self.max_active,
             )
 
     @asynccontextmanager
@@ -439,15 +469,18 @@ class ContainerTerminalService:
         """Serialize workspace mutations with terminals and code executions."""
 
         async with self._lock:
-            if engagement_id in self._starting_engagements or any(
+            if engagement_id in self._workspace_operations or any(
                 session.request.engagement_id == engagement_id
-                for session in self._sessions.values()
+                for session in (
+                    *self._sessions.values(),
+                    *self._finishing_sessions.values(),
+                )
             ):
                 raise ContainerTerminalError(
                     "workspace_busy",
                     "workspace cannot be changed while a terminal is pending or running",
                 )
-            self._starting_engagements.add(engagement_id)
+            self._workspace_operations.add(engagement_id)
         lock = self.workspace_lock(engagement_id)
         acquired = False
         try:
@@ -458,12 +491,12 @@ class ContainerTerminalService:
             if acquired:
                 lock.release()
             async with self._lock:
-                self._starting_engagements.discard(engagement_id)
+                self._workspace_operations.discard(engagement_id)
 
     async def shutdown(self) -> None:
         self._shutting_down = True
         async with self._lock:
-            session_ids = list(self._sessions)
+            session_ids = [*self._sessions, *self._finishing_sessions]
         await gather_diagnostic(
             *(
                 self.finish(
@@ -594,82 +627,62 @@ class ContainerTerminalService:
                         "that request already created a terminal session; use a new idempotency key",
                     )
                 return self._start_response(prior)
-            if request.engagement_id in self._starting_engagements or any(
-                item.request.engagement_id == request.engagement_id
-                for item in self._sessions.values()
-            ):
+            if request.engagement_id in self._workspace_operations:
                 raise ContainerTerminalError(
-                    "terminal_active",
-                    "this engagement already has a pending or active terminal",
+                    "workspace_busy",
+                    "workspace cannot start a terminal while a destructive operation is running",
                 )
-            if len(self._sessions) + len(self._starting_engagements) >= self.max_active:
+            if len(self._sessions) + len(self._finishing_sessions) >= self.max_active:
                 raise ContainerTerminalError(
                     "terminal_capacity",
                     "container terminal capacity is currently full",
                     status_code=429,
                 )
-            self._starting_engagements.add(request.engagement_id)
-
-        reservation: _TerminalReservation | None = None
-        try:
-            async with self._lock:
-                if any(
-                    item.request.engagement_id == request.engagement_id
-                    for item in self._sessions.values()
-                ):
-                    raise ContainerTerminalError(
-                        "terminal_active",
-                        "this engagement already has a pending or active terminal",
-                    )
-                session_id = str(uuid4())
-                ticket = secrets.token_urlsafe(32)
-                audit_nonce = self.audit_nonce_factory()
-                operator_id = self.operator_id()
-                expires = utc_now() + timedelta(seconds=TICKET_TTL_SECONDS)
-                parser = (
-                    self.command_history.new_parser(
-                        nonce=audit_nonce,
-                        engagement_id=base.engagement_id,
-                        session_id=session_id,
-                        operator_id=operator_id,
-                        runtime_image_digest=prepared.resolution.image.digest,
-                        manifest_sha256=(
-                            prepared.resolution.image.security_tool_manifest_sha256
-                        ),
-                        default_tools=prepared.resolution.image.security_tools,
-                    )
-                    if self.command_history is not None
-                    else Osc633CommandParser(nonce=audit_nonce)
-                )
-                reservation = _TerminalReservation(
-                    id=session_id,
-                    request=base,
-                    request_fingerprint=request_fingerprint,
-                    preview_fingerprint=request.preview_fingerprint,
-                    runtime=prepared.runtime,
+            session_id = str(uuid4())
+            ticket = secrets.token_urlsafe(32)
+            audit_nonce = self.audit_nonce_factory()
+            operator_id = self.operator_id()
+            expires = utc_now() + timedelta(seconds=TICKET_TTL_SECONDS)
+            parser = (
+                self.command_history.new_parser(
+                    nonce=audit_nonce,
+                    engagement_id=base.engagement_id,
+                    session_id=session_id,
                     operator_id=operator_id,
-                    websocket_ticket=ticket,
-                    ticket_expires_at=expires,
-                    start_websocket_ticket=ticket,
-                    start_ticket_expires_at=expires,
-                    created_at=utc_now(),
-                    audit_nonce=audit_nonce,
-                    last_activity=monotonic(),
-                    parser=parser,
+                    runtime_image_digest=prepared.resolution.image.digest,
+                    manifest_sha256=(
+                        prepared.resolution.image.security_tool_manifest_sha256
+                    ),
+                    default_tools=prepared.resolution.image.security_tools,
                 )
-                self._sessions[session_id] = reservation
-                self._idempotency[key] = (request_fingerprint, session_id)
-                reservation.expiry_task = create_diagnostic_task(
-                    self._expire_ticket(session_id),
-                    feature="terminal",
-                    event_code="terminal.ticket_expiry",
-                    failure_message="Terminal ticket expiry supervision failed.",
-                    name=f"container-terminal-ticket-{session_id}",
-                )
-        finally:
-            async with self._lock:
-                self._starting_engagements.discard(request.engagement_id)
-        assert reservation is not None
+                if self.command_history is not None
+                else Osc633CommandParser(nonce=audit_nonce)
+            )
+            reservation = _TerminalReservation(
+                id=session_id,
+                request=base,
+                request_fingerprint=request_fingerprint,
+                preview_fingerprint=request.preview_fingerprint,
+                runtime=prepared.runtime,
+                operator_id=operator_id,
+                websocket_ticket=ticket,
+                ticket_expires_at=expires,
+                start_websocket_ticket=ticket,
+                start_ticket_expires_at=expires,
+                created_at=utc_now(),
+                audit_nonce=audit_nonce,
+                last_activity=monotonic(),
+                parser=parser,
+            )
+            self._sessions[session_id] = reservation
+            self._idempotency[key] = (request_fingerprint, session_id)
+            reservation.expiry_task = create_diagnostic_task(
+                self._expire_ticket(session_id),
+                feature="terminal",
+                event_code="terminal.ticket_expiry",
+                failure_message="Terminal ticket expiry supervision failed.",
+                name=f"container-terminal-ticket-{session_id}",
+            )
         self._event(
             reservation,
             "container_terminal.pending",
@@ -702,41 +715,86 @@ class ContainerTerminalService:
         """
 
         self.store.get(Engagement, engagement_id)
-        expired_session_id: str | None = None
+        await self._finish_expired_reconnects(engagement_id)
         async with self._lock:
-            session = next(
+            sessions = sorted(
                 (
                     item
                     for item in self._sessions.values()
                     if item.request.engagement_id == engagement_id
                 ),
-                None,
+                key=lambda item: (item.created_at, item.id),
             )
-            if session is None:
+            if not sessions:
                 return ContainerTerminalRecoveryResponse(active=False)
+            if len(sessions) > 1:
+                raise ContainerTerminalError(
+                    "multiple_terminals_active",
+                    "this Project has multiple active terminals; use multi-terminal recovery",
+                )
+            session = sessions[0]
             if session.state == "claimed":
                 raise ContainerTerminalError(
                     "terminal_connecting",
                     "terminal is already being connected",
                 )
+            return self._recover_session_locked(session, utc_now())
+
+    async def recover_all(
+        self,
+        engagement_id: str,
+    ) -> ContainerTerminalRecoveryListResponse:
+        """Issue fresh one-use tickets for every active Project terminal."""
+
+        self.store.get(Engagement, engagement_id)
+        await self._finish_expired_reconnects(engagement_id)
+        async with self._lock:
+            sessions = sorted(
+                (
+                    item
+                    for item in self._sessions.values()
+                    if item.request.engagement_id == engagement_id
+                ),
+                key=lambda item: (item.created_at, item.id),
+            )
+            if any(session.state == "claimed" for session in sessions):
+                raise ContainerTerminalError(
+                    "terminal_connecting",
+                    "a terminal is already being connected",
+                )
+            recovered: list[ContainerTerminalRecoveredSession] = []
             now = utc_now()
-            if (
-                session.state == "running"
+            for session in sessions:
+                response = self._recover_session_locked(session, now)
+                assert response.session is not None
+                assert response.runtime is not None
+                recovered.append(
+                    ContainerTerminalRecoveredSession(
+                        session=response.session,
+                        runtime=response.runtime,
+                    )
+                )
+            return ContainerTerminalRecoveryListResponse(sessions=recovered)
+
+    async def _finish_expired_reconnects(self, engagement_id: str) -> None:
+        now = utc_now()
+        async with self._lock:
+            expired_session_ids = [
+                session.id
+                for session in self._sessions.values()
+                if session.request.engagement_id == engagement_id
+                and session.state == "running"
                 and session.attachment is None
                 and session.ticket_expires_at is not None
                 and session.ticket_expires_at <= now
-            ):
-                expired_session_id = session.id
-            else:
-                return self._recover_session_locked(session, now)
-        assert expired_session_id is not None
-        await self.finish(
-            expired_session_id,
-            outcome="reconnect_timeout",
-            detail="terminal reconnect grace expired",
-            error_code="reconnect_timeout",
-        )
-        return ContainerTerminalRecoveryResponse(active=False)
+            ]
+        for session_id in expired_session_ids:
+            await self.finish(
+                session_id,
+                outcome="reconnect_timeout",
+                detail="terminal reconnect grace expired",
+                error_code="reconnect_timeout",
+            )
 
     def _recover_session_locked(
         self,
@@ -776,6 +834,7 @@ class ContainerTerminalService:
 
         recovered = ContainerTerminalStartResponse(
             session_id=session.id,
+            created_at=session.created_at,
             websocket_ticket=ticket,
             ticket_expires_at=ticket_expires_at,
             websocket_path=f"/api/v1/container-terminals/{session.id}/ws",
@@ -993,6 +1052,11 @@ class ContainerTerminalService:
             self._require_attachment_locked(attachment)
         await self.finish(attachment.session_id, outcome="closed")
 
+    async def close(self, session_id: str) -> None:
+        """Idempotently stop a terminal whether or not a WebSocket is attached."""
+
+        await self.finish(session_id, outcome="closed")
+
     async def touch(self, session_id: str) -> None:
         async with self._lock:
             session = self._sessions.get(session_id)
@@ -1042,24 +1106,34 @@ class ContainerTerminalService:
     ) -> None:
         tasks: list[asyncio.Task[None]] = []
         unfinished_capture = None
+        finishing_waiter: asyncio.Event | None = None
         async with self._lock:
             session = self._sessions.pop(session_id, None)
             if session is None:
-                return
-            for attribute in (
-                "expiry_task",
-                "grace_task",
-                "reader_task",
-                "monitor_task",
-                "watchdog_task",
-            ):
-                task = getattr(session, attribute)
-                setattr(session, attribute, None)
-                if task is not None and task is not asyncio.current_task():
-                    task.cancel()
-                    tasks.append(task)
-            if session.attachment is not None:
-                session.attachment.terminal_finishing = True
+                finishing = self._finishing_sessions.get(session_id)
+                if finishing is None:
+                    return
+                finishing_waiter = finishing.finished
+            else:
+                self._finishing_sessions[session_id] = session
+                for attribute in (
+                    "expiry_task",
+                    "grace_task",
+                    "reader_task",
+                    "monitor_task",
+                    "watchdog_task",
+                ):
+                    task = getattr(session, attribute)
+                    setattr(session, attribute, None)
+                    if task is not None and task is not asyncio.current_task():
+                        task.cancel()
+                        tasks.append(task)
+                if session.attachment is not None:
+                    session.attachment.terminal_finishing = True
+        if finishing_waiter is not None:
+            await finishing_waiter.wait()
+            return
+        assert session is not None
         if tasks:
             await gather_diagnostic(
                 *tasks,
@@ -1114,6 +1188,9 @@ class ContainerTerminalService:
             session.audit_task = None
         elif unfinished_capture is not None:
             await self._persist_capture(session, unfinished_capture)
+        async with self._lock:
+            self._finishing_sessions.pop(session_id, None)
+            session.finished.set()
         if session.attachment is not None:
             session.attachment.terminal_event = ContainerTerminalExit(
                 outcome=outcome,
@@ -1884,6 +1961,7 @@ class ContainerTerminalService:
     ) -> ContainerTerminalStartResponse:
         return ContainerTerminalStartResponse(
             session_id=session.id,
+            created_at=session.created_at,
             websocket_ticket=session.start_websocket_ticket,
             ticket_expires_at=session.start_ticket_expires_at,
             websocket_path=f"/api/v1/container-terminals/{session.id}/ws",

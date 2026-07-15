@@ -292,6 +292,8 @@ def continuity_fixture(tmp_path, **service_options):
 async def start_controllable_terminal(
     service: ContainerTerminalService,
     engagement: Engagement,
+    *,
+    idempotency_key: str = "continuity-terminal",
 ):
     request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     preview = await service.preflight(request)
@@ -302,7 +304,7 @@ async def start_controllable_terminal(
             **request.model_dump(),
             preview_token=preview.preview_token,
             preview_fingerprint=preview.preview_fingerprint,
-            client_idempotency_key="continuity-terminal",
+            client_idempotency_key=idempotency_key,
         )
     )
     attachment = await service.attach(
@@ -310,6 +312,167 @@ async def start_controllable_terminal(
         started.websocket_ticket,
     )
     return started, attachment
+
+
+@async_test
+async def test_project_supports_multiple_independent_terminals_and_bulk_recovery(
+    tmp_path,
+):
+    _store, engagement, runner, _platform, service = continuity_fixture(tmp_path)
+    first, first_attachment = await start_controllable_terminal(
+        service, engagement, idempotency_key="terminal-one"
+    )
+    second, second_attachment = await start_controllable_terminal(
+        service, engagement, idempotency_key="terminal-two"
+    )
+
+    assert first.session_id != second.session_id
+    assert first.created_at <= second.created_at
+    assert len(runner.processes) == 2
+    assert (await service.capacity()).active_sessions == 2
+    with pytest.raises(ContainerTerminalError) as ambiguous:
+        await service.recover(engagement.id)
+    assert ambiguous.value.code == "multiple_terminals_active"
+
+    await service.detach(first_attachment)
+    await service.detach(second_attachment)
+    reconnect_tickets = {
+        first_attachment.reconnect_ticket,
+        second_attachment.reconnect_ticket,
+    }
+    recovered = await service.recover_all(engagement.id)
+    assert [item.session.session_id for item in recovered.sessions] == [
+        first.session_id,
+        second.session_id,
+    ]
+    assert all(item.runtime.image_digest for item in recovered.sessions)
+    assert len({item.session.websocket_ticket for item in recovered.sessions}) == 2
+    assert reconnect_tickets.isdisjoint(
+        item.session.websocket_ticket for item in recovered.sessions
+    )
+    assert len(runner.processes) == 2
+
+    await service.close(first.session_id)
+    await service.close(first.session_id)
+    assert runner.processes[0].closed == 1
+    assert runner.processes[1].closed == 0
+    assert (await service.capacity()).active_sessions == 1
+    with pytest.raises(ContainerTerminalError, match="workspace cannot be changed"):
+        async with service.guard_workspace_operation(engagement.id):
+            pytest.fail("workspace reset guard ignored the remaining terminal")
+
+    await service.close(second.session_id)
+    async with service.guard_workspace_operation(engagement.id):
+        pass
+    assert (await service.capacity()).active_sessions == 0
+
+
+@async_test
+async def test_closing_terminal_keeps_capacity_and_workspace_reserved(tmp_path):
+    _store, engagement, runner, _platform, service = continuity_fixture(tmp_path)
+    started, _attachment = await start_controllable_terminal(service, engagement)
+    process = runner.processes[0]
+    close_started = asyncio.Event()
+    allow_close = asyncio.Event()
+    original_close = process.close
+
+    async def blocking_close() -> None:
+        close_started.set()
+        await allow_close.wait()
+        await original_close()
+
+    process.close = blocking_close  # type: ignore[method-assign]
+    close_task = asyncio.create_task(service.close(started.session_id))
+    await close_started.wait()
+
+    assert (await service.capacity()).active_sessions == 1
+    with pytest.raises(ContainerTerminalError, match="workspace cannot be changed"):
+        async with service.guard_workspace_operation(engagement.id):
+            pytest.fail("workspace reset guard ignored a terminal that was still stopping")
+    duplicate_close = asyncio.create_task(service.close(started.session_id))
+    await asyncio.sleep(0)
+    assert not duplicate_close.done()
+
+    allow_close.set()
+    await asyncio.gather(close_task, duplicate_close)
+    assert (await service.capacity()).active_sessions == 0
+    async with service.guard_workspace_operation(engagement.id):
+        pass
+
+
+@async_test
+async def test_terminal_global_capacity_allows_32_reservations_and_rejects_33rd(
+    tmp_path,
+):
+    store, engagement, _runner, _platform, service = continuity_fixture(
+        tmp_path, max_active=32
+    )
+    other = store.create(Engagement(name="Second Terminal Project"))
+    created_ids: list[str] = []
+    for index in range(32):
+        target = engagement if index < 31 else other
+        request = ContainerTerminalPreflightRequest(engagement_id=target.id)
+        preview = await service.preflight(request)
+        created = await service.start(
+            ContainerTerminalStartRequest(
+                **request.model_dump(),
+                preview_token=preview.preview_token,
+                preview_fingerprint=preview.preview_fingerprint,
+                client_idempotency_key=f"capacity-{index}",
+            )
+        )
+        created_ids.append(created.session_id)
+
+    capacity = await service.capacity()
+    assert capacity.active_sessions == 32
+    assert capacity.available_sessions == 0
+    assert capacity.max_active_sessions == 32
+    overflow_request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+    overflow_preview = await service.preflight(overflow_request)
+    with pytest.raises(ContainerTerminalError) as capacity_error:
+        await service.start(
+            ContainerTerminalStartRequest(
+                **overflow_request.model_dump(),
+                preview_token=overflow_preview.preview_token,
+                preview_fingerprint=overflow_preview.preview_fingerprint,
+                client_idempotency_key="capacity-overflow",
+            )
+        )
+    assert capacity_error.value.code == "terminal_capacity"
+    assert capacity_error.value.status_code == 429
+    assert (await service.capacity()).active_sessions == 32
+
+    for session_id in created_ids:
+        await service.close(session_id)
+    assert (await service.capacity()).active_sessions == 0
+
+
+@async_test
+async def test_concurrent_same_project_starts_reserve_unique_sessions_atomically(
+    tmp_path,
+):
+    _store, engagement, _runner, _platform, service = continuity_fixture(
+        tmp_path, max_active=8
+    )
+    requests: list[ContainerTerminalStartRequest] = []
+    for index in range(8):
+        base = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+        preview = await service.preflight(base)
+        requests.append(
+            ContainerTerminalStartRequest(
+                **base.model_dump(),
+                preview_token=preview.preview_token,
+                preview_fingerprint=preview.preview_fingerprint,
+                client_idempotency_key=f"concurrent-{index}",
+            )
+        )
+
+    started = await asyncio.gather(*(service.start(request) for request in requests))
+
+    assert len({item.session_id for item in started}) == 8
+    assert (await service.capacity()).active_sessions == 8
+    for item in started:
+        await service.close(item.session_id)
 
 
 @async_test
@@ -821,6 +984,99 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
                 "outcome": "completed",
             }
     assert runner.processes[0].closed == 1
+
+
+def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
+    store, engagement, _policy, _runner, _platform, service = fixture(tmp_path)
+    app = create_app(
+        store,
+        auth_token="test-token",
+        container_terminal_service=service,
+    )
+    headers = {"Authorization": "Bearer test-token"}
+
+    with TestClient(app) as client:
+        session_ids: list[str] = []
+        for index in range(32):
+            preview = client.post(
+                "/api/v1/container-terminal/preflight",
+                headers=headers,
+                json={"engagement_id": engagement.id},
+            ).json()
+            started = client.post(
+                "/api/v1/container-terminal/sessions",
+                headers=headers,
+                json={
+                    "engagement_id": engagement.id,
+                    "preview_token": preview["preview_token"],
+                    "preview_fingerprint": preview["preview_fingerprint"],
+                    "client_idempotency_key": f"api-multi-{index}",
+                },
+            )
+            assert started.status_code == 201
+            assert started.headers["Cache-Control"] == "private, no-store"
+            assert started.json()["created_at"]
+            session_ids.append(started.json()["session_id"])
+
+        capacity = client.get(
+            "/api/v1/container-terminal/capacity", headers=headers
+        )
+        assert capacity.status_code == 200
+        assert capacity.headers["Cache-Control"] == "private, no-store"
+        assert capacity.json() == {
+            "active_sessions": 32,
+            "available_sessions": 0,
+            "max_active_sessions": 32,
+        }
+
+        overflow_preview = client.post(
+            "/api/v1/container-terminal/preflight",
+            headers=headers,
+            json={"engagement_id": engagement.id},
+        ).json()
+        overflow = client.post(
+            "/api/v1/container-terminal/sessions",
+            headers=headers,
+            json={
+                "engagement_id": engagement.id,
+                "preview_token": overflow_preview["preview_token"],
+                "preview_fingerprint": overflow_preview["preview_fingerprint"],
+                "client_idempotency_key": "api-capacity-overflow",
+            },
+        )
+        assert overflow.status_code == 429
+        assert overflow.json()["code"] == "terminal_capacity"
+        assert overflow.headers["Cache-Control"] == "private, no-store"
+
+        singular = client.post(
+            f"/api/v1/engagements/{engagement.id}/container-terminal/recover",
+            headers=headers,
+        )
+        assert singular.status_code == 409
+        assert singular.json()["code"] == "multiple_terminals_active"
+        assert singular.headers["Cache-Control"] == "private, no-store"
+
+        recovered = client.post(
+            f"/api/v1/engagements/{engagement.id}/container-terminals/recover",
+            headers=headers,
+        )
+        assert recovered.status_code == 200
+        assert recovered.headers["Cache-Control"] == "private, no-store"
+        assert [item["session"]["session_id"] for item in recovered.json()["sessions"]] == session_ids
+
+        unauthenticated = client.get("/api/v1/container-terminal/capacity")
+        assert unauthenticated.status_code == 401
+        stopped = client.delete(
+            f"/api/v1/container-terminals/{session_ids[0]}", headers=headers
+        )
+        assert stopped.status_code == 204
+        assert stopped.headers["Cache-Control"] == "private, no-store"
+        assert client.delete(
+            f"/api/v1/container-terminals/{session_ids[0]}", headers=headers
+        ).status_code == 204
+        assert client.get(
+            "/api/v1/container-terminal/capacity", headers=headers
+        ).json()["active_sessions"] == 31
 
 
 def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):

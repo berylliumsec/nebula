@@ -44,6 +44,7 @@ describe("ContainerTerminalSocket", () => {
       token: "secret-token",
       session: {
         sessionId: "terminal-1",
+        createdAt: "2026-07-15T12:00:00Z",
         websocketTicket: "one-use-ticket",
         ticketExpiresAt: "2026-07-13T18:00:00Z",
         websocketPath: "/api/v1/container-terminals/terminal-1/ws",
@@ -90,6 +91,7 @@ describe("ContainerTerminalSocket", () => {
       apiBaseUrl: "http://127.0.0.1:8765/api/v1",
       session: {
         sessionId: "terminal-2",
+        createdAt: "2026-07-15T12:00:00Z",
         websocketTicket: "ticket-2",
         ticketExpiresAt: "2026-07-13T18:00:00Z",
         websocketPath: "/api/v1/container-terminals/terminal-2/ws",
@@ -118,6 +120,7 @@ describe("ContainerTerminalSocket", () => {
       apiBaseUrl: "http://127.0.0.1:8765/api/v1",
       session: {
         sessionId: "terminal-recovered",
+        createdAt: "2026-07-15T12:00:00Z",
         websocketTicket: "fresh-recovery-ticket",
         ticketExpiresAt: "2026-07-13T18:00:00Z",
         websocketPath: "/api/v1/container-terminals/terminal-recovered/ws",
@@ -163,6 +166,7 @@ describe("ContainerTerminalSocket", () => {
     const output: number[][] = [];
     const session = {
       sessionId: "terminal-3",
+      createdAt: "2026-07-15T12:00:00Z",
       websocketTicket: "ticket-3",
       ticketExpiresAt: "2026-07-13T18:00:00Z",
       websocketPath: "/api/v1/container-terminals/terminal-3/ws",

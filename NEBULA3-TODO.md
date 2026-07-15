@@ -26,9 +26,10 @@ The release is blocked until all of these gates pass:
       bootstrapping, ready, degraded, and failed states truthfully.
 - [ ] Fresh, upgraded, imported, concurrently opened, and intentionally pruned
       databases create exactly zero or one Scratch Project as specified.
-- [ ] A terminal survives Workbench mode changes and reconnects, obeys idle and
-      disconnect grace periods, and completes 100 lifecycle cycles without a
-      leaked container or workspace lock.
+- [ ] Terminal tabs survive Workbench mode changes and reconnects, obey idle and
+      disconnect grace periods independently, enforce the 32-session global
+      ceiling, and complete 100 lifecycle cycles without a leaked container or
+      workspace lock.
 - [ ] Tests prove raw output from selected terminal security tools is persisted
       only as immutable audit artifacts and sensitive exports, while unselected
       commands retain metadata only; neither enters SQLite, ordinary logs,
@@ -51,8 +52,9 @@ The release is blocked until all of these gates pass:
 These items belong in the first parity release and must remain integrated rather
 than hidden behind separate top-level destinations:
 
-- Workbench with one persistent terminal per Project and an optional Assistant
-  split; Files, Notes, and Activity are secondary surfaces.
+- Workbench with persistent browser-style terminal tabs and an optional
+  Assistant split; Files, Notes, and Activity are secondary surfaces. Up to 32
+  terminal containers may be pending or running globally.
 - Five primary destinations: Workbench, Findings, Reports, Project, Settings.
 - Optional contextual assistant setup with secure credential references and a
   non-generating discovery/liveness check.
@@ -77,7 +79,7 @@ and deliver each as a separate, tested project:
 - Scanner import and normalization.
 - Topology and comparison views.
 - Full desktop, window, or region capture requiring native permissions.
-- Multiple detached terminals per Project.
+- A manager for intentionally detached or hidden terminal containers.
 - Rich HTML notes and the legacy rich-text toolbar.
 - Legacy Chroma command search.
 - Background AI file watchers and always-on AI suggestions.
