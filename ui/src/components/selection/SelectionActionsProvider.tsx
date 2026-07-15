@@ -35,7 +35,7 @@ export interface SelectionActionsProviderProps extends DomSelectionOptions {
   children: ReactNode;
   /** Opens an editable assistant draft. The provider never submits a turn. */
   onAsk: (draft: SelectionActionDraft) => void;
-  /** Opens an editable note draft. Omit to hide Add note. */
+  /** Captures selected text as a project note. Omit to hide Take note. */
   onAddNote?: (draft: SelectionActionDraft) => void;
   /** Opens mandatory reviewed execution for explicitly runnable selections. */
   onRun?: (draft: SelectionActionDraft) => void;
@@ -94,6 +94,7 @@ export function SelectionActionsProvider({
 
   useEffect(() => {
     const read = (event: Event) => {
+      if (event instanceof KeyboardEvent && event.key === "Escape") return;
       if (popoverRef.current?.contains(event.target as Node | null)) return;
       const next = isSelectableTextControl(event.target)
         ? readTextControlSelection(event.target, domOptions)
@@ -103,19 +104,22 @@ export function SelectionActionsProvider({
     const dismissForPointer = (event: PointerEvent) => {
       if (!popoverRef.current?.contains(event.target as Node | null)) setDraft(undefined);
     };
+    const dismissForEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismissSelection();
+    };
     document.addEventListener("pointerdown", dismissForPointer, true);
     document.addEventListener("pointerup", read, true);
     document.addEventListener("keyup", read, true);
     document.addEventListener("select", read, true);
+    document.addEventListener("keydown", dismissForEscape, true);
     globalThis.addEventListener("resize", dismissSelection);
-    globalThis.addEventListener("scroll", dismissSelection, true);
     return () => {
       document.removeEventListener("pointerdown", dismissForPointer, true);
       document.removeEventListener("pointerup", read, true);
       document.removeEventListener("keyup", read, true);
       document.removeEventListener("select", read, true);
+      document.removeEventListener("keydown", dismissForEscape, true);
       globalThis.removeEventListener("resize", dismissSelection);
-      globalThis.removeEventListener("scroll", dismissSelection, true);
     };
   }, [dismissSelection, domOptions]);
 
@@ -158,7 +162,7 @@ export function SelectionActionsProvider({
       {onAddNote && <button className={styles.action} type="button" onClick={() => {
         dismissSelectionElegantly();
         onAddNote(draft);
-      }}><NotebookPen size={14} /> Add note</button>}
+      }}><NotebookPen size={14} /> Take note</button>}
       {onRun && ["terminal", "terminal_command"].includes(draft.source.kind) && <button className={styles.action} type="button" onClick={() => {
         dismissSelectionElegantly();
         onRun(draft);

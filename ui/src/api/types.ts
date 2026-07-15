@@ -411,7 +411,9 @@ export interface ReportSummary {
   executiveSummary: string;
   findingIds: string[];
   observationIds: string[];
+  noteTransforms: ReportNoteTransform[];
   artifactIds: string[];
+  executiveSummaryProvenance?: AIWritingProvenance;
   signedOffBy?: string;
   signedOffAt?: string;
   createdAt: string;
@@ -426,6 +428,7 @@ export interface ReportCreateRequest {
   executiveSummary?: string;
   findingIds?: string[];
   observationIds?: string[];
+  noteTransforms?: ReportNoteTransform[];
 }
 
 export interface ReportUpdateRequest {
@@ -434,7 +437,43 @@ export interface ReportUpdateRequest {
   executiveSummary?: string;
   findingIds?: string[];
   observationIds?: string[];
+  noteTransforms?: ReportNoteTransform[];
+  executiveSummaryProvenance?: AIWritingProvenance | null;
   expectedRevision: number;
+}
+
+export interface AIWritingProvenance {
+  providerProfileId: Identifier;
+  model: string;
+  promptVersion: string;
+  sourceSha256: string;
+  instruction: string;
+  generatedAt: string;
+  providerRequestId?: string;
+}
+
+export interface ReportNoteTransform {
+  observationId: Identifier;
+  sourceRevision: number;
+  title: string;
+  body: string;
+  provenance: AIWritingProvenance;
+}
+
+export interface WritingTransformRequest {
+  engagementId: Identifier;
+  providerId: Identifier;
+  model: string;
+  purpose: "note" | "report_summary" | "report_section";
+  instruction: string;
+  sourceText: string;
+  cloudConfirmed?: boolean;
+}
+
+export interface WritingTransformResponse {
+  content: string;
+  provenance: AIWritingProvenance;
+  usage: ChatUsage;
 }
 
 export interface ObservationSummary {

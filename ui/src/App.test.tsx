@@ -496,12 +496,16 @@ describe("Nebula workspace", () => {
     expect(body.messages).toEqual([{ role: "user", content: "Explain this project title." }]);
   });
 
-  it("opens selected text as an editable Notes draft without unmounting Workbench", async () => {
+  it("captures selected text as a saved note without unmounting Workbench", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
       if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "project-1", name: "Notes review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/observations") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ ...entity, id: "note-selection", ...body, asset_ids: [], service_ids: [], evidence_ids: [], confidence: 1 }), { status: 201 });
+      }
       return new Response(JSON.stringify([]), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -510,12 +514,12 @@ describe("Nebula workspace", () => {
 
     const heading = await screen.findByRole("heading", { name: "Notes review" });
     selectElementText(heading);
-    await user.click(await screen.findByRole("button", { name: "Add note" }));
+    await user.click(await screen.findByRole("button", { name: "Take note" }));
 
     expect(await screen.findByRole("tab", { name: "Project notes" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("textbox", { name: "Note title" })).toHaveValue("Note from Project selection");
     expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("Notes review");
-    expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/observations") && init?.method === "POST")).toBe(false);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/observations") && init?.method === "POST")).toBe(true));
   });
 
   it("keeps chat working memory in the background", async () => {
@@ -1138,6 +1142,52 @@ describe("Nebula workspace", () => {
     expect(await screen.findByText("No provider profiles")).toBeVisible();
     const deleteCall = fetchMock.mock.calls.find(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-anthropic") && init?.method === "DELETE");
     expect(new Headers(deleteCall?.[1]?.headers).get("If-Match")).toBe("5");
+  });
+
+  it("adds a note section to a report and saves an operator-reviewed AI transform", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const note = { ...entity, id: "note-1", engagement_id: "engagement-1", observation_type: "note", title: "TLS note", body: "443 open; certificate review pending", asset_ids: [], service_ids: [], evidence_ids: [], source: "operator-note", confidence: 1, metadata: {} };
+    const report = { ...entity, id: "report-1", engagement_id: "engagement-1", title: "Draft assessment", status: "draft", executive_summary: "", finding_ids: [], observation_ids: [], note_transforms: [], artifact_ids: [], metadata: {} };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Writing review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/providers")) return new Response(JSON.stringify([{ ...entity, id: "provider-1", name: "Local writer", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true, secret_ref: null, model_allowlist: ["model-1"], capabilities: {}, privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "model-1" } }]), { status: 200 });
+      if (path.endsWith("/observations")) return new Response(JSON.stringify([note]), { status: 200 });
+      if (path.endsWith("/reports") && init?.method !== "POST") return new Response(JSON.stringify([report]), { status: 200 });
+      if (path.endsWith("/writing/transform")) return new Response(JSON.stringify({ content: "Port 443 was observed open; certificate posture remains under review.", provenance: { provider_profile_id: "provider-1", model: "model-1", prompt_version: "writing-transform/v1", source_sha256: "a".repeat(64), instruction: "Rewrite for the report.", generated_at: entity.updated_at, provider_request_id: "request-1" }, usage: { input_tokens: 10, output_tokens: 8, total_tokens: 18 } }), { status: 200 });
+      if (path.endsWith("/reports/report-1") && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ ...report, ...body.changes, revision: 2 }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/reports");
+
+    await screen.findByRole("heading", { name: "Reports" });
+    await user.click(await screen.findByRole("checkbox", { name: /TLS note/ }));
+    await user.click(screen.getByRole("button", { name: "Transform with AI" }));
+    const dialog = screen.getByRole("dialog", { name: "Transform note into a report section" });
+    await user.clear(within(dialog).getByRole("textbox", { name: "AI writing instruction" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "AI writing instruction" }), "Rewrite for the report.");
+    await user.click(within(dialog).getByRole("button", { name: "Generate draft" }));
+    expect(await within(dialog).findByRole("textbox", { name: "AI writing draft" })).toHaveValue("Port 443 was observed open; certificate posture remains under review.");
+    await user.click(within(dialog).getByRole("button", { name: "Apply draft" }));
+    await user.click(screen.getByRole("button", { name: "Save report" }));
+
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([input, requestInit]) => new URL(String(input)).pathname.endsWith("/reports/report-1") && requestInit?.method === "PATCH");
+      const body = JSON.parse(String(request?.[1]?.body));
+      expect(body.changes.observation_ids).toEqual(["note-1"]);
+      expect(body.changes.note_transforms).toEqual([expect.objectContaining({
+        observation_id: "note-1",
+        source_revision: 1,
+        body: "Port 443 was observed open; certificate posture remains under review.",
+        provenance: expect.objectContaining({ provider_profile_id: "provider-1" }),
+      })]);
+    });
   });
 
   it("renders final reports as immutable while keeping export actions available", async () => {

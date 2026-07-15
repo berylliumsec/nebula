@@ -1915,6 +1915,35 @@ class GeneratedDraft(Entity):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class AIWritingProvenance(NebulaModel):
+    """Review metadata for AI-assisted prose that an operator chose to keep."""
+
+    provider_profile_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
+    prompt_version: str = Field(min_length=1, max_length=100)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    instruction: str = Field(min_length=1, max_length=4000)
+    generated_at: datetime = Field(default_factory=utc_now)
+    provider_request_id: str | None = Field(default=None, max_length=500)
+
+    @field_validator("generated_at")
+    @classmethod
+    def writing_time_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("AI writing timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+
+class ReportNoteTransform(NebulaModel):
+    """An editable, report-local rendering of a linked project note."""
+
+    observation_id: str = Field(min_length=1, max_length=200)
+    source_revision: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(max_length=100_000)
+    provenance: AIWritingProvenance
+
+
 class Report(Entity):
     entity_kind: ClassVar[str] = "reports"
     engagement_id: str
@@ -1923,7 +1952,11 @@ class Report(Entity):
     executive_summary: str = ""
     finding_ids: list[str] = Field(default_factory=list)
     observation_ids: list[str] = Field(default_factory=list)
+    note_transforms: list[ReportNoteTransform] = Field(
+        default_factory=list, max_length=500
+    )
     artifact_ids: list[str] = Field(default_factory=list)
+    executive_summary_provenance: AIWritingProvenance | None = None
     signed_off_by: str | None = None
     signed_off_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -1938,6 +1971,13 @@ class Report(Entity):
             raise ValueError("final reports require operator signoff")
         if self.status != ReportStatus.FINAL and has_operator:
             raise ValueError("only final reports may contain signoff fields")
+        transformed_ids = [item.observation_id for item in self.note_transforms]
+        if len(transformed_ids) != len(set(transformed_ids)):
+            raise ValueError(
+                "report note transforms must reference unique observations"
+            )
+        if any(item not in self.observation_ids for item in transformed_ids):
+            raise ValueError("report note transforms require a selected observation")
         return self
 
 

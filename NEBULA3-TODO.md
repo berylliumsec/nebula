@@ -58,8 +58,9 @@ than hidden behind separate top-level destinations:
 - Five primary destinations: Workbench, Findings, Reports, Project, Settings.
 - Optional contextual assistant setup with secure credential references and a
   non-generating discovery/liveness check.
-- Select → Ask Nebula/Add Note/Copy, with reviewed Run only for code and terminal
-  selections; context is bounded, editable, draft-only, and provenance-linked.
+- Select → Ask Nebula/Take Note/Copy, with reviewed Run only for code and terminal
+  selections. Take Note persists the bounded selection with provenance; AI note
+  and report transformations remain editable drafts until an operator saves them.
 - Visible terminal-viewport PNG capture plus a Canvas image editor with crop,
   annotation, blur, solid redaction, undo/redo, and immutable derived lineage.
 - Streamed atomic workspace uploads, Markdown observations, evidence promotion,

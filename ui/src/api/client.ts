@@ -67,6 +67,7 @@ import type {
   ProviderRuntimeHealth,
   ProviderUpdateRequest,
   ReportCreateRequest,
+  ReportNoteTransform,
   ReportRender,
   ReportSummary,
   ReportUpdateRequest,
@@ -89,6 +90,8 @@ import type {
   WorkspacePreview,
   WorkspaceResetResult,
   WorkspaceUploadResult,
+  WritingTransformRequest,
+  WritingTransformResponse,
 } from "./types";
 import {
   logDiagnostic,
@@ -244,10 +247,40 @@ interface WireReport extends WireEntity {
   executive_summary?: string;
   finding_ids?: string[];
   observation_ids?: string[];
+  note_transforms?: WireReportNoteTransform[];
   artifact_ids?: string[];
+  executive_summary_provenance?: WireAIWritingProvenance | null;
   signed_off_by?: string | null;
   signed_off_at?: string | null;
   metadata?: JsonObject;
+}
+
+interface WireAIWritingProvenance extends JsonObject {
+  provider_profile_id: string;
+  model: string;
+  prompt_version: string;
+  source_sha256: string;
+  instruction: string;
+  generated_at: string;
+  provider_request_id?: string | null;
+}
+
+interface WireReportNoteTransform extends JsonObject {
+  observation_id: string;
+  source_revision: number;
+  title: string;
+  body: string;
+  provenance: WireAIWritingProvenance;
+}
+
+interface WireWritingTransformResponse extends JsonObject {
+  content: string;
+  provenance: WireAIWritingProvenance;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+  };
 }
 
 interface WireObservation extends WireEntity {
@@ -1235,12 +1268,60 @@ function mapReport(value: WireReport): ReportSummary {
     executiveSummary: value.executive_summary ?? "",
     findingIds: value.finding_ids ?? [],
     observationIds: value.observation_ids ?? [],
+    noteTransforms: (value.note_transforms ?? []).map(mapReportNoteTransform),
     artifactIds: value.artifact_ids ?? [],
+    executiveSummaryProvenance: value.executive_summary_provenance
+      ? mapAIWritingProvenance(value.executive_summary_provenance)
+      : undefined,
     signedOffBy: value.signed_off_by ?? undefined,
     signedOffAt: value.signed_off_at ?? undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     revision: value.revision,
+  };
+}
+
+function mapAIWritingProvenance(value: WireAIWritingProvenance) {
+  return {
+    providerProfileId: value.provider_profile_id,
+    model: value.model,
+    promptVersion: value.prompt_version,
+    sourceSha256: value.source_sha256,
+    instruction: value.instruction,
+    generatedAt: value.generated_at,
+    providerRequestId: value.provider_request_id ?? undefined,
+  };
+}
+
+function mapReportNoteTransform(value: WireReportNoteTransform): ReportNoteTransform {
+  return {
+    observationId: value.observation_id,
+    sourceRevision: value.source_revision,
+    title: value.title,
+    body: value.body,
+    provenance: mapAIWritingProvenance(value.provenance),
+  };
+}
+
+function writingProvenanceBody(value: ReportNoteTransform["provenance"]): JsonObject {
+  return {
+    provider_profile_id: value.providerProfileId,
+    model: value.model,
+    prompt_version: value.promptVersion,
+    source_sha256: value.sourceSha256,
+    instruction: value.instruction,
+    generated_at: value.generatedAt,
+    provider_request_id: value.providerRequestId,
+  };
+}
+
+function reportNoteTransformBody(value: ReportNoteTransform): JsonObject {
+  return {
+    observation_id: value.observationId,
+    source_revision: value.sourceRevision,
+    title: value.title,
+    body: value.body,
+    provenance: writingProvenanceBody(value.provenance),
   };
 }
 
@@ -3109,6 +3190,7 @@ export class ApiClient {
         executive_summary: body.executiveSummary ?? "",
         finding_ids: body.findingIds ?? [],
         observation_ids: body.observationIds ?? [],
+        note_transforms: (body.noteTransforms ?? []).map(reportNoteTransformBody),
         artifact_ids: [],
         metadata: {},
       }),
@@ -3126,6 +3208,10 @@ export class ApiClient {
           ...(body.executiveSummary === undefined ? {} : { executive_summary: body.executiveSummary }),
           ...(body.findingIds === undefined ? {} : { finding_ids: body.findingIds }),
           ...(body.observationIds === undefined ? {} : { observation_ids: body.observationIds }),
+          ...(body.noteTransforms === undefined ? {} : { note_transforms: body.noteTransforms.map(reportNoteTransformBody) }),
+          ...(body.executiveSummaryProvenance === undefined
+            ? {}
+            : { executive_summary_provenance: body.executiveSummaryProvenance ? writingProvenanceBody(body.executiveSummaryProvenance) : null }),
         },
       }),
     }).then(mapReport);
@@ -3190,6 +3276,30 @@ export class ApiClient {
       method: "DELETE",
       headers: { "If-Match": String(expectedRevision) },
     });
+  }
+
+  transformWriting(body: WritingTransformRequest, signal?: AbortSignal): Promise<WritingTransformResponse> {
+    return this.request<WireWritingTransformResponse>("writing/transform", {
+      method: "POST",
+      signal,
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        provider_id: body.providerId,
+        model: body.model,
+        purpose: body.purpose,
+        instruction: body.instruction,
+        source_text: body.sourceText,
+        cloud_confirmed: body.cloudConfirmed ?? false,
+      }),
+    }).then((value) => ({
+      content: value.content,
+      provenance: mapAIWritingProvenance(value.provenance),
+      usage: {
+        inputTokens: value.usage.input_tokens,
+        outputTokens: value.usage.output_tokens,
+        totalTokens: value.usage.total_tokens,
+      },
+    }));
   }
 
   renderReport(id: string, reportRevision: number): Promise<ReportRender> {
