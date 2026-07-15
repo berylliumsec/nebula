@@ -399,8 +399,8 @@ kbd { font-size: 11px; }
 .overview-grid { gap: 16px; }
 .mission-panel { grid-row: span 2; }
 .mission-panel.is-empty { grid-row: auto; align-self: start; }
-.mission-steps li { min-height: 58px; }
-.mission-steps li > div { min-width: 0; }
+.mission-steps > li { min-height: 58px; }
+.mission-steps > li > div { min-width: 0; }
 .mission-steps strong { font-size: 13px; }
 .mission-steps small, .step-label { font-size: 11px; }
 .mission-step-summary .assistant-markdown {

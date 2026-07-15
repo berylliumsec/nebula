@@ -3,6 +3,8 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { DialogProvider } from "../components/DialogSystem";
 import { OverviewPage } from "./OverviewPage";
+import "../styles.css";
+import "../refinement.css";
 
 vi.mock("../state/ChromeContext", () => ({
   useChrome: () => ({ setActivityOpen: vi.fn(), toolbarHost: null }),
@@ -54,7 +56,11 @@ describe("project overview mission activity", () => {
     const activity = container.querySelector<HTMLElement>(".mission-steps");
     expect(activity).not.toBeNull();
     expect(within(activity!).getByText("Analyst-Facing Result").tagName).toBe("STRONG");
-    expect(within(activity!).getByText("Scan prepared").closest("li")?.parentElement?.tagName).toBe("UL");
+    const eventRow = activity!.querySelector(":scope > li");
+    const markdownListItem = within(activity!).getByText("Scan prepared").closest("li");
+    expect(markdownListItem?.parentElement?.tagName).toBe("UL");
+    expect(getComputedStyle(eventRow!).display).toBe("grid");
+    expect(getComputedStyle(markdownListItem!).display).toBe("list-item");
     expect(within(activity!).getByText("192.168.1.1").tagName).toBe("CODE");
     expect(screen.queryByText(/\*\*Analyst-Facing Result\*\*/)).toBeNull();
   });

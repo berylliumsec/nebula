@@ -357,23 +357,23 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--violet)); }
 .progress-track.small { height: 4px; }
 .mission-steps { margin: 0; padding: 6px 18px 13px; list-style: none; }
-.mission-steps li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 46px; border-bottom: 1px solid var(--border-soft); }
-.mission-steps li:last-child { border-bottom: 0; }
+.mission-steps > li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 46px; border-bottom: 1px solid var(--border-soft); }
+.mission-steps > li:last-child { border-bottom: 0; }
 .step-state { display: grid; width: 18px; height: 18px; place-items: center; border: 1px solid var(--border); border-radius: 50%; color: var(--muted); }
-.mission-steps .complete .step-state { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
-.mission-steps .running .step-state { border-color: var(--blue); }
-.mission-steps .running .step-state span { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); animation: pulse 1.8s infinite; }
-.mission-steps .waiting .step-state { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 45%, var(--border)); }
-.mission-steps .failed .step-state { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
-.mission-steps .stopped .step-state { color: var(--muted); }
-.mission-steps li > div { display: flex; flex-direction: column; }
+.mission-steps > .complete .step-state { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+.mission-steps > .running .step-state { border-color: var(--blue); }
+.mission-steps > .running .step-state span { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); animation: pulse 1.8s infinite; }
+.mission-steps > .waiting .step-state { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 45%, var(--border)); }
+.mission-steps > .failed .step-state { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.mission-steps > .stopped .step-state { color: var(--muted); }
+.mission-steps > li > div { display: flex; flex-direction: column; }
 .mission-steps strong { font-size: 11px; font-weight: 590; }
 .mission-steps small { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .step-label { color: var(--muted); font-size: 11px; text-transform: capitalize; }
-.mission-steps .running .step-label { color: var(--blue); }
-.mission-steps .complete .step-label { color: var(--green); }
-.mission-steps .waiting .step-label { color: var(--yellow); }
-.mission-steps .failed .step-label { color: var(--red); }
+.mission-steps > .running .step-label { color: var(--blue); }
+.mission-steps > .complete .step-label { color: var(--green); }
+.mission-steps > .waiting .step-label { color: var(--yellow); }
+.mission-steps > .failed .step-label { color: var(--red); }
 .risk-summary { display: flex; align-items: center; justify-content: space-evenly; gap: 18px; padding: 17px; }
 .risk-ring { display: grid; width: 96px; height: 96px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: conic-gradient(var(--red) 0 8%, var(--orange) 8% 42%, var(--yellow) 42% 84%, var(--blue) 84% 100%); }
 .risk-ring::before { position: absolute; width: 76px; height: 76px; border-radius: 50%; background: var(--surface); content: ""; }
