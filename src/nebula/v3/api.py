@@ -204,6 +204,7 @@ from .harnesses import (
     HarnessConfigurationError,
     HarnessError,
     HarnessRuntimeService,
+    HarnessSessionActivity,
     HarnessStateError,
     HarnessUnavailableError,
     harness_catalog,
@@ -1885,6 +1886,17 @@ def create_app(
     )
     async def check_harness_health(profile_id: str) -> Any:
         return await harness_runtime.health(profile_id)
+
+    @app.get(
+        f"{API_PREFIX}/harness-sessions/{{session_id}}/activity",
+        response_model=HarnessSessionActivity,
+        tags=["harnesses"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_harness_session_activity(
+        session_id: str,
+    ) -> HarnessSessionActivity:
+        return harness_runtime.session_activity(session_id)
 
     @app.post(
         f"{API_PREFIX}/harness-sessions/{{session_id}}/close",

@@ -827,6 +827,7 @@ export type ChatStreamEvent =
   | { type: "tool_started"; turnId: Identifier; toolCallId: Identifier; capability: string; arguments: Record<string, unknown>; step: number }
   | { type: "tool_completed"; turnId: Identifier; toolCallId: Identifier; capability: string; status: string; summary: string; evidenceIds: Identifier[]; resultArtifactId?: Identifier; artifacts: ToolArtifactReference[]; receipt?: Record<string, unknown>; step: number }
   | { type: "approval_required"; turnId: Identifier; toolCallId: Identifier; approval: Record<string, unknown> }
+  | { type: "status"; phase: string; detail: string; harnessSessionId?: Identifier; harnessTurnId?: Identifier; previousSessionId?: Identifier }
   | { type: "item_started" | "item_completed" | "usage" | "interrupted" | "completed"; harnessSessionId?: Identifier; harnessTurnId?: Identifier; payload?: Record<string, unknown> }
   | ({ type: "done" } & ChatCompletionResponse)
   | { type: "error"; detail: string };
@@ -925,6 +926,19 @@ export interface HarnessSessionSummary {
   status: "starting" | "idle" | "running" | "waiting_approval" | "closed" | "failed" | "interrupted";
   mcpServerIds: Identifier[];
   lastActivityAt: string;
+}
+
+export interface HarnessSessionActivity {
+  sessionId: Identifier;
+  sessionStatus: HarnessSessionSummary["status"];
+  busy: boolean;
+  live: boolean;
+  turnId?: Identifier;
+  turnStatus?: "queued" | "running" | "waiting_approval" | "complete" | "failed" | "cancelled" | "interrupted";
+  turnOrigin?: "chat" | "mission";
+  startedAt?: string;
+  lastActivityAt: string;
+  detail: string;
 }
 
 export interface ChatSessionRenameRequest {

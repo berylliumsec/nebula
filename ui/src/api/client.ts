@@ -45,6 +45,7 @@ import type {
   GeneratedDraftContent,
   HealthResponse,
   HarnessProfile,
+  HarnessSessionActivity,
   HarnessSessionSummary,
   KnowledgeIngestRequest,
   KnowledgeSource,
@@ -491,7 +492,7 @@ interface WireContextStatus extends JsonObject {
 }
 
 interface WireChatStreamEvent extends Partial<WireChatCompletion> {
-  type: "started" | "delta" | "message_delta" | "item_started" | "item_completed" | "usage" | "interrupted" | "completed" | "tool_started" | "tool_completed" | "approval_required" | "done" | "error";
+  type: "started" | "delta" | "message_delta" | "item_started" | "item_completed" | "usage" | "interrupted" | "completed" | "tool_started" | "tool_completed" | "approval_required" | "status" | "done" | "error";
   turn_id?: string;
   tool_call_id?: string;
   capability?: string;
@@ -595,6 +596,19 @@ interface WireHarnessSession extends WireEntity {
   status: HarnessSessionSummary["status"];
   mcp_server_ids?: string[];
   last_activity_at: string;
+}
+
+interface WireHarnessSessionActivity extends JsonObject {
+  session_id: string;
+  session_status: HarnessSessionSummary["status"];
+  busy: boolean;
+  live: boolean;
+  turn_id?: string | null;
+  turn_status?: HarnessSessionActivity["turnStatus"] | null;
+  turn_origin?: HarnessSessionActivity["turnOrigin"] | null;
+  started_at?: string | null;
+  last_activity_at: string;
+  detail: string;
 }
 
 interface WireChatTurn extends WireEntity {
@@ -1962,6 +1976,21 @@ function mapHarnessSession(value: WireHarnessSession): HarnessSessionSummary {
   };
 }
 
+function mapHarnessSessionActivity(value: WireHarnessSessionActivity): HarnessSessionActivity {
+  return {
+    sessionId: value.session_id,
+    sessionStatus: value.session_status,
+    busy: value.busy,
+    live: value.live,
+    turnId: value.turn_id ?? undefined,
+    turnStatus: value.turn_status ?? undefined,
+    turnOrigin: value.turn_origin ?? undefined,
+    startedAt: value.started_at ?? undefined,
+    lastActivityAt: value.last_activity_at,
+    detail: value.detail,
+  };
+}
+
 function mapChatTurn(value: WireChatTurn): ChatTurn {
   return {
     id: value.id,
@@ -2621,6 +2650,11 @@ export class ApiClient {
   listHarnessSessions(engagementId?: string, signal?: AbortSignal): Promise<HarnessSessionSummary[]> {
     return this.listAll<WireHarnessSession>("harness-sessions", signal, engagementId)
       .then((items) => items.map(mapHarnessSession));
+  }
+
+  getHarnessSessionActivity(id: string, signal?: AbortSignal): Promise<HarnessSessionActivity> {
+    return this.request<WireHarnessSessionActivity>(`harness-sessions/${encodeURIComponent(id)}/activity`, { signal })
+      .then(mapHarnessSessionActivity);
   }
 
   closeHarnessSession(id: string): Promise<HarnessSessionSummary> {
@@ -4123,6 +4157,17 @@ export class ApiClient {
           turnId,
           toolCallId: wire.tool_call_id,
           approval: wire.approval ?? { id: wire.approval_id, exact_request: wire.payload ?? {} },
+        });
+        return;
+      }
+      if (wire.type === "status") {
+        onEvent({
+          type: "status",
+          phase: typeof wire.payload?.phase === "string" ? wire.payload.phase : "working",
+          detail: typeof wire.payload?.detail === "string" ? wire.payload.detail : "Harness is working.",
+          harnessSessionId: wire.harness_session_id ?? body.harnessSessionId,
+          harnessTurnId: wire.harness_turn_id ?? undefined,
+          previousSessionId: typeof wire.payload?.previous_session_id === "string" ? wire.payload.previous_session_id : undefined,
         });
         return;
       }

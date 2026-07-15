@@ -60,7 +60,6 @@ from nebula.v3.harnesses import (
     HarnessHealth,
     HarnessPermissionRequest,
     HarnessRuntimeService,
-    HarnessStateError,
     HarnessTransportError,
 )
 from nebula.v3.exporter import export_engagement
@@ -158,6 +157,12 @@ class FakeAdapter(HarnessAdapter):
         return connection
 
 
+class FailingOpenAdapter(FakeAdapter):
+    async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+        self.opens.append(request)
+        raise HarnessTransportError("harness launch failed token=do-not-store")
+
+
 def _runtime(tmp_path: Path, *, fail: bool = False):
     store = NebulaStore(tmp_path / "nebula.db")
     engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
@@ -225,24 +230,23 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-
-        with pytest.raises(HarnessStateError, match="active work"):
-            await runtime.start_mission(
-                engagement_id=engagement.id,
-                objective="Cannot overlap",
-                profile_id=profile.id,
-                model=None,
-                budget=RunBudget(),
-                harness_session_id=chat.harness_session_id,
-            )
+        reserved = runtime.session_activity(chat.harness_session_id or "")
+        assert reserved.busy is True
+        assert reserved.live is False
+        assert reserved.turn_id == harness_turn.id
+        assert reserved.turn_status == HarnessTurnStatus.QUEUED
+        assert reserved.detail == "A harness turn is reserved and waiting to start."
 
         events = [event async for event in runtime.stream_turn(harness_turn.id)]
         assert [event.type for event in events] == [
+            "status",
+            "status",
             "started",
             "message_delta",
             "message_delta",
             "usage",
             "completed",
+            "status",
         ]
         assert (
             store.get(HarnessTurn, harness_turn.id).status == HarnessTurnStatus.COMPLETE
@@ -251,6 +255,11 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         session = store.get(HarnessSession, chat.harness_session_id or "")
         assert session.external_session_id == "vendor-session-1"
         assert session.status == HarnessSessionStatus.IDLE
+        available = runtime.session_activity(session.id)
+        assert available.busy is False
+        assert available.live is False
+        assert available.turn_id is None
+        assert available.detail == "This harness session is ready for another turn."
 
         # Editing a profile cannot mutate the immutable session snapshot.
         store.update(
@@ -292,6 +301,47 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         ]
         await runtime.shutdown()
         assert adapter.connections[0].closed is True
+
+    asyncio.run(scenario())
+
+
+def test_parallel_work_uses_independent_harness_sessions(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        chat, _, chat_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Keep the chat turn running",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        original_session_id = chat.harness_session_id or ""
+
+        run = await runtime.start_mission(
+            engagement_id=engagement.id,
+            objective="Run independently",
+            profile_id=profile.id,
+            model=None,
+            budget=RunBudget(max_duration_seconds=5),
+            harness_session_id=original_session_id,
+        )
+
+        assert run.harness_session_id != original_session_id
+        assert run.metadata["forked_from_harness_session_id"] == original_session_id
+        assert runtime.session_activity(original_session_id).turn_id == chat_turn.id
+
+        async def collect_chat_events() -> list[HarnessEvent]:
+            return [event async for event in runtime.stream_turn(chat_turn.id)]
+
+        chat_events, _ = await asyncio.gather(
+            collect_chat_events(), runtime._mission_tasks[run.id]
+        )
+        assert any(event.type == "started" for event in chat_events)
+        assert store.get(HarnessTurn, chat_turn.id).status == HarnessTurnStatus.COMPLETE
+        assert store.get(AgentRun, run.id).status == RunStatus.COMPLETE
+        assert len(adapter.opens) == 2
 
     asyncio.run(scenario())
 
@@ -1086,6 +1136,36 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
     asyncio.run(scenario())
 
 
+def test_connection_failure_is_reported_and_releases_the_session(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        adapter = FailingOpenAdapter()
+        runtime.adapter_factory = lambda _: adapter
+        _, chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Show the launch failure",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+
+        events = [event async for event in runtime.stream_turn(turn.id)]
+
+        assert [event.type for event in events] == ["status", "error"]
+        assert events[0].payload["phase"] == "connecting"
+        assert "launch failed" in (events[1].message or "")
+        failed = store.get(HarnessTurn, turn.id)
+        assert failed.status == HarnessTurnStatus.INTERRUPTED
+        assert store.get(ChatTurn, chat_turn.id).status.value == "interrupted"
+        activity = runtime.session_activity(failed.harness_session_id)
+        assert activity.busy is False
+        assert adapter.opens
+
+    asyncio.run(scenario())
+
+
 def test_explicit_stdio_mcp_probe_validates_schema_and_closes_process(tmp_path):
     fixture = Path(__file__).parent / "fixtures" / "fake_mcp_server.py"
     store = NebulaStore(tmp_path / "mcp.db")
@@ -1279,6 +1359,19 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         )
         assert sessions.status_code == 200
         assert sessions.json()[0]["external_session_id"] == "vendor-session-1"
+        activity = client.get(
+            f"/api/v1/harness-sessions/{body['harness_session_id']}/activity",
+            headers=headers,
+        )
+        assert activity.status_code == 200
+        activity_body = activity.json()
+        assert activity_body["session_id"] == body["harness_session_id"]
+        assert activity_body["session_status"] == "idle"
+        assert activity_body["busy"] is False
+        assert activity_body["turn_id"] is None
+        assert activity_body["detail"] == (
+            "This harness session is ready for another turn."
+        )
 
         handoff = client.post(
             f"/api/v1/chat/sessions/{body['session_id']}/continue-as-mission",

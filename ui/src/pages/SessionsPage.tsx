@@ -33,6 +33,7 @@ import type {
   ExecutionCapabilities,
   ExecutionLanguage,
   HarnessProfile,
+  HarnessSessionActivity,
   HarnessSessionSummary,
   McpServerProfile,
   PersistedChatMessage,
@@ -79,6 +80,14 @@ interface PendingChatResponse {
   approval: Record<string, unknown>;
 }
 
+interface HarnessProgress {
+  phase: string;
+  detail: string;
+  sessionId?: string;
+  turnId?: string;
+  previousSessionId?: string;
+}
+
 const ContainerTerminalPanel = lazy(() => import("../components/ContainerTerminalPanel").then((module) => ({ default: module.ContainerTerminalPanel })));
 
 interface ConversationMessage extends ChatMessage {
@@ -100,6 +109,24 @@ function timeLabel(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Now";
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
+}
+
+function harnessPhaseLabel(phase: string): string {
+  switch (phase) {
+    case "ready": return "Harness session ready";
+    case "status_unavailable": return "Harness status unavailable";
+    case "queued": return "Harness request queued";
+    case "connecting": return "Connecting to harness";
+    case "parallel_session_created": return "Parallel harness session started";
+    case "running": return "Harness is working";
+    case "tool": return "Harness is using a tool";
+    case "waiting_approval": return "Harness needs approval";
+    case "finalizing": return "Saving harness response";
+    case "complete": return "Harness turn complete";
+    case "interrupted": return "Harness turn interrupted";
+    case "failed": return "Harness turn failed";
+    default: return "Harness status";
+  }
 }
 
 function persistedMessage(message: PersistedChatMessage): ConversationMessage {
@@ -187,6 +214,9 @@ export function SessionsPage() {
   const [runtimeKind, setRuntimeKind] = useState<"provider" | "harness">("provider");
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
   const [harnessSessions, setHarnessSessions] = useState<HarnessSessionSummary[]>([]);
+  const [harnessActivity, setHarnessActivity] = useState<HarnessSessionActivity>();
+  const [harnessActivityError, setHarnessActivityError] = useState<string>();
+  const [harnessProgress, setHarnessProgress] = useState<HarnessProgress>();
   const [mcpServers, setMcpServers] = useState<McpServerProfile[]>([]);
   const [harnessId, setHarnessId] = useState("");
   const [harnessSessionId, setHarnessSessionId] = useState("");
@@ -304,6 +334,34 @@ export function SessionsPage() {
   }, [api, coreState, engagement]);
 
   useEffect(() => {
+    if (!api || coreState !== "online" || runtimeKind !== "harness" || !harnessSessionId) {
+      setHarnessActivity(undefined);
+      setHarnessActivityError(undefined);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    const refresh = async () => {
+      try {
+        const next = await api.getHarnessSessionActivity(harnessSessionId, controller.signal);
+        if (!active) return;
+        setHarnessActivity(next);
+        setHarnessActivityError(undefined);
+      } catch (error) {
+        if (!active || controller.signal.aborted) return;
+        setHarnessActivityError(error instanceof Error ? error.message : "Harness activity is unavailable.");
+      }
+    };
+    void refresh();
+    const interval = globalThis.setInterval(() => void refresh(), 2_000);
+    return () => {
+      active = false;
+      controller.abort();
+      globalThis.clearInterval(interval);
+    };
+  }, [api, coreState, harnessSessionId, runtimeKind]);
+
+  useEffect(() => {
     let active = true;
     if (!api || coreState !== "online" || !engagement) {
       setHarnesses([]);
@@ -389,6 +447,9 @@ export function SessionsPage() {
     setSessionId("");
     setConversationOpen(Boolean(assistantDraft || requestedSessionId));
     setHarnessSessionId("");
+    setHarnessActivity(undefined);
+    setHarnessActivityError(undefined);
+    setHarnessProgress(undefined);
     setMessages([]);
     setDraft(assistantDraft ? "" : "");
     setChatError(undefined);
@@ -445,6 +506,9 @@ export function SessionsPage() {
     setSessionId("");
     setConversationOpen(open);
     setHarnessSessionId("");
+    setHarnessActivity(undefined);
+    setHarnessActivityError(undefined);
+    setHarnessProgress(undefined);
     setMessages([]);
     setDraft("");
     setChatError(undefined);
@@ -585,6 +649,8 @@ export function SessionsPage() {
     setConversationOpen(true);
     setLoadingHistory(true);
     setChatError(undefined);
+    setHarnessProgress(undefined);
+    setHarnessActivity(undefined);
     try {
       const summary = sessions.find((session) => session.id === id);
       const [history, pendingTurn] = await Promise.all([
@@ -676,6 +742,8 @@ export function SessionsPage() {
     if (!api || !engagement) return;
     setLoadingHistory(true);
     setChatError(undefined);
+    setHarnessProgress(undefined);
+    setHarnessActivity(undefined);
     try {
       const [page, history] = await Promise.all([
         api.listChatSessions(engagement.id),
@@ -713,12 +781,39 @@ export function SessionsPage() {
     if (streamEvent.type === "started" && streamEvent.sessionId) {
       setSessionId(streamEvent.sessionId);
     }
+    if (streamEvent.type === "started") {
+      if (streamEvent.harnessSessionId) setHarnessSessionId(streamEvent.harnessSessionId);
+      if (request.backend === "harness") {
+        setHarnessProgress((current) => ({
+          phase: "running",
+          detail: "Harness accepted the turn and is processing the request.",
+          sessionId: streamEvent.harnessSessionId ?? current?.sessionId,
+          turnId: streamEvent.harnessTurnId ?? current?.turnId,
+          previousSessionId: current?.previousSessionId,
+        }));
+      }
+    }
+    if (streamEvent.type === "status") {
+      if (streamEvent.harnessSessionId) setHarnessSessionId(streamEvent.harnessSessionId);
+      setHarnessProgress({
+        phase: streamEvent.phase,
+        detail: streamEvent.detail,
+        sessionId: streamEvent.harnessSessionId,
+        turnId: streamEvent.harnessTurnId,
+        previousSessionId: streamEvent.previousSessionId,
+      });
+    }
     if ((streamEvent.type === "delta" || streamEvent.type === "message_delta") && streamEvent.delta) {
       setMessages((current) => current.map((message) => message.id === assistantId
         ? { ...message, content: message.content + streamEvent.delta }
         : message));
     }
     if (streamEvent.type === "tool_started") {
+      setHarnessProgress((current) => request.backend === "harness" ? {
+        ...current,
+        phase: "tool",
+        detail: `Running ${streamEvent.capability}.`,
+      } : current);
       setToolCards((current) => [...current.filter((item) => item.toolCallId !== streamEvent.toolCallId), {
         assistantId,
         toolCallId: streamEvent.toolCallId,
@@ -746,6 +841,11 @@ export function SessionsPage() {
         }]);
     }
     if (streamEvent.type === "approval_required") {
+      setHarnessProgress((current) => request.backend === "harness" ? {
+        ...current,
+        phase: "waiting_approval",
+        detail: "Harness work is paused until the requested action is approved or rejected.",
+      } : current);
       setToolCards((current) => current.map((item) => item.toolCallId === streamEvent.toolCallId
         ? { ...item, status: "waiting_approval" }
         : item));
@@ -762,6 +862,16 @@ export function SessionsPage() {
       }));
     }
     if (streamEvent.type === "done") {
+      if (streamEvent.harnessSessionId) setHarnessSessionId(streamEvent.harnessSessionId);
+      if (request.backend === "harness") {
+        setHarnessProgress((current) => ({
+          ...current,
+          phase: "complete",
+          detail: "Harness response and activity records were saved.",
+          sessionId: streamEvent.harnessSessionId ?? current?.sessionId,
+          turnId: streamEvent.harnessTurnId ?? current?.turnId,
+        }));
+      }
       setPendingResponse(undefined);
       setMessages((current) => current.map((message) => {
         if (message.id === userId) return { ...message, durable: true };
@@ -777,7 +887,16 @@ export function SessionsPage() {
         };
       }));
     }
-    if (streamEvent.type === "error") setChatError(streamEvent.detail);
+    if (streamEvent.type === "interrupted" && request.backend === "harness") {
+      setHarnessProgress((current) => ({ ...current, phase: "interrupted", detail: "The harness turn was interrupted." }));
+    }
+    if (streamEvent.type === "completed" && request.backend === "harness") {
+      setHarnessProgress((current) => ({ ...current, phase: "finalizing", detail: "Harness finished; Nebula is saving the response." }));
+    }
+    if (streamEvent.type === "error") {
+      setChatError(streamEvent.detail);
+      if (request.backend === "harness") setHarnessProgress((current) => ({ ...current, phase: "failed", detail: streamEvent.detail }));
+    }
   };
 
   const submit = async (event: FormEvent) => {
@@ -868,6 +987,15 @@ export function SessionsPage() {
     clearAssistantDraft();
     setChatError(undefined);
     setSending(true);
+    if (runtimeKind === "harness") {
+      setHarnessProgress({
+        phase: "queued",
+        detail: harnessActivity?.busy
+          ? "Existing work is active; Core will start an independent harness session for this request."
+          : "Request accepted locally and waiting for the harness connection.",
+        sessionId: harnessSessionId || undefined,
+      });
+    }
     const controller = new AbortController();
     abortRef.current = controller;
     const initialSessionId = sessionId || undefined;
@@ -1137,6 +1265,20 @@ export function SessionsPage() {
 
   const runtimeReady = runtimeKind === "provider" ? Boolean(selectedProvider) : Boolean(selectedHarness);
   const canSend = Boolean(api && coreState === "online" && engagement && runtimeReady && model.trim() && draft.trim() && !sending);
+  const visibleHarnessProgress: HarnessProgress | undefined = runtimeKind !== "harness" || !harnessSessionId
+    ? harnessProgress
+    : harnessProgress ?? (harnessActivityError
+      ? { phase: "status_unavailable", detail: harnessActivityError, sessionId: harnessSessionId }
+      : harnessActivity
+        ? {
+            phase: harnessActivity.busy
+              ? harnessActivity.turnStatus === "waiting_approval" ? "waiting_approval" : harnessActivity.turnStatus ?? "running"
+              : "ready",
+            detail: harnessActivity.detail,
+            sessionId: harnessActivity.sessionId,
+            turnId: harnessActivity.turnId,
+          }
+        : { phase: "connecting", detail: "Reading authoritative harness activity from Core.", sessionId: harnessSessionId });
   const runnableLanguages = useMemo(() => new Set<ExecutionLanguage>(
     executionCapabilities?.runtimes
       .filter((runtime) => runtime.offline && runtime.scopedNetwork)
@@ -1225,12 +1367,13 @@ export function SessionsPage() {
                     tabIndex={-1}
                   >
                     <span className="chat-avatar">{message.role === "user" ? "You" : "N"}</span>
-                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}{card.status !== "running" && <button className="button quiet" type="button" onClick={() => void openArtifacts(card)}><Search size={13} /> Artifacts</button>}</div>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> Waiting for provider</div>}{message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}{message.detail && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
+                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}{card.status !== "running" && <button className="button quiet" type="button" onClick={() => void openArtifacts(card)}><Search size={13} /> Artifacts</button>}</div>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}{message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}{message.detail && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
                   </article>
                 )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use project-assigned Toolbox capabilities when the exact model is verified.</p></div>}
               </div>
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />}
+              {runtimeKind === "harness" && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "complete" || visibleHarnessProgress.phase === "ready" ? "healthy" : visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? " · independent parallel session" : ""}</code>}</div></div>}
               <form className="chat-composer" onSubmit={(event) => void submit(event)}>
                 {assistantDraft && <div className="chat-context-attachment" role="group" aria-label="Selected context attachment">
                   <div><strong>{assistantDraft.source.label}</strong><small>{assistantDraft.text.length.toLocaleString()} characters{assistantDraft.truncated ? " · truncated to the first 20,000" : ""}</small></div>
@@ -1239,7 +1382,7 @@ export function SessionsPage() {
                 </div>}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <textarea ref={composerRef} id="analyst-message" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
-                <footer><span>{runtimeKind === "harness" ? `${harnessSessionId ? "Resumed" : "New"} harness session · ${selectedMcpIds.length || harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length || 0} MCP` : canUseTools || selectedMcpIds.length ? `${canUseTools ? `${assignedToolCount} Toolbox` : "No Toolbox"} · ${selectedMcpIds.length} MCP` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse && pendingResponse.request.backend !== "harness") void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><span>{runtimeKind === "harness" ? sending ? visibleHarnessProgress?.detail ?? "Harness is working" : harnessActivity?.busy ? "Active work detected · sending starts an independent session" : `${harnessSessionId ? "Resumed" : "New"} harness session · ${selectedMcpIds.length || harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length || 0} MCP` : canUseTools || selectedMcpIds.length ? `${canUseTools ? `${assignedToolCount} Toolbox` : "No Toolbox"} · ${selectedMcpIds.length} MCP` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse && pendingResponse.request.backend !== "harness") void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
             </div>
           )}

@@ -1006,6 +1006,45 @@ describe("ApiClient", () => {
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("Authorization")).toBe("Bearer token");
   });
 
+  it("maps harness lifecycle status and independent-session rollover frames", async () => {
+    const encoder = new TextEncoder();
+    const frames = [
+      'event: status\ndata: {"type":"status","harness_session_id":"session-new","harness_turn_id":"turn-1","payload":{"phase":"parallel_session_created","detail":"Started an independent harness session for parallel work.","previous_session_id":"session-old"}}\n\n',
+      'event: status\ndata: {"type":"status","harness_session_id":"session-new","harness_turn_id":"turn-1","payload":{"phase":"connecting","detail":"Connecting to the harness runtime."}}\n\n',
+      'event: done\ndata: {"type":"done","session_id":"chat-1","harness_profile_id":"harness-1","harness_session_id":"session-new","harness_turn_id":"turn-1","model":"model-1","message":{"role":"assistant","content":"complete"},"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"finish_reason":"stop","citations":[]}\n\n',
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        frames.forEach((frame) => controller.enqueue(encoder.encode(frame)));
+        controller.close();
+      },
+    });
+    const client = new ApiClient({
+      baseUrl: "http://127.0.0.1:8765",
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(new Response(stream, { status: 200 })),
+    });
+    const events: Array<{ type: string; phase?: string; harnessSessionId?: string; previousSessionId?: string }> = [];
+
+    const result = await client.streamChat({
+      harnessProfileId: "harness-1",
+      harnessSessionId: "session-old",
+      engagementId: "engagement-1",
+      model: "model-1",
+      messages: [{ role: "user", content: "work in parallel" }],
+    }, (event) => events.push(event));
+
+    expect(events).toMatchObject([
+      { type: "status", phase: "parallel_session_created", harnessSessionId: "session-new", previousSessionId: "session-old" },
+      { type: "status", phase: "connecting", harnessSessionId: "session-new" },
+      { type: "done", harnessSessionId: "session-new" },
+    ]);
+    expect(result).toMatchObject({
+      harnessSessionId: "session-new",
+      harnessTurnId: "turn-1",
+      message: { content: "complete" },
+    });
+  });
+
   it("loads durable chat session summaries and ordered messages", async () => {
     const entity = { created_at: "2026-07-12T11:00:00Z", updated_at: "2026-07-12T12:00:00Z", revision: 1 };
     const fetchMock = vi.fn<typeof fetch>()
@@ -1280,6 +1319,18 @@ describe("ApiClient", () => {
         mcp_server_ids: ["mcp-1"],
         last_activity_at: entity.updated_at,
       }]), { status: 200 });
+      if (path.endsWith("/harness-sessions/session-1/activity")) return new Response(JSON.stringify({
+        session_id: "session-1",
+        session_status: "running",
+        busy: true,
+        live: true,
+        turn_id: "turn-1",
+        turn_status: "running",
+        turn_origin: "chat",
+        started_at: entity.updated_at,
+        last_activity_at: entity.updated_at,
+        detail: "A harness turn is currently running.",
+      }), { status: 200 });
       if (path.endsWith("/missions")) return new Response(JSON.stringify({
         ...entity,
         id: "run-harness",
@@ -1298,6 +1349,7 @@ describe("ApiClient", () => {
     const [harness] = await client.listHarnesses();
     const [server] = await client.listMcpServers();
     const [session] = await client.listHarnessSessions("engagement-1");
+    const activity = await client.getHarnessSessionActivity(session.id);
     const run = await client.createMission({
       engagementId: "engagement-1",
       objective: "Inspect",
@@ -1323,6 +1375,7 @@ describe("ApiClient", () => {
     });
     expect(server).toMatchObject({ required: true, tools: [{ name: "read_file", readOnly: true }] });
     expect(session).toMatchObject({ harnessProfileId: "harness-1", mcpServerIds: ["mcp-1"] });
+    expect(activity).toMatchObject({ sessionId: "session-1", busy: true, live: true, turnId: "turn-1", turnStatus: "running" });
     expect(run).toMatchObject({ backend: "harness", harnessSessionId: "session-1" });
     const missionBody = JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/missions"))?.[1]?.body));
     expect(missionBody).toMatchObject({
