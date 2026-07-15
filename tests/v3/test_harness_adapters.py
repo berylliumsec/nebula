@@ -14,8 +14,10 @@ from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.domain import (
     HarnessAuthMode,
     HarnessKind,
+    HarnessNativeCapabilities,
     HarnessProfile,
     HarnessSession,
+    HarnessWorkspaceAccess,
     McpCapabilitySnapshot,
     McpServerProfile,
     McpToolSnapshot,
@@ -238,10 +240,8 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert decisions[0].category == "command"
         assert rpc.responses == [(41, {"decision": "accept"})]
         instructions = rpc.calls[1][1]["developerInstructions"]
-        assert "general Codex workspace agent" in instructions
-        assert (
-            "browser" in instructions and "capabilities are unavailable" in instructions
-        )
+        assert "unrestricted vendor workspace agent" in instructions
+        assert "BEGIN TRUSTED VENDOR-NATIVE CAPABILITIES (JSON)\n[]" in instructions
         assert '"name":"environment.run_network"' in instructions
         _validate("CommandExecutionRequestApprovalResponse.json", rpc.responses[0][1])
 
@@ -377,7 +377,7 @@ def test_codex_rpc_rejects_malformed_and_uncorrelated_messages():
 
 
 def test_codex_gateway_thread_disables_vendor_execution_and_environment():
-    config = _codex_thread_config({}, gateway_only=True)
+    config = _codex_thread_config({})
 
     assert config["features"]["shell_tool"] is False
     assert config["features"]["unified_exec"] is False
@@ -388,6 +388,32 @@ def test_codex_gateway_thread_disables_vendor_execution_and_environment():
         "inherit": "none",
         "set": {"PATH": "/nonexistent"},
     }
+
+
+def test_codex_native_capabilities_are_explicit_and_keep_shell_environment_minimal():
+    native = HarnessNativeCapabilities(
+        workspace_access=HarnessWorkspaceAccess.WRITE,
+        shell=True,
+        web_search=True,
+        browser=True,
+        computer_use=True,
+        image_generation=True,
+        subagents=True,
+    )
+    config = _codex_thread_config({}, native_capabilities=native)
+
+    assert config["features"]["shell_tool"] is True
+    assert config["features"]["unified_exec"] is True
+    assert config["features"]["browser_use"] is True
+    assert config["features"]["in_app_browser"] is True
+    assert config["features"]["browser_use_external"] is False
+    assert config["features"]["computer_use"] is True
+    assert config["features"]["image_generation"] is True
+    assert config["features"]["multi_agent"] is True
+    assert config["features"]["plugins"] is False
+    assert config["web_search"] == "live"
+    assert config["shell_environment_policy"]["inherit"] == "none"
+    assert config["shell_environment_policy"]["set"]["PATH"] != "/nonexistent"
 
 
 class StreamEvent:
@@ -497,6 +523,12 @@ class PermissionResultAllow:
         self.updated_input = updated_input
 
 
+class FakeHookMatcher:
+    def __init__(self, *, matcher: str | None, hooks: list[Any]) -> None:
+        self.matcher = matcher
+        self.hooks = hooks
+
+
 def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
     tmp_path, monkeypatch
 ):
@@ -504,6 +536,7 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
         sdk = SimpleNamespace(
             ClaudeAgentOptions=FakeClaudeOptions,
             ClaudeSDKClient=FakeClaudeClient,
+            HookMatcher=FakeHookMatcher,
             PermissionResultAllow=PermissionResultAllow,
         )
         monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
@@ -554,8 +587,29 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
         assert options["resume"] == "claude-session-existing"
         assert options["include_partial_messages"] is True
         assert set(options["mcp_servers"]) == {"workspace_server"}
-        assert options["disallowed_tools"] == ["WebFetch", "WebSearch"]
-        assert options["env"] == {"ANTHROPIC_API_KEY": "anthropic-fixture-secret"}
+        assert options["tools"] == []
+        assert options["skills"] == []
+        assert set(options["disallowed_tools"]) == {
+            "Agent",
+            "Bash",
+            "Edit",
+            "Glob",
+            "Grep",
+            "NotebookEdit",
+            "Read",
+            "Skill",
+            "WebFetch",
+            "WebSearch",
+            "Write",
+        }
+        assert options["env"]["ANTHROPIC_API_KEY"] == "anthropic-fixture-secret"
+        assert options["env"]["PATH"]
+
+        pre_tool_use = options["hooks"]["PreToolUse"][0].hooks[0]
+        hook_result = await pre_tool_use(
+            {"tool_name": "mcp__workspace_server__read_file"}, None, None
+        )
+        assert hook_result["hookSpecificOutput"]["permissionDecision"] == "ask"
 
         permission_result = await options["can_use_tool"](
             "mcp__workspace_server__read_file", {"path": "README.md"}, None
@@ -593,6 +647,105 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
     asyncio.run(scenario())
 
 
+def test_claude_native_capabilities_use_an_explicit_toolset_and_pretool_gate(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        sdk = SimpleNamespace(
+            ClaudeAgentOptions=FakeClaudeOptions,
+            ClaudeSDKClient=FakeClaudeClient,
+            HookMatcher=FakeHookMatcher,
+            PermissionResultAllow=PermissionResultAllow,
+        )
+        monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
+        observed_permissions: list[Any] = []
+
+        async def permission(request):
+            observed_permissions.append(request)
+            future: asyncio.Future[HarnessPermissionDecision] = (
+                asyncio.get_running_loop().create_future()
+            )
+            future.set_result(HarnessPermissionDecision(allowed=True))
+            return PermissionTicket(None, "call-native", future)
+
+        native = HarnessNativeCapabilities(
+            workspace_access=HarnessWorkspaceAccess.READ,
+            shell=True,
+            web_search=True,
+            web_fetch=True,
+            skills=True,
+            subagents=True,
+        )
+        profile = HarnessProfile(
+            id="claude-native",
+            name="Claude native",
+            kind=HarnessKind.CLAUDE_AGENT_SDK,
+            default_model="claude-test",
+            native_capabilities=native,
+        )
+        session = HarnessSession(
+            id="session-native",
+            engagement_id="eng-a",
+            harness_profile_id=profile.id,
+            model="claude-test",
+            metadata={"native_capabilities": native.model_dump(mode="json")},
+        )
+        connection = await ClaudeAgentSdkAdapter().open(
+            AdapterOpenRequest(
+                profile=profile,
+                session=session,
+                workspace=tmp_path,
+                mcp_profiles=(),
+                credential_store=CredentialStore(),
+                permission_handler=permission,
+            )
+        )
+        options = FakeClaudeClient.latest.options.kwargs
+        assert set(options["tools"]) == {
+            "Read",
+            "Glob",
+            "Grep",
+            "Bash",
+            "WebSearch",
+            "WebFetch",
+            "Skill",
+            "Agent",
+        }
+        assert options["setting_sources"] == ["user"]
+        assert options["skills"] == "all"
+        assert {"Write", "Edit", "NotebookEdit"}.issubset(options["disallowed_tools"])
+        assert "BEGIN TRUSTED VENDOR-NATIVE CAPABILITIES" in options["system_prompt"]
+
+        pre_tool_use = options["hooks"]["PreToolUse"][0].hooks[0]
+        read_result = await pre_tool_use(
+            {"tool_name": "Read", "tool_input": {"file_path": "README.md"}},
+            None,
+            None,
+        )
+        skill_result = await pre_tool_use(
+            {"tool_name": "Skill", "tool_input": {"skill": "review"}},
+            None,
+            None,
+        )
+        write_result = await pre_tool_use(
+            {"tool_name": "Write", "tool_input": {"file_path": "out.txt"}},
+            None,
+            None,
+        )
+        assert read_result["hookSpecificOutput"]["permissionDecision"] == "ask"
+        assert skill_result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert write_result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+        allowed = await options["can_use_tool"](
+            "Read", {"file_path": "README.md"}, None
+        )
+        assert allowed.behavior == "allow"
+        assert observed_permissions[-1].vendor_name == "Read"
+        await connection.close()
+
+    asyncio.run(scenario())
+
+
 def test_claude_gateway_is_required_and_ready_before_the_session_opens(
     tmp_path, monkeypatch
 ):
@@ -600,6 +753,7 @@ def test_claude_gateway_is_required_and_ready_before_the_session_opens(
         sdk = SimpleNamespace(
             ClaudeAgentOptions=FakeClaudeOptions,
             ClaudeSDKClient=FakeClaudeClient,
+            HookMatcher=FakeHookMatcher,
             PermissionResultAllow=PermissionResultAllow,
         )
         monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))

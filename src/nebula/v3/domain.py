@@ -113,6 +113,12 @@ class HarnessAuthMode(StringEnum):
     ENDPOINT_BEARER = "endpoint_bearer"
 
 
+class HarnessWorkspaceAccess(StringEnum):
+    NONE = "none"
+    READ = "read"
+    WRITE = "write"
+
+
 class HarnessSessionStatus(StringEnum):
     STARTING = "starting"
     IDLE = "idle"
@@ -1114,11 +1120,28 @@ class HarnessCapabilities(NebulaModel):
     mcp: bool = True
     enforceable_cost_limit: bool = False
     enforceable_token_limit: bool = False
+    supported_native_capabilities: list[str] = Field(
+        default_factory=list, max_length=64
+    )
     harness_version: str | None = Field(default=None, max_length=200)
     adapter_version: str | None = Field(default=None, max_length=200)
     protocol_version: str | None = Field(default=None, max_length=200)
     checked_at: datetime | None = None
     detail: str | None = Field(default=None, max_length=1_000)
+
+
+class HarnessNativeCapabilities(NebulaModel):
+    """Explicit vendor-native capabilities available beside Nebula's gateway."""
+
+    workspace_access: HarnessWorkspaceAccess = HarnessWorkspaceAccess.NONE
+    shell: bool = False
+    web_search: bool = False
+    web_fetch: bool = False
+    browser: bool = False
+    computer_use: bool = False
+    image_generation: bool = False
+    skills: bool = False
+    subagents: bool = False
 
 
 class HarnessProfile(Entity):
@@ -1135,6 +1158,9 @@ class HarnessProfile(Entity):
     enabled: bool = True
     privacy: ProviderPrivacy = Field(default_factory=ProviderPrivacy)
     capabilities: HarnessCapabilities = Field(default_factory=HarnessCapabilities)
+    native_capabilities: HarnessNativeCapabilities = Field(
+        default_factory=HarnessNativeCapabilities
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("executable")
@@ -1156,6 +1182,28 @@ class HarnessProfile(Entity):
 
     @model_validator(mode="after")
     def connection_is_supported(self) -> "HarnessProfile":
+        native = self.native_capabilities
+        if self.kind == HarnessKind.CLAUDE_AGENT_SDK and (
+            native.browser or native.computer_use or native.image_generation
+        ):
+            raise ValueError(
+                "Claude Agent SDK profiles do not support browser, computer-use, "
+                "or image-generation capabilities"
+            )
+        if (
+            self.kind == HarnessKind.CLAUDE_AGENT_SDK
+            and native.shell
+            and self.auth_mode == HarnessAuthMode.SECRET_REF
+        ):
+            raise ValueError(
+                "Claude native shell requires existing-session authentication so "
+                "an API key is not present in the vendor process environment"
+            )
+        if self.kind == HarnessKind.CODEX_APP_SERVER and native.web_fetch:
+            raise ValueError(
+                "Codex uses web_search for both discovery and page retrieval; "
+                "web_fetch is Claude-only"
+            )
         if self.auth_mode != HarnessAuthMode.EXISTING_SESSION and not self.secret_ref:
             raise ValueError("selected harness authentication requires secret_ref")
         if self.auth_mode == HarnessAuthMode.EXISTING_SESSION and self.secret_ref:

@@ -326,15 +326,25 @@ removes promoted evidence.
 Operator setup, installation locations, CLI/API examples, extension authoring,
 and release status are documented in the [Toolbox guide](TOOLBOX.md).
 
-All native chat, mission, Codex, and Claude action tools share the same
-artifact-first runtime. OCI stdout/stderr, generated files, optional parsed
-values, and MCP content blocks are stored as immutable content-addressed
-artifacts. Models receive only a compact `nebula.tool-result/v2` receipt and can
-inspect relevant evidence through bounded, redacted `tool_output.search` and
-`tool_output.read` excerpts. Gateway-only harnesses also receive bounded
-`workspace.search` and `workspace.read`; vendor shell and file-execution tools
-are disabled. Execution and artifact-retrieval calls use independent durable
-budgets.
+All Nebula-assigned action tools used by native chat, missions, Codex, and
+Claude share the same artifact-first runtime. OCI stdout/stderr, generated
+files, optional parsed values, and MCP content blocks are stored as immutable
+content-addressed artifacts. Models receive only a compact
+`nebula.tool-result/v2` receipt and can inspect relevant evidence through
+bounded, redacted `tool_output.search` and `tool_output.read` excerpts.
+Harnesses also receive bounded `workspace.search` and `workspace.read`.
+Execution and artifact-retrieval calls use independent durable budgets.
+
+Harness profiles may opt into a fail-closed set of vendor-native capabilities.
+The supported set includes isolated scratch-workspace access, an isolated
+shell, web research, installed skills, and subagents; Codex profiles may also
+enable browser, computer-use, and image-generation surfaces, while Claude
+profiles may enable web fetch. The exact policy is frozen when a session starts.
+Local native actions require Nebula approval and become durable `ToolCall`
+records. They never receive the engagement workspace or replace scoped Toolbox
+execution against engagement targets. Claude uses an explicit built-in-tool
+list plus a `PreToolUse` gate; Codex receives per-thread feature, sandbox,
+approval, web, and environment policy.
 
 Selected MCP profiles are available to native and harness chat and missions.
 Their tool schemas, policy, and identity are frozen into durable session/run
@@ -343,7 +353,9 @@ gateway; upstream servers are never passed directly to a vendor harness. Core
 retains credentials and approval, scope, privacy, idempotency, and evidence
 enforcement, captures every upstream result, namespaces duplicate tool names,
 and revokes gateway access when the session closes. Managed Codex configuration
-is per thread and does not alter global Codex settings.
+is per thread and does not alter global Codex settings. Vendor-native web or
+interactive results remain vendor results rather than Nebula evidence until an
+operator explicitly promotes relevant material.
 
 Executable tools are disabled unless all of these are present:
 

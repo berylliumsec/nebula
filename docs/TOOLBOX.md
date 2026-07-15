@@ -141,8 +141,10 @@ hard-coded schemas:
 | `environment.shell_network` | Run full Bash through broker-pinned egress | Scoped |
 
 Every agent runtime also receives `tool_output.search` and `tool_output.read`.
-Gateway-only Codex and Claude sessions receive bounded `workspace.search` and
-`workspace.read` instead of vendor-native shell or file tools. Artifact searches
+Codex and Claude sessions receive bounded `workspace.search` and
+`workspace.read`. A harness profile may separately opt into vendor-native tools,
+but native shell and file access is confined to an isolated scratch workspace;
+engagement-target execution still uses the capabilities above. Artifact searches
 are independently budgeted (200 per mission and 20 per chat turn by default), so
 an agent can continue investigating prior evidence after exhausting its active
 execution-call budget. Excerpts are line-numbered, redacted, capped at 8 KiB,

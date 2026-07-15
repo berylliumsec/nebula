@@ -28,11 +28,13 @@ from nebula.v3.domain import (
     Engagement,
     HarnessCapabilities,
     HarnessKind,
+    HarnessNativeCapabilities,
     HarnessProfile,
     HarnessSession,
     HarnessSessionStatus,
     HarnessTurn,
     HarnessTurnStatus,
+    HarnessWorkspaceAccess,
     KnowledgeSource,
     McpApprovalMode,
     McpAuthMode,
@@ -288,6 +290,59 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         assert adapter.connections[0].closed is True
 
     asyncio.run(scenario())
+
+
+def test_harness_session_freezes_native_capabilities(tmp_path):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    configured = HarnessNativeCapabilities(
+        workspace_access=HarnessWorkspaceAccess.READ,
+        web_search=True,
+        subagents=True,
+    )
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {"native_capabilities": configured.model_dump(mode="json")},
+        expected_revision=profile.revision,
+    )
+    session = runtime.create_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+    )
+
+    store.update(
+        HarnessProfile,
+        profile.id,
+        {"native_capabilities": HarnessNativeCapabilities().model_dump(mode="json")},
+        expected_revision=profile.revision,
+    )
+
+    assert session.metadata["native_capabilities"] == configured.model_dump(mode="json")
+
+
+def test_harness_profiles_reject_unsupported_or_secret_bearing_native_tools():
+    with pytest.raises(ValueError, match="web_fetch is Claude-only"):
+        HarnessProfile(
+            name="Codex invalid",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            native_capabilities={"web_fetch": True},
+        )
+    with pytest.raises(ValueError, match="existing-session authentication"):
+        HarnessProfile(
+            name="Claude secret shell",
+            kind=HarnessKind.CLAUDE_AGENT_SDK,
+            auth_mode="secret_ref",
+            secret_ref="env:ANTHROPIC_API_KEY",
+            native_capabilities={"shell": True},
+        )
+    with pytest.raises(ValueError, match="do not support browser"):
+        HarnessProfile(
+            name="Claude browser",
+            kind=HarnessKind.CLAUDE_AGENT_SDK,
+            native_capabilities={"browser": True},
+        )
 
 
 def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path):
@@ -846,6 +901,95 @@ def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
             ),
         )
         assert (await exact_deny.decision).allowed is False
+
+    asyncio.run(scenario())
+
+
+def test_native_command_policy_requires_profile_capability_and_exact_approval(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        profile = store.update(
+            HarnessProfile,
+            profile.id,
+            {
+                "native_capabilities": HarnessNativeCapabilities(
+                    workspace_access=HarnessWorkspaceAccess.READ,
+                    shell=True,
+                ).model_dump(mode="json")
+            },
+            expected_revision=profile.revision,
+        )
+        _, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Use isolated shell",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        ticket = await runtime._request_permission(
+            turn.id,
+            HarnessPermissionRequest(
+                vendor_request_id="native-shell-1",
+                category="command",
+                vendor_name="item/commandExecution/requestApproval",
+                arguments={"command": "pwd", "cwd": "."},
+                annotations={"vendor_item_id": "codex-item-1"},
+            ),
+        )
+        approval = store.get(Approval, ticket.approval_id or "")
+        assert approval.risk_class == RiskClass.LOCAL_READ
+        assert approval.exact_request["arguments"] == {
+            "command": "pwd",
+            "cwd": ".",
+        }
+        assert approval.exact_request["argument_editing"] is False
+        decided = store.update(
+            Approval,
+            approval.id,
+            {"status": ApprovalStatus.APPROVED, "decided_by": "operator"},
+            expected_revision=approval.revision,
+        )
+        await runtime.resolve_approval(decided)
+        assert (await ticket.decision).allowed is True
+
+        session = store.get(HarnessSession, turn.harness_session_id)
+        started = runtime._record_tool_event(
+            turn,
+            session,
+            HarnessEvent(
+                type="tool_started",
+                server_id="codex",
+                tool_name="commandExecution",
+                payload={"id": "codex-item-1", "command": "pwd"},
+            ),
+        )
+        completed = runtime._record_tool_event(
+            turn,
+            session,
+            HarnessEvent(
+                type="tool_completed",
+                server_id="codex",
+                tool_name="commandExecution",
+                payload={
+                    "id": "codex-item-1",
+                    "status": "completed",
+                    "output": "scratch workspace",
+                },
+            ),
+        )
+        assert started.tool_call_id == ticket.tool_call_id
+        assert completed.tool_call_id == ticket.tool_call_id
+        native_call = store.get(ToolCall, ticket.tool_call_id or "")
+        assert native_call.status == ToolCallStatus.COMPLETE
+        assert native_call.result == "scratch workspace"
+
+        frozen = HarnessNativeCapabilities.model_validate(
+            session.metadata["native_capabilities"]
+        )
+        assert frozen.shell is True
+        assert frozen.workspace_access == HarnessWorkspaceAccess.READ
 
     asyncio.run(scenario())
 

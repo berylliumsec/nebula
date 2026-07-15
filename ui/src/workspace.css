@@ -223,6 +223,13 @@
 .provider-dialog .provider-consent span { display: flex; flex-direction: column; gap: 3px; }
 .provider-dialog .provider-consent strong { color: var(--text); font-size: 11px; }
 .provider-dialog .provider-consent small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.provider-capability-policy { margin-top: 10px; padding: 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
+.provider-capability-policy summary { cursor: pointer; color: var(--text); font-size: 12px; font-weight: 600; }
+.provider-capability-policy[open] { display: grid; gap: 8px; }
+.provider-capability-policy label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
+.provider-capability-policy .provider-consent { display: flex; align-items: flex-start; flex-direction: row; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); }
+.provider-capability-policy .provider-consent input { width: 15px; min-height: 15px; margin-top: 2px; }
+.provider-capability-policy .provider-consent span { display: flex; flex-direction: column; gap: 2px; }
 .provider-dialog-note, .form-error { margin: 0; font-size: .82rem; line-height: 1.45; }
 .provider-dialog-note { color: var(--muted); }
 .form-error { color: var(--red); }

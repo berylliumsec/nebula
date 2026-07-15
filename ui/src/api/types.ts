@@ -867,10 +867,23 @@ export interface HarnessProfile {
   enabled: boolean;
   localOnly: boolean;
   permitsSensitiveData: boolean;
+  nativeCapabilities: HarnessNativeCapabilities;
   healthy?: boolean;
   version?: string;
   detail?: string;
   revision: number;
+}
+
+export interface HarnessNativeCapabilities {
+  workspaceAccess: "none" | "read" | "write";
+  shell: boolean;
+  webSearch: boolean;
+  webFetch: boolean;
+  browser: boolean;
+  computerUse: boolean;
+  imageGeneration: boolean;
+  skills: boolean;
+  subagents: boolean;
 }
 
 export interface McpToolProfile {

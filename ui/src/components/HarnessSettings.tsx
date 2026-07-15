@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Bot, Network, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, X } from "lucide-react";
-import type { HarnessProfile, McpServerProfile } from "../api/types";
+import type { HarnessNativeCapabilities, HarnessProfile, McpServerProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
@@ -26,6 +26,15 @@ export function HarnessSettings() {
   const [harnessSessionCredential, setHarnessSessionCredential] = useState(false);
   const [harnessLocalOnly, setHarnessLocalOnly] = useState(false);
   const [harnessSensitiveData, setHarnessSensitiveData] = useState(false);
+  const [nativeWorkspaceAccess, setNativeWorkspaceAccess] = useState<"none" | "read" | "write">("none");
+  const [nativeShell, setNativeShell] = useState(false);
+  const [nativeWebSearch, setNativeWebSearch] = useState(false);
+  const [nativeWebFetch, setNativeWebFetch] = useState(false);
+  const [nativeBrowser, setNativeBrowser] = useState(false);
+  const [nativeComputerUse, setNativeComputerUse] = useState(false);
+  const [nativeImageGeneration, setNativeImageGeneration] = useState(false);
+  const [nativeSkills, setNativeSkills] = useState(false);
+  const [nativeSubagents, setNativeSubagents] = useState(false);
   const [mcpName, setMcpName] = useState("");
   const [mcpTransport, setMcpTransport] = useState<McpServerProfile["transport"]>("stdio");
   const [command, setCommand] = useState("");
@@ -78,6 +87,15 @@ export function HarnessSettings() {
     setHarnessSessionCredential(false);
     setHarnessLocalOnly(profile?.localOnly ?? false);
     setHarnessSensitiveData(profile?.permitsSensitiveData ?? false);
+    setNativeWorkspaceAccess(profile?.nativeCapabilities.workspaceAccess ?? "none");
+    setNativeShell(profile?.nativeCapabilities.shell ?? false);
+    setNativeWebSearch(profile?.nativeCapabilities.webSearch ?? false);
+    setNativeWebFetch(profile?.nativeCapabilities.webFetch ?? false);
+    setNativeBrowser(profile?.nativeCapabilities.browser ?? false);
+    setNativeComputerUse(profile?.nativeCapabilities.computerUse ?? false);
+    setNativeImageGeneration(profile?.nativeCapabilities.imageGeneration ?? false);
+    setNativeSkills(profile?.nativeCapabilities.skills ?? false);
+    setNativeSubagents(profile?.nativeCapabilities.subagents ?? false);
     setError(undefined);
     setHarnessDialog(true);
   };
@@ -109,6 +127,17 @@ export function HarnessSettings() {
         privacy: {
           local_only: harnessLocalOnly,
           permits_sensitive_data: harnessSensitiveData,
+        },
+        native_capabilities: {
+          workspace_access: nativeWorkspaceAccess,
+          shell: nativeShell,
+          web_search: nativeWebSearch,
+          web_fetch: kind === "claude_agent_sdk" && nativeWebFetch,
+          browser: kind === "codex_app_server" && nativeBrowser,
+          computer_use: kind === "codex_app_server" && nativeComputerUse,
+          image_generation: kind === "codex_app_server" && nativeImageGeneration,
+          skills: nativeSkills,
+          subagents: nativeSubagents,
         },
       };
       if (editingHarness) await api.updateHarness(editingHarness.id, payload, editingHarness.revision);
@@ -207,6 +236,26 @@ export function HarnessSettings() {
     } finally { setBusy(undefined); }
   };
 
+  const updateNativeCapabilities = (
+    profile: HarnessProfile,
+    changes: Partial<HarnessNativeCapabilities>,
+  ) => {
+    const capabilities = { ...profile.nativeCapabilities, ...changes };
+    return updateHarness(profile, {
+      native_capabilities: {
+        workspace_access: capabilities.workspaceAccess,
+        shell: capabilities.shell,
+        web_search: capabilities.webSearch,
+        web_fetch: profile.kind === "claude_agent_sdk" && capabilities.webFetch,
+        browser: profile.kind === "codex_app_server" && capabilities.browser,
+        computer_use: profile.kind === "codex_app_server" && capabilities.computerUse,
+        image_generation: profile.kind === "codex_app_server" && capabilities.imageGeneration,
+        skills: capabilities.skills,
+        subagents: capabilities.subagents,
+      },
+    });
+  };
+
   return <>
     <section className="settings-section" id="harness-settings">
       <div className="section-heading"><div><h2>Agent harnesses</h2><p>Stateful Codex and Claude runtimes shared by chat and missions.</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add harness</button></div>
@@ -215,6 +264,17 @@ export function HarnessSettings() {
         <header><span className={`status-dot ${profile.enabled ? profile.healthy ? "healthy" : "warning" : "unavailable"}`} /><div><small>{profile.kind === "codex_app_server" ? "Codex App Server" : "Claude Agent SDK"}</small><h3>{profile.name}</h3></div></header>
         <p>{profile.detail ?? `${profile.connectionMode} · ${profile.transport}${profile.transport === "websocket" ? " · experimental" : ""}`}</p>
         <dl><div><dt>Model</dt><dd>{profile.defaultModel ?? "Selected per session"}</dd></div><div><dt>Auth</dt><dd>{profile.authMode === "existing_session" ? "Existing local sign-in" : "Secret-backed · configured"}</dd></div><div><dt>Privacy</dt><dd>{profile.localOnly ? "Local runtime" : profile.permitsSensitiveData ? "Cloud data allowed with confirmation" : "Text only"}</dd></div><div><dt>Version</dt><dd>{profile.version ?? "Not checked"}</dd></div></dl>
+        <details className="provider-capability-policy">
+          <summary>Vendor-native capabilities</summary>
+          <p className="provider-dialog-note">Opt-in capabilities are frozen when a new harness session starts. Target actions still use Nebula Toolbox.</p>
+          <label>Scratch workspace<select value={profile.nativeCapabilities.workspaceAccess} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { workspaceAccess: event.target.value as HarnessNativeCapabilities["workspaceAccess"] })}><option value="none">Disabled</option><option value="read">Read only</option><option value="write">Read and write</option></select></label>
+          <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.shell} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { shell: event.target.checked })} /><span><strong>Isolated shell</strong><small>Scratch-workspace commands with Nebula approval.</small></span></label>
+          <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.webSearch} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { webSearch: event.target.checked })} /><span><strong>Web search</strong><small>Vendor-hosted research, never target scanning.</small></span></label>
+          {profile.kind === "claude_agent_sdk" && <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.webFetch} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { webFetch: event.target.checked })} /><span><strong>Web fetch</strong><small>Retrieve selected public research pages.</small></span></label>}
+          {profile.kind === "codex_app_server" && <><label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.browser} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { browser: event.target.checked })} /><span><strong>Browser</strong><small>Browser-driven research with action approvals.</small></span></label><label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.computerUse} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { computerUse: event.target.checked })} /><span><strong>Computer use</strong><small>Interactive vendor computer-use surface.</small></span></label><label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.imageGeneration} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { imageGeneration: event.target.checked })} /><span><strong>Image generation</strong><small>Vendor-hosted analyst image generation.</small></span></label></>}
+          <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.skills} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { skills: event.target.checked })} /><span><strong>Installed skills</strong><small>Expose already-installed vendor skills.</small></span></label>
+          <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.subagents} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { subagents: event.target.checked })} /><span><strong>Subagents</strong><small>Delegated analysis in the bounded session.</small></span></label>
+        </details>
         <footer><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void api?.checkHarness(profile.id).then(reload).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_06", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Health check failed."); }).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === profile.id ? "spin" : undefined} size={14} /> Check</button><button className="icon-button subtle" aria-label={`Edit ${profile.name}`} type="button" onClick={() => openHarness(profile)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => void updateHarness(profile, { enabled: !profile.enabled })}>{profile.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${profile.name}`} type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void api?.deleteHarness(profile.id, profile.revision).then(reload).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_07", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></footer>
       </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex App Server or Claude Agent SDK when you want vendor-managed sessions.</p></div>}
     </section>

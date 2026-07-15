@@ -548,6 +548,17 @@ interface WireHarnessProfile extends WireEntity {
   default_model?: string | null;
   enabled: boolean;
   privacy?: { local_only?: boolean; permits_sensitive_data?: boolean };
+  native_capabilities?: {
+    workspace_access?: "none" | "read" | "write";
+    shell?: boolean;
+    web_search?: boolean;
+    web_fetch?: boolean;
+    browser?: boolean;
+    computer_use?: boolean;
+    image_generation?: boolean;
+    skills?: boolean;
+    subagents?: boolean;
+  };
   capabilities?: { checked_at?: string | null; harness_version?: string | null; protocol_version?: string | null; detail?: string | null };
 }
 
@@ -1892,6 +1903,17 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     enabled: value.enabled,
     localOnly: value.privacy?.local_only === true,
     permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
+    nativeCapabilities: {
+      workspaceAccess: value.native_capabilities?.workspace_access ?? "none",
+      shell: value.native_capabilities?.shell === true,
+      webSearch: value.native_capabilities?.web_search === true,
+      webFetch: value.native_capabilities?.web_fetch === true,
+      browser: value.native_capabilities?.browser === true,
+      computerUse: value.native_capabilities?.computer_use === true,
+      imageGeneration: value.native_capabilities?.image_generation === true,
+      skills: value.native_capabilities?.skills === true,
+      subagents: value.native_capabilities?.subagents === true,
+    },
     healthy: Boolean(value.capabilities?.checked_at && !value.capabilities?.detail),
     version: value.capabilities?.harness_version ?? value.capabilities?.protocol_version ?? undefined,
     detail: value.capabilities?.detail ?? undefined,

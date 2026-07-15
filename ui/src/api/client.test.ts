@@ -1249,6 +1249,12 @@ describe("ApiClient", () => {
         default_model: "gpt-test",
         enabled: true,
         privacy: { local_only: false, permits_sensitive_data: true },
+        native_capabilities: {
+          workspace_access: "read",
+          shell: true,
+          web_search: true,
+          subagents: true,
+        },
         capabilities: { checked_at: entity.updated_at, harness_version: "0.144.0" },
       }]), { status: 200 });
       if (path.endsWith("/mcp-servers")) return new Response(JSON.stringify([{
@@ -1303,7 +1309,17 @@ describe("ApiClient", () => {
       allowCloudToolResults: true,
     });
 
-    expect(harness).toMatchObject({ version: "0.144.0", localOnly: false, permitsSensitiveData: true });
+    expect(harness).toMatchObject({
+      version: "0.144.0",
+      localOnly: false,
+      permitsSensitiveData: true,
+      nativeCapabilities: {
+        workspaceAccess: "read",
+        shell: true,
+        webSearch: true,
+        subagents: true,
+      },
+    });
     expect(server).toMatchObject({ required: true, tools: [{ name: "read_file", readOnly: true }] });
     expect(session).toMatchObject({ harnessProfileId: "harness-1", mcpServerIds: ["mcp-1"] });
     expect(run).toMatchObject({ backend: "harness", harnessSessionId: "session-1" });
