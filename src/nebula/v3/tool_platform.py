@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .diagnostics import gather_diagnostic, record_caught_exception
+from .diagnostics import gather_diagnostic, record_caught_exception, record_diagnostic
 
 import asyncio
 import hashlib
@@ -424,14 +424,27 @@ class ToolPlatform:
         for installation in self.store.list_entities(ToolPackInstallation, limit=1_000):
             try:
                 manifest = self.manifests.get(installation.manifest_digest)
-                specs = manifest.tool_specs(self._installation_platform(installation))
+                specs = manifest.tool_specs(
+                    self._installation_platform(installation),
+                    manifest_digest_value=installation.manifest_digest,
+                )
             except Exception as exc:
-                record_caught_exception(
+                error_id = record_diagnostic(
+                    "error",
                     "toolbox",
-                    "toolbox.tool_platform.caught_failure_003",
-                    "A handled toolbox operation raised an exception.",
-                    exc,
-                    stage="tool_platform",
+                    "toolbox.manifest.load_failed",
+                    "An installed tool pack's immutable manifest could not be loaded.",
+                    outcome="failure",
+                    stage="manifest-load",
+                    retryable=False,
+                    safe_failure_cause=(
+                        "The installed tool pack manifest failed local integrity or schema validation."
+                    ),
+                    exception=exc,
+                    metadata={
+                        "entity_id": installation.id,
+                        "digest": installation.manifest_digest,
+                    },
                 )
                 result.append(
                     {
@@ -444,6 +457,7 @@ class ToolPlatform:
                         "requires_approval": False,
                         "available": False,
                         "unavailable_reason": str(exc),
+                        "error_id": error_id,
                     }
                 )
                 continue

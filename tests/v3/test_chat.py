@@ -183,6 +183,14 @@ def test_local_chat_retrieves_only_its_engagement_and_persists(tmp_path, monkeyp
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     service = ChatService(store)
+    retrieval_queries: list[str] = []
+    retrieve = service._retrieve
+
+    def capture_retrieval_queries(engagement_id, queries, **kwargs):
+        retrieval_queries.extend(queries)
+        return retrieve(engagement_id, queries, **kwargs)
+
+    monkeypatch.setattr(service, "_retrieve", capture_retrieval_queries)
 
     prepared = service.prepare(
         ChatCompletionRequest(
@@ -199,6 +207,11 @@ def test_local_chat_retrieves_only_its_engagement_and_persists(tmp_path, monkeyp
     assert retrieval_request.metadata["operation"] == "agentic_knowledge_retrieval"
     assert retrieval_request.messages == [
         chat_module.ModelMessage(role="user", content="What port is relevant?")
+    ]
+    assert retrieval_queries == [
+        "What port is relevant?",
+        "relevant service port",
+        "TLS HTTPS listener",
     ]
     final_request = provider.requests[-1]
     instructions = final_request.instructions or ""
@@ -248,6 +261,12 @@ def test_retrieval_agent_falls_back_to_original_query_on_invalid_plan(
 
     provider.complete = invalid_retrieval_plan  # type: ignore[method-assign]
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    diagnostics = []
+    monkeypatch.setattr(
+        chat_module,
+        "record_diagnostic",
+        lambda *args, **kwargs: diagnostics.append((args, kwargs)),
+    )
 
     prepared = ChatService(store).prepare(
         ChatCompletionRequest(
@@ -263,6 +282,18 @@ def test_retrieval_agent_falls_back_to_original_query_on_invalid_plan(
     )
 
     assert [citation.source_id for citation in prepared.citations] == ["source-a"]
+    [(args, fields)] = diagnostics
+    assert args[:3] == ("warning", "chat", "chat.retrieval.plan_fallback")
+    assert fields["outcome"] == "fallback"
+    assert fields["stage"] == "retrieval-planning"
+
+
+def test_retrieval_plan_normalizes_without_recursive_assignment_validation():
+    plan = chat_module._RetrievalPlan.model_validate(
+        {"queries": ["  TLS   listener ", "tls listener", " port 443 "]}
+    )
+
+    assert plan.queries == ["TLS listener", "port 443"]
 
 
 def test_chat_without_ready_knowledge_skips_retrieval_agent(tmp_path, monkeypatch):

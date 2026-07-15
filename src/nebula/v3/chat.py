@@ -6,7 +6,7 @@ can enable that bounded runtime but can never supply or broaden capabilities.
 
 from __future__ import annotations
 
-from .diagnostics import record_caught_exception
+from .diagnostics import record_caught_exception, record_diagnostic
 
 import asyncio
 import hashlib
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .domain import (
     Approval,
@@ -244,11 +244,12 @@ class _RetrievalPlan(NebulaModel):
 
     queries: list[str] = Field(min_length=1, max_length=4)
 
-    @model_validator(mode="after")
-    def queries_are_distinct_and_bounded(self) -> "_RetrievalPlan":
+    @field_validator("queries")
+    @classmethod
+    def queries_are_distinct_and_bounded(cls, queries: list[str]) -> list[str]:
         cleaned: list[str] = []
         seen: set[str] = set()
-        for query in self.queries:
+        for query in queries:
             query = " ".join(query.split()).strip()[:500]
             folded = query.casefold()
             if query and folded not in seen:
@@ -256,8 +257,7 @@ class _RetrievalPlan(NebulaModel):
                 cleaned.append(query)
         if not cleaned:
             raise ValueError("retrieval plan must contain a non-empty query")
-        self.queries = cleaned
-        return self
+        return cleaned
 
 
 @dataclass
@@ -1896,16 +1896,18 @@ class ChatService:
                 payload = re.sub(r"^```(?:json)?\s*|\s*```$", "", payload)
             plan = _RetrievalPlan.model_validate_json(payload)
         except Exception as exc:
-            record_caught_exception(
+            record_diagnostic(
+                "warning",
                 "chat",
-                "chat.chat.caught_failure_016",
-                "A handled chat operation raised an exception.",
-                exc,
-                stage="chat",
+                "chat.retrieval.plan_fallback",
+                "The retrieval planner returned an unusable plan; the original query will be used.",
+                outcome="fallback",
+                stage="retrieval-planning",
+                retryable=False,
+                safe_failure_cause="The retrieval plan could not be validated safely.",
+                exception=exc,
             )
-            logger.info(
-                "retrieval agent planning failed; using original query: %s", exc
-            )
+            logger.info("retrieval agent planning failed; using original query")
             return fallback
         return [
             query,

@@ -378,8 +378,13 @@ class ToolPackManifestV1(StrictModel):
             f"pack has no {platform} image for component {component}"
         )
 
-    def tool_specs(self, platform: str) -> list[ToolSpec]:
-        digest = manifest_digest(self)
+    def tool_specs(
+        self,
+        platform: str,
+        *,
+        manifest_digest_value: str | None = None,
+    ) -> list[ToolSpec]:
+        digest = manifest_digest_value or manifest_digest(self)
         result: list[ToolSpec] = []
         for tool in self.tools:
             parser_contract = tool.parser.model_dump(mode="json", exclude_none=True)
@@ -1089,13 +1094,19 @@ class ImmutableManifestStore:
             path.unlink(missing_ok=True)
             raise
 
-    def get(self, digest: str) -> ToolPackManifestV1:
+    def get_with_payload(self, digest: str) -> tuple[ToolPackManifestV1, bytes]:
+        """Load a manifest and the exact immutable bytes bound to its digest.
+
+        Older Nebula releases can serialize valid manifests differently as the
+        schema gains defaulted fields. The installation digest and publisher
+        signature remain bound to those original bytes, so validation must not
+        replace them with a round-trip through the current model.
+        """
+
         path = self.manifest_path(digest)
         try:
-            if path.stat().st_size > MAX_STORED_MANIFEST_BYTES:
-                raise ToolPackInstallError("stored manifest exceeds its size limit")
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            manifest = ToolPackManifestV1.model_validate(payload)
+            with path.open("rb") as stream:
+                stored = stream.read(MAX_STORED_MANIFEST_BYTES + 2)
         except FileNotFoundError as exc:
             record_caught_exception(
                 "toolbox",
@@ -1114,8 +1125,41 @@ class ImmutableManifestStore:
                 stage="toolpacks",
             )
             raise ToolPackInstallError(f"stored manifest is invalid: {digest}") from exc
-        if manifest_digest(manifest) != digest:
+
+        if len(stored) > MAX_STORED_MANIFEST_BYTES + 1:
+            raise ToolPackInstallError("stored manifest exceeds its size limit")
+        candidates = [stored]
+        if stored.endswith(b"\n"):
+            # ImmutableManifestStore.put appends one storage delimiter that is
+            # not part of the content digest or publisher signature.
+            candidates.append(stored[:-1])
+        payload = next(
+            (
+                candidate
+                for candidate in candidates
+                if len(candidate) <= MAX_STORED_MANIFEST_BYTES
+                and hashlib.sha256(candidate).hexdigest() == digest
+            ),
+            None,
+        )
+        if payload is None:
             raise ToolPackInstallError(f"stored manifest digest mismatch: {digest}")
+
+        try:
+            manifest = ToolPackManifestV1.model_validate_json(payload)
+        except Exception as exc:
+            record_caught_exception(
+                "toolbox",
+                "toolbox.toolpacks.caught_failure_020",
+                "A handled toolbox operation raised an exception.",
+                exc,
+                stage="toolpacks",
+            )
+            raise ToolPackInstallError(f"stored manifest is invalid: {digest}") from exc
+        return manifest, payload
+
+    def get(self, digest: str) -> ToolPackManifestV1:
+        manifest, _payload = self.get_with_payload(digest)
         return manifest
 
     def get_signature(self, digest: str) -> SignatureEnvelope:
@@ -1203,10 +1247,6 @@ def build_tool_registry(
                 f"tool pack is not ready: {installation.publisher}/{installation.name}"
             )
         manifest = manifests.get(installation.manifest_digest)
-        if manifest_digest(manifest) != installation.manifest_digest:
-            raise ToolPackInstallError(
-                "installed manifest digest does not match storage"
-            )
         expected_locks = {
             tool.image: manifest.image_for(tool.image, platform).image
             for tool in manifest.tools
@@ -1221,7 +1261,12 @@ def build_tool_registry(
         if installation.image_locks != expected_locks:
             raise ToolPackInstallError("installed image locks do not match manifest")
         for tool, spec in zip(
-            manifest.tools, manifest.tool_specs(platform), strict=True
+            manifest.tools,
+            manifest.tool_specs(
+                platform,
+                manifest_digest_value=installation.manifest_digest,
+            ),
+            strict=True,
         ):
             try:
                 plugin: ToolPlugin
@@ -1418,7 +1463,10 @@ class ToolPackInstaller:
             installation = self._transition(
                 installation, ToolPackInstallationStatus.VERIFYING
             )
-            await self._verify_runtime(manifest)
+            await self._verify_runtime(
+                manifest,
+                manifest_digest_value=installation.manifest_digest,
+            )
             return self._transition(
                 installation,
                 ToolPackInstallationStatus.READY,
@@ -1453,9 +1501,14 @@ class ToolPackInstaller:
             installation, ToolPackInstallationStatus.VERIFYING
         )
         try:
-            manifest = self.manifests.get(installation.manifest_digest)
-            self._verify_installation_record(installation, manifest)
-            await self._verify_runtime(manifest)
+            manifest, payload = self.manifests.get_with_payload(
+                installation.manifest_digest
+            )
+            self._verify_installation_record(installation, manifest, payload)
+            await self._verify_runtime(
+                manifest,
+                manifest_digest_value=installation.manifest_digest,
+            )
             return self._transition(
                 installation,
                 ToolPackInstallationStatus.READY,
@@ -1483,7 +1536,12 @@ class ToolPackInstaller:
         installation = self.store.get(ToolPackInstallation, installation_id)
         return self._transition(installation, ToolPackInstallationStatus.DISABLED)
 
-    async def _verify_runtime(self, manifest: ToolPackManifestV1) -> None:
+    async def _verify_runtime(
+        self,
+        manifest: ToolPackManifestV1,
+        *,
+        manifest_digest_value: str | None = None,
+    ) -> None:
         for component, image in sorted(self._manifest_image_locks(manifest).items()):
             del component
             info = await self.runtime.inspect(image)
@@ -1492,7 +1550,13 @@ class ToolPackInstaller:
                 raise ToolPackInstallError(f"runtime image digest mismatch: {image}")
             if info.platform != self.platform:
                 raise ToolPackInstallError(f"runtime image platform mismatch: {image}")
-        specs = {spec.name: spec for spec in manifest.tool_specs(self.platform)}
+        specs = {
+            spec.name: spec
+            for spec in manifest.tool_specs(
+                self.platform,
+                manifest_digest_value=manifest_digest_value,
+            )
+        }
         for tool in manifest.tools:
             image = manifest.image_for(tool.image, self.platform).image
             spec = specs[tool.name]
@@ -1592,6 +1656,7 @@ class ToolPackInstaller:
         self,
         installation: ToolPackInstallation,
         manifest: ToolPackManifestV1,
+        manifest_payload: bytes,
     ) -> None:
         expected_path = self.manifests.manifest_path(installation.manifest_digest)
         if Path(installation.manifest_path) != expected_path:
@@ -1621,7 +1686,7 @@ class ToolPackInstaller:
             return
         signature = self.manifests.get_signature(installation.manifest_digest)
         key_id = self.verifier.verify_publisher(
-            canonical_manifest_json(manifest), signature, manifest.metadata.publisher
+            manifest_payload, signature, manifest.metadata.publisher
         )
         if not installation.publisher_key_id or key_id != installation.publisher_key_id:
             raise SignatureVerificationError(

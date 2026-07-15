@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 from datetime import timedelta
@@ -317,10 +318,92 @@ def test_immutable_manifest_store_detects_conflicts_and_tampering(tmp_path):
     assert storage.get(manifest_digest(manifest)) == manifest
 
     path.write_text("{}", encoding="utf-8")
-    with pytest.raises(ToolPackInstallError, match="invalid"):
+    with pytest.raises(ToolPackInstallError, match="digest mismatch"):
         storage.get(manifest_digest(manifest))
     with pytest.raises(ValueError):
         storage.manifest_path("../escape")
+
+
+def test_manifest_store_loads_byte_exact_legacy_serialization(tmp_path):
+    manifest = compile_manifest_yaml(manifest_source())
+    legacy_payload = json.dumps(
+        manifest.model_dump(mode="json", exclude_defaults=True),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    legacy_digest = hashlib.sha256(legacy_payload).hexdigest()
+    storage = ImmutableManifestStore(tmp_path / "packs")
+    path = storage.manifest_path(legacy_digest)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(legacy_payload + b"\n")
+
+    loaded, verified_payload = storage.get_with_payload(legacy_digest)
+
+    assert loaded == manifest
+    assert verified_payload == legacy_payload
+    assert canonical_manifest_json(loaded) != legacy_payload
+
+
+def test_signed_legacy_manifest_verification_uses_original_bytes(tmp_path):
+    private, keyring = signing_material()
+    manifest = compile_manifest_yaml(manifest_source())
+    service = ToolPackInstaller(
+        store=NebulaStore(Database(tmp_path / "signed-legacy.db")),
+        manifests=ImmutableManifestStore(tmp_path / "packs"),
+        runtime=FakeRuntime(),
+        runtime_profile_id="runner-1",
+        platform="linux/amd64",
+        verifier=keyring,
+    )
+    installed = asyncio.run(
+        service.install(
+            manifest,
+            source="catalog",
+            signature=envelope(private, canonical_manifest_json(manifest)),
+        )
+    )
+    legacy_payload = json.dumps(
+        manifest.model_dump(mode="json", exclude_defaults=True),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    legacy_digest = hashlib.sha256(legacy_payload).hexdigest()
+    legacy_path = service.manifests.manifest_path(legacy_digest)
+    legacy_path.write_bytes(legacy_payload + b"\n")
+    legacy_signature = envelope(private, legacy_payload)
+    service.manifests.signature_path(legacy_digest).write_text(
+        json.dumps(
+            legacy_signature.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    installed = service.store.update(
+        ToolPackInstallation,
+        installed.id,
+        {
+            "manifest_digest": legacy_digest,
+            "manifest_path": str(legacy_path),
+        },
+        expected_revision=installed.revision,
+    )
+
+    verified = asyncio.run(service.verify(installed.id))
+    registry = build_tool_registry(
+        [verified],
+        platform="linux/amd64",
+        manifests=service.manifests,
+    )
+
+    assert verified.status == ToolPackInstallationStatus.READY
+    assert verified.manifest_digest == legacy_digest
+    assert registry.get("sample.query").spec.manifest_digest == legacy_digest
 
 
 class FakeRuntime:
