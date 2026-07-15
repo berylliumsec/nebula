@@ -143,6 +143,14 @@ export function SessionsPage() {
     params.set("view", next);
     setSearchParams(params, { replace: true });
   };
+  const openUnattachedChatView = () => {
+    setViewState("chat");
+    localStorage.setItem("nebula.workbench.view", "chat");
+    const params = new URLSearchParams(searchParams);
+    params.set("view", "chat");
+    params.delete("session");
+    setSearchParams(params, { replace: true });
+  };
   const [mobileListOpen, setMobileListOpen] = useState(false);
   const [conversationPanelExpanded, setConversationPanelExpanded] = useState(
     () => localStorage.getItem("nebula.conversations.expanded") === "true",
@@ -169,10 +177,12 @@ export function SessionsPage() {
   const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [deletingSessionId, setDeletingSessionId] = useState<string>();
+  const [deletingAllSessions, setDeletingAllSessions] = useState(false);
   const [renamingSessionId, setRenamingSessionId] = useState<string>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameError, setRenameError] = useState<string>();
   const [sessionId, setSessionId] = useState("");
+  const [conversationOpen, setConversationOpen] = useState(Boolean(requestedSessionId));
   const [providerId, setProviderId] = useState("");
   const [runtimeKind, setRuntimeKind] = useState<"provider" | "harness">("provider");
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
@@ -240,6 +250,7 @@ export function SessionsPage() {
 
   useEffect(() => {
     if (!assistantDraft) return;
+    setConversationOpen(true);
     setDraft((current) => current.trim() ? current : "");
     globalThis.requestAnimationFrame?.(() => composerRef.current?.focus());
   }, [assistantDraft]);
@@ -370,6 +381,7 @@ export function SessionsPage() {
     setSending(false);
     setSessions([]);
     setSessionId("");
+    setConversationOpen(Boolean(assistantDraft || requestedSessionId));
     setHarnessSessionId("");
     setMessages([]);
     setDraft(assistantDraft ? "" : "");
@@ -421,22 +433,27 @@ export function SessionsPage() {
     if (selectedId) setSessionId(selectedId);
   };
 
-  const newConversation = () => {
+  const resetConversation = (open: boolean) => {
     abortRef.current?.abort();
     setSending(false);
     setSessionId("");
+    setConversationOpen(open);
     setHarnessSessionId("");
     setMessages([]);
     setDraft("");
     setChatError(undefined);
-    setView("chat");
     setMobileListOpen(false);
     setToolCards([]);
     setPendingResponse(undefined);
   };
 
+  const newConversation = () => {
+    resetConversation(true);
+    openUnattachedChatView();
+  };
+
   const deleteConversation = async (session: ChatSessionSummary) => {
-    if (!api || deletingSessionId) return;
+    if (!api || deletingSessionId || deletingAllSessions) return;
     const approved = await confirm({
       title: `Delete ${session.title}?`,
       message: "This permanently deletes the conversation, its messages, and its saved working memory.",
@@ -449,13 +466,47 @@ export function SessionsPage() {
     try {
       await api.deleteChatSession(session.id);
       setSessions((current) => current.filter((item) => item.id !== session.id));
-      if (sessionId === session.id) newConversation();
+      if (sessionId === session.id) {
+        resetConversation(false);
+        openUnattachedChatView();
+      }
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_06", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not delete the conversation.");
     } finally {
       setDeletingSessionId(undefined);
     }
+  };
+
+  const deleteAllConversations = async () => {
+    if (!api || deletingSessionId || deletingAllSessions || !sessions.length || sending || pendingResponse) return;
+    const targets = [...sessions];
+    const approved = await confirm({
+      title: "Delete all conversations?",
+      message: `This permanently deletes all ${targets.length} saved conversation${targets.length === 1 ? "" : "s"}, including every message and saved working memory.`,
+      confirmLabel: "Delete all conversations",
+      tone: "danger",
+    });
+    if (!approved) return;
+    setDeletingAllSessions(true);
+    setChatError(undefined);
+    const results = await Promise.allSettled(targets.map((session) => api.deleteChatSession(session.id)));
+    const deletedIds = new Set(targets.filter((_, index) => results[index]?.status === "fulfilled").map((session) => session.id));
+    const failures = results.filter((result) => result.status === "rejected");
+    setSessions((current) => current.filter((session) => !deletedIds.has(session.id)));
+    if (deletedIds.has(sessionId)) {
+      resetConversation(false);
+      openUnattachedChatView();
+    }
+    if (failures.length) {
+      for (const failure of failures) {
+        if (failure.status === "rejected") {
+          void logCaughtDiagnostic("interface.sessions_page.caught_failure_21", "One conversation could not be deleted during a bulk delete.", failure.reason, "sessions_page");
+        }
+      }
+      setChatError(`${failures.length} of ${targets.length} conversations could not be deleted. A conversation with an active response must finish before it can be deleted.`);
+    }
+    setDeletingAllSessions(false);
   };
 
   const toggleConversationPanel = () => {
@@ -525,6 +576,7 @@ export function SessionsPage() {
       return;
     }
     if (!api) return;
+    setConversationOpen(true);
     setLoadingHistory(true);
     setChatError(undefined);
     try {
@@ -627,6 +679,7 @@ export function SessionsPage() {
       const summary = ordered.find((session) => session.id === id);
       setSessions(ordered);
       setSessionId(id);
+      setConversationOpen(true);
       setMessages(history.map(persistedMessage));
       if (summary) {
         setRuntimeKind(summary.backend);
@@ -1089,10 +1142,10 @@ export function SessionsPage() {
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelExpanded ? " conversation-panel-expanded" : ""}`}>
         {view === "chat" && <aside className="session-list" aria-label="Conversations">
-          <header><div><span>Conversations</span><strong>{sessions.length} saved</strong></div><div className="session-list-header-actions"><button className="icon-button subtle" type="button" aria-label={conversationPanelExpanded ? "Collapse conversations panel" : "Expand conversations panel"} aria-pressed={conversationPanelExpanded} onClick={toggleConversationPanel}>{conversationPanelExpanded ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</button><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={!engagement} onClick={newConversation}><Plus size={16} /></button></div></header>
+          <header><div><span>Conversations</span><strong>{sessions.length} saved</strong></div><div className="session-list-header-actions"><button className="icon-button subtle" type="button" aria-label="Delete all conversations" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => void deleteAllConversations()}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button><button className="icon-button subtle" type="button" aria-label={conversationPanelExpanded ? "Collapse conversations panel" : "Expand conversations panel"} aria-pressed={conversationPanelExpanded} onClick={toggleConversationPanel}>{conversationPanelExpanded ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</button><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={!engagement} onClick={newConversation}><Plus size={16} /></button></div></header>
           <nav>
-            <button className={!sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
-            {sessions.map((session) => <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" type="button" onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><button className="icon-button subtle" type="button" aria-label={`Rename conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Rename ${session.title}`} onClick={() => startRenamingConversation(session)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete conversation ${session.title}`} disabled={deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Delete ${session.title}`} onClick={() => void deleteConversation(session)}>{deletingSessionId === session.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></>}</div>)}
+            <button className={conversationOpen && !sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
+            {sessions.map((session) => <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" type="button" onClick={() => void selectSession(session.id)}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><button className="icon-button subtle" type="button" aria-label={`Rename conversation ${session.title}`} disabled={deletingAllSessions || deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Rename ${session.title}`} onClick={() => startRenamingConversation(session)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete conversation ${session.title}`} disabled={deletingAllSessions || deletingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)))} title={session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : `Delete ${session.title}`} onClick={() => void deleteConversation(session)}>{deletingSessionId === session.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}</button></>}</div>)}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
         </aside>}
@@ -1123,6 +1176,8 @@ export function SessionsPage() {
             />
           ) : view !== "chat" ? (
             <div className="empty-state"><FolderOpen size={24} /><strong>Select a project</strong><p>Terminal, execution history, and workspace files are project-scoped.</p></div>
+          ) : !conversationOpen ? (
+            <div className="empty-state chat-empty-state"><MessageSquare size={24} /><strong>No conversation open</strong><p>Select a saved conversation or start a new chat when you are ready.</p><button className="button primary" type="button" disabled={!engagement} onClick={newConversation}><Plus size={15} /> Start new chat</button></div>
           ) : (
             <div className="chat-panel">
               <details className="chat-settings" open={!runtimeReady}>
@@ -1168,7 +1223,7 @@ export function SessionsPage() {
 
         {view === "chat" && <aside className="session-inspector" aria-label="Session inspector">
           <header><div><span>Context</span><strong>Session details</strong></div></header>
-          <dl><div><dt>Active operator</dt><dd>{activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat"}</dd></div><div><dt>Runtime</dt><dd>{runtimeKind === "harness" ? selectedHarness?.name ?? "Harness" : selectedProvider?.name ?? "Not selected"}</dd></div><div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl>
+          <dl><div><dt>Active operator</dt><dd>{activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{conversationOpen ? sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat" : "None selected"}</dd></div><div><dt>Runtime</dt><dd>{runtimeKind === "harness" ? selectedHarness?.name ?? "Harness" : selectedProvider?.name ?? "Not selected"}</dd></div><div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl>
           {sessionId && sessions.find((session) => session.id === sessionId)?.backend === "harness" && <button className="button primary full" type="button" disabled={sending} onClick={() => void continueAsMission()}><Bot size={15} /> Continue as mission</button>}
           <section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} source{knowledgeSources.length === 1 ? "" : "s"}</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section>
           <section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>{canUseTools ? `${assignedToolCount} assigned capabilities run sequentially through the scoped broker; approvals pause this response.` : toolboxUnavailableReason ?? "Toolbox is unavailable for this session."}</p></div></section>

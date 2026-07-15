@@ -503,6 +503,8 @@ kbd { font-size: 11px; }
 .session-inspector > header span, .session-inspector dt, .session-inspector dd, .session-inspector code { font-size: 11px; }
 .session-inspector > header strong, .session-inspector h3 { font-size: 12px; }
 .chat-panel { min-height: 594px; border-color: var(--border-soft); border-radius: 11px; }
+.chat-empty-state { min-height: 594px; }
+.chat-empty-state .button { margin-top: 16px; }
 .chat-settings { border-bottom: 1px solid var(--border-soft); background: var(--surface-muted); }
 .chat-settings > summary { min-height: 36px; padding: 10px 12px; color: var(--muted); font-size: 11px; font-weight: 650; cursor: pointer; }
 .chat-settings[open] > summary { border-bottom: 1px solid var(--border-soft); }

@@ -223,6 +223,30 @@ describe("Nebula workspace", () => {
     ]));
   });
 
+  it("opens Assistant without automatically opening a new chat", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Idle assistant", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions");
+
+    expect(await screen.findByRole("tab", { name: "Analyst chat" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("No conversation open")).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "Message the analyst assistant" })).not.toBeInTheDocument();
+    expect(screen.getByText("New conversation").closest("button")).not.toHaveClass("active");
+    expect(screen.getByText("None selected")).toBeVisible();
+    expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/chat/completions") && init?.method === "POST")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Start new chat" }));
+    expect(screen.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+    expect(screen.getByText("New conversation").closest("button")).toHaveClass("active");
+  });
+
   it("streams analyst chat with explicit provider/model selection and cloud knowledge consent", async () => {
     const entity = {
       created_at: "2026-07-12T10:00:00Z",
@@ -289,6 +313,7 @@ describe("Nebula workspace", () => {
 
     renderApp("/sessions");
     await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
     await user.click(screen.getByText("Assistant settings"));
     expect(await screen.findByRole("combobox", { name: "Chat provider" })).toHaveValue("provider-1");
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Chat model" })).toHaveValue("model-1"));
@@ -363,6 +388,7 @@ describe("Nebula workspace", () => {
     const user = userEvent.setup();
     renderApp("/sessions");
 
+    await user.click(await screen.findByRole("button", { name: "New chat" }));
     const assistantSettings = await screen.findByText("Assistant settings");
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Chat provider" })).toHaveValue("provider-1"));
     const assistantSettingsPanel = assistantSettings.closest("details");
@@ -554,6 +580,42 @@ describe("Nebula workspace", () => {
     await user.click(within(dialog).getByRole("button", { name: "Delete conversation" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Delete conversation Port review" })).not.toBeInTheDocument());
     expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "DELETE")).toBe(true);
+  });
+
+  it("deletes every saved Assistant conversation after one confirmation", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const chats = [
+      { ...entity, id: "session-1", engagement_id: "engagement-1", title: "First conversation", provider_profile_id: null, model: null, metadata: { message_count: 2 } },
+      { ...entity, id: "session-2", engagement_id: "engagement-1", title: "Second conversation", provider_profile_id: null, model: null, metadata: { message_count: 4 } },
+    ];
+    const deleted = new Set<string>();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Bulk delete review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      const sessionMatch = path.match(/\/chat-sessions\/(session-[12])$/);
+      if (sessionMatch && init?.method === "DELETE") {
+        deleted.add(sessionMatch[1]);
+        return new Response(null, { status: 204 });
+      }
+      if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify(chats.filter((chat) => !deleted.has(chat.id))), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions");
+
+    expect(await screen.findByText("First conversation")).toBeVisible();
+    expect(screen.getByText("Second conversation")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Delete all conversations" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete all conversations?" });
+    expect(dialog).toHaveTextContent("including every message and saved working memory");
+    await user.click(within(dialog).getByRole("button", { name: "Delete all conversations" }));
+
+    await waitFor(() => expect(screen.queryByText("First conversation")).not.toBeInTheDocument());
+    expect(screen.queryByText("Second conversation")).not.toBeInTheDocument();
+    expect(deleted).toEqual(new Set(["session-1", "session-2"]));
+    expect(screen.getByRole("button", { name: "Delete all conversations" })).toBeDisabled();
   });
 
   it("starts Terminal automatically inside the reviewed container boundary", async () => {
