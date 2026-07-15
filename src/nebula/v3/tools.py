@@ -50,6 +50,7 @@ from .sandbox import (
     SandboxWorkspaceAccess,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .redaction import redacted_display
 from .tool_results import (
     MAX_CAPTURE_BYTES,
     MAX_GENERATED_BYTES,
@@ -62,6 +63,7 @@ from .tool_results import (
     ToolTimingReceipt,
     ToolResultReceipt,
     ToolOutputService,
+    ToolObservation,
     WorkspaceOutputService,
     artifact_ref,
     bytes_are_searchable,
@@ -1108,6 +1110,61 @@ def _regular_files_beneath(root: Path) -> Iterator[Path]:
                 continue
 
 
+def _compact_tool_summary(
+    result: ToolExecutionResult, status: ToolResultStatus
+) -> str | None:
+    if status == ToolResultStatus.COMPLETED:
+        return None
+    nested_stderr = result.output.get("stderr")
+    # Only promote validation errors emitted by the trusted Toolbox wrapper.
+    # Command stderr remains artifact-first because it can contain target data.
+    if (
+        result.output.get("protocol") != "nebula.toolbox/v1"
+        or result.output.get("operation") != "error"
+        or result.output.get("command") != []
+        or not isinstance(nested_stderr, str)
+    ):
+        return None
+    source = nested_stderr
+    first_line = next(
+        (line.strip() for line in source.splitlines() if line.strip()), ""
+    )
+    if not first_line:
+        return None
+    return redacted_display(first_line)[:1_000]
+
+
+def _compact_tool_observations(result: ToolExecutionResult) -> list[ToolObservation]:
+    if result.output.get("tool") != "nmap" or result.exit_code != 0:
+        return []
+    nested_stdout = result.output.get("stdout")
+    source = result.stdout or (nested_stdout if isinstance(nested_stdout, str) else "")
+    observations: list[ToolObservation] = []
+    for line in source.splitlines():
+        match = re.match(
+            r"^\s*(?P<port>[0-9]{1,5})/(?P<protocol>tcp|udp|sctp)\s+"
+            r"(?P<state>[A-Za-z0-9_.-]{1,80})(?:\s+(?P<service>\S{1,120}))?",
+            line,
+        )
+        if match is None:
+            continue
+        port = int(match.group("port"))
+        if not 1 <= port <= 65_535:
+            continue
+        observations.append(
+            ToolObservation(
+                kind="network_port",
+                protocol=match.group("protocol"),
+                port=port,
+                state=match.group("state"),
+                service=match.group("service"),
+            )
+        )
+        if len(observations) >= 100:
+            break
+    return observations
+
+
 class StoreToolEvidenceRecorder:
     """Persist raw streams separately and return only a compact v2 receipt."""
 
@@ -1508,6 +1565,8 @@ class StoreToolEvidenceRecorder:
             tool_version=spec.version,
             status=status,
             exit_code=result.exit_code,
+            summary=_compact_tool_summary(result, status),
+            observations=_compact_tool_observations(result),
             timing=ToolTimingReceipt(
                 started_at=result.execution.get("started_at"),
                 completed_at=result.execution.get("completed_at"),

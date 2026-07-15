@@ -30,6 +30,7 @@ from .domain import (
     AgentRun,
     Engagement,
     EngagementToolAssignment,
+    RiskClass,
     RunnerIsolation,
     RunnerProfile as StoredRunnerProfile,
     ScopePolicy,
@@ -80,12 +81,16 @@ from .toolpacks import (
 from .kali_tool_inventory import TOOL_NAME_PATTERN
 from .toolparsers import SandboxParserExecutor
 from .tool_interfaces import (
+    COMMAND_SELECTOR_INPUT_SCHEMA,
+    COMMAND_SELECTOR_NAME,
     MAX_INTERFACE_CATALOG_BYTES,
     ToolInterfaceCatalog,
     load_interface_catalog,
     load_interface_catalog_file,
+    select_command_interface,
 )
 from .tools import (
+    InvocationAnalysisTool,
     StoreToolEvidenceRecorder,
     StoreToolLedger,
     ToolBroker,
@@ -1357,6 +1362,32 @@ class ToolPlatform:
             registry,
             output_service=ToolOutputService(self.store, self.artifact_store),
         )
+        if interface_catalogs_by_manifest:
+            catalogs = tuple(interface_catalogs_by_manifest.values())
+
+            async def select_interface(invocation: Any) -> dict[str, Any]:
+                return select_command_interface(catalogs, invocation.arguments)
+
+            registry.register(
+                InvocationAnalysisTool(
+                    ToolSpec(
+                        name=COMMAND_SELECTOR_NAME,
+                        description=(
+                            "Select a compact exact command interface from the signed "
+                            "Toolbox catalog before calling environment.run_*. This "
+                            "does not execute the command."
+                        ),
+                        input_schema=COMMAND_SELECTOR_INPUT_SCHEMA,
+                        output_schema={
+                            "type": "object",
+                            "additionalProperties": True,
+                        },
+                        risk_class=RiskClass.LOCAL_READ,
+                        budget_class="artifact_query",
+                    ),
+                    select_interface,
+                )
+            )
         specs = {spec.name: spec for spec in registry.specs()}
         network_tools = sorted(
             spec.name for spec in specs.values() if spec.network_access

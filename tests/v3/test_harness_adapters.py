@@ -25,6 +25,7 @@ from nebula.v3.harnesses import (
     AdapterOpenRequest,
     ClaudeAgentSdkAdapter,
     CodexAppServerAdapter,
+    CodexAppServerConnection,
     HarnessPermissionDecision,
     PermissionTicket,
     _CodexRpc,
@@ -189,6 +190,17 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
             engagement_id="eng-a",
             harness_profile_id=profile.id,
             model="gpt-test",
+            metadata={
+                "oci_tool_snapshot": {
+                    "specs": {
+                        "environment.run_network": {
+                            "description": "Run a scoped network command",
+                            "risk_class": "active_scan",
+                            "network_access": True,
+                        }
+                    }
+                }
+            },
         )
         connection = await adapter.open(
             AdapterOpenRequest(
@@ -225,7 +237,121 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert events[-1].message == "done"
         assert decisions[0].category == "command"
         assert rpc.responses == [(41, {"decision": "accept"})]
+        instructions = rpc.calls[1][1]["developerInstructions"]
+        assert "general Codex workspace agent" in instructions
+        assert (
+            "browser" in instructions and "capabilities are unavailable" in instructions
+        )
+        assert '"name":"environment.run_network"' in instructions
         _validate("CommandExecutionRequestApprovalResponse.json", rpc.responses[0][1])
+
+    asyncio.run(scenario())
+
+
+def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
+    class PhaseRpc(FixtureCodexRpc):
+        def __init__(self, server_name: str) -> None:
+            super().__init__()
+            self.server_name = server_name
+
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            self.calls.append((method, params))
+            if method != "turn/start":
+                return {}
+            events = [
+                {
+                    "method": "item/started",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "item": {
+                            "id": "commentary-1",
+                            "type": "agentMessage",
+                            "phase": "commentary",
+                        },
+                    },
+                },
+                {
+                    "method": "item/agentMessage/delta",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "itemId": "commentary-1",
+                        "delta": "I am checking the interface. ",
+                    },
+                },
+                {
+                    "id": 92,
+                    "method": "mcpServer/elicitation/request",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "serverName": self.server_name,
+                        "mode": "form",
+                        "requestedSchema": {"type": "object", "properties": {}},
+                    },
+                },
+                {
+                    "method": "item/started",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "item": {
+                            "id": "final-1",
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                        },
+                    },
+                },
+                {
+                    "method": "item/agentMessage/delta",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "itemId": "final-1",
+                        "delta": "The scan completed.",
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "turn": {"id": "turn-phase", "status": "completed"},
+                    },
+                },
+            ]
+            for event in events:
+                await self.events.put(event)
+            return {"turn": {"id": "turn-phase"}}
+
+    async def scenario() -> None:
+        rpc = PhaseRpc("external")
+
+        async def permission(_):
+            raise AssertionError("no permission request expected")
+
+        connection = CodexAppServerConnection(
+            rpc,
+            external_session_id="thread-phase",
+            permission_handler=permission,
+        )
+        events = [item async for item in connection.run_turn("scan", model="gpt-test")]
+
+        assert not any(item.type == "error" for item in events)
+        assert [item.delta for item in events if item.type == "message_delta"] == [
+            "The scan completed."
+        ]
+        assert events[-1].message == "The scan completed."
+        assert rpc.responses == [(92, {"action": "decline"})]
+
+        trusted_rpc = PhaseRpc("nebula")
+        trusted_connection = CodexAppServerConnection(
+            trusted_rpc,
+            external_session_id="thread-trusted",
+            permission_handler=permission,
+            approval_policy="never",
+            trusted_mcp_servers=frozenset({"nebula"}),
+        )
+        trusted_events = [
+            item async for item in trusted_connection.run_turn("scan", model="gpt-test")
+        ]
+        assert trusted_events[-1].message == "The scan completed."
+        assert trusted_rpc.responses == [(92, {"action": "accept", "content": {}})]
 
     asyncio.run(scenario())
 

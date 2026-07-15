@@ -2,6 +2,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 import nebula.v3.chat as chat_module
 from nebula.v3.chat import ChatCompletionRequest, ChatService
 from nebula.v3.domain import (
@@ -303,6 +305,78 @@ def test_environment_help_routing_schema_explains_command_path_semantics():
         "use [] for top-level command help"
         in schema["properties"]["command_path"]["description"]
     )
+
+
+def test_structured_environment_routing_requires_and_locks_selected_interface():
+    class Catalog:
+        digest = "c" * 64
+
+        def canonical_command_path(self, tool_name, command_path):
+            assert tool_name == "nmap"
+            assert command_path in ([], ["nmap"])
+            return []
+
+    selection = {
+        "schema": "nebula.toolbox.command-selection/v1",
+        "catalog_digest": "c" * 64,
+        "tool": {"name": "nmap", "risk_class": "active_scan"},
+        "command": {
+            "path": [],
+            "options": [
+                {"id": "st", "value": None},
+                {"id": "p", "value": {"type": "port"}},
+            ],
+            "positionals": [{"id": "targets"}],
+        },
+    }
+    spec = SimpleNamespace(name="environment.run_network")
+    components = SimpleNamespace(interface_catalogs_by_manifest={"m": Catalog()})
+    arguments = {
+        "tool": "nmap",
+        "invocation": {
+            "command_path": ["nmap"],
+            "options": [{"id": "st"}, {"id": "p", "value": "443"}],
+            "positionals": [{"id": "targets", "value": "192.0.2.1"}],
+        },
+    }
+
+    normalized = chat_module._normalize_routing_arguments(
+        components, spec, arguments, selected_interface=selection
+    )
+
+    assert normalized["invocation"]["command_path"] == []
+    assert normalized["invocation"]["options"][1]["value"] == 443
+    invalid = json.loads(json.dumps(arguments))
+    invalid["invocation"]["options"][0]["id"] = "invented"
+    with pytest.raises(Exception, match="absent from the selected interface"):
+        chat_module._normalize_routing_arguments(
+            components, spec, invalid, selected_interface=selection
+        )
+
+
+def test_command_selection_is_consumed_by_one_structured_execution():
+    selection = {
+        "schema": "nebula.toolbox.command-selection/v1",
+        "tool": {"name": "nmap", "risk_class": "active_scan"},
+    }
+    selected_turn = SimpleNamespace(
+        tool_history=[
+            {
+                "name": "environment.get_interface",
+                "status": "complete",
+                "provider_result": json.dumps(selection),
+            }
+        ]
+    )
+    consumed_turn = SimpleNamespace(
+        tool_history=[
+            *selected_turn.tool_history,
+            {"name": "environment.run_network", "status": "complete"},
+        ]
+    )
+
+    assert chat_module._unconsumed_command_selection(selected_turn) == selection
+    assert chat_module._unconsumed_command_selection(consumed_turn) is None
 
 
 def test_tool_final_synthesis_retrieves_help_from_the_observed_failure(

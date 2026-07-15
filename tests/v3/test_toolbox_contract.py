@@ -29,7 +29,12 @@ from nebula.v3.providers import (
     ProviderKind,
     ToolCall,
 )
-from nebula.v3.tool_interfaces import ToolInterfaceError, load_interface_catalog
+from nebula.v3.tool_interfaces import (
+    ToolInterfaceError,
+    load_interface_catalog,
+    select_command_interface,
+    selected_environment_capability,
+)
 from nebula.v3.tool_results import ToolResultReceipt, ToolResultStatus
 from nebula.v3.tools import ToolExecutionResult, ToolSpec
 
@@ -419,6 +424,32 @@ def test_catalog_canonicalizes_model_command_paths_without_ambiguous_guessing(
         catalog.canonical_command_path("gobuster", ["invented"])
     with pytest.raises(ToolInterfaceError, match="invalid command path"):
         catalog.canonical_command_path("gobuster", [{"not": "a subcommand"}])
+
+
+def test_core_selects_compact_exact_nmap_interface(tmp_path):
+    catalog_path = tmp_path / "tool-catalog.json"
+    write_test_catalog(catalog_path)
+    catalog = load_interface_catalog(catalog_path.read_bytes())
+
+    selected = select_command_interface(
+        (catalog,),
+        {
+            "tool": "nmap",
+            "command_path": ["nmap"],
+            "requested_options": ["-sT", "-n", "-Pn", "-p"],
+        },
+    )
+
+    assert selected["schema"] == "nebula.toolbox.command-selection/v1"
+    assert selected["command"]["path"] == []
+    assert [item["id"] for item in selected["command"]["options"]] == [
+        "st",
+        "n",
+        "pn",
+        "p",
+    ]
+    assert selected_environment_capability(selected) == "environment.run_network"
+    assert "help_documents" not in json.dumps(selected)
 
 
 def test_toolbox_mission_groups_structured_and_shell_capabilities():

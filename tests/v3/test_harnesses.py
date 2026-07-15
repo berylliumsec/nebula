@@ -68,6 +68,7 @@ from nebula.v3.policy import PolicyEngine
 from nebula.v3.sandbox import SandboxResult, SandboxRunner
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_platform import ChatToolComponents
+from nebula.v3.tool_interfaces import COMMAND_SELECTOR_NAME
 from nebula.v3.tool_results import ToolOutputService
 from nebula.v3.tools import (
     SandboxCommandTool,
@@ -612,6 +613,143 @@ def test_harness_gateway_exposes_frozen_assigned_oci_tools(tmp_path):
         )
         assert found["matches"]
         assert store.get(ChatTurn, chat_turn.id).tool_pack_digests == ["a" * 64]
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
+def test_harness_gateway_selects_and_locks_structured_command_interface(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+
+        class Catalog:
+            digest = "c" * 64
+            tools = {"nmap": {}}
+
+            def canonical_command_path(self, tool_name, command_path):
+                assert tool_name == "nmap"
+                assert command_path in ([], ["nmap"])
+                return []
+
+            def command(self, tool_name, command_path):
+                assert tool_name == "nmap" and command_path == []
+                return {
+                    "catalog_digest": self.digest,
+                    "tool": {
+                        "name": "nmap",
+                        "aliases": [],
+                        "version": "7.99",
+                        "executable": "/usr/bin/nmap",
+                        "category": "network",
+                        "risk_class": "active_scan",
+                        "description": "Network mapper",
+                        "synopsis": "nmap [options] target",
+                        "examples": ["nmap -sT target"],
+                        "notes": ["Use scoped targets"],
+                    },
+                    "command": {
+                        "path": [],
+                        "synopsis": "nmap [options] target",
+                        "positionals": [{"id": "targets"}],
+                        "options": [
+                            {
+                                "id": "st",
+                                "flags": ["-sT"],
+                                "usage": "-sT",
+                                "description": "TCP connect scan",
+                                "section": "scan",
+                            }
+                        ],
+                    },
+                }
+
+        spec = ToolSpec(
+            name="environment.run_network",
+            description="Run a scoped structured network command",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "tool": {"type": "string"},
+                    "invocation": {"type": "object"},
+                },
+                "required": ["tool", "invocation"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.ACTIVE_SCAN,
+        )
+        components = ChatToolComponents(
+            broker=object(),  # type: ignore[arg-type]
+            scope=ScopePolicy(engagement_id=engagement.id),
+            workspace=tmp_path,
+            specs={spec.name: spec},
+            tool_pack_digests=("a" * 64,),
+            interface_catalog_digests=("c" * 64,),
+            interface_catalogs_by_manifest={"a" * 64: Catalog()},  # type: ignore[dict-item]
+        )
+
+        class Platform:
+            store = runtime.store
+
+            def chat_components(self, **kwargs):
+                del kwargs
+                return components
+
+        runtime.bind_tool_platform(Platform())  # type: ignore[arg-type]
+        _, _, harness_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Run a connect scan",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        assert COMMAND_SELECTOR_NAME in {
+            item["name"] for item in runtime._gateway_catalog(session)["tools"]
+        }
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=harness_turn.id, connection=None, task=None
+        )
+        response = await runtime._gateway_call(
+            session,
+            COMMAND_SELECTOR_NAME,
+            {
+                "tool": "nmap",
+                "command_path": ["nmap"],
+                "requested_options": ["-sT"],
+            },
+        )
+        assert response["structuredContent"]["command"]["options"][0]["id"] == "st"
+
+        arguments = {
+            "tool": "nmap",
+            "invocation": {
+                "command_path": [],
+                "options": [{"id": "st"}],
+                "positionals": [{"id": "targets", "value": "192.0.2.1"}],
+            },
+        }
+        assert (
+            runtime._validate_gateway_command_selection(
+                session,
+                store.get(HarnessTurn, harness_turn.id),
+                "environment.run_network",
+                arguments,
+            )
+            is None
+        )
+        arguments["invocation"]["options"] = [{"id": "invented"}]
+        assert "absent from the selected interface" in str(
+            runtime._validate_gateway_command_selection(
+                session,
+                store.get(HarnessTurn, harness_turn.id),
+                "environment.run_network",
+                arguments,
+            )
+        )
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 

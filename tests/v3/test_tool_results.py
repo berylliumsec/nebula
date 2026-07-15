@@ -233,6 +233,36 @@ def test_raw_nmap_output_is_artifact_first_and_searchable(tmp_path: Path) -> Non
     )
 
 
+def test_receipt_includes_safe_nmap_port_observations(tmp_path: Path) -> None:
+    raw = b"PORT STATE SERVICE\n18080/tcp open unknown\n"
+
+    def parser(stdout, stderr, exit_code):
+        return {
+            "protocol": "nebula.toolbox/v1",
+            "tool": "nmap",
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": exit_code,
+        }
+
+    broker, _, _, _ = _broker(
+        tmp_path,
+        StreamingFixtureRunner(stdout=raw),
+        parser=parser,
+    )
+
+    result = _execute(broker, tmp_path)
+
+    assert result.receipt is not None
+    assert result.receipt.observations[0].model_dump() == {
+        "kind": "network_port",
+        "protocol": "tcp",
+        "port": 18080,
+        "state": "open",
+        "service": "unknown",
+    }
+
+
 @pytest.mark.parametrize(
     ("is_error", "expected"), [(False, "completed"), (True, "failed")]
 )
@@ -381,6 +411,7 @@ def test_failed_and_timed_out_execution_preserve_partial_output(
 
     assert result.receipt is not None
     assert result.receipt.status.value == expected
+    assert result.receipt.summary is None
     found = ToolOutputService(store, artifacts).search(
         engagement_id="eng-a",
         owner_id="run-a",
@@ -389,6 +420,31 @@ def test_failed_and_timed_out_execution_preserve_partial_output(
     )
     assert found["matches"]
     assert store.get(ToolCall, f"call-{expected}").status == ToolCallStatus.FAILED
+
+
+def test_receipt_promotes_only_trusted_wrapper_validation_error(tmp_path: Path) -> None:
+    def parser(stdout, stderr, exit_code):
+        del stdout
+        return {
+            "protocol": "nebula.toolbox/v1",
+            "operation": "error",
+            "command": [],
+            "stderr": stderr,
+            "exit_code": exit_code,
+        }
+
+    broker, _, _, _ = _broker(
+        tmp_path,
+        StreamingFixtureRunner(
+            stderr=b"ValueError: p must be an integer\n", exit_code=2
+        ),
+        parser=parser,
+    )
+
+    result = _execute(broker, tmp_path, call_id="call-wrapper-error")
+
+    assert result.receipt is not None
+    assert result.receipt.summary == "ValueError: p must be an integer"
 
 
 def test_cancellation_preserves_searchable_partial_output(tmp_path: Path) -> None:

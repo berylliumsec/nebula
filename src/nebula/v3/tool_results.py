@@ -90,6 +90,18 @@ class ToolTimingReceipt(BaseModel):
     duration_seconds: float | None = Field(default=None, ge=0)
 
 
+class ToolObservation(BaseModel):
+    """A small parser-derived fact safe to place directly in model context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["network_port"]
+    protocol: Literal["tcp", "udp", "sctp"]
+    port: int = Field(ge=1, le=65_535)
+    state: str = Field(min_length=1, max_length=80)
+    service: str | None = Field(default=None, max_length=120)
+
+
 class ToolResultReceipt(BaseModel):
     """The complete and deliberately compact model-facing action result."""
 
@@ -103,6 +115,8 @@ class ToolResultReceipt(BaseModel):
     tool_version: str
     status: ToolResultStatus
     exit_code: int | None = None
+    summary: str | None = Field(default=None, max_length=1_000)
+    observations: list[ToolObservation] = Field(default_factory=list, max_length=100)
     timing: ToolTimingReceipt = Field(default_factory=ToolTimingReceipt)
     artifacts: list[ToolArtifactRef] = Field(default_factory=list, max_length=12)
     truncated: bool = False
@@ -850,6 +864,7 @@ __all__ = [
     "ToolOutputService",
     "ToolParserReceipt",
     "ToolResultReceipt",
+    "ToolObservation",
     "ToolResultStatus",
     "ToolTimingReceipt",
     "WorkspaceOutputService",
