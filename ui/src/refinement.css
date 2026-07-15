@@ -824,7 +824,9 @@ kbd { font-size: 11px; }
 .settings-detail[data-section="advanced-settings"] { display: grid; gap: 30px; }
 .settings-detail[data-section="advanced-settings"] > .settings-section,
 .settings-detail[data-section="advanced-settings"] > .settings-bottom-grid { display: grid; }
-.settings-detail[data-section="advanced-settings"] > #setup-settings { display: none; }
+.settings-detail[data-section="advanced-settings"] > #setup-settings,
+.settings-detail[data-section="advanced-settings"] > #diagnostics-settings { display: none; }
+.settings-detail > .settings-section[hidden] { display: none !important; }
 .settings-bottom-grid { grid-template-columns: minmax(280px, .8fr) minmax(360px, 1.2fr); }
 .settings-section { margin-bottom: 0; scroll-margin-top: 74px; }
 .setup-overview { gap: 18px; }

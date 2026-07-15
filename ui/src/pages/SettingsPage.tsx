@@ -473,7 +473,7 @@ export function SettingsPage() {
         {setupError && <DiagnosticErrorNotice error={setupError} fallback="Setup could not complete the operation." />}
         {!setupStatus && workspaceState !== "starting" && <p className="setup-footnote">Setup details are unavailable. Core reports runner status: {health?.runner ?? "unknown"}.</p>}
       </section>
-      <DiagnosticsPanel />
+      <DiagnosticsPanel hidden={settingsSection !== "diagnostics-settings"} />
       <section className="settings-section" id="provider-settings">
         <div className="section-heading"><div><h2>Model providers</h2><p>Configured provider profiles and their declared capabilities.</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <DiagnosticErrorNotice error={providerActionError} fallback="The provider operation could not be completed." />}

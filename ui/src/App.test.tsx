@@ -147,11 +147,17 @@ describe("Nebula workspace", () => {
     expect(screen.queryByText(/Acme|Jordan|Gateway applicability/i)).not.toBeInTheDocument();
   });
 
-  it("reduces settings to setup and advanced views while preserving legacy hashes", async () => {
+  it("keeps diagnostics out of the advanced view while preserving legacy hashes", async () => {
     window.history.replaceState({}, "", "/settings#security-settings");
     const user = userEvent.setup();
     renderApp("/settings");
     expect(await screen.findByRole("link", { name: "Advanced settings" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "Model providers" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Diagnostics", hidden: true })).not.toBeVisible();
+
+    await user.click(screen.getByRole("link", { name: "Diagnostics settings and recent errors" }));
+    expect(screen.getByRole("heading", { name: "Diagnostics" })).toBeVisible();
+
     await user.click(screen.getByRole("link", { name: "Setup" }));
     expect(screen.getByRole("link", { name: "Setup" })).toHaveAttribute("aria-current", "page");
   });

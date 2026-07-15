@@ -65,7 +65,7 @@ export function DiagnosticsAvailabilityBanner() {
   );
 }
 
-export function DiagnosticsPanel() {
+export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) {
   const { api, workspaceState } = useWorkspace();
   const confirm = useConfirmation();
   const [settings, setSettings] = useState<DiagnosticSettings>();
@@ -275,7 +275,7 @@ export function DiagnosticsPanel() {
   };
 
   return (
-    <section className="settings-section diagnostics-panel" id="diagnostics-settings">
+    <section className="settings-section diagnostics-panel" id="diagnostics-settings" hidden={hidden}>
       <div className="section-heading">
         <div><h2>Diagnostics</h2><p>Privacy-preserving local logs. Errors are enabled by default; higher detail never includes project payloads.</p></div>
         <button className="button secondary" type="button" disabled={busy} onClick={() => void refresh()}><RefreshCw className={busy ? "spin" : undefined} size={15} /> Refresh</button>
