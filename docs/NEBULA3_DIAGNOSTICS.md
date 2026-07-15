@@ -113,11 +113,24 @@ uploads it automatically.
 
 ## Operator workflow and health
 
-Use **Settings → Diagnostics** to filter recent errors, inspect correlation and
-stage details, open the computed log directory, or confirm and export a support
-bundle. The open-folder command reveals only Nebula's computed directory; the
-webview cannot request an arbitrary path. When Core is unavailable, the native
-viewer still reads desktop-owned errors.
+Use **Settings → Diagnostics** to see live Core, Terminal-runtime, and diagnostic
+storage checks before reviewing historical failures. A retained failure does not
+mean that the subsystem is still unhealthy; only the **Current status** checks
+describe present health. Failure cards lead with the affected subsystem and
+operation, sanitized cause, retry classification, and a verified Nebula
+destination. Event codes, exception chains, sanitized stack locations, metadata,
+and correlation references remain available under **Technical details**.
+
+Links containing `?diagnostic=err_...` or `?diagnostic=req_...` select, expand,
+and focus the retained matching failure. If rotation has removed the record, the
+viewer says that the reference is no longer present instead of showing unrelated
+guidance. Settings, health, files, and failures load independently, so one
+unavailable source does not hide the remaining local evidence.
+
+The advanced section can configure logging detail, open the computed log
+directory, or confirm and export a support bundle. The open-folder command reveals
+only Nebula's computed directory; the webview cannot request an arbitrary path.
+When Core is unavailable, the native viewer still reads desktop-owned errors.
 
 `nebula-core doctor --json` and `/api/v1/health` report logger writability,
 active levels, disk use, last rotation, dropped-record count, and degraded

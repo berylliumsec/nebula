@@ -189,6 +189,18 @@ function exceptionType(value: unknown): string | undefined {
   return "NonErrorRejection";
 }
 
+function caughtFailureCause(value: unknown, status: number | undefined, cancelled: boolean): string {
+  if (cancelled) return "The operation ended through expected cancellation.";
+  if (status !== undefined && status < 500) return "The request was rejected safely.";
+  if (value instanceof Error && value.name === "TimeoutError") {
+    return "The operation exceeded its bounded time limit.";
+  }
+  if (value instanceof Error) {
+    return `The interface operation raised ${safeText(value.name || "Error", 128)}.`;
+  }
+  return "The interface operation failed with a non-Error rejection.";
+}
+
 function stackFrames(value: unknown): DiagnosticRecord["stack_frames"] {
   if (!(value instanceof Error) || !value.stack) return undefined;
   const frames = value.stack.split("\n").slice(1, 33).flatMap((raw) => {
@@ -405,6 +417,15 @@ export function logCaughtDiagnostic(
   const cancelled = classified?.name === "AbortError";
   const status = typeof classified?.status === "number" ? classified.status : undefined;
   const alreadyRecordedByCore = typeof classified?.errorId === "string";
+  const retryable = typeof classified?.retryable === "boolean"
+    ? classified.retryable
+    : cancelled
+      ? false
+      : status !== undefined && [408, 409, 425, 429].includes(status)
+        ? true
+        : classified?.name === "TimeoutError"
+          ? true
+          : undefined;
   const level: DiagnosticLevel = cancelled || alreadyRecordedByCore
     ? "debug"
     : status !== undefined && status < 500
@@ -425,7 +446,7 @@ export function logCaughtDiagnostic(
     ? classified.errorId
     : localErrorId ?? (typeof classified?.requestId === "string" ? classified.requestId : undefined);
   rememberDiagnosticErrorPresentation(reference, {
-    retryable: typeof classified?.retryable === "boolean" ? classified.retryable : undefined,
+    retryable,
     code: typeof classified?.code === "string" ? classified.code : undefined,
   });
   void logDiagnostic({
@@ -434,7 +455,8 @@ export function logCaughtDiagnostic(
     message: cancelled ? "An interface operation was cancelled." : message,
     outcome: cancelled ? "cancelled" : "failure",
     stage,
-    retryable: cancelled ? false : undefined,
+    retryable,
+    safeFailureCause: caughtFailureCause(error, status, cancelled),
     exception: error,
     requestId: typeof classified?.requestId === "string" ? classified.requestId : undefined,
     errorId: typeof classified?.errorId === "string" ? classified.errorId : localErrorId,

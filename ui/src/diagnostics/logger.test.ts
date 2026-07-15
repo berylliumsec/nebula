@@ -197,6 +197,8 @@ describe("interface diagnostics", () => {
     expect(body.events[0]).toMatchObject({
       level: "warning",
       request_id: "req_denied_123",
+      retryable: true,
+      safe_failure_cause: "The request was rejected safely.",
       metadata: { kind: "interface-error", http_status: 409 },
     });
     expect(body.events[0]).not.toHaveProperty("error_id");
@@ -225,5 +227,6 @@ describe("interface diagnostics", () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(body.events[0].error_id).toBe((failure as Error & { errorId: string }).errorId);
+    expect(body.events[0].safe_failure_cause).toBe("The interface operation raised Error.");
   });
 });

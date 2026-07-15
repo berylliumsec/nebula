@@ -117,6 +117,45 @@ async function installTruthfulCore(page: Page) {
         human_pty: "unavailable",
         container_terminal: "configured",
       };
+    } else if (path.endsWith("/diagnostics/settings")) {
+      body = {
+        schema: "nebula.diagnostics-settings/v1",
+        global_level: "error",
+        feature_levels: {},
+      };
+    } else if (path.endsWith("/diagnostics/files")) {
+      body = {
+        files: [{ name: "chat.log", size_bytes: 2048, modified_at: "2026-07-14T12:00:00Z" }],
+        health: {
+          schema: "nebula.diagnostics-status/v1",
+          writable: true,
+          degraded: false,
+          global_level: "error",
+          feature_levels: {},
+          disk_usage_bytes: 2048,
+          dropped_record_count: 0,
+        },
+      };
+    } else if (path.endsWith("/diagnostics/errors")) {
+      body = { errors: [{
+        schema: "nebula.diagnostic/v1",
+        timestamp: "2026-07-14T12:00:00Z",
+        sequence: 12,
+        level: "ERROR",
+        feature: "chat",
+        source: "core",
+        event_code: "chat.stream.failed",
+        message: "The assistant response stream stopped unexpectedly.",
+        safe_failure_cause: "The configured model provider stopped the stream.",
+        stage: "stream",
+        outcome: "failure",
+        retryable: true,
+        error_id: "err_preview_123",
+        request_id: "req_preview_123",
+        exception_type: "ProviderError",
+        stack_frames: [{ module: "chat", function: "stream", line: 42 }],
+        metadata: { component: "response_stream", provider: "local" },
+      }] };
     } else if (path.endsWith("/setup/status") || path.endsWith("/setup/runtime/refresh")) {
       body = {
         core: { status: "ready", detail: null },
@@ -311,6 +350,21 @@ test("primary navigation exposes only the five task destinations", async ({ page
   for (const stale of ["Sessions", "Missions", "Assets", "Evidence", "Knowledge"]) {
     await expect(navigation.getByRole("link", { name: stale, exact: true })).toHaveCount(0);
   }
+});
+
+test("Diagnostics explains and focuses a requested failure at every breakpoint", async ({ page }) => {
+  await openWorkspace(page, "/settings?diagnostic=err_preview_123#diagnostics-settings", "Settings");
+  await expect(page.getByRole("heading", { name: "Diagnostics", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Current status" })).toBeVisible();
+  await expect(page.getByText("Core is responding")).toBeVisible();
+  await expect(page.getByText("The configured model provider stopped the stream.")).toBeVisible();
+  await expect(page.getByText("Retry the original action.")).toBeVisible();
+  await expect(page.getByText("Showing requested failure")).toBeVisible();
+  await expect(page.locator(".diagnostic-failure-card.targeted")).toBeFocused();
+  await expect(page.locator(".diagnostic-technical-details dd", { hasText: "err_preview_123" })).toBeVisible();
+  expect(await page.locator(".diagnostics-panel").evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include(".diagnostics-panel").analyze();
+  expect(accessibility.violations).toEqual([]);
 });
 
 test("critical workspaces remain visually stable", async ({ page }, testInfo) => {

@@ -882,6 +882,29 @@ kbd { font-size: 11px; }
 .diagnostic-fatal > div { display: flex; justify-content: center; gap: 9px; }
 .diagnostic-reference { font-family: var(--font-mono); font-size: 12px; }
 .diagnostics-panel { gap: 16px; }
+.diagnostics-partial-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border-soft));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--yellow) 8%, var(--surface-raised));
+}
+.diagnostics-partial-warning > span { display: grid; gap: 3px; }
+.diagnostics-partial-warning small { color: var(--muted); }
+.diagnostics-current { display: grid; gap: 13px; padding: 17px; border: 1px solid var(--border-soft); border-radius: 12px; background: var(--surface-raised); }
+.diagnostics-status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.diagnostics-status-card { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 13px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-muted); }
+.diagnostics-status-card > svg { flex: 0 0 auto; margin-top: 2px; }
+.diagnostics-status-card > span { display: grid; min-width: 0; gap: 3px; }
+.diagnostics-status-card small { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.diagnostics-status-card strong { font-size: 12px; }
+.diagnostics-status-card p { margin: 0; color: var(--muted-strong); font-size: 10px; line-height: 1.45; }
+.diagnostics-status-card.healthy > svg { color: var(--green); }
+.diagnostics-status-card.attention > svg,
+.diagnostics-status-card.checking > svg { color: var(--yellow); }
+.diagnostics-status-card.unavailable > svg { color: var(--red); }
 .diagnostics-grid { display: grid; grid-template-columns: minmax(340px, 1.15fr) minmax(280px, .85fr); gap: 14px; }
 .diagnostics-settings-card,
 .diagnostics-health-card,
@@ -906,22 +929,52 @@ kbd { font-size: 11px; }
 .diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .diagnostics-errors-card > header { align-items: end; }
 .diagnostics-errors-card > header label { display: grid; gap: 4px; color: var(--muted); font-size: 10px; }
-.diagnostics-error-list { display: grid; max-height: 560px; gap: 7px; overflow: auto; }
-.diagnostics-error-list details { border: 1px solid var(--border-soft); border-radius: 9px; background: var(--surface-muted); }
-.diagnostics-error-list summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; }
-.diagnostics-error-list summary strong { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.diagnostics-error-list summary time { color: var(--muted); font-size: 10px; }
-.diagnostics-error-list details dl { padding: 0 12px 12px; }
+.diagnostic-target-notice { padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border-soft)); border-radius: 8px; background: color-mix(in srgb, var(--blue) 7%, var(--surface-muted)); color: var(--muted-strong); font-size: 11px; }
+.diagnostic-target-notice.missing { border-color: color-mix(in srgb, var(--yellow) 42%, var(--border-soft)); background: color-mix(in srgb, var(--yellow) 7%, var(--surface-muted)); }
+.diagnostic-target-notice code { color: var(--text-strong); }
+.diagnostics-error-list { display: grid; max-height: 720px; gap: 9px; padding: 1px; overflow: auto; }
+.diagnostic-failure-card { display: grid; gap: 12px; padding: 13px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-muted); outline: none; }
+.diagnostic-failure-card.targeted { border-color: color-mix(in srgb, var(--blue) 65%, var(--border-soft)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent); }
+.diagnostic-failure-card > header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 9px; }
+.diagnostic-failure-card > header > div { display: grid; min-width: 0; gap: 3px; }
+.diagnostic-failure-card > header small { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.diagnostic-failure-card h4 { margin: 0; color: var(--text-strong); font-size: 13px; line-height: 1.35; }
+.diagnostic-failure-card time { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.diagnostic-failure-explanation { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.diagnostic-failure-explanation > span { display: grid; align-content: start; gap: 4px; padding: 10px; border-radius: 8px; background: var(--surface-raised); }
+.diagnostic-failure-explanation small,
+.diagnostic-stack > small,
+.diagnostic-metadata > small { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.diagnostic-failure-explanation p { margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.45; }
+.diagnostic-failure-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.diagnostic-failure-actions .button { min-height: 30px; padding: 5px 9px; font-size: 10px; }
+.diagnostic-technical-details { border-top: 1px solid var(--border-soft); padding-top: 9px; }
+.diagnostic-technical-details > summary { cursor: pointer; color: var(--muted-strong); font-size: 10px; font-weight: 650; }
+.diagnostic-technical-details[open] > summary { margin-bottom: 11px; }
+.diagnostic-technical-details dl { padding: 0; }
+.diagnostic-stack,
+.diagnostic-metadata { display: grid; gap: 6px; margin-top: 11px; }
+.diagnostic-stack ol { display: grid; gap: 3px; margin: 0; padding-left: 22px; color: var(--muted); font-size: 10px; }
+.diagnostic-stack code { color: var(--text-strong); overflow-wrap: anywhere; }
+.diagnostic-metadata pre { max-height: 180px; margin: 0; padding: 9px; overflow: auto; border-radius: 7px; background: var(--surface-base); color: var(--muted-strong); font-size: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diagnostic-technical-details > .button { margin-top: 10px; }
 .diagnostic-level { padding: 3px 5px; border-radius: 5px; background: color-mix(in srgb, var(--red) 13%, transparent); color: var(--red); font-family: var(--font-mono); font-size: 9px; font-weight: 700; }
+.diagnostic-level.warning { background: color-mix(in srgb, var(--yellow) 13%, transparent); color: var(--yellow); }
+.diagnostics-advanced { padding: 14px 0 0; border-top: 1px solid var(--border-soft); }
+.diagnostics-advanced > summary { cursor: pointer; color: var(--text-strong); font-size: 12px; font-weight: 700; }
+.diagnostics-advanced > p { margin: 7px 0 13px; color: var(--muted); font-size: 11px; }
+.diagnostics-advanced > .diagnostics-files-card { margin-top: 14px; }
 .diagnostics-files-card > div { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 7px; }
 .diagnostics-files-card > div > span { display: grid; gap: 3px; padding: 9px 10px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-muted); }
 .diagnostics-files-card code { color: var(--text-strong); font-size: 11px; }
 .diagnostics-files-card small { color: var(--muted); font-size: 10px; }
 
 @media (max-width: 900px) {
-  .diagnostics-grid { grid-template-columns: 1fr; }
-  .diagnostics-error-list summary { grid-template-columns: auto minmax(0, 1fr); }
-  .diagnostics-error-list summary time { grid-column: 2; }
+  .diagnostics-grid,
+  .diagnostics-status-grid { grid-template-columns: 1fr; }
+  .diagnostic-failure-card > header { grid-template-columns: auto minmax(0, 1fr); }
+  .diagnostic-failure-card time { grid-column: 2; }
+  .diagnostic-failure-explanation { grid-template-columns: 1fr; }
 }
 .setup-card h3 { margin: 0; font-size: 15px; }
 .setup-card p { margin: 0; color: var(--muted-strong); font-size: 12px; line-height: 1.5; }
