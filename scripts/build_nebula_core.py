@@ -165,6 +165,8 @@ def main() -> None:
         str(root / "src"),
         "--collect-submodules",
         "nebula.v3",
+        "--collect-all",
+        "regex",
         "--add-data",
         f"{migrations}:nebula/v3/migrations",
         "--add-data",

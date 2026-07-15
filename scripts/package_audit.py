@@ -55,7 +55,6 @@ FORBIDDEN_MODULES = (
     "prompt_toolkit",
     "psutil",
     "qdarkstyle",
-    "regex",
     "scipy",
     "sentence_transformers",
     "spacy",
@@ -102,6 +101,9 @@ FORBIDDEN_MODULES = (
 
 REQUIRED_MEMBERS = (
     ("nebula.v3.cli",),
+    # Tool-output regex searches use the third-party timeout-capable engine.
+    # A frozen Core must not pass audit if that runtime dependency is absent.
+    ("regex",),
     ("reportlab",),
     ("PIL",),
     ("nebula/v3/BUILD_INFO.json", "nebula.v3.BUILD_INFO.json"),

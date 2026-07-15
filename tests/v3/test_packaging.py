@@ -17,6 +17,7 @@ from scripts.build_nebula_core import macos_codesign_arguments
 from scripts.build_nebula_core import stage_runtime_payload
 from scripts.package_audit import (
     ArtifactAuditError,
+    FORBIDDEN_MODULES,
     inspect_installer_tree,
     validate_members,
 )
@@ -149,6 +150,7 @@ def test_runtime_dependency_boundary_keeps_legacy_stacks_out_of_main():
         "fastapi",
         "sqlalchemy",
         "langgraph",
+        "regex",
         "boto3",
         "pypdf",
         "reportlab",
@@ -163,12 +165,18 @@ def test_runtime_dependency_boundary_keeps_legacy_stacks_out_of_main():
     assert "pytest-qt" not in {
         name.lower() for name in project["group"]["dev"]["dependencies"]
     }
+    assert "regex" not in {name.lower() for name in FORBIDDEN_MODULES}
 
 
 def test_core_archive_rejects_nltk_and_its_pyinstaller_runtime_hook():
     for member in ("nltk", "nltk/tokenize/casual.py", "pyi_rth_nltk.py"):
         with pytest.raises(ArtifactAuditError, match="forbidden members"):
             validate_members([member])
+
+
+def test_core_archive_requires_timeout_capable_regex_runtime():
+    with pytest.raises(ArtifactAuditError, match="required members absent: regex"):
+        validate_members(["nebula.v3.cli"])
 
 
 def test_nebula3_runtime_has_no_conditional_import_fallbacks():
@@ -251,6 +259,7 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
     result = validate_members(
         {
             "nebula.v3.cli",
+            "regex",
             "reportlab",
             "PIL",
             "nebula/v3/BUILD_INFO.json",
