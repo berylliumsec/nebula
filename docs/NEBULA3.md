@@ -222,6 +222,28 @@ requires the corpus so installed agents cannot silently lose it.
 
 ## Workbench terminal, reviewed execution, and workspace limits
 
+### Integrated Project browser
+
+The desktop Workbench includes a multi-tab **Browser** backed by Tauri child
+webviews (WKWebView on macOS and WebKitGTK on Linux). Browser pages are remote,
+untrusted surfaces: they receive no Nebula IPC capability, Core token,
+filesystem bridge, opener permission, Project data, evidence, or model context.
+Navigation and pop-ups are limited to HTTP and HTTPS. Open tab URLs and history
+remain memory-only and are discarded when Nebula closes.
+
+Cookies, cache, and site storage use a separate persistent profile per Project
+on Linux and macOS 14 or newer. macOS 13 uses an isolated non-persistent store
+that is cleared when Nebula closes because that operating-system WebKit version
+does not provide named persistent stores. **Clear Project browser data** closes
+the Project's browser tabs and removes only that profile.
+
+Website downloads are staged in Nebula's private cache, capped at the existing
+1 GiB workspace-file limit, and streamed through the authenticated workspace
+upload endpoint. Core therefore applies the same atomic write, total quota,
+entry limit, traversal, symlink, and overwrite-confirmation rules as an
+operator upload. A downloaded file enters Project Files only; it is never
+promoted to evidence or sent to a model without another explicit action.
+
 Nebula does not provide a host terminal. Workbench uses a human-operated
 **Terminal** in a verified human-workstation image containing the
 `kali-linux-headless` baseline. Core verifies the official base repository,

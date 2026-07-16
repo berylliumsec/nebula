@@ -93,6 +93,7 @@ interface PendingConfirmation {
 
 type Confirm = (options: ConfirmationOptions) => Promise<boolean>;
 const ConfirmationContext = createContext<Confirm | undefined>(undefined);
+const DialogOpenContext = createContext(false);
 
 export function DialogProvider({ children }: PropsWithChildren) {
   const [pending, setPending] = useState<PendingConfirmation>();
@@ -108,8 +109,9 @@ export function DialogProvider({ children }: PropsWithChildren) {
 
   return (
     <ConfirmationContext.Provider value={confirm}>
-      {children}
-      {pending && (
+      <DialogOpenContext.Provider value={Boolean(pending)}>
+        {children}
+        {pending && (
         <ModalSurface labelledBy="confirmation-title" className="confirmation-dialog" onClose={() => finish(false)}>
           <header>
             <span className={`confirmation-icon ${pending.options.tone ?? "default"}`} aria-hidden="true">
@@ -137,9 +139,14 @@ export function DialogProvider({ children }: PropsWithChildren) {
             </button>
           </footer>
         </ModalSurface>
-      )}
+        )}
+      </DialogOpenContext.Provider>
     </ConfirmationContext.Provider>
   );
+}
+
+export function useDialogOpen(): boolean {
+  return useContext(DialogOpenContext);
 }
 
 export function useConfirmation(): Confirm {

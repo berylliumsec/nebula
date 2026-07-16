@@ -1,5 +1,6 @@
 #![deny(unused_must_use)]
 
+mod browser;
 mod diagnostics;
 mod release;
 mod sidecar;
@@ -17,6 +18,7 @@ use tauri::{Emitter, Manager, Wry};
 fn build_app() -> tauri::App<Wry> {
     let builder = tauri::Builder::default()
         .manage(BackendState::default())
+        .manage(browser::BrowserState::default())
         .manage(DiagnosticsState::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -28,6 +30,7 @@ fn build_app() -> tauri::App<Wry> {
                 eprintln!("NEBULA_DIAGNOSTICS_UNAVAILABLE {error}");
             }
             install_panic_hook(diagnostics.clone());
+            browser::initialize(app.handle()).map_err(std::io::Error::other)?;
             diagnostics.record_desktop(
                 DiagnosticLevel::Info,
                 "desktop.application.starting",
@@ -146,7 +149,17 @@ fn build_app() -> tauri::App<Wry> {
             diagnostics_files,
             diagnostics_recent_errors,
             diagnostics_status,
-            diagnostics_reveal_logs
+            diagnostics_reveal_logs,
+            browser::browser_capabilities,
+            browser::browser_create_tab,
+            browser::browser_navigate,
+            browser::browser_control,
+            browser::browser_set_bounds,
+            browser::browser_set_visible,
+            browser::browser_close_tab,
+            browser::browser_clear_project_data,
+            browser::browser_import_download,
+            browser::browser_discard_download
         ]);
 
     #[cfg(feature = "direct-updater")]
@@ -169,6 +182,7 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::Exit) {
+            browser::shutdown(app_handle);
             let diagnostics = app_handle.state::<DiagnosticsState>();
             if let Err(error) =
                 sidecar::stop_managed_backend(&app_handle.state::<BackendState>(), &diagnostics)

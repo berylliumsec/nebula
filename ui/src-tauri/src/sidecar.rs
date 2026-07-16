@@ -75,9 +75,9 @@ const SIDECAR_ENV_ALLOWLIST: &[&str] = &[
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BackendSession {
-    endpoint: String,
-    token: String,
-    protocol: &'static str,
+    pub(crate) endpoint: String,
+    pub(crate) token: String,
+    pub(crate) protocol: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +143,23 @@ struct ManagedBackend {
 #[derive(Default)]
 pub(crate) struct BackendState {
     process: Mutex<Option<ManagedBackend>>,
+}
+
+impl BackendState {
+    pub(crate) fn active_session(&self) -> Result<BackendSession, String> {
+        let mut process = self
+            .process
+            .lock()
+            .map_err(|_| "the Nebula Core supervisor is unavailable".to_string())?;
+        let managed = process
+            .as_mut()
+            .ok_or_else(|| "Nebula Core is not running".to_string())?;
+        match managed.child.try_wait() {
+            Ok(None) => Ok(managed.session.clone()),
+            Ok(Some(_)) => Err("Nebula Core is not running".to_string()),
+            Err(error) => Err(format!("cannot inspect Nebula Core: {error}")),
+        }
+    }
 }
 
 fn sibling_sidecar_path() -> Result<PathBuf, String> {
