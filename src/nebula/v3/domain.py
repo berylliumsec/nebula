@@ -144,6 +144,19 @@ class HarnessTurnStatus(StringEnum):
     INTERRUPTED = "interrupted"
 
 
+class HarnessInteractionKind(StringEnum):
+    USER_INPUT = "user_input"
+    MCP_ELICITATION = "mcp_elicitation"
+
+
+class HarnessInteractionStatus(StringEnum):
+    PENDING = "pending"
+    ANSWERED = "answered"
+    DECLINED = "declined"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
 class McpTransport(StringEnum):
     STDIO = "stdio"
     STREAMABLE_HTTP = "streamable_http"
@@ -1118,6 +1131,17 @@ class HarnessCapabilities(NebulaModel):
     approvals: bool = True
     streaming: bool = True
     mcp: bool = True
+    activity_replay: bool = False
+    reasoning_summaries: bool = False
+    plans: bool = False
+    live_command_output: bool = False
+    file_diffs: bool = False
+    detailed_usage: bool = False
+    interactions: bool = False
+    hooks: bool = False
+    subagent_activity: bool = False
+    subagent_control: bool = False
+    checkpoint_rewind: bool = False
     enforceable_cost_limit: bool = False
     enforceable_token_limit: bool = False
     supported_native_capabilities: list[str] = Field(
@@ -1488,6 +1512,33 @@ class ChatTokenUsage(NebulaModel):
     total_tokens: int = Field(default=0, ge=0)
 
 
+class HarnessDetailedUsage(NebulaModel):
+    """Provider-neutral usage and timing exposed by local harnesses."""
+
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+    cache_creation_input_tokens: int = Field(default=0, ge=0)
+    cache_read_input_tokens: int = Field(default=0, ge=0)
+    reasoning_output_tokens: int = Field(default=0, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    duration_api_ms: int | None = Field(default=None, ge=0)
+    num_turns: int | None = Field(default=None, ge=0)
+    context_window: int | None = Field(default=None, ge=0)
+    context_used: int | None = Field(default=None, ge=0)
+    model_usage: dict[str, Any] = Field(default_factory=dict)
+    rate_limit: dict[str, Any] = Field(default_factory=dict)
+
+    def basic(self) -> ChatTokenUsage:
+        return ChatTokenUsage(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            total_tokens=self.total_tokens,
+        )
+
+
 class ContextOwnerType(StringEnum):
     CHAT_SESSION = "chat_session"
     AGENT_RUN = "agent_run"
@@ -1583,6 +1634,46 @@ class HarnessTurn(Entity):
                 raise ValueError("chat harness turns require chat bindings only")
         elif not self.run_id or self.chat_turn_id:
             raise ValueError("mission harness turns require run_id and no chat_turn_id")
+        return self
+
+
+class HarnessInteraction(Entity):
+    """A durable question or structured elicitation blocking a harness turn."""
+
+    entity_kind: ClassVar[str] = "harness_interactions"
+    engagement_id: str
+    harness_turn_id: str
+    harness_session_id: str
+    origin: HarnessTurnOrigin
+    kind: HarnessInteractionKind
+    status: HarnessInteractionStatus = HarnessInteractionStatus.PENDING
+    vendor_request_id: str = Field(min_length=1, max_length=500)
+    item_id: str | None = Field(default=None, max_length=500)
+    chat_session_id: str | None = Field(default=None, max_length=200)
+    run_id: str | None = Field(default=None, max_length=200)
+    prompt: str = Field(default="Input required", max_length=4_000)
+    questions: list[dict[str, Any]] = Field(default_factory=list, max_length=32)
+    response_schema: dict[str, Any] = Field(default_factory=dict)
+    response: dict[str, Any] | None = None
+    contains_secret: bool = False
+    auto_resolution_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+    resolved_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def owner_and_resolution_are_coherent(self) -> "HarnessInteraction":
+        if self.origin == HarnessTurnOrigin.CHAT:
+            if not self.chat_session_id or self.run_id is not None:
+                raise ValueError("chat interactions require only chat_session_id")
+        elif not self.run_id or self.chat_session_id is not None:
+            raise ValueError("mission interactions require only run_id")
+        terminal = self.status != HarnessInteractionStatus.PENDING
+        if terminal != (self.resolved_at is not None):
+            raise ValueError(
+                "resolved_at is required exactly when an interaction is terminal"
+            )
+        if self.contains_secret and self.response is not None:
+            raise ValueError("secret interaction answers cannot be persisted")
         return self
 
 
@@ -2073,6 +2164,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatTurn,
     ChatMessage,
     HarnessTurn,
+    HarnessInteraction,
     ContextSnapshot,
     OperatorExecution,
     GeneratedDraft,

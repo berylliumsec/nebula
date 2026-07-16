@@ -439,6 +439,24 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .chat-message-error, .chat-error { color: var(--red) !important; }
 .chat-tool-card, .chat-approval-card { display: grid; gap: 7px; margin-top: 10px; padding: 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .chat-tool-card > span { color: var(--muted); text-transform: capitalize; }
+.harness-timeline { display: grid; gap: 7px; margin-top: 10px; contain: layout style; }
+.harness-activity-card { content-visibility: auto; contain-intrinsic-size: 72px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: clip; }
+.harness-activity-card.nested { margin-left: 18px; border-left: 2px solid var(--blue); }
+.harness-activity-card > summary { display: flex; align-items: center; gap: 7px; padding: 9px 11px; cursor: pointer; list-style: none; }
+.harness-activity-card > summary::-webkit-details-marker { display: none; }
+.harness-activity-card > summary strong { flex: 1; }
+.harness-activity-card > summary code, .harness-activity-card > summary > span:last-child { color: var(--muted); font-size: 10px; text-transform: capitalize; }
+.harness-activity-body { display: grid; gap: 8px; padding: 0 11px 11px 30px; }
+.harness-activity-body p { margin: 0; color: var(--muted); }
+.harness-output, .harness-structured { min-width: 0; }
+.harness-output > small { display: block; margin-bottom: 4px; color: var(--muted); text-transform: uppercase; }
+.harness-output pre, .harness-structured { max-height: 320px; margin: 0; padding: 9px; overflow: auto; overscroll-behavior: contain; border-radius: 7px; background: var(--bg); white-space: pre-wrap; word-break: break-word; font-size: 11px; }
+.harness-output.diff pre { color: var(--text); white-space: pre; }
+.harness-plan, .harness-file-list { display: grid; gap: 5px; margin: 0; padding-left: 20px; }
+.harness-file-list { list-style: none; padding-left: 0; }
+.harness-file-list li { display: flex; align-items: center; gap: 6px; }
+.harness-interaction label { display: grid; gap: 5px; }
+.harness-interaction textarea { width: 100%; resize: vertical; }
 .chat-approval-card pre { max-height: 224px; overflow: auto; white-space: pre-wrap; font-size: 11px; }
 .chat-approval-card > div { display: flex; justify-content: flex-end; gap: 8px; }
 .chat-error { margin: 0 12px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--red) 25%, var(--border)); border-radius: 6px; background: var(--red-muted); font-size: 11px; }

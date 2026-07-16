@@ -786,6 +786,25 @@ class NebulaStore:
                 raise ConflictError(
                     "conversation cannot be deleted while a response is active"
                 )
+            harness_turn_ids = list(
+                session.scalars(
+                    select(EntityRow.id).where(
+                        EntityRow.kind == "harness_turns",
+                        EntityRow.payload["chat_session_id"].as_string() == session_id,
+                    )
+                )
+            )
+            active_harness_turn = and_(
+                EntityRow.kind == "harness_turns",
+                EntityRow.payload["chat_session_id"].as_string() == session_id,
+                EntityRow.payload["status"]
+                .as_string()
+                .in_(("queued", "running", "waiting_approval")),
+            )
+            if session.scalar(select(exists().where(active_harness_turn))):
+                raise ConflictError(
+                    "conversation cannot be deleted while a harness turn is active"
+                )
             owned_records = or_(
                 and_(
                     EntityRow.kind.in_(("chat_messages", "chat_turns")),
@@ -800,7 +819,17 @@ class NebulaStore:
                     EntityRow.kind.in_(("tool_calls", "approvals")),
                     EntityRow.payload["chat_session_id"].as_string() == session_id,
                 ),
+                and_(
+                    EntityRow.kind.in_(("harness_turns", "harness_interactions")),
+                    EntityRow.payload["chat_session_id"].as_string() == session_id,
+                ),
             )
+            if harness_turn_ids:
+                session.execute(
+                    delete(OperationEventRow).where(
+                        OperationEventRow.operation_id.in_(harness_turn_ids)
+                    )
+                )
             session.execute(delete(EntityRow).where(owned_records))
             result = session.execute(
                 delete(EntityRow).where(

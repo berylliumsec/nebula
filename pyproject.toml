@@ -45,7 +45,7 @@ cryptography = ">=44,<47"
 packaging = "*"
 semantic-version = "2.10.0"
 pypdf = ">=6,<7"
-claude-agent-sdk = ">=0.2.115,<0.3"
+claude-agent-sdk = ">=0.2.118,<0.3"
 
 # The legacy group remains installed by default for the Nebula 2 maintenance
 # application. Nebula 3 release environments use `poetry install --without

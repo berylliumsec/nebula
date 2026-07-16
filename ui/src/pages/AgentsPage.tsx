@@ -61,6 +61,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
     }
   };
   const resultEvent = events.find((event) => event.kind === "run.completed" || event.kind === "run.failed");
+  const harnessEvents = events.filter((event) => event.kind.startsWith("harness."));
   if (!previewMode) {
     return (
       <div className="page agents-page">
@@ -81,8 +82,19 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           <footer>{resultEvent.actor ?? "Nebula Core"} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resultEvent.occurredAt))}</footer>
         </section>}
         <section className="panel data-panel">
-          <header className="panel-header compact"><div><h2>Activity</h2><p>Latest mission transitions</p></div><GitBranch size={19} /></header>
-          {events.length > 0 ? <ol className="event-list">{events.slice(0, 10).map((event) => <li key={event.id}><span className="event-icon"><Bot size={15} /></span><div className="event-summary"><AssistantMarkdown content={event.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /><small>{event.actor ?? "Nebula Core"} · #{event.sequence}</small></div></li>)}</ol> : <div className="empty-state compact"><CircleDashed size={23} /><strong>No run events</strong><p>The selected run has not recorded a transition yet.</p></div>}
+          <header className="panel-header compact"><div><h2>Activity</h2><p>{harnessEvents.length ? "Replayable harness timeline" : "Latest mission transitions"}</p></div><GitBranch size={19} /></header>
+          {harnessEvents.length > 0 ? <div className="harness-timeline" aria-live="polite">{harnessEvents.map((event) => {
+            const payload = event.payload;
+            const data = payload.payload && typeof payload.payload === "object" && !Array.isArray(payload.payload) ? payload.payload as Record<string, unknown> : {};
+            const kind = typeof payload.item_kind === "string" ? payload.item_kind : "notice";
+            const status = typeof payload.item_status === "string" ? payload.item_status : undefined;
+            const title = typeof payload.title === "string" ? payload.title : event.kind.replace("harness.", "").replaceAll("_", " ");
+            const delta = typeof payload.delta === "string" ? payload.delta : undefined;
+            return <details className={`harness-activity-card kind-${kind}${payload.parent_item_id ? " nested" : ""}`} open={kind !== "reasoning" && kind !== "compaction"} key={event.id}>
+              <summary><span className={`status-dot ${["complete", "completed", "success"].includes(status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(status ?? "") ? "unavailable" : "pending"}`} /><strong>{title}</strong><code>{kind.replaceAll("_", " ")}</code>{status && <span>{status.replaceAll("_", " ")}</span>}</summary>
+              <div className="harness-activity-body"><p>{event.summary}</p>{delta && <div className="harness-output"><small>{typeof payload.stream === "string" ? payload.stream : "output"}</small><pre>{delta}</pre></div>}{typeof data.diff === "string" && data.diff && <div className="harness-output diff"><small>Unified diff</small><pre>{data.diff}</pre></div>}{Object.keys(data).length > 0 && kind !== "reasoning" && <pre className="harness-structured">{JSON.stringify(data, null, 2)}</pre>}<small>#{event.sequence} · {new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(event.occurredAt))}</small></div>
+            </details>;
+          })}</div> : events.length > 0 ? <ol className="event-list">{events.slice(0, 10).map((event) => <li key={event.id}><span className="event-icon"><Bot size={15} /></span><div className="event-summary"><AssistantMarkdown content={event.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /><small>{event.actor ?? "Nebula Core"} · #{event.sequence}</small></div></li>)}</ol> : <div className="empty-state compact"><CircleDashed size={23} /><strong>No run events</strong><p>The selected run has not recorded a transition yet.</p></div>}
         </section>
       </div>
     );

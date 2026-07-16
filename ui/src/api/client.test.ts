@@ -1413,4 +1413,63 @@ describe("ApiClient", () => {
       expect(headers.get("Authorization")).toBe("Bearer terminal-token");
     }
   });
+
+  it("maps durable harness activity cursors and detailed usage", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      events: [{
+        schema_version: "nebula.harness-activity/v1",
+        id: "event-7",
+        sequence: 7,
+        type: "item_upsert",
+        vendor: "claude_agent_sdk",
+        harness_session_id: "session-1",
+        harness_turn_id: "turn-1",
+        item_id: "command-1",
+        parent_item_id: "agent-1",
+        item_kind: "command",
+        item_status: "completed",
+        title: "Run tests",
+        artifact_ids: ["artifact-1"],
+        payload: { cwd: "/workspace", exit_code: 0 },
+        detailed_usage: {
+          input_tokens: 12,
+          output_tokens: 8,
+          total_tokens: 20,
+          cache_creation_input_tokens: 3,
+          cache_read_input_tokens: 4,
+          reasoning_output_tokens: 2,
+          cost_usd: 0.01,
+          duration_ms: 250,
+          duration_api_ms: 200,
+          num_turns: 1,
+          context_used: 12,
+          context_window: 200000,
+        },
+      }],
+      next_sequence: 7,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const page = await client.getHarnessTurnEvents("turn/one", 3);
+
+    expect(page.nextSequence).toBe(7);
+    expect(page.events[0]).toMatchObject({
+      itemId: "command-1",
+      parentItemId: "agent-1",
+      itemKind: "command",
+      itemStatus: "completed",
+      artifactIds: ["artifact-1"],
+      detailedUsage: {
+        totalTokens: 20,
+        cacheCreationTokens: 3,
+        cacheReadTokens: 4,
+        reasoningTokens: 2,
+        apiDurationMs: 200,
+        contextLimitTokens: 200000,
+      },
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/harness-turns/turn%2Fone/events?after=3&limit=10000",
+    );
+  });
 });

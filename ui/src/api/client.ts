@@ -45,6 +45,11 @@ import type {
   GeneratedDraftContent,
   HealthResponse,
   HarnessProfile,
+  HarnessActivityEvent,
+  HarnessActivityEventPage,
+  HarnessDetailedUsage,
+  HarnessInteraction,
+  HarnessTurnDetail,
   HarnessSessionActivity,
   HarnessSessionSummary,
   KnowledgeIngestRequest,
@@ -93,6 +98,7 @@ import type {
   WritingTransformRequest,
   WritingTransformResponse,
 } from "./types";
+import { websocketAuthProtocol } from "./events";
 import {
   logDiagnostic,
   newOperationId,
@@ -524,8 +530,36 @@ interface WireContextStatus extends JsonObject {
   snapshot?: WireContextSnapshot | null;
 }
 
-interface WireChatStreamEvent extends Partial<WireChatCompletion> {
-  type: "started" | "delta" | "message_delta" | "item_started" | "item_completed" | "usage" | "interrupted" | "completed" | "tool_started" | "tool_completed" | "approval_required" | "status" | "done" | "error";
+interface WireChatStreamEvent extends JsonObject {
+  type: "started" | "delta" | "message_delta" | "item_started" | "item_completed" | "usage" | "interrupted" | "completed" | "tool_started" | "tool_completed" | "approval_required" | "status" | "turn_status" | "item_upsert" | "output_delta" | "approval" | "interaction" | "checkpoint" | "notice" | "done" | "error";
+  schema_version?: "nebula.harness-activity/v1";
+  id?: string;
+  sequence?: number;
+  vendor?: "codex_app_server" | "claude_agent_sdk";
+  occurred_at?: string;
+  external_session_id?: string;
+  external_turn_id?: string;
+  item_id?: string;
+  parent_item_id?: string;
+  item_kind?: HarnessActivityEvent["itemKind"];
+  item_status?: string;
+  title?: string;
+  stream?: string;
+  message?: WireChatCompletion["message"] | string;
+  session_id?: string;
+  backend?: "provider" | "harness";
+  harness_profile_id?: string;
+  citations?: WireChatCitation[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  };
+  context_usage?: WireChatCompletion["context_usage"];
+  finish_reason?: string;
+  provider_request_id?: string;
+  detailed_usage?: JsonObject;
+  artifact_ids?: string[];
   turn_id?: string;
   tool_call_id?: string;
   capability?: string;
@@ -557,6 +591,21 @@ interface WireChatStreamEvent extends Partial<WireChatCompletion> {
   payload?: JsonObject;
   harness_session_id?: string;
   harness_turn_id?: string;
+}
+
+interface WireHarnessActivityEventPage extends JsonObject {
+  events: WireChatStreamEvent[];
+  next_sequence: number;
+}
+
+interface WireHarnessTurn extends WireEntity {
+  status: HarnessTurnDetail["status"];
+  origin: HarnessTurnDetail["origin"];
+  harness_session_id: string;
+  chat_session_id?: string | null;
+  run_id?: string | null;
+  error?: string | null;
+  metadata?: JsonObject;
 }
 
 interface WireChatSession extends WireEntity {
@@ -593,7 +642,36 @@ interface WireHarnessProfile extends WireEntity {
     skills?: boolean;
     subagents?: boolean;
   };
-  capabilities?: { checked_at?: string | null; harness_version?: string | null; protocol_version?: string | null; detail?: string | null; models?: string[] };
+  capabilities?: {
+    checked_at?: string | null;
+    harness_version?: string | null;
+    protocol_version?: string | null;
+    detail?: string | null;
+    models?: string[];
+    activity_replay?: boolean;
+    reasoning_summaries?: boolean;
+    plans?: boolean;
+    live_command_output?: boolean;
+    file_diffs?: boolean;
+    detailed_usage?: boolean;
+    interactions?: boolean;
+    hooks?: boolean;
+    subagent_activity?: boolean;
+    subagent_control?: boolean;
+    checkpoint_rewind?: boolean;
+    steering?: boolean;
+    interruption?: boolean;
+  };
+}
+
+interface WireHarnessInteraction extends WireEntity {
+  harness_turn_id: string;
+  status: HarnessInteraction["status"];
+  kind: HarnessInteraction["kind"];
+  prompt: string;
+  questions?: JsonObject[];
+  response_schema?: JsonObject;
+  contains_secret?: boolean;
 }
 
 interface WireMcpServerProfile extends WireEntity {
@@ -648,6 +726,7 @@ interface WireChatTurn extends WireEntity {
   session_id: string;
   status: ChatTurn["status"];
   approval_id?: string | null;
+  harness_turn_id?: string | null;
   tool_call_ids?: string[];
 }
 
@@ -2012,7 +2091,36 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     healthy: Boolean(value.capabilities?.checked_at && !value.capabilities?.detail),
     version: value.capabilities?.harness_version ?? value.capabilities?.protocol_version ?? undefined,
     detail: value.capabilities?.detail ?? undefined,
+    capabilities: {
+      activityReplay: value.capabilities?.activity_replay === true,
+      reasoningSummaries: value.capabilities?.reasoning_summaries === true,
+      plans: value.capabilities?.plans === true,
+      liveCommandOutput: value.capabilities?.live_command_output === true,
+      fileDiffs: value.capabilities?.file_diffs === true,
+      detailedUsage: value.capabilities?.detailed_usage === true,
+      interactions: value.capabilities?.interactions === true,
+      hooks: value.capabilities?.hooks === true,
+      subagentActivity: value.capabilities?.subagent_activity === true,
+      subagentControl: value.capabilities?.subagent_control === true,
+      checkpointRewind: value.capabilities?.checkpoint_rewind === true,
+      steering: value.capabilities?.steering === true,
+      interruption: value.capabilities?.interruption === true,
+    },
     revision: value.revision,
+  };
+}
+
+function mapHarnessInteraction(value: WireHarnessInteraction): HarnessInteraction {
+  return {
+    id: value.id,
+    harnessTurnId: value.harness_turn_id,
+    status: value.status,
+    kind: value.kind,
+    prompt: value.prompt,
+    questions: value.questions ?? [],
+    responseSchema: value.response_schema ?? {},
+    containsSecret: value.contains_secret === true,
+    createdAt: value.created_at,
   };
 }
 
@@ -2078,7 +2186,69 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
     sessionId: value.session_id,
     status: value.status,
     approvalId: value.approval_id ?? undefined,
+    harnessTurnId: value.harness_turn_id ?? undefined,
     toolCallIds: value.tool_call_ids ?? [],
+  };
+}
+
+function mapHarnessDetailedUsage(value?: JsonObject): HarnessDetailedUsage | undefined {
+  if (!value) return undefined;
+  const inputTokens = numberField(value.input_tokens);
+  const outputTokens = numberField(value.output_tokens);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: numberField(value.total_tokens) || inputTokens + outputTokens,
+    cachedInputTokens: numberField(value.cached_input_tokens),
+    cacheCreationTokens: numberField(value.cache_creation_input_tokens),
+    cacheReadTokens: numberField(value.cache_read_input_tokens),
+    reasoningTokens: numberField(value.reasoning_output_tokens),
+    costUsd: numberField(value.cost_usd),
+    durationMs: typeof value.duration_ms === "number" ? value.duration_ms : undefined,
+    apiDurationMs: typeof value.duration_api_ms === "number" ? value.duration_api_ms : undefined,
+    turnCount: numberField(value.num_turns),
+    contextUsedTokens: typeof value.context_used === "number" ? value.context_used : undefined,
+    contextLimitTokens: typeof value.context_window === "number" ? value.context_window : undefined,
+    modelUsage: value.model_usage && typeof value.model_usage === "object" && !Array.isArray(value.model_usage)
+      ? value.model_usage as Record<string, Record<string, unknown>>
+      : {},
+    rateLimit: value.rate_limit && typeof value.rate_limit === "object" && !Array.isArray(value.rate_limit)
+      ? value.rate_limit as Record<string, unknown>
+      : {},
+  };
+}
+
+function mapHarnessActivityEvent(value: WireChatStreamEvent): HarnessActivityEvent {
+  const inputTokens = numberField(value.usage?.input_tokens);
+  const outputTokens = numberField(value.usage?.output_tokens);
+  return {
+    schemaVersion: value.schema_version ?? "nebula.harness-activity/v1",
+    id: value.id,
+    sequence: value.sequence,
+    type: value.type,
+    vendor: value.vendor,
+    harnessSessionId: value.harness_session_id,
+    harnessTurnId: value.harness_turn_id,
+    externalSessionId: value.external_session_id,
+    externalTurnId: value.external_turn_id,
+    itemId: value.item_id,
+    parentItemId: value.parent_item_id,
+    itemKind: value.item_kind,
+    itemStatus: value.item_status,
+    title: value.title,
+    summary: value.summary,
+    stream: value.stream,
+    delta: value.delta,
+    message: typeof value.message === "string" ? value.message : undefined,
+    usage: value.usage ? {
+      inputTokens,
+      outputTokens,
+      totalTokens: numberField(value.usage.total_tokens) || inputTokens + outputTokens,
+    } : undefined,
+    detailedUsage: mapHarnessDetailedUsage(value.detailed_usage),
+    artifactIds: value.artifact_ids ?? [],
+    payload: value.payload ?? {},
+    occurredAt: value.occurred_at,
   };
 }
 
@@ -2119,6 +2289,9 @@ function mapPersistedChatMessage(value: WirePersistedChatMessage): PersistedChat
         }];
       })
       : [],
+    harnessTurnId: typeof value.metadata?.harness_turn_id === "string"
+      ? value.metadata.harness_turn_id
+      : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
@@ -2736,6 +2909,119 @@ export class ApiClient {
   getHarnessSessionActivity(id: string, signal?: AbortSignal): Promise<HarnessSessionActivity> {
     return this.request<WireHarnessSessionActivity>(`harness-sessions/${encodeURIComponent(id)}/activity`, { signal })
       .then(mapHarnessSessionActivity);
+  }
+
+  getHarnessTurnEvents(id: string, after = 0, signal?: AbortSignal): Promise<HarnessActivityEventPage> {
+    return this.request<WireHarnessActivityEventPage>(
+      `harness-turns/${encodeURIComponent(id)}/events?after=${after}&limit=10000`,
+      { signal },
+    ).then((value) => ({
+      events: value.events.map(mapHarnessActivityEvent),
+      nextSequence: value.next_sequence,
+    }));
+  }
+
+  getHarnessTurn(id: string, signal?: AbortSignal): Promise<HarnessTurnDetail> {
+    return this.request<WireHarnessTurn>(`harness-turns/${encodeURIComponent(id)}`, { signal })
+      .then((value) => ({
+        id: value.id,
+        status: value.status,
+        origin: value.origin,
+        harnessSessionId: value.harness_session_id,
+        chatSessionId: value.chat_session_id ?? undefined,
+        runId: value.run_id ?? undefined,
+        error: value.error ?? undefined,
+        retryOfTurnId: typeof value.metadata?.retry_of_turn_id === "string" ? value.metadata.retry_of_turn_id : undefined,
+      }));
+  }
+
+  followHarnessTurnEvents(
+    id: string,
+    after: number,
+    onEvent: (event: HarnessActivityEvent) => void,
+    onComplete?: () => void,
+    onError?: (error: Error) => void,
+  ): () => void {
+    const endpoint = new URL(
+      `${this.baseUrl.replace(/\/$/, "")}/harness-turns/${encodeURIComponent(id)}/events/ws`,
+      globalThis.location?.origin ?? "http://127.0.0.1",
+    );
+    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+    endpoint.searchParams.set("after", String(after));
+    const protocols = ["nebula.harness-activity.v1"];
+    const token = this.getToken();
+    if (token) protocols.push(websocketAuthProtocol(token));
+    const socket = new WebSocket(endpoint, protocols);
+    socket.addEventListener("message", (message) => {
+      try {
+        const frame = JSON.parse(String(message.data)) as {
+          kind?: string;
+          event?: WireChatStreamEvent;
+        };
+        if (frame.kind === "event" && frame.event) {
+          onEvent(mapHarnessActivityEvent(frame.event));
+        } else if (frame.kind === "complete") {
+          onComplete?.();
+        }
+      } catch (error) {
+        void logCaughtDiagnostic("interface.client.harness_activity_frame", "A harness activity frame could not be decoded.", error, "client");
+        onError?.(error instanceof Error ? error : new Error("Malformed harness activity frame"));
+      }
+    });
+    socket.addEventListener("error", () => onError?.(new Error("Harness activity connection failed")));
+    return () => socket.close(1000, "viewer detached");
+  }
+
+  listHarnessInteractions(id: string, signal?: AbortSignal): Promise<HarnessInteraction[]> {
+    return this.request<WireHarnessInteraction[]>(
+      `harness-turns/${encodeURIComponent(id)}/interactions`,
+      { signal },
+    ).then((items) => items.map(mapHarnessInteraction));
+  }
+
+  decideHarnessInteraction(
+    id: string,
+    action: "answer" | "decline" | "cancel",
+    response: Record<string, unknown> = {},
+  ): Promise<HarnessInteraction> {
+    return this.request<WireHarnessInteraction>(
+      `harness-interactions/${encodeURIComponent(id)}/decision`,
+      { method: "POST", body: JSON.stringify({ action, response }) },
+    ).then(mapHarnessInteraction);
+  }
+
+  stopHarnessTurn(id: string, reason = "Stopped by operator"): Promise<void> {
+    return this.request(`harness-turns/${encodeURIComponent(id)}/stop`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }).then(() => undefined);
+  }
+
+  retryHarnessTurn(id: string): Promise<void> {
+    return this.request(`harness-turns/${encodeURIComponent(id)}/retry`, {
+      method: "POST",
+    }).then(() => undefined);
+  }
+
+  steerHarnessTurn(id: string, text: string): Promise<void> {
+    return this.request(`harness-turns/${encodeURIComponent(id)}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }).then(() => undefined);
+  }
+
+  stopHarnessSubagent(turnId: string, taskId: string): Promise<void> {
+    return this.request(
+      `harness-turns/${encodeURIComponent(turnId)}/tasks/${encodeURIComponent(taskId)}/stop`,
+      { method: "POST" },
+    ).then(() => undefined);
+  }
+
+  rewindHarnessCheckpoint(sessionId: string, checkpointId: string): Promise<void> {
+    return this.request(
+      `harness-sessions/${encodeURIComponent(sessionId)}/checkpoints/rewind`,
+      { method: "POST", body: JSON.stringify({ checkpoint_id: checkpointId }) },
+    ).then(() => undefined);
   }
 
   closeHarnessSession(id: string): Promise<HarnessSessionSummary> {
@@ -4281,6 +4567,10 @@ export class ApiClient {
         });
         return;
       }
+      if (["turn_status", "item_upsert", "output_delta", "approval", "interaction", "checkpoint", "notice"].includes(wire.type)) {
+        onEvent(mapHarnessActivityEvent(wire) as ChatStreamEvent);
+        return;
+      }
       if (["item_started", "item_completed", "usage", "interrupted", "completed"].includes(wire.type)) {
         onEvent({
           type: wire.type as "item_started" | "item_completed" | "usage" | "interrupted" | "completed",
@@ -4291,10 +4581,10 @@ export class ApiClient {
         return;
       }
       if (wire.type === "done") {
-        if (!wire.model || !wire.message || (!wire.provider_id && !wire.harness_profile_id)) {
+        if (!wire.model || !wire.message || typeof wire.message === "string" || (!wire.provider_id && !wire.harness_profile_id)) {
           throw new ApiError("Nebula Core returned an incomplete chat completion.", 502, undefined, wire);
         }
-        completed = mapChatCompletion(wire as WireChatCompletion);
+        completed = mapChatCompletion(wire as unknown as WireChatCompletion);
         onEvent({ type: "done", ...completed });
       }
     };

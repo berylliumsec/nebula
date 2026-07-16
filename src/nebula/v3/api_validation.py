@@ -26,6 +26,7 @@ from .domain import (
     Finding,
     GeneratedDraft,
     HarnessProfile,
+    HarnessInteraction,
     HarnessSession,
     HarnessTurn,
     Identity,
@@ -130,6 +131,12 @@ _REFERENCE_RULES: dict[type[Entity], tuple[ReferenceRule, ...]] = {
         ReferenceRule("harness_session_id", HarnessSession),
         ReferenceRule("chat_session_id", ChatSession),
         ReferenceRule("chat_turn_id", ChatTurn),
+        ReferenceRule("run_id", AgentRun),
+    ),
+    HarnessInteraction: (
+        ReferenceRule("harness_turn_id", HarnessTurn),
+        ReferenceRule("harness_session_id", HarnessSession),
+        ReferenceRule("chat_session_id", ChatSession),
         ReferenceRule("run_id", AgentRun),
     ),
     ChatMessage: (

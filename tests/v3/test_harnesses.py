@@ -28,6 +28,9 @@ from nebula.v3.domain import (
     Engagement,
     HarnessCapabilities,
     HarnessKind,
+    HarnessInteraction,
+    HarnessInteractionKind,
+    HarnessInteractionStatus,
     HarnessNativeCapabilities,
     HarnessProfile,
     HarnessSession,
@@ -59,6 +62,7 @@ from nebula.v3.harnesses import (
     HarnessEvent,
     HarnessHealth,
     HarnessPermissionRequest,
+    HarnessInteractionRequest,
     HarnessRuntimeService,
     HarnessTransportError,
 )
@@ -301,6 +305,175 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         ]
         await runtime.shutdown()
         assert adapter.connections[0].closed is True
+
+    asyncio.run(scenario())
+
+
+def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        _, chat_turn, harness_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Keep running after the viewer leaves",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        task = runtime.start_chat_turn(harness_turn.id)
+        first = await anext(runtime.follow_turn(harness_turn.id))
+        assert first.sequence == 1
+        await task
+
+        finished = store.get(HarnessTurn, harness_turn.id)
+        assert finished.status == HarnessTurnStatus.COMPLETE
+        assert store.get(ChatTurn, chat_turn.id).status.value == "complete"
+        replay = runtime.activity_events(harness_turn.id)
+        assert replay.events
+        assert [event.sequence for event in replay.events] == list(
+            range(1, replay.next_sequence + 1)
+        )
+        assert {event.schema_version for event in replay.events} == {
+            "nebula.harness-activity/v1"
+        }
+        after_first = runtime.activity_events(harness_turn.id, after_sequence=1)
+        assert all((event.sequence or 0) > 1 for event in after_first.events)
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_secret_harness_interaction_is_forwarded_but_not_persisted(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        _, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Request a secret",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        interaction_id, future = await runtime._request_interaction(
+            turn.id,
+            HarnessInteractionRequest(
+                vendor_request_id="request-secret",
+                kind=HarnessInteractionKind.MCP_ELICITATION,
+                prompt="Enter the temporary password",
+                response_schema={"type": "object"},
+                contains_secret=True,
+            ),
+        )
+        resolved = await runtime.resolve_interaction(
+            interaction_id,
+            action="answer",
+            response={"password": "one-use-value"},
+        )
+        assert await future == {
+            "action": "answer",
+            "response": {"password": "one-use-value"},
+        }
+        persisted = store.get(HarnessInteraction, interaction_id)
+        assert resolved.status == HarnessInteractionStatus.ANSWERED
+        assert persisted.response is None
+        assert persisted.metadata["response_recorded"] is False
+        assert "one-use-value" not in json.dumps(persisted.model_dump(mode="json"))
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
+    class BlockingConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str
+        ) -> AsyncIterator[HarnessEvent]:
+            del prompt, model
+            yield HarnessEvent(type="started")
+            await asyncio.Event().wait()
+
+        async def interrupt(self) -> None:
+            # A real vendor acknowledgement can arrive after the producer gets a
+            # chance to run, so stopping must be durable before this await.
+            await asyncio.sleep(0.01)
+            await super().interrupt()
+
+    class BlockingAdapter(FakeAdapter):
+        async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+            connection = BlockingConnection(request)
+            self.connections.append(connection)
+            return connection
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        adapter = BlockingAdapter()
+        runtime.adapter_factory = lambda _: adapter
+        _, chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Block until stopped",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        task = runtime.start_chat_turn(turn.id)
+        for _ in range(100):
+            if store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.RUNNING:
+                break
+            await asyncio.sleep(0.01)
+        stopped = await runtime.cancel_turn(turn.id, reason="Operator stop")
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        assert stopped.status == HarnessTurnStatus.CANCELLED
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.CANCELLED
+        assert store.get(ChatTurn, chat_turn.id).status.value == "cancelled"
+        assert adapter.connections[0].interrupted is True
+        replay = runtime.activity_events(turn.id)
+        assert replay.events[-1].type == "turn_status"
+        assert replay.events[-1].item_status == "cancelled"
+
+        run = await runtime.start_mission(
+            engagement_id=engagement.id,
+            objective="Block mission until stopped",
+            profile_id=profile.id,
+            model=None,
+            budget=RunBudget(max_duration_seconds=5),
+        )
+        mission_task = runtime._mission_tasks[run.id]
+        mission_turn = next(
+            item
+            for item in store.list_entities(
+                HarnessTurn, engagement_id=engagement.id, limit=1_000
+            )
+            if item.run_id == run.id
+        )
+        for _ in range(100):
+            if (
+                store.get(HarnessTurn, mission_turn.id).status
+                == HarnessTurnStatus.RUNNING
+            ):
+                break
+            await asyncio.sleep(0.01)
+        stopped_mission = await runtime.cancel_turn(
+            mission_turn.id, reason="Operator mission stop"
+        )
+        try:
+            await mission_task
+        except asyncio.CancelledError:
+            pass
+
+        assert stopped_mission.status == HarnessTurnStatus.CANCELLED
+        assert store.get(AgentRun, run.id).status == RunStatus.CANCELLED
+        assert any(
+            event.event_type == "run.cancelled" for event in store.replay_events(run.id)
+        )
+        await runtime.shutdown()
 
     asyncio.run(scenario())
 
@@ -1351,6 +1524,16 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         assert body["message"]["content"] == "Harness answer for API inspection"
         assert body["harness_session_id"]
         assert body["harness_turn_id"]
+        replay = client.get(
+            f"/api/v1/harness-turns/{body['harness_turn_id']}/events",
+            headers=headers,
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["events"]
+        assert replay.json()["events"][0]["sequence"] == 1
+        assert replay.json()["events"][0]["schema_version"] == (
+            "nebula.harness-activity/v1"
+        )
 
         sessions = client.get(
             "/api/v1/harness-sessions",

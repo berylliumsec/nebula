@@ -13,15 +13,18 @@ from .diagnostics import (
 )
 
 import asyncio
+import difflib
 import inspect
 import json
 import os
 import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 import hashlib
 import tempfile
@@ -30,6 +33,7 @@ from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 import claude_agent_sdk
+from packaging.version import InvalidVersion, Version
 from pydantic import Field
 
 from .credentials import CredentialError, CredentialStore
@@ -48,9 +52,13 @@ from .domain import (
     ChatTurnStatus,
     Engagement,
     HarnessCapabilities,
+    HarnessDetailedUsage,
     HarnessAuthMode,
     HarnessConnectionMode,
     HarnessKind,
+    HarnessInteraction,
+    HarnessInteractionKind,
+    HarnessInteractionStatus,
     HarnessNativeCapabilities,
     HarnessProfile,
     HarnessSession,
@@ -77,7 +85,7 @@ from .domain import (
     ToolCallStatus,
     utc_now,
 )
-from .redaction import redact_text
+from .redaction import redact_text, sanitize_display_text
 from .storage import NebulaStore, NotFoundError
 from .mcp import (
     MAX_MCP_MESSAGE_BYTES,
@@ -115,7 +123,11 @@ if TYPE_CHECKING:
 MAX_NORMALIZED_TEXT = 200_000
 MAX_TOOL_ARGUMENT_TEXT = 64_000
 MAX_TOOL_RESULT_TEXT = 64_000
-ADAPTER_CONTRACT_VERSION = "nebula-harness-v1"
+ADAPTER_CONTRACT_VERSION = "nebula-harness-v2"
+HARNESS_ACTIVITY_SCHEMA_VERSION = "nebula.harness-activity/v1"
+CLAUDE_ACTIVITY_MINIMUM_VERSION = Version("0.2.118")
+ACTIVITY_DELTA_FLUSH_SECONDS = 0.1
+ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
 _CODEX_MANAGED_VENDOR_FEATURES = (
     "shell_tool",
@@ -160,6 +172,7 @@ _CLAUDE_NATIVE_TOOLS = {
 _CODEX_NATIVE_ITEM_TYPES = {
     "commandExecution",
     "fileChange",
+    "dynamicToolCall",
     "webSearch",
     "imageGeneration",
     "imageView",
@@ -386,14 +399,26 @@ class HarnessTransportError(HarnessError):
 
 
 class HarnessEvent(NebulaModel):
+    schema_version: Literal["nebula.harness-activity/v1"] = (
+        HARNESS_ACTIVITY_SCHEMA_VERSION
+    )
+    id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=200)
+    sequence: int = Field(default=0, ge=0)
     type: Literal[
         "started",
+        "turn_status",
         "message_delta",
+        "item_upsert",
+        "output_delta",
         "item_started",
         "item_completed",
         "tool_started",
         "tool_completed",
+        "approval",
         "approval_required",
+        "interaction",
+        "checkpoint",
+        "notice",
         "status",
         "usage",
         "interrupted",
@@ -405,8 +430,59 @@ class HarnessEvent(NebulaModel):
     harness_session_id: str | None = None
     harness_turn_id: str | None = None
     model: str | None = None
+    vendor: HarnessKind | None = None
     external_session_id: str | None = None
     external_turn_id: str | None = None
+    occurred_at: datetime = Field(default_factory=utc_now)
+    item_id: str | None = Field(default=None, max_length=500)
+    parent_item_id: str | None = Field(default=None, max_length=500)
+    item_kind: (
+        Literal[
+            "reasoning",
+            "plan",
+            "command",
+            "file_change",
+            "tool",
+            "web_search",
+            "browser",
+            "image",
+            "skill",
+            "subagent",
+            "hook",
+            "review",
+            "compaction",
+        ]
+        | None
+    ) = None
+    item_status: (
+        Literal[
+            "queued",
+            "running",
+            "streaming",
+            "waiting_approval",
+            "waiting_input",
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+        ]
+        | None
+    ) = None
+    title: str | None = Field(default=None, max_length=1_000)
+    summary: str | None = Field(default=None, max_length=4_000)
+    stream: (
+        Literal[
+            "stdout",
+            "stderr",
+            "terminal",
+            "reasoning_summary",
+            "commentary",
+            "tool_input",
+            "tool_output",
+            "patch",
+        ]
+        | None
+    ) = None
     delta: str | None = Field(default=None, max_length=MAX_NORMALIZED_TEXT)
     message: str | None = Field(default=None, max_length=MAX_NORMALIZED_TEXT)
     approval_id: str | None = None
@@ -414,7 +490,77 @@ class HarnessEvent(NebulaModel):
     server_id: str | None = None
     tool_name: str | None = None
     usage: ChatTokenUsage | None = None
+    detailed_usage: HarnessDetailedUsage | None = None
+    artifact_ids: list[str] = Field(default_factory=list, max_length=256)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class HarnessActivityEventList(NebulaModel):
+    events: list[HarnessEvent]
+    next_sequence: int = Field(ge=0)
+
+
+async def _coalesce_activity_deltas(
+    source: AsyncIterator[HarnessEvent],
+) -> AsyncIterator[HarnessEvent]:
+    """Bound write amplification while keeping live output perceptibly immediate."""
+
+    iterator = source.__aiter__()
+    pending: HarnessEvent | None = None
+    pending_since = 0.0
+    next_event: asyncio.Task[HarnessEvent] | None = asyncio.create_task(anext(iterator))
+    try:
+        while next_event is not None:
+            timeout: float | None = None
+            if pending is not None:
+                timeout = max(
+                    0.0,
+                    ACTIVITY_DELTA_FLUSH_SECONDS
+                    - (asyncio.get_running_loop().time() - pending_since),
+                )
+            done, _ = await asyncio.wait({next_event}, timeout=timeout)
+            if not done:
+                if pending is not None:
+                    yield pending
+                    pending = None
+                continue
+            try:
+                event = next_event.result()
+            except StopAsyncIteration:
+                next_event = None
+                break
+            next_event = asyncio.create_task(anext(iterator))
+            if event.type != "output_delta" or not event.delta:
+                if pending is not None:
+                    yield pending
+                    pending = None
+                yield event
+                continue
+            same_stream = pending is not None and (
+                pending.type,
+                pending.vendor,
+                pending.item_id,
+                pending.stream,
+            ) == (event.type, event.vendor, event.item_id, event.stream)
+            if not same_stream:
+                if pending is not None:
+                    yield pending
+                pending = event
+                pending_since = asyncio.get_running_loop().time()
+            else:
+                pending = pending.model_copy(
+                    update={"delta": (pending.delta or "") + event.delta}
+                )
+            if len(pending.delta or "") >= ACTIVITY_DELTA_FLUSH_CHARS:
+                yield pending
+                pending = None
+        if pending is not None:
+            yield pending
+    finally:
+        if next_event is not None and not next_event.done():
+            next_event.cancel()
+            with suppress(asyncio.CancelledError, StopAsyncIteration):
+                await next_event
 
 
 class HarnessHealth(NebulaModel):
@@ -469,6 +615,18 @@ class HarnessPermissionDecision(NebulaModel):
     reason: str | None = None
 
 
+class HarnessInteractionRequest(NebulaModel):
+    vendor_request_id: str = Field(min_length=1, max_length=500)
+    kind: HarnessInteractionKind
+    prompt: str = Field(default="Input required", max_length=4_000)
+    item_id: str | None = Field(default=None, max_length=500)
+    questions: list[dict[str, Any]] = Field(default_factory=list, max_length=32)
+    response_schema: dict[str, Any] = Field(default_factory=dict)
+    contains_secret: bool = False
+    auto_resolution_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+    annotations: dict[str, Any] = Field(default_factory=dict)
+
+
 @dataclass
 class PermissionTicket:
     approval_id: str | None
@@ -477,6 +635,17 @@ class PermissionTicket:
 
 
 PermissionHandler = Callable[[HarnessPermissionRequest], Awaitable[PermissionTicket]]
+InteractionHandler = Callable[
+    [HarnessInteractionRequest], Awaitable[tuple[str, asyncio.Future[dict[str, Any]]]]
+]
+
+
+async def _decline_unsupported_interaction(
+    _request: HarnessInteractionRequest,
+) -> tuple[str, asyncio.Future[dict[str, Any]]]:
+    future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+    future.set_result({"action": "decline", "response": {}})
+    return str(uuid4()), future
 
 
 @dataclass(frozen=True)
@@ -487,6 +656,7 @@ class AdapterOpenRequest:
     mcp_profiles: tuple[McpServerProfile, ...]
     credential_store: CredentialStore
     permission_handler: PermissionHandler
+    interaction_handler: InteractionHandler = _decline_unsupported_interaction
     gateway_config: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -505,6 +675,14 @@ class HarnessConnection(ABC):
 
     @abstractmethod
     async def close(self) -> None: ...
+
+    async def stop_subagent(self, task_id: str) -> None:
+        del task_id
+        raise HarnessStateError("this harness does not expose subagent stopping")
+
+    async def rewind_files(self, checkpoint_id: str) -> None:
+        del checkpoint_id
+        raise HarnessStateError("this harness does not expose file checkpoint rewind")
 
 
 class HarnessAdapter(ABC):
@@ -558,7 +736,7 @@ def _bounded(value: Any, *, limit: int) -> Any:
     """Bound and redact a JSON-compatible diagnostic value."""
 
     if isinstance(value, str):
-        clean = redact_text(value)
+        clean = sanitize_display_text(redact_text(value))
         if len(clean) > limit:
             return clean[:limit] + "…[truncated]"
         return clean
@@ -569,10 +747,24 @@ def _bounded(value: Any, *, limit: int) -> Any:
                 result["_truncated"] = True
                 break
             lowered = str(key).lower()
-            if any(
-                token in lowered
-                for token in ("authorization", "token", "secret", "password")
-            ):
+            sensitive_key = (
+                lowered
+                in {
+                    "authorization",
+                    "token",
+                    "access_token",
+                    "refresh_token",
+                    "api_token",
+                    "secret",
+                    "client_secret",
+                    "password",
+                    "passphrase",
+                }
+                or lowered.endswith("_secret")
+                or lowered.endswith("_password")
+                or lowered.endswith("_credential")
+            )
+            if sensitive_key:
                 result[str(key)] = "[REDACTED]"
             else:
                 result[str(key)] = _bounded(item, limit=limit)
@@ -870,12 +1062,14 @@ class CodexAppServerConnection(HarnessConnection):
         *,
         external_session_id: str,
         permission_handler: PermissionHandler,
+        interaction_handler: InteractionHandler = _decline_unsupported_interaction,
         approval_policy: Literal["untrusted", "never"] = "untrusted",
         trusted_mcp_servers: frozenset[str] = frozenset(),
     ) -> None:
         self.rpc = rpc
         self.external_session_id = external_session_id
         self.permission_handler = permission_handler
+        self.interaction_handler = interaction_handler
         self.approval_policy = approval_policy
         self.trusted_mcp_servers = trusted_mcp_servers
         self.active_turn_id: str | None = None
@@ -901,6 +1095,7 @@ class CodexAppServerConnection(HarnessConnection):
         )
         message_parts: list[str] = []
         message_phases: dict[str, str] = {}
+        reasoning_items: set[str] = set()
         while True:
             raw = await self.rpc.events.get()
             if isinstance(raw, BaseException):
@@ -918,6 +1113,68 @@ class CodexAppServerConnection(HarnessConnection):
                 async for event in self._approval(raw, method, params):
                     yield event
                 continue
+            if method == "item/tool/requestUserInput":
+                questions = params.get("questions")
+                if not isinstance(questions, list):
+                    questions = []
+                interaction_id, decision = await self.interaction_handler(
+                    HarnessInteractionRequest(
+                        vendor_request_id=str(raw.get("id")),
+                        kind=HarnessInteractionKind.USER_INPUT,
+                        prompt="Codex needs input to continue.",
+                        item_id=str(params.get("itemId") or "") or None,
+                        questions=_bounded(questions, limit=8_000),
+                        contains_secret=any(
+                            isinstance(question, dict)
+                            and question.get("isSecret") is True
+                            for question in questions
+                        ),
+                        auto_resolution_ms=(
+                            int(params["autoResolutionMs"])
+                            if isinstance(params.get("autoResolutionMs"), int)
+                            else None
+                        ),
+                    )
+                )
+                yield HarnessEvent(
+                    type="interaction",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=str(params.get("itemId") or interaction_id),
+                    item_kind="tool",
+                    item_status="waiting_input",
+                    title="Input required",
+                    summary="Codex is waiting for operator input.",
+                    payload={
+                        "interaction_id": interaction_id,
+                        "kind": "user_input",
+                        "questions": _bounded(questions, limit=8_000),
+                    },
+                )
+                resolved = await decision
+                await self.rpc.respond(
+                    raw.get("id"),
+                    _codex_user_input_response(
+                        questions,
+                        resolved.get("response")
+                        if resolved.get("action") == "answer"
+                        else {},
+                    ),
+                )
+                yield HarnessEvent(
+                    type="interaction",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=str(params.get("itemId") or interaction_id),
+                    item_kind="tool",
+                    item_status="completed",
+                    title="Input resolved",
+                    payload={
+                        "interaction_id": interaction_id,
+                        "action": str(resolved.get("action") or "decline"),
+                    },
+                )
+                continue
             if method == "mcpServer/elicitation/request":
                 server_name = str(params.get("serverName") or "")
                 requested_schema = params.get("requestedSchema")
@@ -929,27 +1186,72 @@ class CodexAppServerConnection(HarnessConnection):
                 # The empty confirmation is Codex's duplicate MCP approval. The
                 # in-process Nebula gateway still performs scope, risk, and durable
                 # approval checks before any action reaches its broker.
-                response = (
-                    {"action": "accept", "content": {}}
-                    if trusted_empty_form
-                    else {"action": "decline"}
+                if trusted_empty_form:
+                    await self.rpc.respond(
+                        raw.get("id"), {"action": "accept", "content": {}}
+                    )
+                    yield HarnessEvent(
+                        type="notice",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        external_turn_id=self.active_turn_id,
+                        title="MCP confirmation accepted",
+                        summary=f"Accepted the trusted empty confirmation from {server_name}.",
+                        payload={"severity": "info", "server_name": server_name},
+                    )
+                    continue
+                interaction_id, decision = await self.interaction_handler(
+                    HarnessInteractionRequest(
+                        vendor_request_id=str(raw.get("id")),
+                        kind=HarnessInteractionKind.MCP_ELICITATION,
+                        prompt=str(
+                            params.get("message") or "MCP server requests input."
+                        ),
+                        item_id=str(params.get("elicitationId") or "") or None,
+                        response_schema=(
+                            requested_schema
+                            if isinstance(requested_schema, dict)
+                            else {}
+                        ),
+                        contains_secret=_schema_contains_secret(requested_schema),
+                        annotations={
+                            "server_name": server_name,
+                            "mode": str(params.get("mode") or ""),
+                        },
+                    )
                 )
-                await self.rpc.respond(raw.get("id"), response)
                 yield HarnessEvent(
-                    type="item_completed",
+                    type="interaction",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
                     external_turn_id=self.active_turn_id,
+                    item_id=str(params.get("elicitationId") or interaction_id),
+                    item_kind="tool",
+                    item_status="waiting_input",
+                    title=f"{server_name or 'MCP'} input required",
                     payload={
-                        "type": (
-                            "mcp_gateway_confirmation_accepted"
-                            if trusted_empty_form
-                            else "mcp_elicitation_declined"
-                        ),
-                        "server_name": server_name,
-                        "mode": str(params.get("mode") or ""),
-                        "requested_schema": _bounded(
-                            params.get("requestedSchema"), limit=4_000
-                        ),
+                        "interaction_id": interaction_id,
+                        "kind": "mcp_elicitation",
+                        "response_schema": _bounded(requested_schema, limit=16_000),
                     },
+                )
+                resolved = await decision
+                accepted = resolved.get("action") == "answer"
+                await self.rpc.respond(
+                    raw.get("id"),
+                    (
+                        {"action": "accept", "content": resolved.get("response", {})}
+                        if accepted
+                        else {"action": "decline"}
+                    ),
+                )
+                yield HarnessEvent(
+                    type="interaction",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=str(params.get("elicitationId") or interaction_id),
+                    item_kind="tool",
+                    item_status="completed" if accepted else "cancelled",
+                    title="MCP input resolved",
+                    payload={"interaction_id": interaction_id, "accepted": accepted},
                 )
                 continue
             if params.get("turnId") not in {None, self.active_turn_id}:
@@ -958,12 +1260,167 @@ class CodexAppServerConnection(HarnessConnection):
                 delta = str(params.get("delta") or "")
                 item_id = str(params.get("itemId") or "")
                 if message_phases.get(item_id) == "commentary":
+                    yield HarnessEvent(
+                        type="output_delta",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        external_turn_id=self.active_turn_id,
+                        item_id=item_id or "commentary",
+                        item_kind="reasoning",
+                        item_status="streaming",
+                        title="Commentary",
+                        stream="commentary",
+                        delta=str(_bounded(delta, limit=MAX_TOOL_RESULT_TEXT)),
+                    )
                     continue
                 message_parts.append(delta)
                 yield HarnessEvent(
                     type="message_delta",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
                     delta=delta,
+                    item_id=item_id or None,
                     external_turn_id=self.active_turn_id,
+                )
+                continue
+            if method == "item/reasoning/summaryTextDelta":
+                item_id = str(params.get("itemId") or "reasoning")
+                reasoning_items.add(item_id)
+                yield HarnessEvent(
+                    type="output_delta",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=item_id,
+                    item_kind="reasoning",
+                    item_status="streaming",
+                    title="Reasoning summary",
+                    stream="reasoning_summary",
+                    delta=str(
+                        _bounded(params.get("delta") or "", limit=MAX_TOOL_RESULT_TEXT)
+                    ),
+                )
+                continue
+            if method == "item/reasoning/summaryPartAdded":
+                item_id = str(params.get("itemId") or "reasoning")
+                reasoning_items.add(item_id)
+                yield HarnessEvent(
+                    type="item_upsert",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=item_id,
+                    item_kind="reasoning",
+                    item_status="streaming",
+                    title="Reasoning summary",
+                    payload={"part_index": params.get("summaryIndex")},
+                )
+                continue
+            if method == "item/reasoning/textDelta":
+                item_id = str(params.get("itemId") or "reasoning")
+                if item_id not in reasoning_items:
+                    reasoning_items.add(item_id)
+                    yield HarnessEvent(
+                        type="item_upsert",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        external_turn_id=self.active_turn_id,
+                        item_id=item_id,
+                        item_kind="reasoning",
+                        item_status="streaming",
+                        title="Reasoning",
+                        summary="Codex is reasoning; hidden trace content is not retained.",
+                    )
+                continue
+            if method in {"turn/plan/updated", "item/plan/delta"}:
+                yield HarnessEvent(
+                    type="item_upsert",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=str(params.get("itemId") or "turn-plan"),
+                    item_kind="plan",
+                    item_status="streaming",
+                    title="Plan",
+                    payload=_bounded(params, limit=MAX_TOOL_RESULT_TEXT),
+                )
+                continue
+            if method == "turn/diff/updated":
+                yield HarnessEvent(
+                    type="item_upsert",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id="turn-diff",
+                    item_kind="file_change",
+                    item_status="streaming",
+                    title="Workspace changes",
+                    payload=_bounded(params, limit=MAX_TOOL_RESULT_TEXT),
+                )
+                continue
+            if method in {
+                "item/commandExecution/outputDelta",
+                "item/commandExecution/terminalInteraction",
+            }:
+                stream = "terminal"
+                if str(params.get("stream") or "").lower() in {"stdout", "stderr"}:
+                    stream = str(params["stream"]).lower()
+                yield HarnessEvent(
+                    type="output_delta",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=str(params.get("itemId") or "command"),
+                    item_kind="command",
+                    item_status="streaming",
+                    title="Command output",
+                    stream=stream,
+                    delta=str(
+                        _bounded(
+                            params.get("delta") or params.get("input") or "",
+                            limit=MAX_TOOL_RESULT_TEXT,
+                        )
+                    ),
+                    payload={"process_id": params.get("processId")},
+                )
+                continue
+            if method in {
+                "item/fileChange/patchUpdated",
+                "item/fileChange/outputDelta",
+            }:
+                yield HarnessEvent(
+                    type=(
+                        "output_delta"
+                        if method.endswith("outputDelta")
+                        else "item_upsert"
+                    ),
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=str(params.get("itemId") or "file-change"),
+                    item_kind="file_change",
+                    item_status="streaming",
+                    title="File changes",
+                    stream="patch" if method.endswith("outputDelta") else None,
+                    delta=(
+                        str(
+                            _bounded(
+                                params.get("delta") or "", limit=MAX_TOOL_RESULT_TEXT
+                            )
+                        )
+                        if method.endswith("outputDelta")
+                        else None
+                    ),
+                    payload=_bounded(params, limit=MAX_TOOL_RESULT_TEXT),
+                )
+                continue
+            if method == "item/mcpToolCall/progress":
+                yield HarnessEvent(
+                    type="output_delta",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=str(params.get("itemId") or "mcp-tool"),
+                    item_kind="tool",
+                    item_status="streaming",
+                    title="MCP tool progress",
+                    stream="tool_output",
+                    delta=str(
+                        _bounded(
+                            params.get("message") or params.get("delta") or "",
+                            limit=MAX_TOOL_RESULT_TEXT,
+                        )
+                    ),
                 )
                 continue
             if method in {"item/started", "item/completed"}:
@@ -971,10 +1428,33 @@ class CodexAppServerConnection(HarnessConnection):
                 if not isinstance(item, dict):
                     continue
                 item_type = str(item.get("type") or "unknown")
+                item_id = str(item.get("id") or "") or None
+                item_status = (
+                    "running"
+                    if method == "item/started"
+                    else _codex_item_terminal_status(item)
+                )
                 if item_type == "agentMessage" and method == "item/started":
-                    item_id = str(item.get("id") or "")
                     if item_id:
                         message_phases[item_id] = str(item.get("phase") or "")
+                if item_type == "agentMessage":
+                    if (
+                        str(
+                            item.get("phase") or message_phases.get(item_id or "") or ""
+                        )
+                        == "commentary"
+                    ):
+                        yield HarnessEvent(
+                            type="item_upsert",
+                            vendor=HarnessKind.CODEX_APP_SERVER,
+                            external_turn_id=self.active_turn_id,
+                            item_id=item_id or "commentary",
+                            item_kind="reasoning",
+                            item_status=item_status,
+                            title="Commentary",
+                            payload=_bounded(item, limit=MAX_TOOL_RESULT_TEXT),
+                        )
+                    continue
                 if item_type == "mcpToolCall":
                     yield HarnessEvent(
                         type=(
@@ -983,11 +1463,16 @@ class CodexAppServerConnection(HarnessConnection):
                             else "tool_completed"
                         ),
                         external_turn_id=self.active_turn_id,
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        item_id=item_id,
+                        item_kind="tool",
+                        item_status=item_status,
                         server_id=str(item.get("server") or ""),
                         tool_name=str(item.get("tool") or ""),
                         payload=_bounded(item, limit=MAX_TOOL_RESULT_TEXT),
                     )
                 elif item_type in _CODEX_NATIVE_ITEM_TYPES:
+                    kind = _codex_item_kind(item_type)
                     yield HarnessEvent(
                         type=(
                             "tool_started"
@@ -995,24 +1480,77 @@ class CodexAppServerConnection(HarnessConnection):
                             else "tool_completed"
                         ),
                         external_turn_id=self.active_turn_id,
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        item_id=item_id,
+                        parent_item_id=str(item.get("parentId") or "") or None,
+                        item_kind=kind,
+                        item_status=item_status,
+                        title=_codex_item_title(item_type, item),
                         server_id="codex",
                         tool_name=item_type,
                         payload=_bounded(item, limit=MAX_TOOL_RESULT_TEXT),
                     )
                 else:
+                    kind = _codex_item_kind(item_type)
                     yield HarnessEvent(
-                        type=(
-                            "item_started"
-                            if method == "item/started"
-                            else "item_completed"
-                        ),
+                        type="item_upsert",
                         external_turn_id=self.active_turn_id,
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        item_id=item_id or f"{item_type}-{len(message_phases)}",
+                        parent_item_id=str(item.get("parentId") or "") or None,
+                        item_kind=kind,
+                        item_status=item_status,
+                        title=_codex_item_title(item_type, item),
                         payload=_bounded(item, limit=MAX_TOOL_RESULT_TEXT),
                     )
                 continue
             if method == "thread/tokenUsage/updated":
                 usage = _codex_usage(params)
-                yield HarnessEvent(type="usage", usage=usage, payload={})
+                yield HarnessEvent(
+                    type="usage",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    usage=usage,
+                    detailed_usage=_codex_detailed_usage(params),
+                    payload={},
+                )
+                continue
+            if method in {"hook/started", "hook/completed"}:
+                yield HarnessEvent(
+                    type="item_upsert",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    item_id=str(params.get("id") or params.get("hookId") or method),
+                    item_kind="hook",
+                    item_status="running"
+                    if method.endswith("started")
+                    else "completed",
+                    title=str(params.get("eventName") or "Hook"),
+                    payload=_bounded(params, limit=MAX_TOOL_RESULT_TEXT),
+                )
+                continue
+            if method in {
+                "warning",
+                "model/rerouted",
+                "model/verification",
+                "turn/moderationMetadata",
+                "turn/aborted",
+                "thread/compacted",
+            }:
+                yield HarnessEvent(
+                    type="notice",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    title=method.replace("/", " ").replace("_", " ").title(),
+                    summary=str(
+                        _bounded(
+                            params.get("message") or params.get("reason") or method,
+                            limit=1_000,
+                        )
+                    ),
+                    payload=_bounded(
+                        {"method": method, **params}, limit=MAX_TOOL_RESULT_TEXT
+                    ),
+                )
                 continue
             if method == "turn/completed":
                 completed = params.get("turn")
@@ -1032,8 +1570,26 @@ class CodexAppServerConnection(HarnessConnection):
                         "Codex turn failed: "
                         + str(_bounded(error or status, limit=1_000))
                     )
-                yield HarnessEvent(type="completed", message="".join(message_parts))
+                yield HarnessEvent(
+                    type="completed",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    message="".join(message_parts),
+                    external_turn_id=str(completed.get("id") or "") or None,
+                )
                 return
+            if (
+                isinstance(method, str)
+                and method
+                and params.get("turnId") == self.active_turn_id
+            ):
+                yield HarnessEvent(
+                    type="notice",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    title="Codex activity",
+                    summary=f"Unhandled Codex event: {method}",
+                    payload=_bounded({"method": method, "params": params}, limit=8_000),
+                )
 
     async def _approval(
         self, raw: dict[str, Any], method: str, params: dict[str, Any]
@@ -1070,6 +1626,19 @@ class CodexAppServerConnection(HarnessConnection):
                 type="approval_required",
                 approval_id=ticket.approval_id,
                 tool_call_id=ticket.tool_call_id,
+                item_id=ticket.tool_call_id or ticket.approval_id,
+                parent_item_id=str(params.get("itemId") or params.get("callId") or "")
+                or None,
+                item_kind=(
+                    "command"
+                    if category == "command"
+                    else "file_change"
+                    if category == "file"
+                    else "tool"
+                ),
+                item_status="waiting_approval",
+                title=f"{category.title()} approval required",
+                summary="The harness is waiting for an operator decision.",
                 payload={"category": category, "arguments": request.arguments},
             )
         decision = await ticket.decision
@@ -1127,6 +1696,116 @@ def _codex_usage(params: dict[str, Any]) -> ChatTokenUsage:
         output_tokens=max(0, output_tokens),
         total_tokens=max(0, input_tokens + output_tokens),
     )
+
+
+def _codex_detailed_usage(params: dict[str, Any]) -> HarnessDetailedUsage:
+    raw_usage = params.get("tokenUsage") or params.get("usage") or {}
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+    raw_last = usage.get("last")
+    last = raw_last if isinstance(raw_last, dict) else usage
+
+    def count(*names: str) -> int:
+        for name in names:
+            value = last.get(name)
+            if isinstance(value, (int, float)):
+                return max(0, int(value))
+        return 0
+
+    input_tokens = count("inputTokens", "input_tokens")
+    output_tokens = count("outputTokens", "output_tokens")
+    total_tokens = count("totalTokens", "total_tokens") or (
+        input_tokens + output_tokens
+    )
+    context_window = usage.get("modelContextWindow")
+    return HarnessDetailedUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cached_input_tokens=count("cachedInputTokens", "cached_input_tokens"),
+        reasoning_output_tokens=count(
+            "reasoningOutputTokens", "reasoning_output_tokens"
+        ),
+        context_window=(
+            max(0, int(context_window))
+            if isinstance(context_window, (int, float))
+            else None
+        ),
+        context_used=input_tokens,
+    )
+
+
+def _codex_item_kind(item_type: str) -> Any:
+    return {
+        "plan": "plan",
+        "reasoning": "reasoning",
+        "commandExecution": "command",
+        "fileChange": "file_change",
+        "mcpToolCall": "tool",
+        "dynamicToolCall": "tool",
+        "webSearch": "web_search",
+        "imageGeneration": "image",
+        "imageView": "image",
+        "skill": "skill",
+        "collabAgentToolCall": "subagent",
+        "contextCompaction": "compaction",
+        "enteredReviewMode": "review",
+        "exitedReviewMode": "review",
+    }.get(item_type, "tool")
+
+
+def _codex_item_title(item_type: str, item: dict[str, Any]) -> str:
+    if item_type == "commandExecution":
+        command = item.get("command")
+        if isinstance(command, str) and command:
+            return command[:1_000]
+    if item_type == "fileChange":
+        return "File changes"
+    if item_type == "collabAgentToolCall":
+        return str(item.get("tool") or item.get("agentType") or "Subagent")[:1_000]
+    return re.sub(r"(?<!^)(?=[A-Z])", " ", item_type).replace("_", " ").title()[:1_000]
+
+
+def _codex_item_terminal_status(item: dict[str, Any]) -> Any:
+    status = str(item.get("status") or "completed").lower()
+    if status in {"failed", "error", "declined"}:
+        return "failed"
+    if status in {"cancelled", "canceled"}:
+        return "cancelled"
+    if status == "interrupted":
+        return "interrupted"
+    return "completed"
+
+
+def _schema_contains_secret(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if value.get("writeOnly") is True or value.get("format") == "password":
+        return True
+    return any(_schema_contains_secret(item) for item in value.values())
+
+
+def _codex_user_input_response(questions: list[Any], response: Any) -> dict[str, Any]:
+    source = response if isinstance(response, dict) else {}
+    raw_answers = source.get("answers")
+    answers = raw_answers if isinstance(raw_answers, dict) else source
+    normalized: dict[str, dict[str, list[str]]] = {}
+    for question in questions:
+        if not isinstance(question, dict):
+            continue
+        question_id = str(question.get("id") or "")
+        if not question_id:
+            continue
+        value = answers.get(question_id) if isinstance(answers, dict) else None
+        if isinstance(value, dict):
+            value = value.get("answers")
+        if isinstance(value, list):
+            items = [str(item)[:4_000] for item in value[:16]]
+        elif value is None:
+            items = []
+        else:
+            items = [str(value)[:4_000]]
+        normalized[question_id] = {"answers": items}
+    return {"answers": normalized}
 
 
 class CodexAppServerAdapter(HarnessAdapter):
@@ -1194,6 +1873,15 @@ class CodexAppServerAdapter(HarnessAdapter):
                     approvals=True,
                     streaming=True,
                     mcp=True,
+                    activity_replay=True,
+                    reasoning_summaries=True,
+                    plans=True,
+                    live_command_output=True,
+                    file_diffs=True,
+                    detailed_usage=True,
+                    interactions=True,
+                    hooks=True,
+                    subagent_activity=True,
                     models=models,
                     supported_native_capabilities=_supported_native_capabilities(
                         self.kind
@@ -1246,7 +1934,14 @@ class CodexAppServerAdapter(HarnessAdapter):
             native_capabilities=native_capabilities,
         )
         try:
-            await self._initialize(rpc)
+            verified_activity_protocol = bool(
+                request.profile.capabilities.checked_at
+                and request.profile.capabilities.protocol_version == "app-server-v2"
+                and not request.profile.capabilities.detail
+            )
+            await self._initialize(
+                rpc, enable_activity_experimental=verified_activity_protocol
+            )
             developer_instructions = _codex_developer_instructions(
                 request.session, native_capabilities
             )
@@ -1301,6 +1996,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                 rpc,
                 external_session_id=external_id,
                 permission_handler=request.permission_handler,
+                interaction_handler=request.interaction_handler,
                 approval_policy=approval_policy,
                 trusted_mcp_servers=frozenset(request.gateway_config),
             )
@@ -1315,7 +2011,17 @@ class CodexAppServerAdapter(HarnessAdapter):
             await rpc.close()
             raise
 
-    async def _initialize(self, rpc: _CodexRpc) -> Any:
+    async def _initialize(
+        self, rpc: _CodexRpc, *, enable_activity_experimental: bool = False
+    ) -> Any:
+        capabilities: dict[str, bool] = {"requestAttestation": False}
+        if enable_activity_experimental:
+            capabilities.update(
+                {
+                    "experimentalApi": True,
+                    "mcpServerOpenaiFormElicitation": True,
+                }
+            )
         result = await rpc.request(
             "initialize",
             {
@@ -1324,11 +2030,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                     "title": "Nebula Core",
                     "version": ADAPTER_CONTRACT_VERSION,
                 },
-                "capabilities": {
-                    "experimentalApi": False,
-                    "mcpServerOpenaiFormElicitation": False,
-                    "requestAttestation": False,
-                },
+                "capabilities": capabilities,
             },
         )
         await rpc.notify("initialized")
@@ -1571,33 +2273,290 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         permission_handler: PermissionHandler,
         sdk: Any,
         external_session_id: str | None,
+        workspace: Path,
     ) -> None:
         self.client = client
         self.permission_handler = permission_handler
         self.sdk = sdk
         self.external_session_id = external_session_id
+        self.workspace = workspace
         self.active = False
 
     async def run_turn(self, prompt: str, *, model: str) -> AsyncIterator[HarnessEvent]:
         del model  # Locked into ClaudeAgentOptions for the connected session.
         self.active = True
         await self.client.query(prompt)
-        yield HarnessEvent(type="started", external_session_id=self.external_session_id)
+        yield HarnessEvent(
+            type="started",
+            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+            external_session_id=self.external_session_id,
+        )
         parts: list[str] = []
         fallback_parts: list[str] = []
-        tool_identities: dict[str, tuple[str | None, str]] = {}
+        tool_identities: dict[str, tuple[str | None, str, Any, str | None]] = {}
+        stream_blocks: dict[int, dict[str, Any]] = {}
+        reasoning_items: set[str] = set()
         usage = ChatTokenUsage()
+        detailed_usage = HarnessDetailedUsage()
+        checkpoint_id: str | None = None
+        before = _workspace_snapshot(self.workspace)
         try:
             async for message in self.client.receive_response():
                 class_name = type(message).__name__
                 if class_name == "StreamEvent":
                     event = getattr(message, "event", None)
-                    delta = _claude_delta(event)
-                    if delta:
-                        parts.append(delta)
-                        yield HarnessEvent(type="message_delta", delta=delta)
+                    if not isinstance(event, dict):
+                        continue
+                    event_type = str(event.get("type") or "")
+                    index = int(event.get("index") or 0)
+                    if event_type == "content_block_start":
+                        block = event.get("content_block")
+                        if not isinstance(block, dict):
+                            continue
+                        block_type = str(block.get("type") or "")
+                        item_id = str(block.get("id") or f"block-{index}")
+                        stream_blocks[index] = {
+                            "id": item_id,
+                            "type": block_type,
+                            "name": block.get("name"),
+                            "parent": getattr(message, "parent_tool_use_id", None),
+                        }
+                        if block_type == "thinking":
+                            reasoning_items.add(item_id)
+                            yield _claude_reasoning_event(item_id, "streaming")
+                        elif block_type in {"tool_use", "server_tool_use"}:
+                            vendor_name = str(block.get("name") or "unknown")
+                            server_name, tool_name = _parse_claude_mcp_name(vendor_name)
+                            normalized_server = server_name or "claude"
+                            kind = _claude_item_kind(tool_name)
+                            parent = getattr(message, "parent_tool_use_id", None)
+                            tool_identities[item_id] = (
+                                normalized_server,
+                                tool_name,
+                                kind,
+                                parent,
+                            )
+                            yield HarnessEvent(
+                                type="tool_started",
+                                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                item_id=item_id,
+                                parent_item_id=parent,
+                                item_kind=kind,
+                                item_status="running",
+                                title=tool_name,
+                                server_id=normalized_server,
+                                tool_name=tool_name,
+                                payload={
+                                    "id": item_id,
+                                    "vendor_name": vendor_name,
+                                    "arguments": _bounded(
+                                        block.get("input", {}),
+                                        limit=MAX_TOOL_ARGUMENT_TEXT,
+                                    ),
+                                },
+                            )
+                        elif block_type != "text":
+                            yield HarnessEvent(
+                                type="notice",
+                                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                title="Claude activity",
+                                summary=f"Unhandled Claude content block: {block_type or 'unknown'}",
+                                payload={"block_type": block_type or "unknown"},
+                            )
+                        continue
+                    if event_type == "content_block_delta":
+                        delta = event.get("delta")
+                        if not isinstance(delta, dict):
+                            continue
+                        delta_type = str(delta.get("type") or "")
+                        block = stream_blocks.get(index, {})
+                        item_id = str(block.get("id") or f"block-{index}")
+                        if delta_type == "text_delta":
+                            text = str(delta.get("text") or "")
+                            if text:
+                                parts.append(text)
+                                yield HarnessEvent(
+                                    type="message_delta",
+                                    vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                    item_id=item_id,
+                                    delta=text,
+                                )
+                        elif delta_type in {"thinking_delta", "signature_delta"}:
+                            if item_id not in reasoning_items:
+                                reasoning_items.add(item_id)
+                                yield _claude_reasoning_event(item_id, "streaming")
+                        elif delta_type == "input_json_delta":
+                            yield HarnessEvent(
+                                type="output_delta",
+                                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                item_id=item_id,
+                                parent_item_id=(
+                                    str(block.get("parent"))
+                                    if block.get("parent")
+                                    else None
+                                ),
+                                item_kind=_claude_item_kind(
+                                    str(block.get("name") or "unknown")
+                                ),
+                                item_status="streaming",
+                                title=str(block.get("name") or "Tool input"),
+                                stream="tool_input",
+                                delta=str(
+                                    _bounded(
+                                        delta.get("partial_json") or "",
+                                        limit=MAX_TOOL_RESULT_TEXT,
+                                    )
+                                ),
+                            )
+                        else:
+                            yield HarnessEvent(
+                                type="notice",
+                                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                title="Claude activity",
+                                summary=f"Unhandled Claude stream delta: {delta_type or 'unknown'}",
+                                payload={"delta_type": delta_type or "unknown"},
+                            )
+                        continue
+                    if event_type == "content_block_stop":
+                        block = stream_blocks.get(index, {})
+                        item_id = str(block.get("id") or f"block-{index}")
+                        if item_id in reasoning_items:
+                            yield _claude_reasoning_event(item_id, "completed")
+                    elif event_type not in {
+                        "message_start",
+                        "message_delta",
+                        "message_stop",
+                    }:
+                        yield HarnessEvent(
+                            type="notice",
+                            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                            title="Claude activity",
+                            summary=f"Unhandled Claude stream event: {event_type or 'unknown'}",
+                            payload={"event_type": event_type or "unknown"},
+                        )
+                    continue
+                if class_name in {
+                    "TaskStartedMessage",
+                    "TaskProgressMessage",
+                    "TaskNotificationMessage",
+                    "TaskUpdatedMessage",
+                }:
+                    task_id = str(getattr(message, "task_id", "") or "task")
+                    raw_status = str(
+                        getattr(message, "status", "")
+                        or getattr(message, "patch", {}).get("status", "")
+                    )
+                    status = _claude_task_status(class_name, raw_status)
+                    task_usage = getattr(message, "usage", None)
+                    yield HarnessEvent(
+                        type="item_upsert",
+                        vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                        item_id=task_id,
+                        parent_item_id=(
+                            str(getattr(message, "tool_use_id", "") or "") or None
+                        ),
+                        item_kind="subagent",
+                        item_status=status,
+                        title=str(
+                            getattr(message, "description", "")
+                            or getattr(message, "summary", "")
+                            or "Claude task"
+                        ),
+                        summary=str(getattr(message, "summary", "") or "") or None,
+                        payload=_bounded(
+                            {
+                                "task_id": task_id,
+                                "task_type": getattr(message, "task_type", None),
+                                "last_tool_name": getattr(
+                                    message, "last_tool_name", None
+                                ),
+                                "output_file": getattr(message, "output_file", None),
+                                "usage": task_usage,
+                                "patch": getattr(message, "patch", None),
+                                "stoppable": status
+                                in {"queued", "running", "streaming"},
+                            },
+                            limit=MAX_TOOL_RESULT_TEXT,
+                        ),
+                    )
+                    continue
+                if class_name == "HookEventMessage":
+                    subtype = str(getattr(message, "subtype", "") or "")
+                    yield HarnessEvent(
+                        type="item_upsert",
+                        vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                        item_id=str(getattr(message, "uuid", "") or f"hook-{subtype}"),
+                        item_kind="hook",
+                        item_status=(
+                            "running" if subtype == "hook_started" else "completed"
+                        ),
+                        title=str(
+                            getattr(message, "hook_event_name", "") or "Claude hook"
+                        ),
+                        payload=_bounded(
+                            getattr(message, "data", {}) or {},
+                            limit=MAX_TOOL_RESULT_TEXT,
+                        ),
+                    )
+                    continue
+                if class_name == "SystemMessage":
+                    subtype = str(getattr(message, "subtype", "") or "system")
+                    data = getattr(message, "data", {}) or {}
+                    if "compact" in subtype.lower():
+                        yield HarnessEvent(
+                            type="item_upsert",
+                            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                            item_id=str(data.get("uuid") or f"compaction-{subtype}"),
+                            item_kind="compaction",
+                            item_status="completed",
+                            title="Context compaction",
+                            payload=_bounded(data, limit=MAX_TOOL_RESULT_TEXT),
+                        )
+                    else:
+                        yield HarnessEvent(
+                            type="notice",
+                            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                            title=subtype.replace("_", " ").title(),
+                            summary=str(
+                                _bounded(
+                                    data.get("message") or subtype,
+                                    limit=1_000,
+                                )
+                            ),
+                            payload=_bounded(data, limit=MAX_TOOL_RESULT_TEXT),
+                        )
+                    continue
+                if class_name == "RateLimitEvent":
+                    info = getattr(message, "rate_limit_info", None)
+                    rate_limit = _object_values(info)
+                    detailed_usage = detailed_usage.model_copy(
+                        update={"rate_limit": _bounded(rate_limit, limit=8_000)}
+                    )
+                    yield HarnessEvent(
+                        type="notice",
+                        vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                        title="Claude rate limit",
+                        summary=str(rate_limit.get("status") or "Rate limit updated"),
+                        detailed_usage=detailed_usage,
+                        payload=_bounded(rate_limit, limit=8_000),
+                    )
                     continue
                 if class_name in {"AssistantMessage", "UserMessage"}:
+                    parent = (
+                        str(getattr(message, "parent_tool_use_id", "") or "") or None
+                    )
+                    if class_name == "UserMessage" and checkpoint_id is None:
+                        raw_checkpoint = getattr(message, "uuid", None)
+                        if isinstance(raw_checkpoint, str) and raw_checkpoint:
+                            checkpoint_id = raw_checkpoint
+                            yield HarnessEvent(
+                                type="checkpoint",
+                                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                item_id=checkpoint_id,
+                                title="File checkpoint",
+                                summary="Claude recorded a rewind point for this turn.",
+                                payload={"checkpoint_id": checkpoint_id},
+                            )
                     for block in getattr(message, "content", []) or []:
                         block_name = type(block).__name__
                         if (
@@ -1607,17 +2566,34 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                             text = str(getattr(block, "text", ""))
                             if text:
                                 fallback_parts.append(text)
-                        elif block_name == "ToolUseBlock":
+                        elif block_name == "ThinkingBlock":
+                            item_id = str(
+                                getattr(message, "uuid", "")
+                                or f"reasoning-{len(reasoning_items)}"
+                            )
+                            if item_id not in reasoning_items:
+                                reasoning_items.add(item_id)
+                                yield _claude_reasoning_event(item_id, "completed")
+                        elif block_name in {"ToolUseBlock", "ServerToolUseBlock"}:
                             vendor_name = str(getattr(block, "name", ""))
                             server_name, tool_name = _parse_claude_mcp_name(vendor_name)
                             normalized_server = server_name or "claude"
                             tool_use_id = str(getattr(block, "id", ""))
+                            kind = _claude_item_kind(tool_name)
                             tool_identities[tool_use_id] = (
                                 normalized_server,
                                 tool_name,
+                                kind,
+                                parent,
                             )
                             yield HarnessEvent(
                                 type="tool_started",
+                                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                item_id=tool_use_id,
+                                parent_item_id=parent,
+                                item_kind=kind,
+                                item_status="running",
+                                title=tool_name,
                                 server_id=normalized_server,
                                 tool_name=tool_name,
                                 payload=_bounded(
@@ -1629,14 +2605,22 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                                     limit=MAX_TOOL_ARGUMENT_TEXT,
                                 ),
                             )
-                        elif block_name == "ToolResultBlock":
+                        elif block_name in {"ToolResultBlock", "ServerToolResultBlock"}:
                             tool_use_id = str(getattr(block, "tool_use_id", ""))
-                            server_name, tool_name = tool_identities.get(
-                                tool_use_id, (None, "unknown")
+                            server_name, tool_name, kind, tool_parent = (
+                                tool_identities.get(
+                                    tool_use_id, (None, "unknown", "tool", parent)
+                                )
                             )
                             is_error = bool(getattr(block, "is_error", False))
                             yield HarnessEvent(
                                 type="tool_completed",
+                                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                item_id=tool_use_id,
+                                parent_item_id=tool_parent,
+                                item_kind=kind,
+                                item_status="failed" if is_error else "completed",
+                                title=tool_name,
                                 server_id=server_name,
                                 tool_name=tool_name,
                                 payload=_bounded(
@@ -1652,21 +2636,75 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                                     limit=MAX_TOOL_RESULT_TEXT,
                                 ),
                             )
+                        else:
+                            yield HarnessEvent(
+                                type="notice",
+                                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                title="Claude activity",
+                                summary=f"Unhandled Claude message block: {block_name}",
+                                payload={"block_type": block_name},
+                            )
+                    raw_message_usage = getattr(message, "usage", None)
+                    if isinstance(raw_message_usage, dict):
+                        message_detail = _claude_detailed_usage(raw_message_usage)
+                        if message_detail.total_tokens >= detailed_usage.total_tokens:
+                            detailed_usage = message_detail
+                            usage = message_detail.basic()
+                            yield HarnessEvent(
+                                type="usage",
+                                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                                usage=usage,
+                                detailed_usage=detailed_usage,
+                            )
+                    message_error = getattr(message, "error", None)
+                    if message_error:
+                        yield HarnessEvent(
+                            type="notice",
+                            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                            title="Claude message error",
+                            summary=str(message_error),
+                            payload={"error": str(message_error)},
+                        )
                     continue
                 if class_name == "ResultMessage":
                     session_id = getattr(message, "session_id", None)
                     if isinstance(session_id, str) and session_id:
                         self.external_session_id = session_id
                     raw_usage = getattr(message, "usage", None) or {}
-                    usage = ChatTokenUsage(
-                        input_tokens=max(0, int(raw_usage.get("input_tokens", 0))),
-                        output_tokens=max(0, int(raw_usage.get("output_tokens", 0))),
-                        total_tokens=max(
-                            0,
-                            int(raw_usage.get("input_tokens", 0))
-                            + int(raw_usage.get("output_tokens", 0)),
-                        ),
+                    detailed_usage = _claude_detailed_usage(
+                        raw_usage,
+                        result=message,
                     )
+                    usage = detailed_usage.basic()
+                    denials = getattr(message, "permission_denials", None)
+                    errors = getattr(message, "errors", None)
+                    deferred = getattr(message, "deferred_tool_use", None)
+                    if denials or errors:
+                        yield HarnessEvent(
+                            type="notice",
+                            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                            title="Claude turn notices",
+                            summary="Claude reported permission denials or errors.",
+                            payload=_bounded(
+                                {"permission_denials": denials, "errors": errors},
+                                limit=MAX_TOOL_RESULT_TEXT,
+                            ),
+                        )
+                    if deferred is not None:
+                        deferred_values = _object_values(deferred)
+                        yield HarnessEvent(
+                            type="item_upsert",
+                            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                            item_id=str(deferred_values.get("id") or "deferred-tool"),
+                            item_kind=_claude_item_kind(
+                                str(deferred_values.get("name") or "unknown")
+                            ),
+                            item_status="waiting_input",
+                            title=str(deferred_values.get("name") or "Deferred tool"),
+                            payload=_bounded(
+                                deferred_values, limit=MAX_TOOL_ARGUMENT_TEXT
+                            ),
+                        )
                     if getattr(message, "is_error", False):
                         raise HarnessTransportError(
                             "Claude turn failed: "
@@ -1676,13 +2714,48 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                                 )
                             )
                         )
+                    continue
+                yield HarnessEvent(
+                    type="notice",
+                    vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                    title="Claude activity",
+                    summary=f"Unhandled Claude message: {class_name}",
+                    payload={"message_type": class_name},
+                )
             if not parts and fallback_parts:
                 fallback = "".join(fallback_parts)
                 parts.append(fallback)
-                yield HarnessEvent(type="message_delta", delta=fallback)
-            yield HarnessEvent(type="usage", usage=usage)
+                yield HarnessEvent(
+                    type="message_delta",
+                    vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                    delta=fallback,
+                )
+            after = _workspace_snapshot(self.workspace)
+            changes, unified = _workspace_changes(before, after)
+            if changes:
+                yield HarnessEvent(
+                    type="item_upsert",
+                    vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                    item_id="workspace-changes",
+                    item_kind="file_change",
+                    item_status="completed",
+                    title="Workspace changes",
+                    summary=f"{len(changes)} file change{'s' if len(changes) != 1 else ''} observed.",
+                    payload={
+                        "files": changes,
+                        "diff": _bounded(unified, limit=MAX_TOOL_RESULT_TEXT),
+                        "attribution": "turn_observed",
+                    },
+                )
+            yield HarnessEvent(
+                type="usage",
+                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                usage=usage,
+                detailed_usage=detailed_usage,
+            )
             yield HarnessEvent(
                 type="completed",
+                vendor=HarnessKind.CLAUDE_AGENT_SDK,
                 message="".join(parts),
                 external_session_id=self.external_session_id,
             )
@@ -1698,6 +2771,14 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         if self.active:
             await self.client.interrupt()
 
+    async def stop_subagent(self, task_id: str) -> None:
+        await self.client.stop_task(task_id)
+
+    async def rewind_files(self, checkpoint_id: str) -> None:
+        if self.active:
+            raise HarnessStateError("Claude files can be rewound only while idle")
+        await self.client.rewind_files(checkpoint_id)
+
     async def close(self) -> None:
         close = getattr(self.client, "disconnect", None) or getattr(
             self.client, "close", None
@@ -1708,15 +2789,172 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                 await result
 
 
-def _claude_delta(event: Any) -> str:
-    if not isinstance(event, dict):
-        return ""
-    if event.get("type") != "content_block_delta":
-        return ""
-    delta = event.get("delta")
-    if isinstance(delta, dict) and delta.get("type") == "text_delta":
-        return str(delta.get("text") or "")
-    return ""
+def _claude_reasoning_event(item_id: str, status: Any) -> HarnessEvent:
+    return HarnessEvent(
+        type="item_upsert",
+        vendor=HarnessKind.CLAUDE_AGENT_SDK,
+        item_id=item_id,
+        item_kind="reasoning",
+        item_status=status,
+        title="Reasoning",
+        summary="Claude reasoning trace is hidden; only lifecycle is retained.",
+    )
+
+
+def _claude_item_kind(tool_name: str) -> Any:
+    normalized = tool_name.lower()
+    if normalized == "bash" or "code_execution" in normalized:
+        return "command"
+    if normalized in {"write", "edit", "notebookedit"} or "text_editor" in normalized:
+        return "file_change"
+    if normalized in {"websearch", "web_search", "webfetch", "web_fetch"}:
+        return "web_search"
+    if normalized in {"agent", "advisor"}:
+        return "subagent"
+    if normalized == "skill":
+        return "skill"
+    return "tool"
+
+
+def _claude_task_status(class_name: str, status: str) -> Any:
+    if class_name == "TaskStartedMessage":
+        return "running"
+    if class_name == "TaskProgressMessage":
+        return "streaming"
+    if status in {"failed"}:
+        return "failed"
+    if status in {"stopped", "killed"}:
+        return "cancelled"
+    if status == "paused":
+        return "waiting_input"
+    if status in {"pending"}:
+        return "queued"
+    if status in {"running"}:
+        return "running"
+    return "completed"
+
+
+def _object_values(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "__dict__"):
+        return {
+            key: item for key, item in vars(value).items() if not key.startswith("_")
+        }
+    return {}
+
+
+def _claude_detailed_usage(
+    usage: Any, *, result: Any | None = None
+) -> HarnessDetailedUsage:
+    values = usage if isinstance(usage, dict) else {}
+
+    def count(*names: str) -> int:
+        for name in names:
+            value = values.get(name)
+            if isinstance(value, (int, float)):
+                return max(0, int(value))
+        return 0
+
+    input_tokens = count("input_tokens", "inputTokens")
+    output_tokens = count("output_tokens", "outputTokens")
+    cache_creation = count("cache_creation_input_tokens", "cacheCreationInputTokens")
+    cache_read = count("cache_read_input_tokens", "cacheReadInputTokens")
+    return HarnessDetailedUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+        cached_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_creation,
+        cache_read_input_tokens=cache_read,
+        cost_usd=(
+            float(getattr(result, "total_cost_usd"))
+            if result is not None
+            and isinstance(getattr(result, "total_cost_usd", None), (int, float))
+            else None
+        ),
+        duration_ms=(
+            int(getattr(result, "duration_ms"))
+            if result is not None
+            and isinstance(getattr(result, "duration_ms", None), (int, float))
+            else None
+        ),
+        duration_api_ms=(
+            int(getattr(result, "duration_api_ms"))
+            if result is not None
+            and isinstance(getattr(result, "duration_api_ms", None), (int, float))
+            else None
+        ),
+        num_turns=(
+            int(getattr(result, "num_turns"))
+            if result is not None
+            and isinstance(getattr(result, "num_turns", None), (int, float))
+            else None
+        ),
+        model_usage=_bounded(
+            getattr(result, "model_usage", None) or {}, limit=MAX_TOOL_RESULT_TEXT
+        ),
+    )
+
+
+def _workspace_snapshot(root: Path) -> dict[str, dict[str, Any]]:
+    snapshot: dict[str, dict[str, Any]] = {}
+    if not root.is_dir():
+        return snapshot
+    for path in sorted(root.rglob("*")):
+        if len(snapshot) >= 2_048 or not path.is_file() or path.is_symlink():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative.startswith(".git/"):
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        text: str | None = None
+        if len(data) <= 2_000_000 and b"\x00" not in data[:8_192]:
+            text = data.decode("utf-8", errors="replace")
+        snapshot[relative] = {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size": len(data),
+            "text": text,
+        }
+    return snapshot
+
+
+def _workspace_changes(
+    before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]
+) -> tuple[list[dict[str, Any]], str]:
+    changes: list[dict[str, Any]] = []
+    diffs: list[str] = []
+    for path in sorted(set(before) | set(after)):
+        old = before.get(path)
+        new = after.get(path)
+        if old is not None and new is not None and old["sha256"] == new["sha256"]:
+            continue
+        kind = "added" if old is None else "deleted" if new is None else "modified"
+        changes.append(
+            {
+                "path": path,
+                "kind": kind,
+                "before_sha256": old.get("sha256") if old else None,
+                "after_sha256": new.get("sha256") if new else None,
+                "binary": (old is not None and old.get("text") is None)
+                or (new is not None and new.get("text") is None),
+            }
+        )
+        old_text = old.get("text") if old else ""
+        new_text = new.get("text") if new else ""
+        if isinstance(old_text, str) and isinstance(new_text, str):
+            diffs.extend(
+                difflib.unified_diff(
+                    old_text.splitlines(keepends=True),
+                    new_text.splitlines(keepends=True),
+                    fromfile=f"a/{path}",
+                    tofile=f"b/{path}",
+                )
+            )
+    return changes, "".join(diffs)
 
 
 def _claude_native_tools(
@@ -1746,6 +2984,16 @@ def _claude_native_tool_enabled(
     return tool_name in _claude_native_tools(capabilities)
 
 
+def _claude_sdk_version(sdk: Any) -> str | None:
+    raw = getattr(sdk, "__version__", None)
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    try:
+        return package_version("claude-agent-sdk")
+    except PackageNotFoundError:
+        return None
+
+
 class ClaudeAgentSdkAdapter(HarnessAdapter):
     kind = HarnessKind.CLAUDE_AGENT_SDK
 
@@ -1759,7 +3007,22 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
         del credential_store
         try:
             sdk = self._sdk()
-            version = getattr(sdk, "__version__", None)
+            version = _claude_sdk_version(sdk)
+            if version is None:
+                raise HarnessConfigurationError(
+                    "Claude Agent SDK version could not be verified; install 0.2.118 or newer"
+                )
+            try:
+                parsed_version = Version(version)
+            except InvalidVersion as exc:
+                raise HarnessConfigurationError(
+                    f"Claude Agent SDK version {version!r} is not valid"
+                ) from exc
+            if parsed_version < CLAUDE_ACTIVITY_MINIMUM_VERSION:
+                raise HarnessConfigurationError(
+                    "Claude Agent SDK 0.2.118 or newer is required for durable activity; "
+                    f"installed version is {version}"
+                )
             if profile.executable and not Path(profile.executable).is_file():
                 raise HarnessConfigurationError(
                     "Claude CLI override must be an existing absolute executable"
@@ -1777,6 +3040,17 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                     approvals=True,
                     streaming=True,
                     mcp=True,
+                    activity_replay=True,
+                    live_command_output=True,
+                    file_diffs=True,
+                    detailed_usage=True,
+                    hooks=True,
+                    subagent_activity=True,
+                    subagent_control=profile.native_capabilities.subagents,
+                    checkpoint_rewind=(
+                        profile.native_capabilities.workspace_access
+                        == HarnessWorkspaceAccess.WRITE
+                    ),
                     models=list(
                         dict.fromkeys(
                             [
@@ -1816,6 +3090,19 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
 
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
         sdk = self._sdk()
+        version = _claude_sdk_version(sdk)
+        if version is None:
+            raise HarnessConfigurationError(
+                "Claude Agent SDK version could not be verified; install 0.2.118 or newer"
+            )
+        try:
+            compatible = Version(version) >= CLAUDE_ACTIVITY_MINIMUM_VERSION
+        except InvalidVersion:
+            compatible = False
+        if not compatible:
+            raise HarnessConfigurationError(
+                "Claude Agent SDK 0.2.118 or newer is required for durable activity"
+            )
         if (
             request.profile.executable
             and not Path(request.profile.executable).is_file()
@@ -1941,6 +3228,10 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             "hooks": hooks,
             "env": _scrubbed_claude_environment(),
             "include_partial_messages": True,
+            "include_hook_events": True,
+            "enable_file_checkpointing": (
+                native_capabilities.workspace_access == HarnessWorkspaceAccess.WRITE
+            ),
             "disallowed_tools": sorted(_CLAUDE_NATIVE_TOOLS - set(native_tools)),
             "sandbox": {
                 "enabled": True,
@@ -1992,6 +3283,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             permission_handler=request.permission_handler,
             sdk=sdk,
             external_session_id=request.session.external_session_id,
+            workspace=request.workspace,
         )
 
 
@@ -2146,7 +3438,9 @@ class HarnessRuntimeService:
         self._approval_futures: dict[
             str, asyncio.Future[HarnessPermissionDecision]
         ] = {}
+        self._interaction_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._mission_tasks: dict[str, asyncio.Task[None]] = {}
+        self._chat_turn_tasks: dict[str, asyncio.Task[None]] = {}
         self._closed = False
 
     def bind_tool_platform(self, platform: ToolPlatform) -> None:
@@ -2173,7 +3467,7 @@ class HarnessRuntimeService:
                 HarnessTurnStatus.WAITING_APPROVAL,
             }:
                 continue
-            self.store.update(
+            interrupted_turn = self.store.update(
                 HarnessTurn,
                 turn.id,
                 {
@@ -2189,7 +3483,7 @@ class HarnessRuntimeService:
                 HarnessSessionStatus.CLOSED,
                 HarnessSessionStatus.FAILED,
             }:
-                self.store.update(
+                session = self.store.update(
                     HarnessSession,
                     session.id,
                     {
@@ -2198,6 +3492,37 @@ class HarnessRuntimeService:
                     },
                     expected_revision=session.revision,
                 )
+            self._persist_activity(
+                interrupted_turn,
+                session,
+                HarnessEvent(
+                    type="turn_status",
+                    origin=turn.origin,
+                    harness_profile_id=session.harness_profile_id,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    model=session.model,
+                    item_status="interrupted",
+                    summary="Nebula Core restarted while the harness outcome was uncertain.",
+                    payload={"phase": "interrupted", "reason": "core_restart"},
+                ),
+            )
+        for interaction in self.store.list_entities(HarnessInteraction, limit=1_000):
+            if interaction.status != HarnessInteractionStatus.PENDING:
+                continue
+            self.store.update(
+                HarnessInteraction,
+                interaction.id,
+                {
+                    "status": HarnessInteractionStatus.CANCELLED,
+                    "resolved_at": utc_now(),
+                    "metadata": {
+                        **interaction.metadata,
+                        "reason": "Nebula Core restarted while input was pending",
+                    },
+                },
+                expected_revision=interaction.revision,
+            )
 
     async def shutdown(self) -> None:
         self._closed = True
@@ -2230,7 +3555,11 @@ class HarnessRuntimeService:
                     expected_revision=turn.revision,
                 )
                 self._interrupt_owner(turn)
-        tasks = [task for task in self._mission_tasks.values() if not task.done()]
+        tasks = [
+            task
+            for task in (*self._mission_tasks.values(), *self._chat_turn_tasks.values())
+            if not task.done()
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -2254,6 +3583,7 @@ class HarnessRuntimeService:
                     stage="harnesses",
                 )
                 pass
+        self._chat_turn_tasks.clear()
         await gather_diagnostic(
             *(connection.close() for connection in self._connections.values()),
             feature="harnesses",
@@ -2681,6 +4011,7 @@ class HarnessRuntimeService:
                 "oci_tool_snapshot": oci_snapshot,
                 "native_capabilities": native_capabilities.model_dump(mode="json"),
                 "forked_from_harness_session_id": forked_from_session_id,
+                "remote_mcp_confirmed": allow_remote_mcp,
             },
         )
         harness_turn = HarnessTurn(
@@ -2724,6 +4055,57 @@ class HarnessRuntimeService:
                 )
             )
         return chat, chat_turn, harness_turn
+
+    def start_chat_turn(self, turn_id: str) -> asyncio.Task[None]:
+        """Start a chat harness producer that survives viewer disconnections."""
+
+        turn = self.store.get(HarnessTurn, turn_id)
+        if turn.origin != HarnessTurnOrigin.CHAT:
+            raise HarnessStateError("only chat harness turns use detached producers")
+        existing = self._chat_turn_tasks.get(turn.id)
+        if existing is not None and not existing.done():
+            return existing
+        if turn.status != HarnessTurnStatus.QUEUED:
+            raise HarnessStateError(f"harness turn is not queued ({turn.status.value})")
+        task = create_diagnostic_task(
+            self._drive_chat_turn(turn.id),
+            feature="harnesses",
+            event_code="harnesses.chat_turn",
+            failure_message="A detached harness chat turn stopped unexpectedly.",
+            name=f"harness-chat-{turn.id}",
+        )
+        self._chat_turn_tasks[turn.id] = task
+        return task
+
+    async def _drive_chat_turn(self, turn_id: str) -> None:
+        try:
+            async for _event in self.stream_turn(turn_id):
+                pass
+        finally:
+            self._chat_turn_tasks.pop(turn_id, None)
+
+    async def follow_turn(
+        self, turn_id: str, *, after_sequence: int = 0
+    ) -> AsyncIterator[HarnessEvent]:
+        """Replay and follow a turn without owning or cancelling its execution."""
+
+        cursor = after_sequence
+        while True:
+            page = self.activity_events(turn_id, after_sequence=cursor, limit=1_000)
+            cursor = max(cursor, page.next_sequence)
+            for event in page.events:
+                yield event
+            if page.events:
+                continue
+            turn = self.store.get(HarnessTurn, turn_id)
+            if turn.status in {
+                HarnessTurnStatus.COMPLETE,
+                HarnessTurnStatus.FAILED,
+                HarnessTurnStatus.CANCELLED,
+                HarnessTurnStatus.INTERRUPTED,
+            }:
+                return
+            await asyncio.sleep(0.1)
 
     async def stream_turn(self, turn_id: str) -> AsyncIterator[HarnessEvent]:
         turn = self.store.get(HarnessTurn, turn_id)
@@ -2769,46 +4151,58 @@ class HarnessRuntimeService:
                     expected_revision=run.revision,
                 )
             lock = self._locks.setdefault(session.id, asyncio.Lock())
-            yield HarnessEvent(
-                type="status",
-                origin=turn.origin,
-                harness_profile_id=session.harness_profile_id,
-                harness_session_id=session.id,
-                harness_turn_id=turn.id,
-                model=session.model,
-                payload={
-                    "phase": "parallel_session_created",
-                    "detail": "Started an independent harness session for parallel work.",
-                    "previous_session_id": previous_session_id,
-                },
+            yield self._persist_activity(
+                turn,
+                session,
+                HarnessEvent(
+                    type="status",
+                    origin=turn.origin,
+                    harness_profile_id=session.harness_profile_id,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    model=session.model,
+                    payload={
+                        "phase": "parallel_session_created",
+                        "detail": "Started an independent harness session for parallel work.",
+                        "previous_session_id": previous_session_id,
+                    },
+                ),
             )
         elif isinstance(turn.metadata.get("forked_from_session_id"), str):
             previous_session_id = str(turn.metadata["forked_from_session_id"])
-            yield HarnessEvent(
-                type="status",
-                origin=turn.origin,
-                harness_profile_id=session.harness_profile_id,
-                harness_session_id=session.id,
-                harness_turn_id=turn.id,
-                model=session.model,
-                payload={
-                    "phase": "parallel_session_created",
-                    "detail": "Started an independent harness session for parallel work.",
-                    "previous_session_id": previous_session_id,
-                },
+            yield self._persist_activity(
+                turn,
+                session,
+                HarnessEvent(
+                    type="status",
+                    origin=turn.origin,
+                    harness_profile_id=session.harness_profile_id,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    model=session.model,
+                    payload={
+                        "phase": "parallel_session_created",
+                        "detail": "Started an independent harness session for parallel work.",
+                        "previous_session_id": previous_session_id,
+                    },
+                ),
             )
         async with lock:
-            yield HarnessEvent(
-                type="status",
-                origin=turn.origin,
-                harness_profile_id=session.harness_profile_id,
-                harness_session_id=session.id,
-                harness_turn_id=turn.id,
-                model=session.model,
-                payload={
-                    "phase": "connecting",
-                    "detail": "Connecting to the harness runtime.",
-                },
+            yield self._persist_activity(
+                turn,
+                session,
+                HarnessEvent(
+                    type="status",
+                    origin=turn.origin,
+                    harness_profile_id=session.harness_profile_id,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    model=session.model,
+                    payload={
+                        "phase": "connecting",
+                        "detail": "Connecting to the harness runtime.",
+                    },
+                ),
             )
             try:
                 connection = await self._connection(session, turn)
@@ -2822,17 +4216,25 @@ class HarnessRuntimeService:
                 )
                 error = _safe_error(exc)
                 self._fail_turn(turn.id, HarnessTurnStatus.INTERRUPTED, error)
-                yield HarnessEvent(
-                    type="error",
-                    origin=turn.origin,
-                    harness_profile_id=session.harness_profile_id,
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    model=session.model,
-                    message=error,
+                yield self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="error",
+                        origin=turn.origin,
+                        harness_profile_id=session.harness_profile_id,
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        model=session.model,
+                        message=error,
+                    ),
                 )
                 return
-            active = _ActiveTurn(turn_id=turn.id, connection=connection)
+            active = _ActiveTurn(
+                turn_id=turn.id,
+                connection=connection,
+                task=asyncio.current_task(),
+            )
             self._active[session.id] = active
             turn = self.store.update(
                 HarnessTurn,
@@ -2854,17 +4256,21 @@ class HarnessRuntimeService:
                 expected_revision=session.revision,
             )
             self._start_owner(turn)
-            yield HarnessEvent(
-                type="status",
-                origin=turn.origin,
-                harness_profile_id=session.harness_profile_id,
-                harness_session_id=session.id,
-                harness_turn_id=turn.id,
-                model=session.model,
-                payload={
-                    "phase": "running",
-                    "detail": "Harness connected and processing the request.",
-                },
+            yield self._persist_activity(
+                turn,
+                session,
+                HarnessEvent(
+                    type="status",
+                    origin=turn.origin,
+                    harness_profile_id=session.harness_profile_id,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    model=session.model,
+                    payload={
+                        "phase": "running",
+                        "detail": "Harness connected and processing the request.",
+                    },
+                ),
             )
             final_message = ""
             usage = ChatTokenUsage()
@@ -2872,8 +4278,8 @@ class HarnessRuntimeService:
             interrupted_reason: str | None = None
             terminal_error: str | None = None
             try:
-                async for event in connection.run_turn(
-                    turn.prompt, model=session.model
+                async for event in _coalesce_activity_deltas(
+                    connection.run_turn(turn.prompt, model=session.model)
                 ):
                     event = event.model_copy(
                         update={
@@ -2902,15 +4308,7 @@ class HarnessRuntimeService:
                         usage = event.usage
                     elif event.type in {"tool_started", "tool_completed"}:
                         event = self._record_tool_event(turn, session, event)
-                    if turn.origin == HarnessTurnOrigin.CHAT:
-                        self.store.append_operation_event(
-                            turn.id,
-                            "harness_turn",
-                            turn.engagement_id,
-                            f"harness.{event.type}",
-                            self._activity_payload(turn, session, event),
-                        )
-                    yield event
+                    yield self._persist_activity(turn, session, event)
                     if interrupted_reason or terminal_error:
                         break
                 if interrupted_reason or terminal_error:
@@ -2923,17 +4321,21 @@ class HarnessRuntimeService:
                         or "Harness turn interrupted",
                     )
                     return
-                yield HarnessEvent(
-                    type="status",
-                    origin=turn.origin,
-                    harness_profile_id=session.harness_profile_id,
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    model=session.model,
-                    payload={
-                        "phase": "finalizing",
-                        "detail": "Harness finished; Nebula is saving the response.",
-                    },
+                yield self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="status",
+                        origin=turn.origin,
+                        harness_profile_id=session.harness_profile_id,
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        model=session.model,
+                        payload={
+                            "phase": "finalizing",
+                            "detail": "Harness finished; Nebula is saving the response.",
+                        },
+                    ),
                 )
                 session = self.store.get(HarnessSession, session.id)
                 if connection.external_session_id != session.external_session_id:
@@ -2979,7 +4381,11 @@ class HarnessRuntimeService:
                     stage="harnesses",
                 )
                 await connection.interrupt()
-                self._fail_turn(turn.id, HarnessTurnStatus.CANCELLED, "Turn cancelled")
+                latest_cancelled = self.store.get(HarnessTurn, turn.id)
+                if latest_cancelled.status != HarnessTurnStatus.CANCELLED:
+                    self._fail_turn(
+                        turn.id, HarnessTurnStatus.CANCELLED, "Turn cancelled"
+                    )
                 raise
             except Exception as exc:
                 record_caught_exception(
@@ -2992,11 +4398,15 @@ class HarnessRuntimeService:
                 self._fail_turn(
                     turn.id, HarnessTurnStatus.INTERRUPTED, _safe_error(exc)
                 )
-                yield HarnessEvent(
-                    type="error",
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    message=_safe_error(exc),
+                yield self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="error",
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        message=_safe_error(exc),
+                    ),
                 )
             finally:
                 self._active.pop(session.id, None)
@@ -3139,21 +4549,10 @@ class HarnessRuntimeService:
     async def _execute_mission(self, run_id: str, turn_id: str) -> None:
         try:
             run = self.store.get(AgentRun, run_id)
-            durable_turn = self.store.get(HarnessTurn, turn_id)
-            durable_session = self.store.get(
-                HarnessSession, durable_turn.harness_session_id
-            )
             try:
                 async with asyncio.timeout(run.budget.max_duration_seconds):
-                    async for event in self.stream_turn(turn_id):
-                        self.store.append_event(
-                            run_id,
-                            f"harness.{event.type}",
-                            self._activity_payload(
-                                durable_turn, durable_session, event
-                            ),
-                            idempotency_key=None,
-                        )
+                    async for _event in self.stream_turn(turn_id):
+                        pass
             except TimeoutError as caught_error:
                 record_caught_exception(
                     "harnesses",
@@ -3235,6 +4634,214 @@ class HarnessRuntimeService:
         )
         return self.store.get(HarnessTurn, active.turn_id)
 
+    async def steer_turn(
+        self, turn_id: str, text: str, *, actor_id: str
+    ) -> HarnessTurn:
+        turn = self.store.get(HarnessTurn, turn_id)
+        active = self._active.get(turn.harness_session_id)
+        if active is None or active.turn_id != turn.id:
+            raise HarnessStateError("harness turn is not active")
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        if not profile.capabilities.steering:
+            raise HarnessStateError("this harness does not advertise turn steering")
+        clean = text.strip()
+        if not clean:
+            raise HarnessConfigurationError("steering text cannot be blank")
+        await active.connection.steer(clean)
+        event = HarnessEvent(
+            type="notice",
+            origin=turn.origin,
+            harness_session_id=turn.harness_session_id,
+            harness_turn_id=turn.id,
+            title="Operator guidance",
+            summary="The operator added guidance to the active harness turn.",
+            payload={"text": _bounded(clean, limit=10_000), "actor_id": actor_id},
+        )
+        self._persist_activity(turn, session, event)
+        return self.store.get(HarnessTurn, turn.id)
+
+    async def stop_subagent(self, turn_id: str, task_id: str) -> HarnessTurn:
+        turn = self.store.get(HarnessTurn, turn_id)
+        active = self._active.get(turn.harness_session_id)
+        if active is None or active.turn_id != turn.id:
+            raise HarnessStateError("harness turn is not active")
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        native = _session_native_capabilities(session, profile)
+        if profile.kind != HarnessKind.CLAUDE_AGENT_SDK or not native.subagents:
+            raise HarnessStateError("this harness does not support stopping subagents")
+        await active.connection.stop_subagent(task_id)
+        self._persist_activity(
+            turn,
+            session,
+            HarnessEvent(
+                type="item_upsert",
+                origin=turn.origin,
+                harness_session_id=session.id,
+                harness_turn_id=turn.id,
+                item_id=task_id,
+                item_kind="subagent",
+                item_status="cancelled",
+                title="Subagent stopped",
+                payload={"task_id": task_id},
+            ),
+        )
+        return self.store.get(HarnessTurn, turn.id)
+
+    async def retry_turn(
+        self, turn_id: str, *, actor_id: str = "system"
+    ) -> HarnessTurn:
+        """Create and start a linked replacement without changing prior execution."""
+
+        original = self.store.get(HarnessTurn, turn_id)
+        if original.status not in {
+            HarnessTurnStatus.FAILED,
+            HarnessTurnStatus.CANCELLED,
+            HarnessTurnStatus.INTERRUPTED,
+        }:
+            raise HarnessStateError(
+                "only failed, cancelled, or interrupted harness turns can be retried"
+            )
+        session = self.store.get(HarnessSession, original.harness_session_id)
+        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        if original.origin == HarnessTurnOrigin.CHAT:
+            chat = self.store.get(ChatSession, original.chat_session_id or "")
+            original_chat_turn = self.store.get(ChatTurn, original.chat_turn_id or "")
+            _, _, replacement = self.prepare_chat(
+                engagement_id=original.engagement_id,
+                profile_id=profile.id,
+                model=session.model,
+                prompt=str(original.metadata.get("user_prompt") or original.prompt),
+                chat_session_id=chat.id,
+                harness_session_id=None,
+                mcp_server_ids=None,
+                citations=[
+                    ChatCitation.model_validate(item)
+                    for item in original.metadata.get("citations", [])
+                    if isinstance(item, dict)
+                ],
+                allow_remote_mcp=bool(
+                    original_chat_turn.request_snapshot.get(
+                        "remote_mcp_confirmed", False
+                    )
+                ),
+            )
+            replacement = self.store.update(
+                HarnessTurn,
+                replacement.id,
+                {
+                    "metadata": {
+                        **replacement.metadata,
+                        "retry_of_turn_id": original.id,
+                    }
+                },
+                expected_revision=replacement.revision,
+            )
+            self.start_chat_turn(replacement.id)
+            return replacement
+
+        original_run = self.store.get(AgentRun, original.run_id or "")
+        replacement_run = await self.start_mission(
+            engagement_id=original.engagement_id,
+            objective=original_run.objective,
+            profile_id=profile.id,
+            model=session.model,
+            budget=original_run.budget,
+            harness_session_id=(
+                session.id if session.status != HarnessSessionStatus.CLOSED else None
+            ),
+            mcp_server_ids=(
+                None
+                if session.status != HarnessSessionStatus.CLOSED
+                else session.mcp_server_ids
+            ),
+            actor_id=actor_id,
+            allow_remote_mcp=bool(
+                original_run.runtime_snapshot.get("remote_mcp_confirmed", False)
+            ),
+        )
+        replacement_run = self.store.update(
+            AgentRun,
+            replacement_run.id,
+            {
+                "metadata": {
+                    **replacement_run.metadata,
+                    "retry_of_run_id": original_run.id,
+                    "retry_of_turn_id": original.id,
+                }
+            },
+            expected_revision=replacement_run.revision,
+        )
+        replacement = next(
+            item
+            for item in self.store.list_entities(
+                HarnessTurn, engagement_id=original.engagement_id, limit=1_000
+            )
+            if item.run_id == replacement_run.id
+        )
+        return self.store.update(
+            HarnessTurn,
+            replacement.id,
+            {
+                "metadata": {
+                    **replacement.metadata,
+                    "retry_of_turn_id": original.id,
+                    "retry_of_run_id": original_run.id,
+                }
+            },
+            expected_revision=replacement.revision,
+        )
+
+    async def rewind_files(self, session_id: str, checkpoint_id: str) -> HarnessSession:
+        session = self.store.get(HarnessSession, session_id)
+        if self.session_activity(session.id).busy:
+            raise HarnessStateError(
+                "files can be rewound only while the session is idle"
+            )
+        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        if profile.kind != HarnessKind.CLAUDE_AGENT_SDK:
+            raise HarnessStateError("file checkpoint rewind is Claude-only")
+        if (
+            _session_native_capabilities(session, profile).workspace_access
+            != HarnessWorkspaceAccess.WRITE
+        ):
+            raise HarnessStateError(
+                "file checkpointing requires workspace write access"
+            )
+        connection = self._connections.get(session.id)
+        if connection is None:
+            raise HarnessStateError("the Claude checkpoint is no longer live")
+        await connection.rewind_files(checkpoint_id)
+        latest = self.store.get(HarnessSession, session.id)
+        latest = self.store.update(
+            HarnessSession,
+            latest.id,
+            {"last_activity_at": utc_now()},
+            expected_revision=latest.revision,
+        )
+        if latest.last_turn_id:
+            turn = self.store.get(HarnessTurn, latest.last_turn_id)
+            self._persist_activity(
+                turn,
+                latest,
+                HarnessEvent(
+                    type="checkpoint",
+                    origin=turn.origin,
+                    harness_session_id=latest.id,
+                    harness_turn_id=turn.id,
+                    item_id=checkpoint_id,
+                    item_status="completed",
+                    title="Files rewound",
+                    summary="Claude restored files to the selected checkpoint.",
+                    payload={
+                        "checkpoint_id": checkpoint_id,
+                        "action": "rewind",
+                    },
+                ),
+            )
+        return latest
+
     async def resolve_approval(self, approval: Approval) -> None:
         future = self._approval_futures.pop(approval.id, None)
         if future is None or future.done():
@@ -3257,6 +4864,54 @@ class HarnessRuntimeService:
                 },
                 expected_revision=call.revision,
             )
+        related_turn = next(
+            (
+                item
+                for item in self.store.list_entities(
+                    HarnessTurn, engagement_id=approval.engagement_id, limit=1_000
+                )
+                if (
+                    approval.chat_turn_id and item.chat_turn_id == approval.chat_turn_id
+                )
+                or (
+                    approval.origin == ToolCallOrigin.MISSION
+                    and item.run_id == approval.run_id
+                )
+            ),
+            None,
+        )
+        if related_turn is not None:
+            related_session = self.store.get(
+                HarnessSession, related_turn.harness_session_id
+            )
+            self._persist_activity(
+                related_turn,
+                related_session,
+                HarnessEvent(
+                    type="approval",
+                    origin=related_turn.origin,
+                    harness_session_id=related_session.id,
+                    harness_turn_id=related_turn.id,
+                    item_id=approval.tool_call_id or approval.id,
+                    item_kind=(
+                        "command"
+                        if approval.exact_request.get("category") == "command"
+                        else "file_change"
+                        if approval.exact_request.get("category") == "file"
+                        else "tool"
+                    ),
+                    item_status="completed" if allowed else "cancelled",
+                    title="Approval resolved",
+                    summary=(
+                        "The operator approved the request."
+                        if allowed
+                        else "The operator declined the request."
+                    ),
+                    approval_id=approval.id,
+                    tool_call_id=approval.tool_call_id,
+                    payload={"allowed": allowed},
+                ),
+            )
         future.set_result(
             HarnessPermissionDecision(
                 allowed=allowed,
@@ -3267,9 +4922,115 @@ class HarnessRuntimeService:
 
     async def cancel_turn(self, harness_turn_id: str, *, reason: str) -> HarnessTurn:
         turn = self.store.get(HarnessTurn, harness_turn_id)
+        if turn.status in {
+            HarnessTurnStatus.COMPLETE,
+            HarnessTurnStatus.FAILED,
+            HarnessTurnStatus.INTERRUPTED,
+        }:
+            raise HarnessStateError(
+                f"harness turn is already terminal ({turn.status.value})"
+            )
+        cancellation_recorded = bool(
+            turn.metadata.get("cancellation_activity_recorded")
+        )
+        if turn.status != HarnessTurnStatus.CANCELLED or not cancellation_recorded:
+            turn = self.store.update(
+                HarnessTurn,
+                turn.id,
+                {
+                    "status": HarnessTurnStatus.CANCELLED,
+                    "error": reason[:1_000],
+                    "completed_at": turn.completed_at or utc_now(),
+                    "metadata": {
+                        **turn.metadata,
+                        "cancellation_activity_recorded": True,
+                    },
+                },
+                expected_revision=turn.revision,
+            )
+        if turn.chat_turn_id:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            if chat_turn.status not in {
+                ChatTurnStatus.COMPLETE,
+                ChatTurnStatus.CANCELLED,
+                ChatTurnStatus.FAILED,
+                ChatTurnStatus.INTERRUPTED,
+            }:
+                self.store.update(
+                    ChatTurn,
+                    chat_turn.id,
+                    {"status": ChatTurnStatus.CANCELLED, "error": reason[:1_000]},
+                    expected_revision=chat_turn.revision,
+                )
+        elif turn.run_id:
+            run = self.store.get(AgentRun, turn.run_id)
+            if run.status not in {
+                RunStatus.COMPLETE,
+                RunStatus.CANCELLED,
+                RunStatus.FAILED,
+                RunStatus.INTERRUPTED,
+            }:
+                self.store.update_with_event(
+                    AgentRun,
+                    run.id,
+                    {"status": RunStatus.CANCELLED, "completed_at": utc_now()},
+                    expected_revision=run.revision,
+                    run_id=run.id,
+                    event_type="run.cancelled",
+                    event_payload={
+                        "reason": reason[:1_000],
+                        "harness_turn_id": turn.id,
+                    },
+                    idempotency_key="run:cancelled",
+                )
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.status not in {
+            HarnessSessionStatus.CLOSED,
+            HarnessSessionStatus.FAILED,
+        }:
+            session = self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "status": HarnessSessionStatus.IDLE,
+                    "last_activity_at": utc_now(),
+                },
+                expected_revision=session.revision,
+            )
+        if not cancellation_recorded:
+            self._persist_activity(
+                turn,
+                session,
+                HarnessEvent(
+                    type="turn_status",
+                    origin=turn.origin,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    item_status="cancelled",
+                    title="Turn stopped",
+                    summary=reason[:1_000],
+                    payload={"phase": "cancelled", "reason": reason[:1_000]},
+                ),
+            )
+        task = (
+            self._chat_turn_tasks.get(turn.id)
+            if turn.origin == HarnessTurnOrigin.CHAT
+            else self._mission_tasks.get(turn.run_id or "")
+        )
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
         active = self._active.get(turn.harness_session_id)
         if active is not None and active.turn_id == turn.id:
-            await active.connection.interrupt()
+            try:
+                await active.connection.interrupt()
+            except Exception as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.turn_stop_interrupt_failed",
+                    "A stopped harness turn did not acknowledge the interrupt.",
+                    caught_error,
+                    stage="turn-stop",
+                )
         for approval_id, future in list(self._approval_futures.items()):
             try:
                 approval = self.store.get(Approval, approval_id)
@@ -3286,42 +5047,57 @@ class HarnessRuntimeService:
                 continue
             self._approval_futures.pop(approval_id, None)
             self._broker_approval_ids.discard(approval_id)
+            if approval.status == ApprovalStatus.PENDING:
+                self.store.update(
+                    Approval,
+                    approval.id,
+                    {
+                        "status": ApprovalStatus.CANCELLED,
+                        "decided_at": utc_now(),
+                        "decision_note": reason[:1_000],
+                    },
+                    expected_revision=approval.revision,
+                )
+            if approval.tool_call_id:
+                call = self.store.get(ToolCall, approval.tool_call_id)
+                if call.status == ToolCallStatus.WAITING_APPROVAL:
+                    self.store.update(
+                        ToolCall,
+                        call.id,
+                        {
+                            "status": ToolCallStatus.DENIED,
+                            "error": reason[:1_000],
+                            "completed_at": utc_now(),
+                        },
+                        expected_revision=call.revision,
+                    )
             if not future.done():
                 future.set_result(
                     HarnessPermissionDecision(allowed=False, reason=reason)
                 )
-        latest = self.store.get(HarnessTurn, turn.id)
-        if latest.status not in {
-            HarnessTurnStatus.COMPLETE,
-            HarnessTurnStatus.FAILED,
-            HarnessTurnStatus.CANCELLED,
-            HarnessTurnStatus.INTERRUPTED,
-        }:
-            latest = self.store.update(
-                HarnessTurn,
-                latest.id,
-                {
-                    "status": HarnessTurnStatus.CANCELLED,
-                    "error": reason[:1_000],
-                    "completed_at": utc_now(),
-                },
-                expected_revision=latest.revision,
+        pending_interactions = [
+            interaction
+            for interaction in self.store.list_entities(
+                HarnessInteraction, engagement_id=turn.engagement_id, limit=1_000
             )
-        if latest.chat_turn_id:
-            chat_turn = self.store.get(ChatTurn, latest.chat_turn_id)
-            if chat_turn.status not in {
-                ChatTurnStatus.COMPLETE,
-                ChatTurnStatus.CANCELLED,
-                ChatTurnStatus.FAILED,
-                ChatTurnStatus.INTERRUPTED,
-            }:
-                self.store.update(
-                    ChatTurn,
-                    chat_turn.id,
-                    {"status": ChatTurnStatus.CANCELLED, "error": reason[:1_000]},
-                    expected_revision=chat_turn.revision,
-                )
-        return latest
+            if interaction.harness_turn_id == turn.id
+            and interaction.status == HarnessInteractionStatus.PENDING
+        ]
+        for interaction in pending_interactions:
+            future = self._interaction_futures.pop(interaction.id, None)
+            self.store.update(
+                HarnessInteraction,
+                interaction.id,
+                {
+                    "status": HarnessInteractionStatus.CANCELLED,
+                    "resolved_at": utc_now(),
+                    "metadata": {**interaction.metadata, "reason": reason[:1_000]},
+                },
+                expected_revision=interaction.revision,
+            )
+            if future is not None and not future.done():
+                future.set_result({"action": "cancel", "response": {}})
+        return self.store.get(HarnessTurn, turn.id)
 
     def attach_run_to_chat(self, run_id: str) -> ChatSession:
         run = self.store.get(AgentRun, run_id)
@@ -4050,7 +5826,7 @@ class HarnessRuntimeService:
             },
             expected_revision=session.revision,
         )
-        self._waiting_owner(turn)
+        self._waiting_owner(turn, approval_id=approval.id)
 
         def restore(_: asyncio.Future[HarnessPermissionDecision]) -> None:
             latest = self.store.get(HarnessTurn, turn.id)
@@ -4294,6 +6070,12 @@ class HarnessRuntimeService:
             active_turn = self._active_gateway_turn(session.id)
             return await self._request_permission(active_turn.id, request)
 
+        async def interaction_handler(
+            request: HarnessInteractionRequest,
+        ) -> tuple[str, asyncio.Future[dict[str, Any]]]:
+            active_turn = self._active_gateway_turn(session.id)
+            return await self._request_interaction(active_turn.id, request)
+
         gateway = McpGatewaySession(
             list_tools=lambda params: self._gateway_catalog(session, params),
             call_tool=lambda name, arguments: self._gateway_call(
@@ -4315,6 +6097,7 @@ class HarnessRuntimeService:
                     gateway_config=launch.runtime_config(),
                     credential_store=self.credential_store,
                     permission_handler=permission_handler,
+                    interaction_handler=interaction_handler,
                 )
             )
         except Exception:
@@ -4448,7 +6231,7 @@ class HarnessRuntimeService:
             },
             expected_revision=session.revision,
         )
-        self._waiting_owner(turn)
+        self._waiting_owner(turn, approval_id=approval.id)
 
         def restore(_: asyncio.Future[HarnessPermissionDecision]) -> None:
             latest_turn = self.store.get(HarnessTurn, turn.id)
@@ -4473,7 +6256,183 @@ class HarnessRuntimeService:
             self._start_owner(turn)
 
         future.add_done_callback(restore)
+        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        if profile.kind == HarnessKind.CLAUDE_AGENT_SDK:
+            self._persist_activity(
+                turn,
+                session,
+                HarnessEvent(
+                    type="approval",
+                    origin=turn.origin,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    item_id=call.id,
+                    parent_item_id=(
+                        str(request.annotations.get("vendor_item_id"))
+                        if request.annotations.get("vendor_item_id")
+                        else None
+                    ),
+                    item_kind=(
+                        "command"
+                        if request.category == "command"
+                        else "file_change"
+                        if request.category == "file"
+                        else "tool"
+                    ),
+                    item_status="waiting_approval",
+                    title=f"{request.category.title()} approval required",
+                    summary="Claude is waiting for an operator decision.",
+                    approval_id=approval.id,
+                    tool_call_id=call.id,
+                    payload={
+                        "category": request.category,
+                        "arguments": request.arguments,
+                    },
+                ),
+            )
         return PermissionTicket(approval.id, call.id, future)
+
+    async def _request_interaction(
+        self, turn_id: str, request: HarnessInteractionRequest
+    ) -> tuple[str, asyncio.Future[dict[str, Any]]]:
+        turn = self.store.get(HarnessTurn, turn_id)
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        interaction = self.store.create(
+            HarnessInteraction(
+                id=str(uuid4()),
+                engagement_id=turn.engagement_id,
+                harness_turn_id=turn.id,
+                harness_session_id=session.id,
+                origin=turn.origin,
+                kind=request.kind,
+                vendor_request_id=request.vendor_request_id,
+                item_id=request.item_id,
+                chat_session_id=turn.chat_session_id,
+                run_id=turn.run_id,
+                prompt=str(_bounded(request.prompt, limit=4_000)),
+                questions=_bounded(request.questions, limit=8_000),
+                response_schema=_bounded(request.response_schema, limit=16_000),
+                contains_secret=request.contains_secret,
+                auto_resolution_ms=request.auto_resolution_ms,
+                metadata=_bounded(request.annotations, limit=8_000),
+            )
+        )
+        future: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._interaction_futures[interaction.id] = future
+        latest_turn = self.store.get(HarnessTurn, turn.id)
+        self.store.update(
+            HarnessTurn,
+            latest_turn.id,
+            {"status": HarnessTurnStatus.WAITING_APPROVAL},
+            expected_revision=latest_turn.revision,
+        )
+        latest_session = self.store.get(HarnessSession, session.id)
+        self.store.update(
+            HarnessSession,
+            latest_session.id,
+            {
+                "status": HarnessSessionStatus.WAITING_APPROVAL,
+                "last_activity_at": utc_now(),
+            },
+            expected_revision=latest_session.revision,
+        )
+        self._waiting_owner(turn)
+
+        def restore(_: asyncio.Future[dict[str, Any]]) -> None:
+            current_turn = self.store.get(HarnessTurn, turn.id)
+            if current_turn.status == HarnessTurnStatus.WAITING_APPROVAL:
+                self.store.update(
+                    HarnessTurn,
+                    current_turn.id,
+                    {"status": HarnessTurnStatus.RUNNING},
+                    expected_revision=current_turn.revision,
+                )
+            current_session = self.store.get(HarnessSession, session.id)
+            if current_session.status == HarnessSessionStatus.WAITING_APPROVAL:
+                self.store.update(
+                    HarnessSession,
+                    current_session.id,
+                    {
+                        "status": HarnessSessionStatus.RUNNING,
+                        "last_activity_at": utc_now(),
+                    },
+                    expected_revision=current_session.revision,
+                )
+            self._start_owner(turn)
+
+        future.add_done_callback(restore)
+        if request.auto_resolution_ms is not None:
+            create_diagnostic_task(
+                self._auto_resolve_interaction(
+                    interaction.id, request.auto_resolution_ms
+                ),
+                feature="harnesses",
+                event_code="harnesses.interaction_auto_resolution",
+                failure_message="A harness interaction auto-resolution failed.",
+                name=f"harness-interaction-{interaction.id}",
+            )
+        return interaction.id, future
+
+    async def _auto_resolve_interaction(
+        self, interaction_id: str, delay_ms: int
+    ) -> None:
+        await asyncio.sleep(delay_ms / 1_000)
+        interaction = self.store.get(HarnessInteraction, interaction_id)
+        if interaction.status == HarnessInteractionStatus.PENDING:
+            await self.resolve_interaction(
+                interaction_id,
+                action="expire",
+                response={},
+            )
+
+    async def resolve_interaction(
+        self,
+        interaction_id: str,
+        *,
+        action: Literal["answer", "decline", "cancel", "expire"],
+        response: dict[str, Any],
+    ) -> HarnessInteraction:
+        interaction = self.store.get(HarnessInteraction, interaction_id)
+        if interaction.status != HarnessInteractionStatus.PENDING:
+            raise HarnessStateError(
+                f"harness interaction is already {interaction.status.value}"
+            )
+        future = self._interaction_futures.pop(interaction.id, None)
+        if future is None or future.done():
+            raise HarnessStateError("harness interaction is no longer active")
+        safe_response = _bounded(response, limit=MAX_TOOL_ARGUMENT_TEXT)
+        if not isinstance(safe_response, dict):
+            safe_response = {}
+        status = {
+            "answer": HarnessInteractionStatus.ANSWERED,
+            "decline": HarnessInteractionStatus.DECLINED,
+            "cancel": HarnessInteractionStatus.CANCELLED,
+            "expire": HarnessInteractionStatus.EXPIRED,
+        }[action]
+        updated = self.store.update(
+            HarnessInteraction,
+            interaction.id,
+            {
+                "status": status,
+                "response": (None if interaction.contains_secret else safe_response),
+                "resolved_at": utc_now(),
+                "metadata": {
+                    **interaction.metadata,
+                    "response_recorded": not interaction.contains_secret,
+                    "answered": action == "answer",
+                },
+            },
+            expected_revision=interaction.revision,
+        )
+        future.set_result(
+            {
+                "action": action,
+                "response": response if action == "answer" else {},
+            }
+        )
+        return updated
 
     def _permission_policy(
         self, session: HarnessSession, request: HarnessPermissionRequest
@@ -4810,7 +6769,12 @@ class HarnessRuntimeService:
         self, turn: HarnessTurn, event: HarnessEvent
     ) -> HarnessEvent:
         vendor = event.server_id or "vendor"
-        item_id = str(event.payload.get("id") or event.payload.get("tool_use_id") or "")
+        item_id = str(
+            event.item_id
+            or event.payload.get("id")
+            or event.payload.get("tool_use_id")
+            or ""
+        )
         pending = [
             call
             for call in self.store.list_entities(
@@ -4909,6 +6873,44 @@ class HarnessRuntimeService:
                 raw_result = event.payload.get("output")
             if raw_result is None:
                 raw_result = event.payload
+            safe_result = _bounded(raw_result, limit=MAX_TOOL_RESULT_TEXT)
+            artifact_id: str | None = None
+            try:
+                if isinstance(safe_result, str):
+                    artifact_bytes = safe_result.encode("utf-8")
+                    media_type = "text/plain"
+                    filename = f"{event.tool_name or 'tool'}-output.txt"
+                else:
+                    artifact_bytes = json.dumps(
+                        safe_result,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
+                    ).encode("utf-8")
+                    media_type = "application/json"
+                    filename = f"{event.tool_name or 'tool'}-output.json"
+                stored = self.artifact_store.put_bytes_with_status(
+                    artifact_bytes,
+                    engagement_id=turn.engagement_id,
+                    filename=filename,
+                    media_type=media_type,
+                    source="harness-native-tool-output",
+                    metadata={
+                        "harness_turn_id": turn.id,
+                        "vendor_item_id": item_id or None,
+                        "redacted": True,
+                    },
+                )
+                self.store.create(stored.artifact)
+                artifact_id = stored.artifact.id
+            except Exception as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.native_tool_artifact_failed",
+                    "A native harness tool result could not be retained as an artifact.",
+                    exc,
+                    stage="artifact-persistence",
+                )
             self.store.update(
                 ToolCall,
                 call.id,
@@ -4916,13 +6918,205 @@ class HarnessRuntimeService:
                     "status": (
                         ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE
                     ),
-                    "result": _bounded(raw_result, limit=MAX_TOOL_RESULT_TEXT),
+                    "result": safe_result,
                     "error": _safe_error(Exception(str(raw_error))) if failed else None,
                     "completed_at": utc_now(),
+                    "result_artifact_id": artifact_id,
                 },
                 expected_revision=call.revision,
             )
+            if artifact_id:
+                return event.model_copy(
+                    update={
+                        "tool_call_id": call.id,
+                        "artifact_ids": [*event.artifact_ids, artifact_id],
+                        "payload": {
+                            **event.payload,
+                            "result_artifact_id": artifact_id,
+                        },
+                    }
+                )
         return event.model_copy(update={"tool_call_id": call.id})
+
+    def _persist_activity(
+        self, turn: HarnessTurn, session: HarnessSession, event: HarnessEvent
+    ) -> HarnessEvent:
+        """Append an activity event before exposing it to any live subscriber."""
+
+        if event.vendor is None:
+            profile = self.store.get(HarnessProfile, session.harness_profile_id)
+            event = event.model_copy(update={"vendor": profile.kind})
+        if event.item_kind == "file_change" and event.payload.get("attribution"):
+            concurrent = 0
+            for active in self._active.values():
+                try:
+                    active_turn = self.store.get(HarnessTurn, active.turn_id)
+                except NotFoundError:
+                    continue
+                if active_turn.engagement_id == turn.engagement_id:
+                    concurrent += 1
+            if concurrent > 1:
+                event = event.model_copy(
+                    update={
+                        "payload": {
+                            **event.payload,
+                            "attribution": "uncertain_parallel_turns",
+                        }
+                    }
+                )
+        if (
+            event.item_kind == "file_change"
+            and event.item_status == "completed"
+            and not event.artifact_ids
+        ):
+            raw_diff = event.payload.get("diff")
+            if isinstance(raw_diff, str) and raw_diff:
+                try:
+                    stored = self.artifact_store.put_bytes_with_status(
+                        sanitize_display_text(redact_text(raw_diff)).encode("utf-8")[
+                            : 100 * 1024 * 1024
+                        ],
+                        engagement_id=turn.engagement_id,
+                        filename="harness-changes.diff",
+                        media_type="text/x-diff",
+                        source="harness-file-diff",
+                        metadata={
+                            "harness_turn_id": turn.id,
+                            "redacted": True,
+                        },
+                    )
+                    self.store.create(stored.artifact)
+                    event = event.model_copy(
+                        update={
+                            "artifact_ids": [stored.artifact.id],
+                            "payload": {
+                                **event.payload,
+                                "diff_artifact_id": stored.artifact.id,
+                            },
+                        }
+                    )
+                except Exception as exc:
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.file_diff_artifact_failed",
+                        "A harness file diff could not be retained as an artifact.",
+                        exc,
+                        stage="artifact-persistence",
+                    )
+        if event.type == "status":
+            phase = str(event.payload.get("phase") or "running")
+            canonical_status = HarnessEvent(
+                type="turn_status",
+                origin=turn.origin,
+                harness_profile_id=session.harness_profile_id,
+                harness_session_id=session.id,
+                harness_turn_id=turn.id,
+                model=session.model,
+                vendor=event.vendor,
+                item_status=(
+                    "completed"
+                    if phase == "complete"
+                    else "interrupted"
+                    if phase == "interrupted"
+                    else "failed"
+                    if phase == "failed"
+                    else "waiting_approval"
+                    if phase == "waiting_approval"
+                    else "running"
+                ),
+                title="Turn status",
+                summary=str(event.payload.get("detail") or phase.replace("_", " "))[
+                    :4_000
+                ],
+                payload=event.payload,
+            )
+            canonical_payload = self._activity_payload(turn, session, canonical_status)
+            if turn.origin == HarnessTurnOrigin.CHAT:
+                self.store.append_operation_event(
+                    turn.id,
+                    "harness_turn",
+                    turn.engagement_id,
+                    "harness.turn_status",
+                    canonical_payload,
+                )
+            else:
+                if not turn.run_id:
+                    raise HarnessStateError("mission harness turn has no run ledger")
+                self.store.append_event(
+                    turn.run_id,
+                    "harness.turn_status",
+                    canonical_payload,
+                )
+        payload = self._activity_payload(turn, session, event)
+        if turn.origin == HarnessTurnOrigin.CHAT:
+            durable = self.store.append_operation_event(
+                turn.id,
+                "harness_turn",
+                turn.engagement_id,
+                f"harness.{event.type}",
+                payload,
+            )
+        else:
+            if not turn.run_id:
+                raise HarnessStateError("mission harness turn has no run ledger")
+            durable = self.store.append_event(
+                turn.run_id,
+                f"harness.{event.type}",
+                payload,
+            )
+        return event.model_copy(
+            update={
+                "id": durable.id,
+                "sequence": durable.sequence,
+                "occurred_at": durable.occurred_at,
+            }
+        )
+
+    def activity_events(
+        self, turn_id: str, *, after_sequence: int = 0, limit: int = 1_000
+    ) -> HarnessActivityEventList:
+        """Replay normalized harness events from the turn's authoritative ledger."""
+
+        if after_sequence < 0:
+            raise ValueError("after_sequence cannot be negative")
+        if not 1 <= limit <= 10_000:
+            raise ValueError("limit must be between 1 and 10000")
+        turn = self.store.get(HarnessTurn, turn_id)
+        if turn.origin == HarnessTurnOrigin.CHAT:
+            durable_events = self.store.replay_operation_events(
+                turn.id, after_sequence=after_sequence, limit=limit
+            )
+        else:
+            if not turn.run_id:
+                raise HarnessStateError("mission harness turn has no run ledger")
+            durable_events = self.store.replay_events(
+                turn.run_id, after_sequence=after_sequence, limit=10_000
+            )
+        events: list[HarnessEvent] = []
+        next_sequence = after_sequence
+        for durable in durable_events:
+            next_sequence = durable.sequence
+            if not durable.event_type.startswith("harness."):
+                continue
+            payload = durable.payload if isinstance(durable.payload, dict) else {}
+            fields = HarnessEvent.model_fields
+            values = {key: value for key, value in payload.items() if key in fields}
+            values.update(
+                {
+                    "id": durable.id,
+                    "sequence": durable.sequence,
+                    "occurred_at": durable.occurred_at,
+                    "type": payload.get("type")
+                    or durable.event_type.removeprefix("harness."),
+                }
+            )
+            events.append(HarnessEvent.model_validate(values))
+            if len(events) >= limit:
+                break
+        return HarnessActivityEventList(
+            events=events,
+            next_sequence=next_sequence,
+        )
 
     @staticmethod
     def _activity_payload(
@@ -4944,7 +7138,7 @@ class HarnessRuntimeService:
             summary = f"{turn.origin.value} · {identity} {event.type.replace('_', ' ')}"
         payload.update(
             {
-                "summary": summary,
+                "summary": event.summary or summary,
                 "originating_surface": turn.origin.value,
                 "harness_profile_id": session.harness_profile_id,
                 "harness_session_id": session.id,
@@ -4963,7 +7157,7 @@ class HarnessRuntimeService:
                 self.store.update(
                     ChatTurn,
                     chat_turn.id,
-                    {"status": ChatTurnStatus.ROUTING},
+                    {"status": ChatTurnStatus.ROUTING, "approval_id": None},
                     expected_revision=chat_turn.revision,
                 )
         elif turn.run_id:
@@ -4976,13 +7170,18 @@ class HarnessRuntimeService:
                     AgentRun, run.id, changes, expected_revision=run.revision
                 )
 
-    def _waiting_owner(self, turn: HarnessTurn) -> None:
+    def _waiting_owner(
+        self, turn: HarnessTurn, *, approval_id: str | None = None
+    ) -> None:
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:
             chat_owner = self.store.get(ChatTurn, turn.chat_turn_id)
             self.store.update(
                 ChatTurn,
                 chat_owner.id,
-                {"status": ChatTurnStatus.WAITING_APPROVAL},
+                {
+                    "status": ChatTurnStatus.WAITING_APPROVAL,
+                    "approval_id": approval_id,
+                },
                 expected_revision=chat_owner.revision,
             )
         elif turn.run_id:

@@ -33,6 +33,10 @@ import type {
   ExecutionCapabilities,
   ExecutionLanguage,
   HarnessProfile,
+  HarnessActivityEvent,
+  HarnessActivityItemKind,
+  HarnessDetailedUsage,
+  HarnessInteraction,
   HarnessSessionActivity,
   HarnessSessionSummary,
   McpServerProfile,
@@ -72,6 +76,26 @@ interface ToolLifecycleCard {
   receipt?: Record<string, unknown>;
 }
 
+interface HarnessActivityItem {
+  assistantId: string;
+  key: string;
+  turnId?: string;
+  sessionId?: string;
+  itemId?: string;
+  parentItemId?: string;
+  kind?: HarnessActivityItemKind;
+  type: string;
+  status?: string;
+  title: string;
+  summary?: string;
+  sequence: number;
+  streams: Record<string, string>;
+  payload: Record<string, unknown>;
+  artifactIds: string[];
+  usage?: HarnessDetailedUsage;
+  occurredAt?: string;
+}
+
 interface PendingChatResponse {
   turnId: string;
   assistantId: string;
@@ -99,6 +123,7 @@ interface ConversationMessage extends ChatMessage {
   durable: boolean;
   detail?: string;
   sequence?: number;
+  harnessTurnId?: string;
 }
 
 function makeId(prefix: string): string {
@@ -140,7 +165,52 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
     state: "complete",
     durable: true,
     sequence: message.sequence,
+    harnessTurnId: message.harnessTurnId,
   };
+}
+
+function reduceHarnessActivity(
+  items: HarnessActivityItem[],
+  event: HarnessActivityEvent,
+  assistantId: string,
+): HarnessActivityItem[] {
+  const sequence = event.sequence ?? 0;
+  const key = event.itemId
+    ? `${event.harnessTurnId ?? "turn"}:${event.itemId}`
+    : `${event.harnessTurnId ?? "turn"}:${event.type}:${event.id ?? sequence}`;
+  const existingIndex = items.findIndex((item) => item.key === key);
+  const existing = existingIndex >= 0 ? items[existingIndex] : undefined;
+  if (existing && sequence > 0 && existing.sequence > sequence) return items;
+  const stream = event.stream ?? (event.type === "message_delta" ? "message" : "output");
+  const streams = { ...(existing?.streams ?? {}) };
+  if (event.delta) streams[stream] = `${streams[stream] ?? ""}${event.delta}`.slice(-65_536);
+  const next: HarnessActivityItem = {
+    assistantId,
+    key,
+    turnId: event.harnessTurnId ?? existing?.turnId,
+    sessionId: event.harnessSessionId ?? existing?.sessionId,
+    itemId: event.itemId ?? existing?.itemId,
+    parentItemId: event.parentItemId ?? existing?.parentItemId,
+    kind: event.itemKind ?? existing?.kind,
+    type: event.type,
+    status: event.itemStatus ?? existing?.status,
+    title: event.title ?? existing?.title ?? event.type.replaceAll("_", " "),
+    summary: event.summary ?? event.message ?? existing?.summary,
+    sequence: Math.max(sequence, existing?.sequence ?? 0),
+    streams,
+    payload: { ...(existing?.payload ?? {}), ...event.payload },
+    artifactIds: [...new Set([...(existing?.artifactIds ?? []), ...event.artifactIds])],
+    usage: event.detailedUsage ?? existing?.usage,
+    occurredAt: event.occurredAt ?? existing?.occurredAt,
+  };
+  const updated = existingIndex >= 0
+    ? items.map((item, index) => index === existingIndex ? next : item)
+    : [...items, next];
+  return updated.sort((left, right) => left.sequence - right.sequence);
+}
+
+function isTimelineActivity(event: HarnessActivityEvent): boolean {
+  return !["message_delta", "started", "status", "completed"].includes(event.type);
 }
 
 export function SessionsPage() {
@@ -229,6 +299,10 @@ export function SessionsPage() {
   const [assignedToolCount, setAssignedToolCount] = useState(0);
   const [toolRuntimeReason, setToolRuntimeReason] = useState<string>();
   const [toolCards, setToolCards] = useState<ToolLifecycleCard[]>([]);
+  const [activityItems, setActivityItems] = useState<HarnessActivityItem[]>([]);
+  const [harnessInteractions, setHarnessInteractions] = useState<HarnessInteraction[]>([]);
+  const [interactionAnswers, setInteractionAnswers] = useState<Record<string, string>>({});
+  const [harnessControlBusy, setHarnessControlBusy] = useState(false);
   const [artifactInspector, setArtifactInspector] = useState<ToolLifecycleCard>();
   const [artifactQuery, setArtifactQuery] = useState("");
   const [artifactSearch, setArtifactSearch] = useState<ToolOutputSearchResult>();
@@ -243,6 +317,7 @@ export function SessionsPage() {
   const [chatError, setChatError] = useState<string>();
   const [discoveringProviderId, setDiscoveringProviderId] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
+  const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
@@ -352,6 +427,7 @@ export function SessionsPage() {
         setHarnessActivityError(undefined);
       } catch (error) {
         if (!active || controller.signal.aborted) return;
+        void logCaughtDiagnostic("interface.sessions_page.harness_activity", "Harness session activity could not be refreshed.", error, "sessions_page");
         setHarnessActivityError(error instanceof Error ? error.message : "Harness activity is unavailable.");
       }
     };
@@ -445,6 +521,8 @@ export function SessionsPage() {
 
   useEffect(() => {
     abortRef.current?.abort();
+    harnessFollowDetachRef.current?.();
+    harnessFollowDetachRef.current = undefined;
     setSending(false);
     setSessions([]);
     setSessionId("");
@@ -458,6 +536,8 @@ export function SessionsPage() {
     setChatError(undefined);
     setRunCandidate(undefined);
     setToolCards([]);
+    setActivityItems([]);
+    setHarnessInteractions([]);
     setPendingResponse(undefined);
   }, [engagement?.id]);
 
@@ -493,6 +573,10 @@ export function SessionsPage() {
   }, []);
 
   useEffect(() => {
+    return () => harnessFollowDetachRef.current?.();
+  }, []);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
@@ -505,6 +589,8 @@ export function SessionsPage() {
 
   const resetConversation = (open: boolean) => {
     abortRef.current?.abort();
+    harnessFollowDetachRef.current?.();
+    harnessFollowDetachRef.current = undefined;
     setSending(false);
     setSessionId("");
     setConversationOpen(open);
@@ -517,6 +603,8 @@ export function SessionsPage() {
     setChatError(undefined);
     setMobileListOpen(false);
     setToolCards([]);
+    setActivityItems([]);
+    setHarnessInteractions([]);
     setPendingResponse(undefined);
   };
 
@@ -643,6 +731,36 @@ export function SessionsPage() {
         ? "No models discovered"
         : "Select provider first";
 
+  const restoreHarnessActivity = async (history: PersistedChatMessage[]) => {
+    if (!api) return;
+    const owners = history.filter((message) => message.role === "assistant" && message.harnessTurnId);
+    if (!owners.length) {
+      setActivityItems([]);
+      setHarnessInteractions([]);
+      return;
+    }
+    const restored = await Promise.all(owners.map(async (message) => {
+      const turnId = message.harnessTurnId as string;
+      const [page, interactions] = await Promise.all([
+        api.getHarnessTurnEvents(turnId),
+        api.listHarnessInteractions(turnId),
+      ]);
+      return { message, events: page.events, interactions };
+    }));
+    let reduced: HarnessActivityItem[] = [];
+    const interactions: HarnessInteraction[] = [];
+    for (const group of restored) {
+      for (const event of group.events) {
+        if (isTimelineActivity(event)) {
+          reduced = reduceHarnessActivity(reduced, event, group.message.id);
+        }
+      }
+      interactions.push(...group.interactions);
+    }
+    setActivityItems(reduced);
+    setHarnessInteractions(interactions);
+  };
+
   const selectSession = async (id: string) => {
     if (!id) {
       newConversation();
@@ -654,6 +772,8 @@ export function SessionsPage() {
     setChatError(undefined);
     setHarnessProgress(undefined);
     setHarnessActivity(undefined);
+    harnessFollowDetachRef.current?.();
+    harnessFollowDetachRef.current = undefined;
     try {
       const summary = sessions.find((session) => session.id === id);
       const [history, pendingTurn] = await Promise.all([
@@ -662,6 +782,7 @@ export function SessionsPage() {
       ]);
       setSessionId(id);
       setMessages(history.map(persistedMessage));
+      await restoreHarnessActivity(history);
       if (summary) {
         setRuntimeKind(summary.backend);
         setProviderId(summary.providerId ?? "");
@@ -722,9 +843,116 @@ export function SessionsPage() {
             setChatError(error instanceof Error ? error.message : "Could not restore the pending response.");
           }).finally(() => setSending(false));
         }
+      } else if (pendingTurn?.harnessTurnId && summary?.backend === "harness") {
+        const assistantId = makeId("assistant-harness-pending");
+        const turnId = pendingTurn.harnessTurnId;
+        const page = await api.getHarnessTurnEvents(turnId);
+        setActivityItems((current) => page.events.reduce(
+          (restored, event) => isTimelineActivity(event)
+            ? reduceHarnessActivity(restored, event, assistantId)
+            : restored,
+          current,
+        ));
+        setHarnessInteractions(await api.listHarnessInteractions(turnId));
+        setMessages((current) => [...current, {
+          id: assistantId,
+          role: "assistant",
+          content: page.events.filter((event) => event.type === "message_delta").map((event) => event.delta ?? "").join(""),
+          createdAt: new Date().toISOString(),
+          citations: [],
+          state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "streaming",
+          durable: false,
+          harnessTurnId: turnId,
+        }]);
+        setHarnessProgress({
+          phase: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "running",
+          detail: pendingTurn.status === "waiting_approval" ? "Harness input or approval is required." : "Reconnected to the active harness turn.",
+          sessionId: summary.harnessSessionId,
+          turnId,
+        });
+        setSending(true);
+        harnessFollowDetachRef.current = api.followHarnessTurnEvents(
+          turnId,
+          page.nextSequence,
+          (event) => {
+            if (event.type === "message_delta" && event.delta) {
+              setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content + event.delta } : message));
+            }
+            if (isTimelineActivity(event)) {
+              setActivityItems((current) => reduceHarnessActivity(current, event, assistantId));
+            }
+            if (event.type === "interaction") {
+              void api.listHarnessInteractions(turnId).then(setHarnessInteractions)
+                .catch((caughtError) => void logCaughtDiagnostic("interface.sessions_page.interaction_follow", "Harness interactions could not be refreshed.", caughtError, "sessions_page"));
+              if (event.itemStatus && event.itemStatus !== "waiting_input") {
+                setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, state: "streaming" } : message));
+              }
+            }
+          },
+          () => {
+            harnessFollowDetachRef.current = undefined;
+            void api.listChatMessages(id).then(async (authoritative) => {
+              setMessages(authoritative.map(persistedMessage));
+              await restoreHarnessActivity(authoritative);
+              await refreshSessions(id);
+            }).catch((error) => {
+              void logCaughtDiagnostic("interface.sessions_page.harness_follow_complete", "A completed harness turn could not be restored.", error, "sessions_page");
+              setChatError(error instanceof Error ? error.message : "Could not restore the completed harness turn.");
+            })
+              .finally(() => setSending(false));
+          },
+          (error) => setChatError(error.message),
+        );
+        const approval = approvals.find((item) => item.id === pendingTurn.approvalId);
+        setPendingResponse(approval ? {
+          turnId: pendingTurn.id,
+          assistantId,
+          userId: "",
+          request: {
+            backend: "harness",
+            harnessProfileId: summary.harnessProfileId,
+            harnessSessionId: summary.harnessSessionId,
+            engagementId: engagement?.id,
+            sessionId: id,
+            model: summary.model,
+            messages: [],
+          },
+          approval: {
+            ...approval,
+            exact_request: { tool_name: approval.toolName, arguments: approval.arguments },
+          },
+        } : undefined);
+        setToolCards([]);
       } else {
         setPendingResponse(undefined);
         setToolCards([]);
+        if (summary?.backend === "harness") {
+          const assistantTurnIds = new Set(history.filter((message) => message.role === "assistant").map((message) => message.harnessTurnId));
+          const dangling = [...history].reverse().find((message) => message.role === "user" && message.harnessTurnId && !assistantTurnIds.has(message.harnessTurnId));
+          if (dangling?.harnessTurnId) {
+            const turn = await api.getHarnessTurn(dangling.harnessTurnId);
+            if (["failed", "cancelled", "interrupted"].includes(turn.status)) {
+              const assistantId = makeId("assistant-harness-recovery");
+              const page = await api.getHarnessTurnEvents(turn.id);
+              setActivityItems((current) => page.events.reduce(
+                (restored, event) => isTimelineActivity(event) ? reduceHarnessActivity(restored, event, assistantId) : restored,
+                current,
+              ));
+              setHarnessInteractions(await api.listHarnessInteractions(turn.id));
+              setMessages((current) => [...current, {
+                id: assistantId,
+                role: "assistant",
+                content: page.events.filter((event) => event.type === "message_delta").map((event) => event.delta ?? "").join(""),
+                createdAt: turn.error ? new Date().toISOString() : dangling.createdAt,
+                citations: [],
+                state: turn.status === "cancelled" ? "cancelled" : "error",
+                durable: false,
+                detail: turn.error ?? "The harness turn was interrupted before its outcome was known.",
+                harnessTurnId: turn.id,
+              }]);
+            }
+          }
+        }
       }
       setView("chat");
       setMobileListOpen(false);
@@ -758,6 +986,7 @@ export function SessionsPage() {
       setSessionId(id);
       setConversationOpen(true);
       setMessages(history.map(persistedMessage));
+      await restoreHarnessActivity(history);
       if (summary) {
         setRuntimeKind(summary.backend);
         setProviderId(summary.providerId ?? "");
@@ -795,6 +1024,11 @@ export function SessionsPage() {
           previousSessionId: current?.previousSessionId,
         }));
       }
+      if (streamEvent.harnessTurnId) {
+        setMessages((current) => current.map((message) => message.id === assistantId
+          ? { ...message, harnessTurnId: streamEvent.harnessTurnId }
+          : message));
+      }
     }
     if (streamEvent.type === "status") {
       if (streamEvent.harnessSessionId) setHarnessSessionId(streamEvent.harnessSessionId);
@@ -805,6 +1039,31 @@ export function SessionsPage() {
         turnId: streamEvent.harnessTurnId,
         previousSessionId: streamEvent.previousSessionId,
       });
+      if (streamEvent.harnessTurnId) {
+        setMessages((current) => current.map((message) => message.id === assistantId
+          ? { ...message, harnessTurnId: streamEvent.harnessTurnId }
+          : message));
+      }
+    }
+    if (["turn_status", "item_upsert", "output_delta", "approval", "interaction", "checkpoint", "notice"].includes(streamEvent.type)) {
+      const activityEvent = streamEvent as HarnessActivityEvent;
+      setActivityItems((current) => reduceHarnessActivity(current, activityEvent, assistantId));
+      if (activityEvent.harnessTurnId) {
+        setMessages((current) => current.map((message) => message.id === assistantId
+          ? { ...message, harnessTurnId: activityEvent.harnessTurnId }
+          : message));
+      }
+      if (streamEvent.type === "interaction" && activityEvent.harnessTurnId && api) {
+        void api.listHarnessInteractions(activityEvent.harnessTurnId)
+          .then((items) => setHarnessInteractions((current) => [
+            ...current.filter((item) => item.harnessTurnId !== activityEvent.harnessTurnId),
+            ...items,
+          ]))
+          .catch((caughtError) => void logCaughtDiagnostic("interface.sessions_page.interaction_refresh", "Could not refresh harness interactions.", caughtError, "sessions_page"));
+        if (activityEvent.itemStatus && activityEvent.itemStatus !== "waiting_input") {
+          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, state: "streaming" } : message));
+        }
+      }
     }
     if ((streamEvent.type === "delta" || streamEvent.type === "message_delta") && streamEvent.delta) {
       setMessages((current) => current.map((message) => message.id === assistantId
@@ -825,6 +1084,19 @@ export function SessionsPage() {
         evidenceIds: [],
         artifacts: [],
       }]);
+      if (request.backend === "harness") {
+        setActivityItems((current) => reduceHarnessActivity(current, {
+          schemaVersion: "nebula.harness-activity/v1",
+          type: "item_upsert",
+          harnessTurnId: streamEvent.turnId,
+          itemId: streamEvent.toolCallId,
+          itemKind: "tool",
+          itemStatus: "running",
+          title: streamEvent.capability,
+          artifactIds: [],
+          payload: { arguments: streamEvent.arguments },
+        }, assistantId));
+      }
     }
     if (streamEvent.type === "tool_completed") {
       setToolCards((current) => current.some((item) => item.toolCallId === streamEvent.toolCallId)
@@ -842,6 +1114,20 @@ export function SessionsPage() {
           artifacts: streamEvent.artifacts,
           receipt: streamEvent.receipt,
         }]);
+      if (request.backend === "harness") {
+        setActivityItems((current) => reduceHarnessActivity(current, {
+          schemaVersion: "nebula.harness-activity/v1",
+          type: "item_upsert",
+          harnessTurnId: streamEvent.turnId,
+          itemId: streamEvent.toolCallId,
+          itemKind: "tool",
+          itemStatus: streamEvent.status,
+          title: streamEvent.capability,
+          summary: streamEvent.summary,
+          artifactIds: streamEvent.artifacts.map((artifact) => artifact.artifactId),
+          payload: { receipt: streamEvent.receipt ?? {}, result_artifact_id: streamEvent.resultArtifactId },
+        }, assistantId));
+      }
     }
     if (streamEvent.type === "approval_required") {
       setHarnessProgress((current) => request.backend === "harness" ? {
@@ -876,6 +1162,15 @@ export function SessionsPage() {
         }));
       }
       setPendingResponse(undefined);
+      const durableAssistantId = streamEvent.message.id ?? assistantId;
+      if (durableAssistantId !== assistantId) {
+        setActivityItems((current) => current.map((item) => item.assistantId === assistantId
+          ? { ...item, assistantId: durableAssistantId }
+          : item));
+        setToolCards((current) => current.map((item) => item.assistantId === assistantId
+          ? { ...item, assistantId: durableAssistantId }
+          : item));
+      }
       setMessages((current) => current.map((message) => {
         if (message.id === userId) return { ...message, durable: true };
         if (message.id !== assistantId) return message;
@@ -887,6 +1182,7 @@ export function SessionsPage() {
           usage: streamEvent.usage,
           state: "complete",
           durable: Boolean(streamEvent.message.id),
+          harnessTurnId: streamEvent.harnessTurnId ?? message.harnessTurnId,
         };
       }));
     }
@@ -1209,6 +1505,135 @@ export function SessionsPage() {
     } finally { setArtifactBusy(false); }
   };
 
+  const decideHarnessInteraction = async (
+    interaction: HarnessInteraction,
+    action: "answer" | "decline",
+  ) => {
+    if (!api || harnessControlBusy) return;
+    setHarnessControlBusy(true);
+    setChatError(undefined);
+    try {
+      let response: Record<string, unknown> = {};
+      if (action === "answer") {
+        const raw = interactionAnswers[interaction.id] ?? "";
+        if (interaction.kind === "mcp_elicitation") {
+          const parsed: unknown = JSON.parse(raw || "{}");
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("MCP form input must be a JSON object.");
+          }
+          response = parsed as Record<string, unknown>;
+        } else {
+          const questions = interaction.questions;
+          response = Object.fromEntries(questions.map((question, index) => [
+            typeof question.id === "string" ? question.id : `question_${index + 1}`,
+            interactionAnswers[`${interaction.id}:${typeof question.id === "string" ? question.id : index}`] ?? raw,
+          ]));
+        }
+      }
+      const updated = await api.decideHarnessInteraction(interaction.id, action, response);
+      setHarnessInteractions((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setInteractionAnswers((current) => Object.fromEntries(
+        Object.entries(current).filter(([key]) => key !== interaction.id && !key.startsWith(`${interaction.id}:`)),
+      ));
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.interaction_decision", "Could not resolve harness interaction.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : "Could not resolve harness input.");
+    } finally {
+      setHarnessControlBusy(false);
+    }
+  };
+
+  const stopCurrentResponse = async () => {
+    if (runtimeKind === "harness" && api) {
+      const turnId = harnessProgress?.turnId ?? harnessActivity?.turnId
+        ?? [...messages].reverse().find((message) => message.state === "streaming")?.harnessTurnId;
+      if (turnId) {
+        try {
+          await api.stopHarnessTurn(turnId);
+        } catch (error) {
+          void logCaughtDiagnostic("interface.sessions_page.harness_stop", "Could not stop harness turn.", error, "sessions_page");
+          setChatError(error instanceof Error ? error.message : "Could not stop the harness turn.");
+          return;
+        }
+      }
+    } else if (pendingResponse && api) {
+      await api.cancelChatTurn(pendingResponse.turnId);
+    }
+    abortRef.current?.abort();
+  };
+
+  const steerCurrentHarness = async () => {
+    if (!api || harnessControlBusy) return;
+    const turnId = harnessProgress?.turnId ?? harnessActivity?.turnId;
+    if (!turnId) return;
+    const text = globalThis.prompt("Add guidance to the active harness turn");
+    if (!text?.trim()) return;
+    setHarnessControlBusy(true);
+    try {
+      await api.steerHarnessTurn(turnId, text.trim());
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.harness_steer", "The active harness turn could not be steered.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : "Could not steer the harness turn.");
+    } finally {
+      setHarnessControlBusy(false);
+    }
+  };
+
+  const retryHarnessMessage = async (message: ConversationMessage) => {
+    if (!api || !message.harnessTurnId || harnessControlBusy) return;
+    const approved = await confirm({
+      title: "Retry harness turn?",
+      message: "This starts a linked new turn and preserves the failed execution unchanged.",
+      confirmLabel: "Start retry",
+    });
+    if (!approved) return;
+    setHarnessControlBusy(true);
+    try {
+      await api.retryHarnessTurn(message.harnessTurnId);
+      setHarnessProgress({ phase: "queued", detail: "Linked retry queued.", turnId: message.harnessTurnId });
+      if (sessionId) await selectSession(sessionId);
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.harness_retry", "The harness turn could not be retried.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : "Could not retry the harness turn.");
+    } finally {
+      setHarnessControlBusy(false);
+    }
+  };
+
+  const rewindCheckpoint = async (item: HarnessActivityItem) => {
+    const checkpointSessionId = item.sessionId ?? harnessSessionId;
+    if (!api || !checkpointSessionId || !item.itemId || harnessControlBusy) return;
+    const approved = await confirm({
+      title: "Rewind files to checkpoint?",
+      message: "Claude will restore tracked files to this checkpoint. This is available only while the session is idle.",
+      confirmLabel: "Rewind files",
+      tone: "danger",
+    });
+    if (!approved) return;
+    setHarnessControlBusy(true);
+    try {
+      await api.rewindHarnessCheckpoint(checkpointSessionId, item.itemId);
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.harness_rewind", "The Claude checkpoint could not be rewound.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : "Could not rewind the checkpoint.");
+    } finally {
+      setHarnessControlBusy(false);
+    }
+  };
+
+  const stopSubagent = async (item: HarnessActivityItem) => {
+    if (!api || !item.turnId || !item.itemId || harnessControlBusy) return;
+    setHarnessControlBusy(true);
+    try {
+      await api.stopHarnessSubagent(item.turnId, item.itemId);
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.harness_subagent_stop", "The harness subagent could not be stopped.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : "Could not stop the subagent.");
+    } finally {
+      setHarnessControlBusy(false);
+    }
+  };
+
   const saveRawArtifact = async (artifact: ToolArtifactReference) => {
     if (!api || !await confirm({
       title: "Open raw tool output?",
@@ -1374,13 +1799,49 @@ export function SessionsPage() {
                     tabIndex={-1}
                   >
                     <span className="chat-avatar">{message.role === "user" ? "You" : "N"}</span>
-                    <div><header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>{message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}{toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}{card.status !== "running" && <button className="button quiet" type="button" onClick={() => void openArtifacts(card)}><Search size={13} /> Artifacts</button>}</div>)}{message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}{message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}{message.detail && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}{message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}</div>
+                    <div>
+                      <header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>
+                      {message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}
+                      {activityItems.some((item) => item.assistantId === message.id) && <section className="harness-timeline" aria-label="Harness activity">
+                        {activityItems.filter((item) => item.assistantId === message.id).map((item) => <details className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} open={item.kind !== "reasoning" && item.kind !== "compaction"} key={item.key}>
+                          <summary><span className={`status-dot ${["completed", "complete", "success"].includes(item.status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(item.status ?? "") ? "unavailable" : "pending"}`} /><strong>{item.title}</strong>{item.kind && <code>{item.kind.replaceAll("_", " ")}</code>}{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</summary>
+                          <div className="harness-activity-body">
+                            {item.summary && <p>{item.summary}</p>}
+                            {item.kind === "plan" && Array.isArray(item.payload.plan) && <ol className="harness-plan">{item.payload.plan.map((step, index) => <li key={index}>{typeof step === "string" ? step : JSON.stringify(step)}</li>)}</ol>}
+                            {item.kind === "file_change" && Array.isArray(item.payload.files) && <ul className="harness-file-list">{item.payload.files.map((file, index) => <li key={index}><FileClock size={13} /> {typeof file === "string" ? file : JSON.stringify(file)}</li>)}</ul>}
+                            {Object.entries(item.streams).map(([stream, output]) => <div className="harness-output" key={stream}><small>{stream}</small><pre tabIndex={0}>{output}</pre></div>)}
+                            {typeof item.payload.diff === "string" && item.payload.diff && <div className="harness-output diff"><small>Unified diff</small><pre tabIndex={0}>{item.payload.diff}</pre></div>}
+                            {item.kind && ["command", "tool", "web_search", "browser", "image", "skill", "hook", "review", "subagent"].includes(item.kind) && Object.keys(item.payload).length > 0 && <pre className="harness-structured" tabIndex={0}>{JSON.stringify(item.payload, null, 2)}</pre>}
+                            {item.usage && <small>{item.usage.totalTokens.toLocaleString()} tokens{item.usage.reasoningTokens ? ` · ${item.usage.reasoningTokens.toLocaleString()} reasoning` : ""}{item.usage.costUsd ? ` · $${item.usage.costUsd.toFixed(4)}` : ""}{item.usage.durationMs ? ` · ${(item.usage.durationMs / 1000).toFixed(1)}s` : ""}</small>}
+                            {item.artifactIds.length > 0 && <div className="scope-chip-list">{item.artifactIds.map((id) => <span title={id} key={id}>Artifact {id.slice(0, 8)}</span>)}</div>}
+                            {item.kind === "subagent" && item.status === "running" && selectedHarness?.capabilities?.subagentControl && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void stopSubagent(item)}>Stop subagent</button>}
+                            {item.type === "checkpoint" && selectedHarness?.capabilities?.checkpointRewind && <button className="button quiet" type="button" disabled={harnessControlBusy || (item.sessionId === harnessSessionId && harnessActivity?.busy)} title={item.sessionId === harnessSessionId && harnessActivity?.busy ? "Checkpoint rewind is available while the session is idle" : undefined} onClick={() => void rewindCheckpoint(item)}>Rewind files here</button>}
+                          </div>
+                        </details>)}
+                      </section>}
+                      {runtimeKind !== "harness" && toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}{card.status !== "running" && <button className="button quiet" type="button" onClick={() => void openArtifacts(card)}><Search size={13} /> Artifacts</button>}</div>)}
+                      {harnessInteractions.filter((interaction) => interaction.harnessTurnId === message.harnessTurnId && interaction.status === "pending").map((interaction) => <div className="chat-approval-card harness-interaction" key={interaction.id}>
+                        <strong>{interaction.prompt}</strong>
+                        {interaction.kind === "user_input" ? interaction.questions.map((question, index) => {
+                          const questionId = typeof question.id === "string" ? question.id : String(index);
+                          const answerKey = `${interaction.id}:${questionId}`;
+                          return <label key={questionId}><span>{typeof question.question === "string" ? question.question : `Question ${index + 1}`}</span>{Array.isArray(question.options) ? <select value={interactionAnswers[answerKey] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [answerKey]: event.target.value }))}><option value="">Select an answer</option>{question.options.map((option, optionIndex) => <option value={typeof option === "object" && option && "label" in option ? String(option.label) : String(option)} key={optionIndex}>{typeof option === "object" && option && "label" in option ? String(option.label) : String(option)}</option>)}</select> : <input type={interaction.containsSecret ? "password" : "text"} value={interactionAnswers[answerKey] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [answerKey]: event.target.value }))} autoComplete="off" />}</label>;
+                        }) : <label><span>JSON response</span>{interaction.containsSecret ? <input type="password" value={interactionAnswers[interaction.id] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [interaction.id]: event.target.value }))} autoComplete="off" /> : <textarea rows={3} value={interactionAnswers[interaction.id] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [interaction.id]: event.target.value }))} autoComplete="off" />}</label>}
+                        {interaction.containsSecret && <small>Secret answer is forwarded in memory and will not be persisted.</small>}
+                        <div><button className="button secondary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "decline")}>Decline</button><button className="button primary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "answer")}>Submit</button></div>
+                      </div>)}
+                      {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}
+                      {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
+                      {message.detail && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
+                      {runtimeKind === "harness" && ["error", "cancelled"].includes(message.state) && message.harnessTurnId && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void retryHarnessMessage(message)}>Retry as linked turn</button>}
+                      {message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}
+                    </div>
                   </article>
                 )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use project-assigned Toolbox capabilities when the exact model is verified.</p></div>}
               </div>
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />}
-              {runtimeKind === "harness" && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "complete" || visibleHarnessProgress.phase === "ready" ? "healthy" : visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? " · independent parallel session" : ""}</code>}</div></div>}
+              {runtimeKind === "harness" && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "complete" || visibleHarnessProgress.phase === "ready" ? "healthy" : visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? " · independent parallel session" : ""}</code>}</div>{sending && selectedHarness?.capabilities?.steering && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void steerCurrentHarness()}>Add guidance</button>}</div>}
               <form className="chat-composer" onSubmit={(event) => void submit(event)}>
                 {assistantDraft && <div className="chat-context-attachment" role="group" aria-label="Selected context attachment">
                   <div><strong>{assistantDraft.source.label}</strong><small>{assistantDraft.text.length.toLocaleString()} characters{assistantDraft.truncated ? " · truncated to the first 20,000" : ""}</small></div>
@@ -1389,7 +1850,7 @@ export function SessionsPage() {
                 </div>}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <textarea ref={composerRef} id="analyst-message" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
-                <footer><span>{runtimeKind === "harness" ? sending ? visibleHarnessProgress?.detail ?? "Harness is working" : harnessActivity?.busy ? "Active work detected · sending starts an independent session" : `${harnessSessionId ? "Resumed" : "New"} harness session · ${selectedMcpIds.length || harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length || 0} MCP` : canUseTools || selectedMcpIds.length ? `${canUseTools ? `${assignedToolCount} Toolbox` : "No Toolbox"} · ${selectedMcpIds.length} MCP` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" onClick={() => { if (pendingResponse && pendingResponse.request.backend !== "harness") void api?.cancelChatTurn(pendingResponse.turnId); abortRef.current?.abort(); }}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><span>{runtimeKind === "harness" ? sending ? visibleHarnessProgress?.detail ?? "Harness is working" : harnessActivity?.busy ? "Active work detected · sending starts an independent session" : `${harnessSessionId ? "Resumed" : "New"} harness session · ${selectedMcpIds.length || harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length || 0} MCP` : canUseTools || selectedMcpIds.length ? `${canUseTools ? `${assignedToolCount} Toolbox` : "No Toolbox"} · ${selectedMcpIds.length} MCP` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
             </div>
           )}

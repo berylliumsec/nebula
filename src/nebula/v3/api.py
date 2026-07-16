@@ -125,6 +125,8 @@ from .domain import (
     Entity,
     Evidence,
     GeneratedDraft,
+    HarnessInteraction,
+    HarnessInteractionStatus,
     HarnessProfile,
     HarnessSession,
     HarnessTurn,
@@ -201,6 +203,7 @@ from .missions import (
     MissionStateError,
 )
 from .harnesses import (
+    HarnessActivityEventList,
     HarnessConfigurationError,
     HarnessError,
     HarnessRuntimeService,
@@ -380,6 +383,11 @@ class OperationEventList(NebulaModel):
     next_sequence: int
 
 
+class HarnessInteractionDecisionRequest(NebulaModel):
+    action: Literal["answer", "decline", "cancel"]
+    response: dict[str, Any] = Field(default_factory=dict)
+
+
 class PatchRequest(NebulaModel):
     changes: dict[str, Any]
     expected_revision: int | None = Field(default=None, ge=1)
@@ -413,6 +421,7 @@ class ChatTurnSummary(NebulaModel):
     session_id: str
     status: ChatTurnStatus
     approval_id: str | None = None
+    harness_turn_id: str | None = None
     tool_call_ids: list[str] = Field(default_factory=list)
     revision: int = Field(ge=1)
 
@@ -486,6 +495,10 @@ class MissionStartRequest(NebulaModel):
 
 class HarnessSteerRequest(NebulaModel):
     text: str = Field(min_length=1, max_length=20_000)
+
+
+class HarnessCheckpointRewindRequest(NebulaModel):
+    checkpoint_id: str = Field(min_length=1, max_length=500)
 
 
 class McpProbeRequest(NebulaModel):
@@ -1926,6 +1939,167 @@ def create_app(
         session_id: str,
     ) -> HarnessSessionActivity:
         return harness_runtime.session_activity(session_id)
+
+    @app.get(
+        f"{API_PREFIX}/harness-turns/{{turn_id}}/events",
+        response_model=HarnessActivityEventList,
+        tags=["harness-turns"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def replay_harness_turn_events(
+        turn_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=1_000, ge=1, le=10_000),
+    ) -> HarnessActivityEventList:
+        return harness_runtime.activity_events(
+            turn_id, after_sequence=after, limit=limit
+        )
+
+    @app.get(
+        f"{API_PREFIX}/harness-turns/{{turn_id}}/interactions",
+        response_model=list[HarnessInteraction],
+        tags=["harness-turns"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_harness_turn_interactions(
+        turn_id: str,
+        interaction_status: HarnessInteractionStatus | None = Query(
+            default=None, alias="status"
+        ),
+    ) -> list[HarnessInteraction]:
+        turn = store.get(HarnessTurn, turn_id)
+        return [
+            item
+            for item in store.list_entities(
+                HarnessInteraction, engagement_id=turn.engagement_id, limit=1_000
+            )
+            if item.harness_turn_id == turn.id
+            and (interaction_status is None or item.status == interaction_status)
+        ]
+
+    @app.post(
+        f"{API_PREFIX}/harness-interactions/{{interaction_id}}/decision",
+        response_model=HarnessInteraction,
+        tags=["harness-turns"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def decide_harness_interaction(
+        interaction_id: str,
+        request: HarnessInteractionDecisionRequest,
+    ) -> HarnessInteraction:
+        return await harness_runtime.resolve_interaction(
+            interaction_id,
+            action=request.action,
+            response=request.response,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/harness-turns/{{turn_id}}/steer",
+        response_model=HarnessTurn,
+        tags=["harness-turns"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def steer_harness_turn(
+        turn_id: str, request: HarnessSteerRequest
+    ) -> HarnessTurn:
+        return await harness_runtime.steer_turn(
+            turn_id, request.text, actor_id=active_operator_id()
+        )
+
+    @app.post(
+        f"{API_PREFIX}/harness-turns/{{turn_id}}/stop",
+        response_model=HarnessTurn,
+        tags=["harness-turns"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stop_harness_turn(
+        turn_id: str, request: MissionStopRequest
+    ) -> HarnessTurn:
+        return await harness_runtime.cancel_turn(turn_id, reason=request.reason)
+
+    @app.post(
+        f"{API_PREFIX}/harness-turns/{{turn_id}}/retry",
+        response_model=HarnessTurn,
+        tags=["harness-turns"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def retry_harness_turn(turn_id: str) -> HarnessTurn:
+        return await harness_runtime.retry_turn(turn_id, actor_id=active_operator_id())
+
+    @app.post(
+        f"{API_PREFIX}/harness-turns/{{turn_id}}/tasks/{{task_id}}/stop",
+        response_model=HarnessTurn,
+        tags=["harness-turns"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stop_harness_subagent(turn_id: str, task_id: str) -> HarnessTurn:
+        return await harness_runtime.stop_subagent(turn_id, task_id)
+
+    @app.post(
+        f"{API_PREFIX}/harness-sessions/{{session_id}}/checkpoints/rewind",
+        response_model=HarnessSession,
+        tags=["harness-sessions"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def rewind_harness_files(
+        session_id: str, request: HarnessCheckpointRewindRequest
+    ) -> HarnessSession:
+        return await harness_runtime.rewind_files(session_id, request.checkpoint_id)
+
+    @app.websocket(f"{API_PREFIX}/harness-turns/{{turn_id}}/events/ws")
+    async def harness_turn_event_socket(
+        websocket: WebSocket,
+        turn_id: str,
+        after: int = Query(default=0, ge=0),
+    ) -> None:
+        offered_protocols = [
+            value.strip()
+            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if value.strip()
+        ]
+        supplied: str | None = None
+        authorization = websocket.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:]
+        protocol_token = _websocket_protocol_secret(
+            offered_protocols, "nebula.auth.", decode_base64=True
+        )
+        if (
+            supplied
+            and protocol_token
+            and not hmac.compare_digest(supplied, protocol_token)
+        ):
+            await websocket.close(code=4401, reason="conflicting authentication tokens")
+            return
+        supplied = protocol_token or supplied
+        if not allow_unauthenticated and (
+            not supplied or not hmac.compare_digest(supplied, token)
+        ):
+            await websocket.close(code=4401, reason="valid bearer token required")
+            return
+        try:
+            harness_runtime.activity_events(turn_id, after_sequence=after, limit=1)
+        except NotFoundError:
+            await websocket.close(code=4404, reason="harness turn not found")
+            return
+        protocol = (
+            "nebula.harness-activity.v1"
+            if "nebula.harness-activity.v1" in offered_protocols
+            else "nebula.events.v1"
+            if "nebula.events.v1" in offered_protocols
+            else None
+        )
+        await websocket.accept(subprotocol=protocol)
+        try:
+            async for event in harness_runtime.follow_turn(
+                turn_id, after_sequence=after
+            ):
+                await websocket.send_json(
+                    {"kind": "event", "event": event.model_dump(mode="json")}
+                )
+            await websocket.send_json({"kind": "complete"})
+        except WebSocketDisconnect:
+            return
 
     @app.post(
         f"{API_PREFIX}/harness-sessions/{{session_id}}/close",
@@ -5156,10 +5330,11 @@ def create_app(
                 allow_remote_mcp=request.allow_cloud_tool_results,
                 max_artifact_queries=request.max_artifact_queries,
             )
+            harness_runtime.start_chat_turn(harness_turn.id)
 
             async def harness_events() -> Any:
                 failed: str | None = None
-                async for event in harness_runtime.stream_turn(harness_turn.id):
+                async for event in harness_runtime.follow_turn(harness_turn.id):
                     if event.type == "error":
                         failed = event.message or "harness turn failed"
                     payload = event.model_dump(mode="json")
@@ -5227,16 +5402,13 @@ def create_app(
                         event_count += 1
                         yield _server_sent_event(event_name, payload)
                 except asyncio.CancelledError as caught_error:
-                    outcome = "cancelled"
+                    outcome = "detached"
                     record_caught_exception(
                         "harnesses",
                         "harnesses.chat_stream.cancelled",
                         "A harness chat stream disconnected.",
                         caught_error,
                         stage="stream",
-                    )
-                    await harness_runtime.cancel_turn(
-                        harness_turn.id, reason="Chat stream disconnected"
                     )
                     raise
                 except (HarnessError, ConflictError) as exc:
@@ -5455,6 +5627,12 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def cancel_chat_turn(turn_id: str) -> ChatTurnSummary:
+        turn = store.get(ChatTurn, turn_id)
+        if turn.backend == ChatBackend.HARNESS and turn.harness_turn_id:
+            await harness_runtime.cancel_turn(
+                turn.harness_turn_id, reason="Stopped by operator"
+            )
+            return _chat_turn_summary(store.get(ChatTurn, turn.id))
         return _chat_turn_summary(chat_service().cancel_turn(turn_id))
 
     @app.get(
@@ -6086,7 +6264,13 @@ def create_app(
 
 def _server_sent_event(event: str, payload: dict[str, Any]) -> bytes:
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return f"event: {event}\ndata: {encoded}\n\n".encode()
+    event_id = payload.get("sequence") or payload.get("id")
+    identifier = (
+        f"id: {str(event_id).replace(chr(10), '').replace(chr(13), '')}\n"
+        if event_id is not None
+        else ""
+    )
+    return f"{identifier}event: {event}\ndata: {encoded}\n\n".encode()
 
 
 async def _correlated_stream(
@@ -6114,6 +6298,7 @@ def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
         session_id=turn.session_id,
         status=turn.status,
         approval_id=turn.approval_id,
+        harness_turn_id=turn.harness_turn_id,
         tool_call_ids=turn.tool_call_ids,
         revision=turn.revision,
     )

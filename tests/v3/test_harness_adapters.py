@@ -13,6 +13,7 @@ from pydantic import SecretStr
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.domain import (
     HarnessAuthMode,
+    HarnessCapabilities,
     HarnessKind,
     HarnessNativeCapabilities,
     HarnessProfile,
@@ -22,10 +23,12 @@ from nebula.v3.domain import (
     McpServerProfile,
     McpToolSnapshot,
     McpTransport,
+    utc_now,
 )
 from nebula.v3.harnesses import (
     AdapterOpenRequest,
     ClaudeAgentSdkAdapter,
+    ClaudeAgentSdkConnection,
     CodexAppServerAdapter,
     CodexAppServerConnection,
     HarnessPermissionDecision,
@@ -191,6 +194,7 @@ def test_codex_probe_discovers_selectable_models():
         assert health.healthy is True
         assert health.capabilities.models == ["gpt-5.4", "gpt-5.3-codex"]
         assert [method for method, _ in rpc.calls] == ["initialize", "model/list"]
+        assert rpc.calls[0][1]["capabilities"] == {"requestAttestation": False}
         assert rpc.closed is True
 
     asyncio.run(scenario())
@@ -235,6 +239,9 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
             kind=HarnessKind.CODEX_APP_SERVER,
             executable="/bin/true",
             default_model="gpt-test",
+            capabilities=HarnessCapabilities(
+                checked_at=utc_now(), protocol_version="app-server-v2"
+            ),
         )
         session = HarnessSession(
             id="session-a",
@@ -274,6 +281,8 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         ]
         assert rpc.notifications == [("initialized", None)]
         _validate("v1/InitializeParams.json", rpc.calls[0][1])
+        assert rpc.calls[0][1]["capabilities"]["experimentalApi"] is True
+        assert rpc.calls[0][1]["capabilities"]["mcpServerOpenaiFormElicitation"] is True
         _validate("v2/ThreadStartParams.json", rpc.calls[1][1])
         _validate("v2/TurnStartParams.json", rpc.calls[2][1])
         assert [event.type for event in events] == [
@@ -286,6 +295,10 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
             "completed",
         ]
         assert events[-1].message == "done"
+        usage_event = next(event for event in events if event.type == "usage")
+        assert usage_event.detailed_usage is not None
+        assert usage_event.detailed_usage.input_tokens == 3
+        assert usage_event.detailed_usage.output_tokens == 2
         assert decisions[0].category == "command"
         assert rpc.responses == [(41, {"decision": "accept"})]
         instructions = rpc.calls[1][1]["developerInstructions"]
@@ -499,6 +512,16 @@ class UserMessage:
         self.content = content
 
 
+class ThinkingBlock:
+    def __init__(self, thinking: str, signature: str) -> None:
+        self.thinking = thinking
+        self.signature = signature
+
+
+class FutureClaudeMessage:
+    raw = "vendor diagnostics must not be retained"
+
+
 class ResultMessage:
     session_id = "claude-session-learned"
     usage = {"input_tokens": 7, "output_tokens": 4}
@@ -563,6 +586,48 @@ class FakeClaudeClient:
 
     async def disconnect(self) -> None:
         self.disconnected = True
+
+
+def test_claude_reasoning_text_is_discarded_and_future_messages_are_notices(tmp_path):
+    class ReasoningClient:
+        async def query(self, _prompt: str) -> None:
+            return None
+
+        async def receive_response(self) -> AsyncIterator[Any]:
+            yield AssistantMessage(
+                [ThinkingBlock("private reasoning marker", "private signature")]
+            )
+            yield FutureClaudeMessage()
+            yield ResultMessage()
+
+    async def permission(_request):
+        raise AssertionError("no permission request expected")
+
+    async def scenario() -> None:
+        connection = ClaudeAgentSdkConnection(
+            ReasoningClient(),
+            permission_handler=permission,
+            sdk=SimpleNamespace(),
+            external_session_id=None,
+            workspace=tmp_path,
+        )
+        events = [event async for event in connection.run_turn("think", model="test")]
+        serialized = json.dumps([event.model_dump(mode="json") for event in events])
+        reasoning = next(event for event in events if event.item_kind == "reasoning")
+        assert reasoning.summary == (
+            "Claude reasoning trace is hidden; only lifecycle is retained."
+        )
+        assert "private reasoning marker" not in serialized
+        assert "private signature" not in serialized
+        notice = next(
+            event
+            for event in events
+            if event.type == "notice" and "FutureClaudeMessage" in (event.summary or "")
+        )
+        assert notice.payload == {"message_type": "FutureClaudeMessage"}
+        assert FutureClaudeMessage.raw not in serialized
+
+    asyncio.run(scenario())
 
 
 class PermissionResultAllow:
@@ -684,6 +749,9 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
         assert tool_started.tool_name == "read_file"
         assert events[-1].message == "ok"
         assert events[-1].external_session_id == "claude-session-learned"
+        usage_event = next(event for event in reversed(events) if event.type == "usage")
+        assert usage_event.detailed_usage is not None
+        assert usage_event.detailed_usage.total_tokens == 11
 
         connection.active = True
         await connection.steer("focus")

@@ -767,6 +767,68 @@ export interface ChatUsage {
   totalTokens: number;
 }
 
+export interface HarnessDetailedUsage extends ChatUsage {
+  cachedInputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  reasoningTokens: number;
+  costUsd: number;
+  durationMs?: number;
+  apiDurationMs?: number;
+  turnCount: number;
+  contextUsedTokens?: number;
+  contextLimitTokens?: number;
+  modelUsage: Record<string, Record<string, unknown>>;
+  rateLimit: Record<string, unknown>;
+}
+
+export type HarnessActivityItemKind =
+  | "reasoning" | "plan" | "command" | "file_change" | "tool"
+  | "web_search" | "browser" | "image" | "skill" | "subagent"
+  | "hook" | "review" | "compaction";
+
+export interface HarnessActivityEvent {
+  schemaVersion: "nebula.harness-activity/v1";
+  id?: Identifier;
+  sequence?: number;
+  type: string;
+  vendor?: "codex_app_server" | "claude_agent_sdk";
+  harnessSessionId?: Identifier;
+  harnessTurnId?: Identifier;
+  externalSessionId?: string;
+  externalTurnId?: string;
+  itemId?: string;
+  parentItemId?: string;
+  itemKind?: HarnessActivityItemKind;
+  itemStatus?: string;
+  title?: string;
+  summary?: string;
+  stream?: string;
+  delta?: string;
+  message?: string;
+  usage?: ChatUsage;
+  detailedUsage?: HarnessDetailedUsage;
+  artifactIds: Identifier[];
+  payload: Record<string, unknown>;
+  occurredAt?: string;
+}
+
+export interface HarnessActivityEventPage {
+  events: HarnessActivityEvent[];
+  nextSequence: number;
+}
+
+export interface HarnessTurnDetail {
+  id: Identifier;
+  status: "queued" | "running" | "waiting_approval" | "complete" | "failed" | "cancelled" | "interrupted";
+  origin: "chat" | "mission";
+  harnessSessionId: Identifier;
+  chatSessionId?: Identifier;
+  runId?: Identifier;
+  error?: string;
+  retryOfTurnId?: Identifier;
+}
+
 export interface ChatCompletionRequest {
   backend?: "provider" | "harness";
   providerId?: Identifier;
@@ -867,6 +929,7 @@ export type ChatStreamEvent =
   | { type: "tool_completed"; turnId: Identifier; toolCallId: Identifier; capability: string; status: string; summary: string; evidenceIds: Identifier[]; resultArtifactId?: Identifier; artifacts: ToolArtifactReference[]; receipt?: Record<string, unknown>; step: number }
   | { type: "approval_required"; turnId: Identifier; toolCallId: Identifier; approval: Record<string, unknown> }
   | { type: "status"; phase: string; detail: string; harnessSessionId?: Identifier; harnessTurnId?: Identifier; previousSessionId?: Identifier }
+  | ({ type: "turn_status" | "item_upsert" | "output_delta" | "approval" | "interaction" | "checkpoint" | "notice" } & HarnessActivityEvent)
   | { type: "item_started" | "item_completed" | "usage" | "interrupted" | "completed"; harnessSessionId?: Identifier; harnessTurnId?: Identifier; payload?: Record<string, unknown> }
   | ({ type: "done" } & ChatCompletionResponse)
   | { type: "error"; detail: string };
@@ -876,6 +939,7 @@ export interface ChatTurn {
   sessionId: Identifier;
   status: "routing" | "waiting_approval" | "finalizing" | "complete" | "failed" | "cancelled" | "interrupted";
   approvalId?: Identifier;
+  harnessTurnId?: Identifier;
   toolCallIds: Identifier[];
 }
 
@@ -913,7 +977,36 @@ export interface HarnessProfile {
   healthy?: boolean;
   version?: string;
   detail?: string;
+  capabilities?: HarnessCapabilities;
   revision: number;
+}
+
+export interface HarnessCapabilities {
+  activityReplay: boolean;
+  reasoningSummaries: boolean;
+  plans: boolean;
+  liveCommandOutput: boolean;
+  fileDiffs: boolean;
+  detailedUsage: boolean;
+  interactions: boolean;
+  hooks: boolean;
+  subagentActivity: boolean;
+  subagentControl: boolean;
+  checkpointRewind: boolean;
+  steering: boolean;
+  interruption: boolean;
+}
+
+export interface HarnessInteraction {
+  id: Identifier;
+  harnessTurnId: Identifier;
+  status: "pending" | "answered" | "declined" | "cancelled" | "expired";
+  kind: "user_input" | "mcp_elicitation";
+  prompt: string;
+  questions: Record<string, unknown>[];
+  responseSchema: Record<string, unknown>;
+  containsSecret: boolean;
+  createdAt: string;
 }
 
 export interface HarnessNativeCapabilities {
@@ -997,6 +1090,7 @@ export interface PersistedChatMessage extends ChatMessage {
   providerRequestId?: string;
   citations: ChatCitation[];
   contextAttachments: ChatContextAttachment[];
+  harnessTurnId?: Identifier;
   createdAt: string;
   updatedAt: string;
 }
@@ -1488,7 +1582,8 @@ export type RunEventKind =
   | "finding.created"
   | "finding.updated"
   | "evidence.created"
-  | "system.notice";
+  | "system.notice"
+  | `harness.${string}`;
 
 export interface RunEvent<T = Record<string, unknown>> {
   sequence: number;
