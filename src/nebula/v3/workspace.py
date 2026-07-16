@@ -6,6 +6,7 @@ from .diagnostics import record_caught_exception
 
 import asyncio
 import hashlib
+import hmac
 import mimetypes
 import os
 import stat
@@ -306,13 +307,18 @@ class WorkspaceService:
         chunks: AsyncIterator[bytes],
         *,
         overwrite: bool = False,
+        expected_sha256: str | None = None,
     ) -> WorkspaceUploadResult:
         """Atomically stream one regular file into an engagement workspace."""
 
         lock = self._upload_locks.setdefault(engagement_id, asyncio.Lock())
         async with lock:
             return await self._upload_locked(
-                engagement_id, path, chunks, overwrite=overwrite
+                engagement_id,
+                path,
+                chunks,
+                overwrite=overwrite,
+                expected_sha256=expected_sha256,
             )
 
     async def _upload_locked(
@@ -322,6 +328,7 @@ class WorkspaceService:
         chunks: AsyncIterator[bytes],
         *,
         overwrite: bool,
+        expected_sha256: str | None,
     ) -> WorkspaceUploadResult:
         """Write an upload while serializing only other API uploads."""
 
@@ -385,7 +392,33 @@ class WorkspaceService:
                         "workspace file already exists; confirm overwrite to replace it",
                         status_code=409,
                     )
+                if expected_sha256 is not None:
+                    current = hashlib.sha256()
+                    current_descriptor = os.open(
+                        relative[-1],
+                        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=parent,
+                    )
+                    try:
+                        while payload := os.read(current_descriptor, 64 * 1024):
+                            current.update(payload)
+                    finally:
+                        os.close(current_descriptor)
+                    if not hmac.compare_digest(
+                        current.hexdigest(), expected_sha256
+                    ):
+                        raise ExecutionServiceError(
+                            "workspace_file_changed",
+                            "workspace file changed after it was opened",
+                            status_code=412,
+                        )
                 replaced = True
+            elif expected_sha256 is not None:
+                raise ExecutionServiceError(
+                    "workspace_file_changed",
+                    "workspace file no longer exists",
+                    status_code=412,
+                )
 
             root = self._workspace_root(engagement_id)
             temporary_path = PurePosixPath(*relative[:-1], temporary_name).as_posix()

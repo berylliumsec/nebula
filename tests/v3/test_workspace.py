@@ -291,3 +291,63 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
     assert (
         platform.workspace_for(engagement.id) / "result.bin"
     ).read_bytes() == b"second payload"
+
+
+def test_workspace_upload_if_match_prevents_lost_terminal_changes(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+    path = platform.workspace_for(engagement.id) / "shared.py"
+    original = b"print('editor opened this')\n"
+    terminal_change = b"print('terminal changed this')\n"
+    original_sha256 = hashlib.sha256(original).hexdigest()
+
+    path.write_bytes(original)
+    path.write_bytes(terminal_change)
+
+    with client:
+        stale = client.put(
+            f"/api/v1/engagements/{engagement.id}/workspace/file",
+            headers={
+                **AUTH,
+                "Content-Type": "application/octet-stream",
+                "If-Match": original_sha256,
+            },
+            params={"path": "shared.py", "overwrite": "true"},
+            content=b"print('stale editor save')\n",
+        )
+        assert stale.status_code == 412
+        assert stale.json()["code"] == "workspace_file_changed"
+        assert path.read_bytes() == terminal_change
+
+        matched = client.put(
+            f"/api/v1/engagements/{engagement.id}/workspace/file",
+            headers={
+                **AUTH,
+                "Content-Type": "application/octet-stream",
+                "If-Match": hashlib.sha256(terminal_change).hexdigest(),
+            },
+            params={"path": "shared.py", "overwrite": "true"},
+            content=b"print('fresh editor save')\n",
+        )
+        assert matched.status_code == 201
+        assert matched.json()["overwritten"] is True
+        assert path.read_bytes() == b"print('fresh editor save')\n"
+
+
+def test_workspace_upload_if_match_rejects_deleted_file(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+
+    with client:
+        response = client.put(
+            f"/api/v1/engagements/{engagement.id}/workspace/file",
+            headers={
+                **AUTH,
+                "Content-Type": "application/octet-stream",
+                "If-Match": "a" * 64,
+            },
+            params={"path": "deleted.py", "overwrite": "true"},
+            content=b"print('replacement')\n",
+        )
+
+    assert response.status_code == 412
+    assert response.json()["code"] == "workspace_file_changed"
+    assert not (platform.workspace_for(engagement.id) / "deleted.py").exists()

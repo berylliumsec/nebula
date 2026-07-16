@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -86,6 +87,7 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
         *,
         environment: dict[str, str] | None = None,
         parser: Osc633CommandParser | None = None,
+        before_commands: Callable[[], None] | None = None,
     ) -> bytes:
         request = SandboxRequest(
             image=image,
@@ -107,6 +109,8 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
             request, container_name=name, columns=100, rows=30
         )
         try:
+            if before_commands is not None:
+                before_commands()
             await process.write(commands)
             output = bytearray()
             while True:
@@ -156,18 +160,23 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
             "nebula-terminal-kali-integration-1",
             b"id -u\n"
             b"touch /root/ephemeral-marker\n"
+            b"python /workspace/editor-script.py\n"
             b"printf persisted > /workspace/kali-workspace.txt\n"
             b"getent hosts kali.org >/dev/null && echo network-ok\n"
             b"command -v nmap >/dev/null && echo nmap-ok\n"
             b"command -v ping >/dev/null && echo ping-installed\n"
             b"apt-get update -qq && echo apt-ok\n"
             b"exit\n",
+            before_commands=lambda: (workspace / "editor-script.py").write_text(
+                "print('editor-volume-ok')\n", encoding="utf-8"
+            ),
         )
         assert b"0" in first.replace(b"\r", b"\n").splitlines()
         assert b"network-ok" in first
         assert b"nmap-ok" in first
         assert b"ping-installed" in first
         assert b"apt-ok" in first
+        assert b"editor-volume-ok" in first
         assert (workspace / "kali-workspace.txt").read_text() == "persisted"
 
         assert "nmap" in image.security_tools
@@ -213,10 +222,12 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
             "nebula-terminal-kali-integration-2",
             b"test ! -e /root/ephemeral-marker && echo ephemeral-ok\n"
             b"cat /workspace/kali-workspace.txt\n"
+            b"python /workspace/editor-script.py\n"
             b"exit\n",
         )
         assert b"ephemeral-ok" in second
         assert b"persisted" in second
+        assert b"editor-volume-ok" in second
         names, _stderr, return_code = await runner._capture(
             "ps", "--all", "--format", "{{.Names}}"
         )

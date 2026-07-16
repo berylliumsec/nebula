@@ -62,7 +62,7 @@ import { AgentsPage } from "./AgentsPage";
 import { finalAssistantContent, isTimelineActivity } from "./harnessActivity";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
-type SessionView = "chat" | "terminal" | "missions" | "activity" | "workspace" | "notes";
+type SessionView = "chat" | "code" | "terminal" | "missions" | "activity" | "workspace" | "notes";
 type MessageState = "complete" | "streaming" | "waiting_approval" | "error" | "cancelled";
 
 interface ToolLifecycleCard {
@@ -114,6 +114,7 @@ interface HarnessProgress {
 }
 
 const ContainerTerminalPanel = lazy(() => import("../components/ContainerTerminalPanel").then((module) => ({ default: module.ContainerTerminalPanel })));
+const CodeEditorPanel = lazy(() => import("../components/CodeEditorPanel").then((module) => ({ default: module.CodeEditorPanel })));
 
 interface ConversationMessage extends ChatMessage {
   id: string;
@@ -224,12 +225,12 @@ export function SessionsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedView = searchParams.get("view");
   const requestedSessionId = searchParams.get("session") ?? "";
-  const initialView = requestedView === "chat" || requestedView === "terminal" || requestedView === "missions" || requestedView === "activity" || requestedView === "workspace" || requestedView === "notes"
+  const initialView = requestedView === "chat" || requestedView === "code" || requestedView === "terminal" || requestedView === "missions" || requestedView === "activity" || requestedView === "workspace" || requestedView === "notes"
     ? requestedView
     : requestedView === "executions" ? "activity"
       : requestedView === "files" ? "workspace"
         : localStorage.getItem("nebula.workbench.view") as SessionView | null;
-  const [view, setViewState] = useState<SessionView>(initialView === "chat" || initialView === "missions" || initialView === "activity" || initialView === "workspace" || initialView === "notes" ? initialView : "terminal");
+  const [view, setViewState] = useState<SessionView>(initialView === "chat" || initialView === "code" || initialView === "missions" || initialView === "activity" || initialView === "workspace" || initialView === "notes" ? initialView : "terminal");
   const setView = (next: SessionView) => {
     setViewState(next);
     localStorage.setItem("nebula.workbench.view", next);
@@ -353,7 +354,7 @@ export function SessionsPage() {
 
   useEffect(() => {
     const next = requestedView === "executions" ? "activity" : requestedView === "files" ? "workspace" : requestedView;
-    if (next === "chat" || next === "terminal" || next === "missions" || next === "activity" || next === "workspace" || next === "notes") {
+    if (next === "chat" || next === "code" || next === "terminal" || next === "missions" || next === "activity" || next === "workspace" || next === "notes") {
       setViewState(next);
       localStorage.setItem("nebula.workbench.view", next);
     }
@@ -1716,13 +1717,14 @@ export function SessionsPage() {
     <div className="page sessions-page">
       <PageHeader
         title="Workbench"
-        description="Start in Terminal, ask the assistant, or open your project files."
+        description="Start in Terminal, edit shared code, ask the assistant, or open your project files."
         actions={view === "chat" ? <button className="button primary" type="button" disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : view === "missions" ? <NewMissionButton /> : undefined}
       />
 
       <div className="session-toolbar">
         <div className="session-tabs" role="tablist" aria-label="Workbench views">
           <button type="button" role="tab" aria-selected={view === "terminal"} onClick={() => setView("terminal")}><SquareTerminal size={16} /> Terminal</button>
+          <button type="button" role="tab" aria-label="Workspace code editor" aria-selected={view === "code"} onClick={() => setView("code")}><Braces size={16} /> Code</button>
           <button type="button" role="tab" aria-label="Analyst chat" aria-selected={view === "chat"} onClick={() => setView("chat")}><MessageSquare size={16} /> Assistant</button>
           <button type="button" role="tab" aria-label="Workspace files" aria-selected={view === "workspace"} onClick={() => setView("workspace")}><FolderOpen size={16} /> Files</button>
           <button type="button" role="tab" aria-label="Project notes" aria-selected={view === "notes"} onClick={() => setView("notes")}><NotebookPen size={16} /> Notes</button>
@@ -1746,9 +1748,12 @@ export function SessionsPage() {
           {api && engagement && <div className="persistent-terminal" hidden={view !== "terminal"}>
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} /></Suspense>
           </div>}
-          {view === "terminal" && (!api || !engagement) ? (
-            <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal becomes available as soon as Nebula finishes creating or loading a project.</p></div>
-          ) : view === "terminal" ? null : view === "missions" && api && engagement ? (
+          {api && engagement && <div className="persistent-code-editor" hidden={view !== "code"}>
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} /></Suspense>
+          </div>}
+          {(view === "terminal" || view === "code") && (!api || !engagement) ? (
+            <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal and Code become available as soon as Nebula finishes creating or loading a project.</p></div>
+          ) : view === "terminal" || view === "code" ? null : view === "missions" && api && engagement ? (
             <AgentsPage embedded />
           ) : view === "activity" && api && engagement ? (
             <div className="workbench-activity-stack">

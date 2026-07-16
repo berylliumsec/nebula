@@ -46,8 +46,19 @@ describe("Nebula workspace", () => {
     }
     expect(await screen.findByRole("heading", { name: "Workbench" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Workspace code editor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Autonomous missions" })).toBeVisible();
     expect(screen.queryByText(/Acme|Jordan/i)).not.toBeInTheDocument();
+  });
+
+  it("opens and restores the dedicated Workbench Code view", async () => {
+    const user = userEvent.setup();
+    renderApp("/?view=code");
+    expect(await screen.findByRole("tab", { name: "Workspace code editor" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Terminal and Code become available as soon as Nebula finishes creating or loading a project.")).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Terminal" }));
+    await user.click(screen.getByRole("tab", { name: "Workspace code editor" }));
+    expect(localStorage.getItem("nebula.workbench.view")).toBe("code");
   });
 
   it("uses Zero as the first-run theme while preserving explicit preferences", async () => {
