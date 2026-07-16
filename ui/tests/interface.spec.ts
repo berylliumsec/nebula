@@ -274,7 +274,15 @@ async function installTruthfulCore(page: Page) {
       body = {
         engagement_id: "scratch-project",
         enabled: true,
+        capture_mode: "selected_tools",
         record_count: 0,
+        recorded_output_count: 0,
+        metadata_only_count: 0,
+        classification_failure_count: 0,
+        degraded_count: 0,
+        truncated_count: 0,
+        audit_gap_count: 0,
+        captured_output_bytes: 0,
         retention_days: 90,
         max_records: 10_000,
         oldest_recorded_at: null,
@@ -282,6 +290,19 @@ async function installTruthfulCore(page: Page) {
       };
     } else if (path.endsWith("/terminal/commands")) {
       body = { records: [], total: 0, offset: 0, limit: 100, next_offset: null };
+    } else if (path.endsWith("/terminal/recording-tools")) {
+      body = {
+        engagement_id: "scratch-project",
+        inventory_status: "verified",
+        runtime_image_digest: runtime.image_digest,
+        manifest_sha256: "f".repeat(64),
+        default_tools: ["nmap", "nikto"],
+        custom_tools: [],
+        disabled_tools: [],
+        effective_tools: ["nmap", "nikto"],
+        revision: 1,
+        updated_at: entity.updated_at,
+      };
     } else if (path.endsWith("/workspace")) {
       body = {
         engagement_id: "scratch-project",
@@ -564,6 +585,33 @@ test("the workbench expands to the full viewport and restores in place", async (
   expect(Math.abs(geometry.right)).toBeLessThanOrEqual(1);
   expect(Math.abs(geometry.bottom)).toBeLessThanOrEqual(1);
   await expect(page.getByRole("heading", { name: "Workbench" })).toBeHidden();
+
+  for (const [tabName, contentSelector] of [
+    ["Terminal", ".persistent-terminal"],
+    ["Workspace code editor", ".persistent-code-editor"],
+    ["Project browser", ".persistent-browser"],
+    ["Analyst chat", ".session-workspace > .chat-empty-state"],
+    ["Workspace files", ".workspace-browser"],
+    ["Project notes", ".notes-panel"],
+    ["Autonomous missions", ".agents-page"],
+    ["Activity history", ".workbench-activity-stack"],
+  ] as const) {
+    await page.getByRole("tab", { name: tabName, exact: true }).click();
+    const content = page.locator(contentSelector);
+    await expect(content).toBeVisible();
+    const bounds = await content.evaluate((element) => {
+      const root = element.getBoundingClientRect();
+      const workspace = element.closest(".session-workspace")!.getBoundingClientRect();
+      return {
+        contentWidth: root.width,
+        contentHeight: root.height,
+        workspaceWidth: workspace.width,
+        workspaceHeight: workspace.height,
+      };
+    });
+    expect(bounds.contentWidth, tabName).toBeGreaterThanOrEqual(bounds.workspaceWidth - 26);
+    expect(bounds.contentHeight, tabName).toBeGreaterThanOrEqual(bounds.workspaceHeight - 26);
+  }
 
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Enter full screen workbench" })).toBeVisible();
