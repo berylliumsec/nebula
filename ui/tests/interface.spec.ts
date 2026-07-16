@@ -906,6 +906,7 @@ test("audit every primary workspace view", async ({ page }, testInfo) => {
   await openWorkspace(page, "/", "Workbench");
   for (const [name, label] of [
     ["workbench-terminal", "Terminal"],
+    ["workbench-browser", "Project browser"],
     ["workbench-assistant", "Analyst chat"],
     ["workbench-files", "Workspace files"],
     ["workbench-notes", "Project notes"],

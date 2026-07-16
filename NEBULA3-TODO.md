@@ -52,9 +52,10 @@ The release is blocked until all of these gates pass:
 These items belong in the first parity release and must remain integrated rather
 than hidden behind separate top-level destinations:
 
-- Workbench with persistent browser-style terminal tabs and an optional
-  Assistant split; Files, Notes, and Activity are secondary surfaces. Up to 32
-  terminal containers may be pending or running globally.
+- Workbench with persistent browser-style terminal tabs, an isolated multi-tab
+  Project web browser, and an optional Assistant split; Files, Notes, and
+  Activity are secondary surfaces. Up to 32 terminal containers may be pending
+  or running globally.
 - Five primary destinations: Workbench, Findings, Reports, Project, Settings.
 - Optional contextual assistant setup with secure credential references and a
   non-generating discovery/liveness check.
