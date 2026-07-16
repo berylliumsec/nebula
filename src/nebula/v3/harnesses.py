@@ -28,13 +28,13 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 import hashlib
 import tempfile
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 import claude_agent_sdk
 from packaging.version import InvalidVersion, Version
-from pydantic import Field
+from pydantic import Field, StringConstraints
 
 from .credentials import CredentialError, CredentialStore
 from .artifacts import ArtifactStore
@@ -489,8 +489,15 @@ class HarnessEvent(NebulaModel):
         ]
         | None
     ) = None
-    delta: str | None = Field(default=None, max_length=MAX_NORMALIZED_TEXT)
-    message: str | None = Field(default=None, max_length=MAX_NORMALIZED_TEXT)
+    # Stream fragments commonly carry their word separator as leading or trailing
+    # whitespace. NebulaModel trims ordinary metadata strings, so opt these exact
+    # text fields out or coalescing fragments would collapse adjacent words.
+    delta: Annotated[str, StringConstraints(strip_whitespace=False)] | None = Field(
+        default=None, max_length=MAX_NORMALIZED_TEXT
+    )
+    message: Annotated[str, StringConstraints(strip_whitespace=False)] | None = Field(
+        default=None, max_length=MAX_NORMALIZED_TEXT
+    )
     approval_id: str | None = None
     tool_call_id: str | None = None
     server_id: str | None = None
@@ -1471,6 +1478,32 @@ class CodexAppServerConnection(HarnessConnection):
                     # The operator message is already a first-class chat message.
                     # Mirroring the vendor's thread item leaks protocol internals
                     # into the assistant activity timeline.
+                    continue
+                if item_type in {"reasoning", "plan"}:
+                    # These are observable lifecycle items, not tool calls. Their
+                    # dedicated delta notifications carry displayable summaries
+                    # and plan updates; private reasoning content stays discarded.
+                    payload = (
+                        {"type": "reasoning"}
+                        if item_type == "reasoning"
+                        else _bounded(item, limit=MAX_TOOL_RESULT_TEXT)
+                    )
+                    yield HarnessEvent(
+                        type="item_upsert",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        external_turn_id=self.active_turn_id,
+                        item_id=item_id or item_type,
+                        parent_item_id=str(item.get("parentId") or "") or None,
+                        item_kind=_codex_item_kind(item_type),
+                        item_status=item_status,
+                        title=_codex_item_title(item_type, item),
+                        summary=(
+                            "Codex is reasoning; hidden trace content is not retained."
+                            if item_type == "reasoning"
+                            else None
+                        ),
+                        payload=payload,
+                    )
                     continue
                 if item_type == "mcpToolCall":
                     yield HarnessEvent(

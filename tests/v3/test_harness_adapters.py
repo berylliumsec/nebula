@@ -348,7 +348,51 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
                     "params": {
                         "turnId": "turn-phase",
                         "itemId": "commentary-1",
-                        "delta": "I am checking the interface. ",
+                        "delta": "I am checking ",
+                    },
+                },
+                {
+                    "method": "item/agentMessage/delta",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "itemId": "commentary-1",
+                        "delta": " the interface. ",
+                    },
+                },
+                {
+                    "method": "item/started",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "item": {"id": "reasoning-1", "type": "reasoning"},
+                    },
+                },
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "item": {
+                            "id": "reasoning-1",
+                            "type": "reasoning",
+                            "content": ["private reasoning must not be retained"],
+                        },
+                    },
+                },
+                {
+                    "method": "item/started",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "item": {"id": "plan-1", "type": "plan", "text": "Scan"},
+                    },
+                },
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "item": {
+                            "id": "plan-1",
+                            "type": "plan",
+                            "text": "Scan complete",
+                        },
                     },
                 },
                 {
@@ -421,8 +465,23 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
         assert [item.delta for item in events if item.type == "message_delta"] == [
             "The scan completed."
         ]
+        assert [
+            item.delta
+            for item in events
+            if item.type == "output_delta" and item.stream == "commentary"
+        ] == ["I am checking ", " the interface. "]
         assert events[-1].message == "The authoritative final answer."
         assert not any(item.title == "User Message" for item in events)
+        assert not any("unsupported" in (item.summary or "") for item in events)
+        reasoning = [item for item in events if item.item_id == "reasoning-1"]
+        assert [item.item_status for item in reasoning] == ["running", "completed"]
+        assert all(item.type == "item_upsert" for item in reasoning)
+        plan = [item for item in events if item.item_id == "plan-1"]
+        assert [item.item_kind for item in plan] == ["plan", "plan"]
+        assert [item.item_status for item in plan] == ["running", "completed"]
+        assert "private reasoning must not be retained" not in json.dumps(
+            [item.model_dump(mode="json") for item in events]
+        )
         assert rpc.responses == [(92, {"action": "decline"})]
 
         trusted_rpc = PhaseRpc("nebula")
