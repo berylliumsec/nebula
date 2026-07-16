@@ -65,3 +65,15 @@ createRoot(root).render(
     </DiagnosticErrorBoundary>
   </StrictMode>,
 );
+
+const bootSplash = document.getElementById("nebula-boot");
+if (bootSplash) {
+  const minimumDisplayMs = 1_100;
+  const elapsed = performance.now();
+  window.setTimeout(() => {
+    window.requestAnimationFrame(() => {
+      bootSplash.classList.add("nebula-boot--leaving");
+      window.setTimeout(() => bootSplash.remove(), 450);
+    });
+  }, Math.max(0, minimumDisplayMs - elapsed));
+}

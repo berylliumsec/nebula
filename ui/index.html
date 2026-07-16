@@ -9,9 +9,325 @@
       content="Nebula 3 local-first security engagement workspace"
     />
     <title>Nebula 3</title>
+    <!-- Critical launch visuals stay inline so they paint before the application bundle. -->
+    <style>
+      :root {
+        background: #020203;
+        color-scheme: dark;
+      }
+
+      body {
+        margin: 0;
+        background: #020203;
+      }
+
+      #nebula-boot {
+        position: fixed;
+        z-index: 2147483647;
+        inset: 0;
+        display: grid;
+        overflow: hidden;
+        place-items: center;
+        background:
+          radial-gradient(circle at 50% 44%, rgb(57 112 184 / 16%), transparent 27%),
+          radial-gradient(circle at 82% 88%, rgb(184 91 36 / 7%), transparent 25%),
+          linear-gradient(145deg, #020203 0%, #08090c 53%, #020203 100%);
+        color: #f8f9fb;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        opacity: 1;
+        transition: opacity 420ms cubic-bezier(.4, 0, .2, 1), visibility 420ms;
+      }
+
+      #nebula-boot::before {
+        position: absolute;
+        inset: -30%;
+        background-image:
+          linear-gradient(rgb(150 194 255 / 3%) 1px, transparent 1px),
+          linear-gradient(90deg, rgb(150 194 255 / 3%) 1px, transparent 1px);
+        background-size: 54px 54px;
+        content: "";
+        mask-image: radial-gradient(circle at center, #000 0%, transparent 61%);
+        transform: perspective(520px) rotateX(61deg) translateY(18%);
+        animation: nebula-grid-drift 9s linear infinite;
+      }
+
+      #nebula-boot::after {
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(108deg, transparent 22%, rgb(255 255 255 / 2.5%) 44%, transparent 63%),
+          radial-gradient(ellipse at center, transparent 44%, rgb(0 0 0 / 55%) 100%);
+        pointer-events: none;
+        content: "";
+      }
+
+      #nebula-boot.nebula-boot--leaving {
+        visibility: hidden;
+        opacity: 0;
+      }
+
+      .nebula-boot__frame {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        width: min(520px, calc(100vw - 48px));
+        justify-items: center;
+      }
+
+      .nebula-boot__eyebrow {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 34px;
+        color: #8491a3;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 9px;
+        letter-spacing: .18em;
+        text-transform: uppercase;
+      }
+
+      .nebula-boot__eyebrow span:last-child {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .nebula-boot__eyebrow span:last-child::before {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #57d99a;
+        box-shadow: 0 0 12px rgb(87 217 154 / 75%);
+        content: "";
+        animation: nebula-status-pulse 1.8s ease-in-out infinite;
+      }
+
+      .nebula-boot__visual {
+        position: relative;
+        display: grid;
+        width: 226px;
+        height: 226px;
+        place-items: center;
+      }
+
+      .nebula-boot__halo,
+      .nebula-boot__orbit,
+      .nebula-boot__core {
+        position: absolute;
+        border-radius: 50%;
+      }
+
+      .nebula-boot__halo {
+        inset: 7px;
+        border: 1px solid rgb(131 185 255 / 9%);
+        box-shadow: inset 0 0 70px rgb(45 113 202 / 5%), 0 0 90px rgb(45 113 202 / 8%);
+        animation: nebula-breathe 3.2s ease-in-out infinite;
+      }
+
+      .nebula-boot__orbit {
+        inset: 25px;
+        border: 1px solid rgb(159 199 255 / 18%);
+        border-right-color: rgb(104 168 255 / 82%);
+        border-bottom-color: rgb(104 168 255 / 5%);
+        animation: nebula-orbit 4.8s linear infinite;
+      }
+
+      .nebula-boot__orbit::before,
+      .nebula-boot__orbit::after {
+        position: absolute;
+        border-radius: 50%;
+        content: "";
+      }
+
+      .nebula-boot__orbit::before {
+        inset: 13px;
+        border: 1px dashed rgb(196 219 255 / 13%);
+        animation: nebula-orbit 8s linear infinite reverse;
+      }
+
+      .nebula-boot__orbit::after {
+        top: 24px;
+        right: 9px;
+        width: 5px;
+        height: 5px;
+        background: #9cc8ff;
+        box-shadow: 0 0 13px #68a8ff;
+      }
+
+      .nebula-boot__core {
+        display: grid;
+        width: 112px;
+        height: 112px;
+        overflow: hidden;
+        place-items: center;
+        border: 1px solid rgb(205 225 255 / 22%);
+        background: linear-gradient(145deg, rgb(23 28 37 / 92%), rgb(5 7 10 / 94%));
+        box-shadow:
+          inset 0 1px rgb(255 255 255 / 8%),
+          inset 0 -24px 50px rgb(28 87 161 / 8%),
+          0 20px 70px rgb(0 0 0 / 60%);
+      }
+
+      .nebula-boot__core::after {
+        position: absolute;
+        width: 150%;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, #68a8ff, transparent);
+        box-shadow: 0 0 15px rgb(104 168 255 / 70%);
+        content: "";
+        animation: nebula-scan 2.7s ease-in-out infinite;
+      }
+
+      .nebula-boot__mark {
+        width: 62px;
+        filter: drop-shadow(0 0 15px rgb(104 168 255 / 25%));
+      }
+
+      .nebula-boot__mark path {
+        fill: none;
+        stroke: #ddecff;
+        stroke-dasharray: 150;
+        stroke-dashoffset: 150;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 3;
+        animation: nebula-draw 2.6s cubic-bezier(.5, 0, .2, 1) infinite alternate;
+      }
+
+      .nebula-boot__title {
+        margin: 29px 0 0;
+        font-size: 25px;
+        font-weight: 560;
+        letter-spacing: .34em;
+        line-height: 1;
+        text-indent: .34em;
+      }
+
+      .nebula-boot__title span {
+        color: #68a8ff;
+        font-size: 11px;
+        letter-spacing: .1em;
+        vertical-align: top;
+      }
+
+      .nebula-boot__subtitle {
+        margin: 12px 0 0;
+        color: #8995a6;
+        font-size: 10px;
+        letter-spacing: .16em;
+        text-transform: uppercase;
+      }
+
+      .nebula-boot__progress {
+        display: grid;
+        width: min(360px, 78vw);
+        margin-top: 35px;
+        gap: 11px;
+      }
+
+      .nebula-boot__track {
+        position: relative;
+        height: 1px;
+        overflow: hidden;
+        background: rgb(190 215 255 / 12%);
+      }
+
+      .nebula-boot__track::after {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent, #68a8ff 46%, #ddecff 54%, transparent);
+        content: "";
+        transform: translateX(-100%);
+        animation: nebula-progress 1.9s cubic-bezier(.4, 0, .2, 1) infinite;
+      }
+
+      .nebula-boot__telemetry {
+        display: flex;
+        justify-content: space-between;
+        color: #697588;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 8px;
+        letter-spacing: .13em;
+        text-transform: uppercase;
+      }
+
+      .nebula-boot__telemetry span:last-child {
+        color: #9fb7d4;
+        animation: nebula-copy-cycle 2.4s ease-in-out infinite;
+      }
+
+      @keyframes nebula-grid-drift {
+        to { transform: perspective(520px) rotateX(61deg) translateY(calc(18% + 54px)); }
+      }
+
+      @keyframes nebula-orbit {
+        to { transform: rotate(360deg); }
+      }
+
+      @keyframes nebula-status-pulse {
+        50% { opacity: .35; transform: scale(.75); }
+      }
+
+      @keyframes nebula-breathe {
+        50% { opacity: .55; transform: scale(.96); }
+      }
+
+      @keyframes nebula-scan {
+        0%, 100% { opacity: 0; transform: translateY(-58px); }
+        18%, 82% { opacity: 1; }
+        50% { transform: translateY(58px); }
+      }
+
+      @keyframes nebula-draw {
+        55%, 100% { stroke-dashoffset: 0; }
+      }
+
+      @keyframes nebula-progress {
+        65%, 100% { transform: translateX(100%); }
+      }
+
+      @keyframes nebula-copy-cycle {
+        50% { opacity: .48; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #nebula-boot *,
+        #nebula-boot::before {
+          animation-duration: 1ms !important;
+          animation-iteration-count: 1 !important;
+        }
+      }
+    </style>
   </head>
   <body>
     <noscript>Nebula requires JavaScript to render the engagement workspace.</noscript>
+    <div id="nebula-boot" role="status" aria-live="polite" aria-label="Nebula is starting">
+      <div class="nebula-boot__frame">
+        <div class="nebula-boot__eyebrow" aria-hidden="true">
+          <span>Local-first security workspace</span>
+          <span>Secure runtime</span>
+        </div>
+        <div class="nebula-boot__visual" aria-hidden="true">
+          <div class="nebula-boot__halo"></div>
+          <div class="nebula-boot__orbit"></div>
+          <div class="nebula-boot__core">
+            <svg class="nebula-boot__mark" viewBox="0 0 80 80" aria-hidden="true">
+              <path d="M14 57V23l26 34 26-34v34M14 23l26 17 26-17" />
+            </svg>
+          </div>
+        </div>
+        <h1 class="nebula-boot__title">NEBULA <span>03</span></h1>
+        <p class="nebula-boot__subtitle">Operational intelligence environment</p>
+        <div class="nebula-boot__progress" aria-hidden="true">
+          <div class="nebula-boot__track"></div>
+          <div class="nebula-boot__telemetry">
+            <span>Initializing workspace</span>
+            <span>Systems nominal</span>
+          </div>
+        </div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
