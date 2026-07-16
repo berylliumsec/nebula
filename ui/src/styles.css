@@ -448,6 +448,8 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .harness-activity-card > summary code, .harness-activity-card > summary > span:last-child { color: var(--muted); font-size: 10px; text-transform: capitalize; }
 .harness-activity-body { display: grid; gap: 8px; padding: 0 11px 11px 30px; }
 .harness-activity-body p { margin: 0; color: var(--muted); }
+.harness-activity-body .harness-reasoning-summary { color: var(--text); white-space: pre-wrap; }
+.harness-reasoning-note { color: var(--muted); }
 .harness-output, .harness-structured { min-width: 0; }
 .harness-output > small { display: block; margin-bottom: 4px; color: var(--muted); text-transform: uppercase; }
 .harness-output pre, .harness-structured { max-height: 320px; margin: 0; padding: 9px; overflow: auto; overscroll-behavior: contain; border-radius: 7px; background: var(--bg); white-space: pre-wrap; word-break: break-word; font-size: 11px; }

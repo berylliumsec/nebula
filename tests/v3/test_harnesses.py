@@ -345,6 +345,91 @@ def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_
     asyncio.run(scenario())
 
 
+def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path):
+    class ReasoningConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str
+        ) -> AsyncIterator[HarnessEvent]:
+            del prompt, model
+            self.external_session_id = "vendor-reasoning-session"
+            yield HarnessEvent(
+                type="started",
+                external_session_id=self.external_session_id,
+                external_turn_id="vendor-reasoning-turn",
+            )
+            yield HarnessEvent(
+                type="output_delta",
+                vendor=HarnessKind.CODEX_APP_SERVER,
+                item_id="reasoning-1",
+                item_kind="reasoning",
+                item_status="streaming",
+                title="Reasoning",
+                stream="reasoning_summary",
+                delta="Live safe summary",
+                payload={
+                    "reasoning_summary_state": "available",
+                    "reasoning_summary_source": "stream",
+                },
+            )
+            yield HarnessEvent(
+                type="item_upsert",
+                vendor=HarnessKind.CODEX_APP_SERVER,
+                item_id="reasoning-1",
+                item_kind="reasoning",
+                item_status="completed",
+                title="Reasoning",
+                payload={
+                    "type": "reasoning",
+                    "reasoning_summary_state": "available",
+                    "reasoning_summary_text": "Authoritative safe summary",
+                    "reasoning_summary_source": "completed_item",
+                },
+            )
+            yield HarnessEvent(type="completed", message="Visible answer")
+
+    class ReasoningAdapter(FakeAdapter):
+        async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+            connection = ReasoningConnection(request)
+            self.connections.append(connection)
+            return connection
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        adapter = ReasoningAdapter()
+        runtime.adapter_factory = lambda _: adapter
+        _, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Preserve the safe summary",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+
+        live = [event async for event in runtime.stream_turn(turn.id)]
+        replay = runtime.activity_events(turn.id).events
+        live_completed = next(
+            event
+            for event in live
+            if event.item_id == "reasoning-1" and event.item_status == "completed"
+        )
+        replayed_completed = next(
+            event
+            for event in replay
+            if event.item_id == "reasoning-1" and event.item_status == "completed"
+        )
+
+        assert live_completed.payload == replayed_completed.payload
+        assert replayed_completed.payload["reasoning_summary_text"] == (
+            "Authoritative safe summary"
+        )
+        assert store.get(HarnessTurn, turn.id).response == "Visible answer"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_secret_harness_interaction_is_forwarded_but_not_persisted(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)

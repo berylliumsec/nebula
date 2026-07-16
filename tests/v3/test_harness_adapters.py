@@ -31,6 +31,7 @@ from nebula.v3.harnesses import (
     ClaudeAgentSdkConnection,
     CodexAppServerAdapter,
     CodexAppServerConnection,
+    HarnessConfigurationError,
     HarnessPermissionDecision,
     PermissionTicket,
     _CodexRpc,
@@ -285,6 +286,7 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert rpc.calls[0][1]["capabilities"]["mcpServerOpenaiFormElicitation"] is True
         _validate("v2/ThreadStartParams.json", rpc.calls[1][1])
         _validate("v2/TurnStartParams.json", rpc.calls[2][1])
+        assert rpc.calls[2][1]["summary"] == "auto"
         assert [event.type for event in events] == [
             "started",
             "approval_required",
@@ -476,6 +478,9 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
         reasoning = [item for item in events if item.item_id == "reasoning-1"]
         assert [item.item_status for item in reasoning] == ["running", "completed"]
         assert all(item.type == "item_upsert" for item in reasoning)
+        assert reasoning[0].payload["reasoning_summary_state"] == "pending"
+        assert reasoning[1].payload["reasoning_summary_state"] == "not_provided"
+        assert all(item.summary is None for item in reasoning)
         plan = [item for item in events if item.item_id == "plan-1"]
         assert [item.item_kind for item in plan] == ["plan", "plan"]
         assert [item.item_status for item in plan] == ["running", "completed"]
@@ -497,6 +502,357 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
         ]
         assert trusted_events[-1].message == "The authoritative final answer."
         assert trusted_rpc.responses == [(92, {"action": "accept", "content": {}})]
+
+    asyncio.run(scenario())
+
+
+def test_codex_reasoning_summary_uses_streams_and_authoritative_completion():
+    class ReasoningRpc(FixtureCodexRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            self.calls.append((method, params))
+            if method != "turn/start":
+                return {}
+            events = [
+                {
+                    "method": "item/started",
+                    "params": {
+                        "turnId": "turn-reasoning",
+                        "item": {"id": "reasoning-1", "type": "reasoning"},
+                    },
+                },
+                {
+                    "method": "item/reasoning/summaryPartAdded",
+                    "params": {
+                        "turnId": "turn-reasoning",
+                        "itemId": "reasoning-1",
+                        "summaryIndex": 0,
+                    },
+                },
+                {
+                    "method": "item/reasoning/summaryTextDelta",
+                    "params": {
+                        "turnId": "turn-reasoning",
+                        "itemId": "reasoning-1",
+                        "summaryIndex": 0,
+                        "delta": "Inspecting the adapter. ",
+                    },
+                },
+                {
+                    "method": "item/reasoning/summaryPartAdded",
+                    "params": {
+                        "turnId": "turn-reasoning",
+                        "itemId": "reasoning-1",
+                        "summaryIndex": 1,
+                    },
+                },
+                {
+                    "method": "item/reasoning/summaryTextDelta",
+                    "params": {
+                        "turnId": "turn-reasoning",
+                        "itemId": "reasoning-1",
+                        "summaryIndex": 1,
+                        "delta": "Checking replay.",
+                    },
+                },
+                {
+                    "method": "item/reasoning/textDelta",
+                    "params": {
+                        "turnId": "turn-reasoning",
+                        "itemId": "reasoning-1",
+                        "delta": "PRIVATE RAW REASONING",
+                    },
+                },
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "turn-reasoning",
+                        "item": {
+                            "id": "reasoning-1",
+                            "type": "reasoning",
+                            "summary": [
+                                "Inspected the adapter.",
+                                "Verified durable replay.",
+                            ],
+                            "content": ["PRIVATE COMPLETED REASONING"],
+                            "signature": "PRIVATE SIGNATURE",
+                            "encrypted_content": "PRIVATE ENCRYPTED CONTENT",
+                        },
+                    },
+                },
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "turn-reasoning",
+                        "item": {
+                            "id": "final-1",
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "The visible assistant response.",
+                        },
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "turnId": "turn-reasoning",
+                        "turn": {"id": "turn-reasoning", "status": "completed"},
+                    },
+                },
+            ]
+            for event in events:
+                await self.events.put(event)
+            return {"turn": {"id": "turn-reasoning"}}
+
+    async def scenario() -> None:
+        rpc = ReasoningRpc()
+
+        async def permission(_):
+            raise AssertionError("no permission request expected")
+
+        connection = CodexAppServerConnection(
+            rpc,
+            external_session_id="thread-reasoning",
+            permission_handler=permission,
+        )
+        events = [
+            event async for event in connection.run_turn("inspect", model="gpt-test")
+        ]
+
+        assert rpc.calls[0][1]["summary"] == "auto"
+        streamed = [
+            event
+            for event in events
+            if event.type == "output_delta" and event.stream == "reasoning_summary"
+        ]
+        assert [event.delta for event in streamed] == [
+            "Inspecting the adapter. ",
+            "\n\nChecking replay.",
+        ]
+        assert all(
+            event.payload["reasoning_summary_state"] == "available"
+            for event in streamed
+        )
+        completed = next(
+            event
+            for event in events
+            if event.item_id == "reasoning-1" and event.item_status == "completed"
+        )
+        assert completed.title == "Reasoning"
+        assert completed.summary is None
+        assert completed.payload == {
+            "type": "reasoning",
+            "reasoning_summary_state": "available",
+            "reasoning_summary_text": (
+                "Inspected the adapter.\n\nVerified durable replay."
+            ),
+            "reasoning_summary_source": "completed_item",
+        }
+        assert events[-1].message == "The visible assistant response."
+        serialized = json.dumps([event.model_dump(mode="json") for event in events])
+        assert "PRIVATE RAW REASONING" not in serialized
+        assert "PRIVATE COMPLETED REASONING" not in serialized
+        assert "PRIVATE SIGNATURE" not in serialized
+        assert "PRIVATE ENCRYPTED CONTENT" not in serialized
+
+    asyncio.run(scenario())
+
+
+def test_codex_reasoning_summary_preserves_bounded_stream_without_snapshot():
+    class StreamOnlyRpc(FixtureCodexRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            self.calls.append((method, params))
+            if method != "turn/start":
+                return {}
+            long_summary = "s" * 70_000
+            for event in [
+                {
+                    "method": "item/reasoning/summaryTextDelta",
+                    "params": {
+                        "turnId": "turn-stream-only",
+                        "itemId": "reasoning-1",
+                        "summaryIndex": 0,
+                        "delta": long_summary,
+                    },
+                },
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "turn-stream-only",
+                        "item": {
+                            "id": "reasoning-1",
+                            "type": "reasoning",
+                            "summary": [],
+                        },
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "turnId": "turn-stream-only",
+                        "turn": {
+                            "id": "turn-stream-only",
+                            "status": "completed",
+                        },
+                    },
+                },
+            ]:
+                await self.events.put(event)
+            return {"turn": {"id": "turn-stream-only"}}
+
+    async def scenario() -> None:
+        rpc = StreamOnlyRpc()
+
+        async def permission(_):
+            raise AssertionError("no permission request expected")
+
+        connection = CodexAppServerConnection(
+            rpc,
+            external_session_id="thread-stream-only",
+            permission_handler=permission,
+        )
+        events = [
+            event async for event in connection.run_turn("inspect", model="gpt-test")
+        ]
+        streamed = next(event for event in events if event.type == "output_delta")
+        completed = next(
+            event
+            for event in events
+            if event.item_id == "reasoning-1" and event.item_status == "completed"
+        )
+        assert len(streamed.delta or "") == 64_000
+        assert (streamed.delta or "").endswith("…[truncated]")
+        assert completed.payload["reasoning_summary_state"] == "available"
+        assert completed.payload["reasoning_summary_source"] == "stream"
+        assert completed.payload["reasoning_summary_text"] == streamed.delta
+
+    asyncio.run(scenario())
+
+
+def test_codex_reasoning_summary_rejects_malformed_private_payloads():
+    class MalformedSummaryRpc(FixtureCodexRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            self.calls.append((method, params))
+            if method != "turn/start":
+                return {}
+            for event in [
+                {
+                    "method": "item/reasoning/summaryTextDelta",
+                    "params": {
+                        "turnId": "turn-malformed",
+                        "itemId": "reasoning-1",
+                        "delta": {"private": "MALFORMED PRIVATE VALUE"},
+                    },
+                },
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "turn-malformed",
+                        "item": {
+                            "id": "reasoning-1",
+                            "type": "reasoning",
+                            "summary": [42, "Safe surviving summary"],
+                            "content": ["PRIVATE CONTENT"],
+                        },
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "turnId": "turn-malformed",
+                        "turn": {"id": "turn-malformed", "status": "completed"},
+                    },
+                },
+            ]:
+                await self.events.put(event)
+            return {"turn": {"id": "turn-malformed"}}
+
+    async def scenario() -> None:
+        rpc = MalformedSummaryRpc()
+
+        async def permission(_):
+            raise AssertionError("no permission request expected")
+
+        connection = CodexAppServerConnection(
+            rpc,
+            external_session_id="thread-malformed",
+            permission_handler=permission,
+        )
+        events = [
+            event async for event in connection.run_turn("inspect", model="gpt-test")
+        ]
+        notice = next(event for event in events if event.type == "notice")
+        assert notice.payload == {
+            "method": "item/reasoning/summaryTextDelta",
+            "value_type": "dict",
+        }
+        completed = next(
+            event
+            for event in events
+            if event.item_id == "reasoning-1" and event.item_status == "completed"
+        )
+        assert completed.payload["reasoning_summary_text"] == ("Safe surviving summary")
+        assert completed.payload["reasoning_summary_malformed"] is True
+        serialized = json.dumps([event.model_dump(mode="json") for event in events])
+        assert "MALFORMED PRIVATE VALUE" not in serialized
+        assert "PRIVATE CONTENT" not in serialized
+
+    asyncio.run(scenario())
+
+
+def test_codex_probe_rejects_unverified_reasoning_summary_baseline():
+    class OldCodexRpc(FixtureCodexRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method == "initialize":
+                self.calls.append((method, params))
+                return {"userAgent": "codex-cli/0.143.0"}
+            return await super().request(method, params)
+
+    async def scenario() -> None:
+        rpc = OldCodexRpc()
+        adapter = FixtureCodexAdapter(rpc)
+        profile = HarnessProfile(
+            id="codex-old",
+            name="Old Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+        )
+
+        health = await adapter.probe(profile, CredentialStore())
+
+        assert health.healthy is False
+        assert health.capabilities.reasoning_summaries is False
+        assert "0.144.0 or newer" in (health.detail or "")
+        assert rpc.closed is True
+
+        open_rpc = OldCodexRpc()
+        open_adapter = FixtureCodexAdapter(open_rpc)
+        session = HarnessSession(
+            id="session-old",
+            engagement_id="eng-old",
+            harness_profile_id=profile.id,
+            model="gpt-test",
+        )
+
+        async def permission(_):
+            raise AssertionError("no permission request expected")
+
+        try:
+            await open_adapter.open(
+                AdapterOpenRequest(
+                    profile=profile,
+                    session=session,
+                    workspace=Path.cwd(),
+                    mcp_profiles=(),
+                    credential_store=CredentialStore(),
+                    permission_handler=permission,
+                )
+            )
+        except HarnessConfigurationError as exc:
+            assert "0.144.0 or newer" in str(exc)
+        else:
+            raise AssertionError("an incompatible Codex app-server was opened")
+        assert [method for method, _ in open_rpc.calls] == ["initialize"]
+        assert open_rpc.closed is True
 
     asyncio.run(scenario())
 

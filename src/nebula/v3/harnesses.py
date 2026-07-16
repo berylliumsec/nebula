@@ -153,6 +153,7 @@ HarnessOutputStream = Literal[
     "patch",
 ]
 CLAUDE_ACTIVITY_MINIMUM_VERSION = Version("0.2.118")
+CODEX_ACTIVITY_MINIMUM_VERSION = Version("0.144.0")
 ACTIVITY_DELTA_FLUSH_SECONDS = 0.1
 ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
@@ -806,6 +807,109 @@ def _bounded(value: Any, *, limit: int) -> Any:
     return _bounded(str(value), limit=limit)
 
 
+def _codex_app_server_version(user_agent: Any) -> Version | None:
+    """Extract the app-server version from the initialize user-agent."""
+
+    if not isinstance(user_agent, str):
+        return None
+    match = re.search(
+        r"(?:^|[/\s])v?(\d+(?:\.\d+){2}(?:[0-9A-Za-z.+-]*))",
+        user_agent.strip(),
+    )
+    if match is None:
+        return None
+    try:
+        return Version(match.group(1))
+    except InvalidVersion:
+        return None
+
+
+def _require_codex_activity_version(initialize: Any) -> Version:
+    user_agent = initialize.get("userAgent") if isinstance(initialize, dict) else None
+    parsed = _codex_app_server_version(user_agent)
+    if parsed is None:
+        raise HarnessConfigurationError(
+            "Codex app-server version could not be verified; install codex-cli "
+            f"{CODEX_ACTIVITY_MINIMUM_VERSION} or newer"
+        )
+    if parsed < CODEX_ACTIVITY_MINIMUM_VERSION:
+        raise HarnessConfigurationError(
+            f"Codex app-server {CODEX_ACTIVITY_MINIMUM_VERSION} or newer is required "
+            f"for durable reasoning summaries; installed version is {parsed}"
+        )
+    return parsed
+
+
+def _codex_reasoning_summary_index(value: Any) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 256:
+        return value
+    return 0
+
+
+def _truncate_reasoning_summary(value: str) -> str:
+    if len(value) <= MAX_TOOL_RESULT_TEXT:
+        return value
+    marker = "…[truncated]"
+    return value[: MAX_TOOL_RESULT_TEXT - len(marker)] + marker
+
+
+def _codex_completed_reasoning_summary(value: Any) -> tuple[str, bool]:
+    """Return only the provider-designated, display-safe summary snapshot."""
+
+    if not isinstance(value, list):
+        return "", value is not None
+    malformed = len(value) > 256
+    parts: list[str] = []
+    for part in value[:256]:
+        if not isinstance(part, str):
+            malformed = True
+            continue
+        safe = sanitize_display_text(redact_text(part))
+        if safe:
+            parts.append(safe)
+    return _truncate_reasoning_summary("\n\n".join(parts)), malformed
+
+
+def _append_codex_reasoning_summary_delta(
+    buffers: dict[str, dict[int, str]],
+    *,
+    item_id: str,
+    part_index: int,
+    delta: str,
+) -> str:
+    """Append one safe summary fragment while bounding the whole item."""
+
+    safe = sanitize_display_text(redact_text(delta))
+    parts = buffers.setdefault(item_id, {})
+    current_part = parts.get(part_index, "")
+    existing_summary = "\n\n".join(part for _, part in sorted(parts.items()) if part)
+    separator = (
+        "\n\n"
+        if not current_part and existing_summary and not safe.startswith("\n")
+        else ""
+    )
+    remaining = MAX_TOOL_RESULT_TEXT - len(existing_summary) - len(separator)
+    if not safe or remaining <= 0:
+        return ""
+    if len(safe) > remaining:
+        marker = "…[truncated]"
+        safe = (
+            safe[: remaining - len(marker)] + marker
+            if remaining > len(marker)
+            else marker[:remaining]
+        )
+    parts[part_index] = current_part + safe
+    return separator + safe
+
+
+def _codex_buffered_reasoning_summary(parts: Mapping[int, str] | None) -> str:
+    if not parts:
+        return ""
+    return _truncate_reasoning_summary(
+        "\n\n".join(part for _, part in sorted(parts.items()) if part)
+    )
+
+
 def _minimal_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     keep = {
         key: value
@@ -1112,6 +1216,7 @@ class CodexAppServerConnection(HarnessConnection):
                 "input": [{"type": "text", "text": prompt}],
                 "model": model,
                 "approvalPolicy": self.approval_policy,
+                "summary": "auto",
             },
         )
         turn = result.get("turn") if isinstance(result, dict) else None
@@ -1127,6 +1232,7 @@ class CodexAppServerConnection(HarnessConnection):
         authoritative_message: str | None = None
         message_phases: dict[str, str] = {}
         reasoning_items: set[str] = set()
+        reasoning_summary_parts: dict[str, dict[int, str]] = {}
         while True:
             raw = await self.rpc.events.get()
             if isinstance(raw, BaseException):
@@ -1315,6 +1421,30 @@ class CodexAppServerConnection(HarnessConnection):
             if method == "item/reasoning/summaryTextDelta":
                 item_id = str(params.get("itemId") or "reasoning")
                 reasoning_items.add(item_id)
+                raw_delta = params.get("delta")
+                if not isinstance(raw_delta, str):
+                    yield HarnessEvent(
+                        type="notice",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        external_turn_id=self.active_turn_id,
+                        item_id=item_id,
+                        title="Reasoning summary unavailable",
+                        summary="Codex sent a malformed reasoning-summary fragment.",
+                        payload={
+                            "method": method,
+                            "value_type": type(raw_delta).__name__,
+                        },
+                    )
+                    continue
+                part_index = _codex_reasoning_summary_index(params.get("summaryIndex"))
+                delta = _append_codex_reasoning_summary_delta(
+                    reasoning_summary_parts,
+                    item_id=item_id,
+                    part_index=part_index,
+                    delta=raw_delta,
+                )
+                if not delta:
+                    continue
                 yield HarnessEvent(
                     type="output_delta",
                     vendor=HarnessKind.CODEX_APP_SERVER,
@@ -1322,16 +1452,23 @@ class CodexAppServerConnection(HarnessConnection):
                     item_id=item_id,
                     item_kind="reasoning",
                     item_status="streaming",
-                    title="Reasoning summary",
+                    title="Reasoning",
                     stream="reasoning_summary",
-                    delta=str(
-                        _bounded(params.get("delta") or "", limit=MAX_TOOL_RESULT_TEXT)
-                    ),
+                    delta=delta,
+                    payload={
+                        "reasoning_summary_state": "available",
+                        "reasoning_summary_source": "stream",
+                        "part_index": part_index,
+                    },
                 )
                 continue
             if method == "item/reasoning/summaryPartAdded":
                 item_id = str(params.get("itemId") or "reasoning")
                 reasoning_items.add(item_id)
+                part_index = _codex_reasoning_summary_index(params.get("summaryIndex"))
+                reasoning_summary_parts.setdefault(item_id, {}).setdefault(
+                    part_index, ""
+                )
                 yield HarnessEvent(
                     type="item_upsert",
                     vendor=HarnessKind.CODEX_APP_SERVER,
@@ -1339,8 +1476,18 @@ class CodexAppServerConnection(HarnessConnection):
                     item_id=item_id,
                     item_kind="reasoning",
                     item_status="streaming",
-                    title="Reasoning summary",
-                    payload={"part_index": params.get("summaryIndex")},
+                    title="Reasoning",
+                    payload={
+                        "reasoning_summary_state": (
+                            "available"
+                            if _codex_buffered_reasoning_summary(
+                                reasoning_summary_parts.get(item_id)
+                            )
+                            else "pending"
+                        ),
+                        "reasoning_summary_source": "stream",
+                        "part_index": part_index,
+                    },
                 )
                 continue
             if method == "item/reasoning/textDelta":
@@ -1355,7 +1502,7 @@ class CodexAppServerConnection(HarnessConnection):
                         item_kind="reasoning",
                         item_status="streaming",
                         title="Reasoning",
-                        summary="Codex is reasoning; hidden trace content is not retained.",
+                        payload={"reasoning_summary_state": "pending"},
                     )
                 continue
             if method in {"turn/plan/updated", "item/plan/delta"}:
@@ -1505,11 +1652,44 @@ class CodexAppServerConnection(HarnessConnection):
                     # These are observable lifecycle items, not tool calls. Their
                     # dedicated delta notifications carry displayable summaries
                     # and plan updates; private reasoning content stays discarded.
-                    payload = (
-                        {"type": "reasoning"}
-                        if item_type == "reasoning"
-                        else _bounded(item, limit=MAX_TOOL_RESULT_TEXT)
-                    )
+                    if item_type == "reasoning":
+                        reasoning_items.add(completed_item_id or item_type)
+                        completed_summary = ""
+                        malformed_summary = False
+                        if method == "item/completed":
+                            completed_summary, malformed_summary = (
+                                _codex_completed_reasoning_summary(item.get("summary"))
+                            )
+                        buffered_summary = _codex_buffered_reasoning_summary(
+                            reasoning_summary_parts.get(completed_item_id or item_type)
+                        )
+                        reasoning_summary = completed_summary or buffered_summary
+                        summary_state = (
+                            "available"
+                            if reasoning_summary
+                            else "not_provided"
+                            if method == "item/completed"
+                            else "pending"
+                        )
+                        payload = {
+                            "type": "reasoning",
+                            "reasoning_summary_state": summary_state,
+                        }
+                        if reasoning_summary:
+                            payload.update(
+                                {
+                                    "reasoning_summary_text": reasoning_summary,
+                                    "reasoning_summary_source": (
+                                        "completed_item"
+                                        if completed_summary
+                                        else "stream"
+                                    ),
+                                }
+                            )
+                        if malformed_summary:
+                            payload["reasoning_summary_malformed"] = True
+                    else:
+                        payload = _bounded(item, limit=MAX_TOOL_RESULT_TEXT)
                     yield HarnessEvent(
                         type="item_upsert",
                         vendor=HarnessKind.CODEX_APP_SERVER,
@@ -1519,11 +1699,6 @@ class CodexAppServerConnection(HarnessConnection):
                         item_kind=_codex_item_kind(item_type),
                         item_status=item_status,
                         title=_codex_item_title(item_type, item),
-                        summary=(
-                            "Codex is reasoning; hidden trace content is not retained."
-                            if item_type == "reasoning"
-                            else None
-                        ),
                         payload=payload,
                     )
                     continue
@@ -1935,6 +2110,7 @@ class CodexAppServerAdapter(HarnessAdapter):
             version = (
                 initialize.get("userAgent") if isinstance(initialize, dict) else None
             )
+            _require_codex_activity_version(initialize)
             return HarnessHealth(
                 profile_id=profile.id,
                 healthy=True,
@@ -2016,9 +2192,10 @@ class CodexAppServerAdapter(HarnessAdapter):
                 and request.profile.capabilities.protocol_version == "app-server-v2"
                 and not request.profile.capabilities.detail
             )
-            await self._initialize(
+            initialize = await self._initialize(
                 rpc, enable_activity_experimental=verified_activity_protocol
             )
+            _require_codex_activity_version(initialize)
             developer_instructions = _codex_developer_instructions(
                 request.session, native_capabilities
             )

@@ -35,8 +35,6 @@ import type {
   ExecutionLanguage,
   HarnessProfile,
   HarnessActivityEvent,
-  HarnessActivityItemKind,
-  HarnessDetailedUsage,
   HarnessInteraction,
   HarnessSessionActivity,
   HarnessSessionSummary,
@@ -61,7 +59,15 @@ import { WorkbenchBrowser } from "../components/WorkbenchBrowser";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { AgentsPage } from "./AgentsPage";
-import { finalAssistantContent, isTimelineActivity } from "./harnessActivity";
+import {
+  finalAssistantContent,
+  isTimelineActivity,
+  reasoningSummaryState,
+  reasoningSummaryText,
+  reduceHarnessActivity,
+  shouldShowActivityKind,
+  type HarnessActivityItem,
+} from "./harnessActivity";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
@@ -77,26 +83,6 @@ interface ToolLifecycleCard {
   resultArtifactId?: string;
   artifacts: ToolArtifactReference[];
   receipt?: Record<string, unknown>;
-}
-
-interface HarnessActivityItem {
-  assistantId: string;
-  key: string;
-  turnId?: string;
-  sessionId?: string;
-  itemId?: string;
-  parentItemId?: string;
-  kind?: HarnessActivityItemKind;
-  type: string;
-  status?: string;
-  title: string;
-  summary?: string;
-  sequence: number;
-  streams: Record<string, string>;
-  payload: Record<string, unknown>;
-  artifactIds: string[];
-  usage?: HarnessDetailedUsage;
-  occurredAt?: string;
 }
 
 interface PendingChatResponse {
@@ -171,46 +157,6 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
     sequence: message.sequence,
     harnessTurnId: message.harnessTurnId,
   };
-}
-
-function reduceHarnessActivity(
-  items: HarnessActivityItem[],
-  event: HarnessActivityEvent,
-  assistantId: string,
-): HarnessActivityItem[] {
-  const sequence = event.sequence ?? 0;
-  const key = event.itemId
-    ? `${event.harnessTurnId ?? "turn"}:${event.itemId}`
-    : `${event.harnessTurnId ?? "turn"}:${event.type}:${event.id ?? sequence}`;
-  const existingIndex = items.findIndex((item) => item.key === key);
-  const existing = existingIndex >= 0 ? items[existingIndex] : undefined;
-  if (existing && sequence > 0 && existing.sequence > sequence) return items;
-  const stream = event.stream ?? (event.type === "message_delta" ? "message" : "output");
-  const streams = { ...(existing?.streams ?? {}) };
-  if (event.delta) streams[stream] = `${streams[stream] ?? ""}${event.delta}`.slice(-65_536);
-  const next: HarnessActivityItem = {
-    assistantId,
-    key,
-    turnId: event.harnessTurnId ?? existing?.turnId,
-    sessionId: event.harnessSessionId ?? existing?.sessionId,
-    itemId: event.itemId ?? existing?.itemId,
-    parentItemId: event.parentItemId ?? existing?.parentItemId,
-    kind: event.itemKind ?? existing?.kind,
-    type: event.type,
-    status: event.itemStatus ?? existing?.status,
-    title: event.title ?? existing?.title ?? event.type.replaceAll("_", " "),
-    summary: event.summary ?? event.message ?? existing?.summary,
-    sequence: Math.max(sequence, existing?.sequence ?? 0),
-    streams,
-    payload: { ...(existing?.payload ?? {}), ...event.payload },
-    artifactIds: [...new Set([...(existing?.artifactIds ?? []), ...event.artifactIds])],
-    usage: event.detailedUsage ?? existing?.usage,
-    occurredAt: event.occurredAt ?? existing?.occurredAt,
-  };
-  const updated = existingIndex >= 0
-    ? items.map((item, index) => index === existingIndex ? next : item)
-    : [...items, next];
-  return updated.sort((left, right) => left.sequence - right.sequence);
 }
 
 export function SessionsPage() {
@@ -1817,12 +1763,16 @@ export function SessionsPage() {
                       {message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}
                       {activityItems.some((item) => item.assistantId === message.id) && <section className="harness-timeline" aria-label="Harness activity">
                         {activityItems.filter((item) => item.assistantId === message.id).map((item) => <details className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} open={["running", "streaming", "waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? "") || item.kind === "plan"} key={item.key}>
-                          <summary><span className={`status-dot ${["completed", "complete", "success"].includes(item.status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(item.status ?? "") ? "unavailable" : "pending"}`} /><strong>{item.title}</strong>{item.kind && <code>{item.kind.replaceAll("_", " ")}</code>}{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</summary>
+                          <summary><span className={`status-dot ${["completed", "complete", "success"].includes(item.status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(item.status ?? "") ? "unavailable" : "pending"}`} /><strong>{item.title}</strong>{shouldShowActivityKind(item) && <code>{item.kind?.replaceAll("_", " ")}</code>}{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</summary>
                           <div className="harness-activity-body">
                             {item.summary && <p>{item.summary}</p>}
+                            {reasoningSummaryText(item) && <p className="harness-reasoning-summary">{reasoningSummaryText(item)}</p>}
+                            {reasoningSummaryState(item) === "pending" && !reasoningSummaryText(item) && <p>Codex is reasoning. A display-safe summary will appear if one is provided.</p>}
+                            {reasoningSummaryState(item) === "not_provided" && <p>No display-safe reasoning summary was provided by Codex.</p>}
+                            {reasoningSummaryState(item) && <small className="harness-reasoning-note">Provider-safe summary only. Private reasoning traces are not captured or retained.</small>}
                             {item.kind === "plan" && Array.isArray(item.payload.plan) && <ol className="harness-plan">{item.payload.plan.map((step, index) => <li key={index}>{typeof step === "string" ? step : JSON.stringify(step)}</li>)}</ol>}
                             {item.kind === "file_change" && Array.isArray(item.payload.files) && <ul className="harness-file-list">{item.payload.files.map((file, index) => <li key={index}><FileClock size={13} /> {typeof file === "string" ? file : JSON.stringify(file)}</li>)}</ul>}
-                            {Object.entries(item.streams).map(([stream, output]) => <div className="harness-output" key={stream}><small>{stream}</small><pre tabIndex={0}>{output}</pre></div>)}
+                            {Object.entries(item.streams).filter(([stream]) => stream !== "reasoning_summary").map(([stream, output]) => <div className="harness-output" key={stream}><small>{stream}</small><pre tabIndex={0}>{output}</pre></div>)}
                             {typeof item.payload.diff === "string" && item.payload.diff && <div className="harness-output diff"><small>Unified diff</small><pre tabIndex={0}>{item.payload.diff}</pre></div>}
                             {item.kind && ["command", "tool", "web_search", "browser", "image", "skill", "hook", "review", "subagent"].includes(item.kind) && Object.keys(item.payload).length > 0 && <details className="harness-structured-details"><summary>Arguments and result details</summary><pre className="harness-structured" tabIndex={0}>{JSON.stringify(item.payload, null, 2)}</pre></details>}
                             {item.usage && <small>{item.usage.totalTokens.toLocaleString()} tokens{item.usage.reasoningTokens ? ` · ${item.usage.reasoningTokens.toLocaleString()} reasoning` : ""}{item.usage.costUsd ? ` · $${item.usage.costUsd.toFixed(4)}` : ""}{item.usage.durationMs ? ` · ${(item.usage.durationMs / 1000).toFixed(1)}s` : ""}</small>}
