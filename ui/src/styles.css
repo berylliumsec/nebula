@@ -490,3 +490,20 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .agent-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }.agent-card { padding: 13px; border: 1px solid var(--border-soft); border-radius: 9px; background: var(--surface); }.agent-card header { display: flex; align-items: center; justify-content: space-between; }.agent-icon { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 7px; color: var(--blue); background: var(--blue-muted); }.agent-icon.complete { color: var(--green); background: var(--green-muted); }.agent-icon.waiting { color: var(--yellow); }.agent-state { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; text-transform: capitalize; }.agent-state.running { color: var(--green); }.agent-card h3 { margin: 12px 0 4px; font-size: 11px; }.agent-card p { margin: 0 0 13px; color: var(--muted); font-size: 11px; }.agent-card footer { display: flex; justify-content: space-between; padding-top: 9px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }.agent-card footer span:last-child { color: var(--blue); }
 .mission-stop-control { display: inline-flex; align-items: flex-start; flex-direction: column; gap: 3px; }
 .mission-stop-control > small { max-width: 220px; color: var(--red); font-size: 11px; }
+.mission-commandbar { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 13px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.mission-commandbar > div { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.mission-commandbar > div:first-child > svg { color: var(--blue); }
+.mission-commandbar > div:first-child span { display: grid; min-width: 0; gap: 2px; }
+.mission-commandbar strong { font-size: 12px; }
+.mission-commandbar small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.mission-now { display: grid; max-width: 720px; gap: 3px; margin-top: 12px; padding: 9px 11px; border-left: 2px solid var(--blue); border-radius: 0 7px 7px 0; background: color-mix(in srgb, var(--blue-muted) 45%, transparent); }
+.mission-now small, .mission-now span { color: var(--muted); font-size: 10px; }
+.mission-now .assistant-markdown, .mission-now .assistant-markdown p { margin: 0; font-size: 11px; line-height: 1.45; }
+.mission-progress { position: relative; height: 22px; margin: -8px 0 13px; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 0 0 8px 8px; background: var(--surface-muted); }
+.mission-progress > span { display: block; height: 100%; background: color-mix(in srgb, var(--blue) 22%, transparent); transition: width .25s ease; }
+.mission-progress > small { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 10px; }
+.mission-event-list .event-kind { display: inline-flex; width: max-content; margin-bottom: 4px; color: var(--blue); font: 10px var(--mono); text-transform: uppercase; }
+.mission-event-details { margin-top: 7px; color: var(--muted); font-size: 10px; }
+.mission-event-details summary { cursor: pointer; }
+.mission-event-details pre { max-height: 260px; padding: 9px; overflow: auto; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--surface-muted); color: var(--text); font: 10px/1.5 var(--mono); }
+.button.danger { color: var(--red); }

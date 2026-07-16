@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
@@ -7,9 +8,11 @@ from nebula.v3.domain import (
     ChatSession,
     Engagement,
     ProviderProfile,
+    RunStatus,
     Service,
+    Task,
 )
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import NebulaStore, NotFoundError
 
 
 def _auth() -> dict[str, str]:
@@ -38,6 +41,51 @@ def test_empty_engagement_can_still_be_deleted(tmp_path):
     response = client.delete(f"/api/v1/engagements/{engagement.id}", headers=_auth())
 
     assert response.status_code == 204
+
+
+def test_mission_delete_requires_terminal_state_and_removes_execution_history(tmp_path):
+    store = NebulaStore(tmp_path / "mission-delete.db")
+    engagement = store.create(Engagement(name="Mission cleanup"))
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Review the exposed service",
+            status=RunStatus.RUNNING,
+        )
+    )
+    task = store.create(
+        Task(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            specialist_role="analyst",
+            title="Inspect service",
+        )
+    )
+    store.append_event(run.id, "run.started", {"status": "running"})
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    active = client.delete(f"/api/v1/runs/{run.id}", headers=_auth())
+    assert active.status_code == 409
+    assert "before deletion" in active.json()["detail"]
+
+    cancelled = store.update(
+        AgentRun,
+        run.id,
+        {"status": RunStatus.CANCELLED},
+        expected_revision=run.revision,
+    )
+    deleted = client.delete(f"/api/v1/runs/{run.id}", headers=_auth())
+    assert deleted.status_code == 204
+
+    with pytest.raises(NotFoundError):
+        store.get(AgentRun, cancelled.id)
+    with pytest.raises(NotFoundError):
+        store.get(Task, task.id)
+    assert len(store.replay_events(run.id)) == 1
+    assert (
+        client.get(f"/api/v1/runs/{run.id}/events", headers=_auth()).status_code
+        == 404
+    )
 
 
 def test_provider_delete_rejects_stranding_chat_or_run_history(tmp_path):

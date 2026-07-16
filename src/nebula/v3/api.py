@@ -5283,6 +5283,17 @@ def create_app(
             actor_id=operator_id,
         )
 
+    @app.delete(
+        f"{API_PREFIX}/runs/{{run_id}}",
+        status_code=204,
+        tags=["runs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_mission(run_id: str) -> Response:
+        run = store.get(AgentRun, run_id)
+        store.delete_run(run_id, expected_revision=run.revision)
+        return Response(status_code=204)
+
     @app.post(
         f"{API_PREFIX}/runs/{{run_id}}/steer",
         response_model=HarnessTurn,

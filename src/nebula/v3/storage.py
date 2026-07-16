@@ -841,6 +841,58 @@ class NebulaStore:
             if result.rowcount != 1:
                 raise ConflictError("conversation changed while it was being deleted")
 
+    def delete_run(self, run_id: str, *, expected_revision: int | None = None) -> None:
+        """Atomically remove a terminal mission and its mutable execution records.
+
+        Immutable event ledgers remain as audit records, but become inaccessible
+        through mission APIs once the owning run is removed.
+        """
+
+        with self.database.session() as session:
+            row = session.scalar(
+                select(EntityRow).where(
+                    EntityRow.id == run_id,
+                    EntityRow.kind == "runs",
+                )
+            )
+            if row is None:
+                raise NotFoundError(f"runs entity not found: {run_id}")
+            if expected_revision is not None and row.revision != expected_revision:
+                raise ConflictError(
+                    f"revision conflict: expected {expected_revision}, found {row.revision}"
+                )
+
+            status = row.payload.get("status")
+            if status not in {"complete", "failed", "cancelled", "interrupted"}:
+                raise ConflictError(
+                    "mission must be completed, failed, cancelled, or interrupted before deletion"
+                )
+
+            session.execute(
+                delete(EntityRow).where(
+                    EntityRow.kind.in_(
+                        (
+                            "tasks",
+                            "agent_attempts",
+                            "tool_calls",
+                            "approvals",
+                            "harness_turns",
+                            "harness_interactions",
+                        )
+                    ),
+                    EntityRow.payload["run_id"].as_string() == run_id,
+                )
+            )
+            result = session.execute(
+                delete(EntityRow).where(
+                    EntityRow.id == run_id,
+                    EntityRow.kind == "runs",
+                    EntityRow.revision == row.revision,
+                )
+            )
+            if result.rowcount != 1:
+                raise ConflictError("mission changed while it was being deleted")
+
     def engagement_has_dependents(self, engagement_id: str) -> bool:
         """Return whether any persisted child is owned by this engagement."""
 

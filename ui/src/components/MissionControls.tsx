@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Play, ShieldCheck, Square, Wrench, X } from "lucide-react";
+import { Play, ShieldCheck, Square, Trash2, Wrench, X } from "lucide-react";
 import { providerModelVerification } from "../api/providerCapabilities";
 import type { HarnessProfile, HarnessSessionSummary, McpServerProfile, ToolSummary } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -416,7 +416,7 @@ export function NewMissionButton({ className = "button primary", children }: New
   </>;
 }
 
-const terminalStatuses = new Set(["failed", "complete", "cancelled"]);
+const terminalStatuses = new Set(["failed", "complete", "cancelled", "interrupted"]);
 
 export function StopMissionButton({ className = "button secondary" }: { className?: string }) {
   const confirm = useConfirmation();
@@ -443,4 +443,31 @@ export function StopMissionButton({ className = "button secondary" }: { classNam
     }
   };
   return <span className="mission-stop-control"><button className={className} type="button" disabled={disabled || stopping} onClick={() => void stop()}><Square size={14} /> {stopping ? "Stopping…" : run?.status === "cancelling" ? "Cancelling…" : "Stop mission"}</button>{error && <DiagnosticErrorNotice error={error} fallback="The mission could not be stopped." compact />}</span>;
+}
+
+export function DeleteMissionButton({ className = "button quiet danger" }: { className?: string }) {
+  const confirm = useConfirmation();
+  const { deleteMission, previewMode, run } = useWorkspace();
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string>();
+  const disabled = previewMode || !run || !terminalStatuses.has(run.status);
+  const remove = async () => {
+    if (!run || !await confirm({
+      title: "Delete this mission?",
+      message: `“${run.title}” and its execution records will be removed from the workspace. Immutable audit events, evidence, and artifacts are retained.`,
+      confirmLabel: "Delete mission",
+      tone: "danger",
+    })) return;
+    setDeleting(true);
+    setError(undefined);
+    try {
+      await deleteMission(run.id);
+    } catch (deleteError) {
+      void logCaughtDiagnostic("interface.mission_controls.caught_failure_07", "A handled interface operation failed.", deleteError, "mission_controls");
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete the mission.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+  return <span className="mission-stop-control"><button className={className} type="button" disabled={disabled || deleting} title={!run ? "No mission selected" : !terminalStatuses.has(run.status) ? "Stop the mission before deleting it" : undefined} onClick={() => void remove()}><Trash2 size={14} /> {deleting ? "Deleting…" : "Delete mission"}</button>{error && <DiagnosticErrorNotice error={error} fallback="The mission could not be deleted." compact />}</span>;
 }

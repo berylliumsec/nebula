@@ -122,6 +122,7 @@ interface WorkspaceContextValue {
   deleteObservation: (id: string, expectedRevision: number) => Promise<void>;
   startMission: (request: MissionCreateRequest) => Promise<AgentRunSummary>;
   stopMission: (id: string, request?: RunStopRequest) => Promise<AgentRunSummary>;
+  deleteMission: (id: string) => Promise<void>;
   createOperatorProfile: (request: OperatorProfileCreateRequest) => Promise<OperatorProfile>;
   updateOperatorProfile: (id: string, request: OperatorProfileUpdateRequest) => Promise<OperatorProfile>;
   activateOperatorProfile: (id: string, expectedRevision?: number) => Promise<OperatorProfile>;
@@ -614,6 +615,17 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return updated;
   }, [api, coreState]);
 
+  const deleteMission = useCallback(async (id: string) => {
+    if (coreState !== "online" || !api) {
+      throw new Error("Nebula Core must be online to delete a mission.");
+    }
+    await api.deleteRun(id);
+    setRun((current) => current?.id === id ? undefined : current);
+    setEvents([]);
+    setApprovals((current) => current.filter((approval) => approval.runId !== id));
+    setAttempt((value) => value + 1);
+  }, [api, coreState]);
+
   const createOperatorProfile = useCallback(async (request: OperatorProfileCreateRequest) => {
     if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to create an operator profile.");
     const created = await api.createOperatorProfile(request);
@@ -752,6 +764,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteObservation,
       startMission,
       stopMission,
+      deleteMission,
       createOperatorProfile,
       updateOperatorProfile,
       activateOperatorProfile,
@@ -801,6 +814,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteObservation,
       startMission,
       stopMission,
+      deleteMission,
       createOperatorProfile,
       updateOperatorProfile,
       activateOperatorProfile,

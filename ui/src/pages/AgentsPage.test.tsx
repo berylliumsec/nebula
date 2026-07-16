@@ -1,38 +1,47 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { DialogProvider } from "../components/DialogSystem";
 import { AgentsPage } from "./AgentsPage";
 
 const steerRun = vi.fn().mockResolvedValue(undefined);
+const workspace = {
+  api: { steerRun, discussRun: vi.fn() },
+  approvals: [],
+  coreState: "offline" as const,
+  deleteMission: vi.fn(),
+  engagement: { id: "engagement-1" },
+  events: [{
+    id: "event-command",
+    sequence: 18,
+    kind: "task.completed",
+    actor: "Nebula Core",
+    occurredAt: "2026-07-14T12:00:00Z",
+    summary: "**Summary**\n\n- Scan prepared\n\n```bash\nnmap -sV 192.168.1.1\n```",
+    payload: {},
+  }],
+  previewMode: false,
+  providers: [],
+  reverifyProvider: vi.fn(),
+  startMission: vi.fn(),
+  stopMission: vi.fn(),
+  run: {
+    id: "run-1",
+    backend: "harness" as const,
+    harnessSessionId: "session-1",
+    title: "Network review",
+    status: "running" as const,
+    completedTasks: 1,
+    totalTasks: 2,
+  },
+};
 
 vi.mock("../state/ChromeContext", () => ({
   useChrome: () => ({ setActivityOpen: vi.fn() }),
 }));
 
 vi.mock("../state/WorkspaceContext", () => ({
-  useWorkspace: () => ({
-    api: { steerRun, discussRun: vi.fn() },
-    approvals: [],
-    events: [{
-      id: "event-command",
-      sequence: 18,
-      kind: "task.completed",
-      actor: "Nebula Core",
-      occurredAt: "2026-07-14T12:00:00Z",
-      summary: "**Summary**\n\n- Scan prepared\n\n```bash\nnmap -sV 192.168.1.1\n```",
-      payload: {},
-    }],
-    previewMode: false,
-    run: {
-      id: "run-1",
-      backend: "harness",
-      harnessSessionId: "session-1",
-      title: "Network review",
-      status: "running",
-      completedTasks: 1,
-      totalTasks: 2,
-    },
-  }),
+  useWorkspace: () => workspace,
 }));
 
 describe("mission activity", () => {
@@ -40,7 +49,7 @@ describe("mission activity", () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-    render(<AgentsPage embedded />);
+    render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
 
     const activity = screen.getByRole("heading", { name: "Activity" }).closest("section");
     expect(activity).not.toBeNull();
@@ -56,11 +65,22 @@ describe("mission activity", () => {
   it("steers the active harness turn", async () => {
     const user = userEvent.setup();
     steerRun.mockClear();
-    render(<AgentsPage embedded />);
+    render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
 
     await user.type(screen.getByLabelText("Steer active harness turn"), "Prioritize the login flow");
     await user.click(screen.getByRole("button", { name: "Steer" }));
 
     expect(steerRun).toHaveBeenCalledWith("run-1", "Prioritize the login flow");
+  });
+
+  it("keeps mission controls and current progress visible in the embedded workbench", () => {
+    render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+
+    expect(screen.getByRole("region", { name: "Mission controls" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Stop mission" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete mission" })).toBeDisabled();
+    expect(screen.getByText("Specialists are actively working through the plan.")).toBeVisible();
+    expect(screen.getByLabelText("50% of recorded mission tasks complete")).toBeVisible();
+    expect(screen.getByText(/Full loaded mission timeline/)).toBeVisible();
   });
 });

@@ -199,6 +199,10 @@
 .mission-steer > label { color: var(--text-strong); font-size: 11px; font-weight: 700; }
 .mission-steer > div { display: flex; gap: 8px; }
 .mission-steer input { min-width: 0; flex: 1; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface-raised); font: inherit; }
+@media (max-width: 760px) {
+  .mission-commandbar { align-items: stretch; flex-direction: column; }
+  .mission-commandbar > div:last-child { flex-wrap: wrap; }
+}
 .settings-tabs { display: flex; gap: 3px; margin: -6px 0 24px; border-bottom: 1px solid var(--border-soft); }
 .settings-tabs a, .settings-tabs > span { position: relative; display: inline-flex; min-height: 39px; align-items: center; padding: 0 10px; color: var(--muted); font-size: 11px; text-decoration: none; }
 .settings-tabs a { cursor: pointer; }

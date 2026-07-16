@@ -4050,6 +4050,12 @@ export class ApiClient {
     }).then(mapRun);
   }
 
+  async deleteRun(id: string): Promise<void> {
+    await this.request<void>(`runs/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  }
+
   listApprovals(
     engagementId: string,
     signal?: AbortSignal,

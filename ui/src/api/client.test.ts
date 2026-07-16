@@ -401,6 +401,20 @@ describe("ApiClient", () => {
     );
   });
 
+  it("deletes a mission through the dedicated run endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await client.deleteRun("run/one");
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/runs/run%2Fone",
+    );
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("DELETE");
+  });
+
   it("loads only pending approvals and sends edited_arguments on decisions", async () => {
     const approval = {
       id: "approval-1",
