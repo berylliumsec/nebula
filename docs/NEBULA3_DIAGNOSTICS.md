@@ -82,10 +82,10 @@ One file is maintained for each domain:
 | `errors.log` | Exact aggregate copy of every Error and Critical record |
 
 In a native launch, Tauri owns `desktop.log`, `interface.log`, and `errors.log`.
-Core owns the remaining files and sends only complete, already-sanitized Error
+Core owns the remaining files and sends only complete, validated Error
 and Critical frames over the supervised stderr channel for aggregation. In a
 headless launch, Core owns every file. `nebula-core-startup.log` is a separate,
-redacted emergency capture used before normal logging is ready.
+bounded emergency capture used before normal logging is ready.
 
 Current files rotate at 5 MiB with two retained generations. Rotations older
 than 14 days are removed, and the log directory is capped at 256 MiB. Files are
@@ -105,7 +105,7 @@ Python and dependency warnings pass through a message-free adapter that records
 only their safe category; raw warning text and source paths are not copied into
 diagnostics.
 
-The diagnostics ZIP includes sanitized current/rotated logs, emergency startup
+The diagnostics ZIP includes unredacted current/rotated logs, emergency startup
 logs when present, build/platform metadata, active settings, logger health, and
 a SHA-256 manifest. It excludes databases, workspaces, artifacts, evidence,
 terminal audit results, provider configuration, and credentials. Nebula never
@@ -134,7 +134,7 @@ When Core is unavailable, the native viewer still reads desktop-owned errors.
 
 `nebula-core doctor --json` and `/api/v1/health` report logger writability,
 active levels, disk use, last rotation, dropped-record count, and degraded
-state. If normal storage becomes unavailable, sanitized errors go to the
+state. If normal storage becomes unavailable, bounded errors go to the
 emergency supervised sink, remain in memory for the viewer, and the interface
 shows a persistent diagnostics-unavailable warning.
 

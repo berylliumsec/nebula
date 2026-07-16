@@ -37,7 +37,6 @@ from .diagnostic_sensitive import (
     SensitiveDetailUnavailable,
     SensitiveDiagnosticStore,
 )
-from .redaction import redact_text
 from .version import __version__, build_metadata
 
 DIAGNOSTIC_SCHEMA = "nebula.diagnostic/v1"
@@ -236,11 +235,11 @@ def _safe_identifier(value: Any) -> str | None:
 
 
 def _safe_text(value: Any, *, limit: int = MAX_STRING_LENGTH) -> str:
-    """Return bounded single-record text with known secret forms removed."""
+    """Return bounded single-record text without altering its contents."""
 
     if not isinstance(value, str):
         value = str(value)
-    value = redact_text(value).replace("\x00", "�")
+    value = value.replace("\x00", "�")
     if len(value) > limit:
         return value[: limit - 1] + "…"
     return value
@@ -856,7 +855,7 @@ class DiagnosticManager:
             and self._sensitive_detail_store is not None
         ):
             detail = (
-                f"{type(exception).__name__}: {redact_text(str(exception)).strip()}"
+                f"{type(exception).__name__}: {_safe_text(str(exception), limit=64 * 1024).strip()}"
             )
             try:
                 capture = self._sensitive_detail_store.capture(
@@ -867,7 +866,7 @@ class DiagnosticManager:
                 )
             except Exception as exc:
                 # Protected detail is strictly best effort. Its failure must not
-                # prevent the sanitized incident or its emergency ID from being
+                # prevent the validated incident or its emergency ID from being
                 # recorded.
                 self._mark_degraded(
                     "Protected diagnostic detail could not be captured.", exc
@@ -1025,7 +1024,7 @@ class DiagnosticManager:
             if pending.record["level"] in {"ERROR", "CRITICAL"}:
                 self._memory_errors.append(dict(pending.record))
                 if self.desktop_parent:
-                    # Desktop validates this complete sanitized frame and owns
+                    # Desktop validates this complete bounded frame and owns
                     # aggregate errors.log.  stderr is already supervised.
                     sys.stderr.write(
                         ERROR_MIRROR_PREFIX
@@ -1464,7 +1463,7 @@ class DiagnosticManager:
                         continue
                     if path.name.startswith("nebula-core-startup.log"):
                         try:
-                            data = self._sanitize_emergency_log(
+                            data = self._encode_emergency_log(
                                 path.read_text(encoding="utf-8", errors="replace")
                             )
                         except OSError as exc:
@@ -1496,7 +1495,7 @@ class DiagnosticManager:
                                     "diagnostics.export_record_invalid",
                                     "A malformed diagnostic record was excluded from export.",
                                     outcome="failure",
-                                    stage="export-redaction",
+                                    stage="export-validation",
                                     retryable=False,
                                     exception=exc,
                                 )
@@ -1578,7 +1577,7 @@ class DiagnosticManager:
             "info",
             "diagnostics",
             "diagnostics.export_completed",
-            "A redacted local diagnostics export was generated.",
+            "A local diagnostics export was generated.",
             outcome="success",
             stage="export",
             metadata={"count": len(manifest)},
@@ -1679,49 +1678,10 @@ class DiagnosticManager:
         return detail
 
     @staticmethod
-    def _sanitize_emergency_log(value: str) -> bytes:
-        """Export only structured/summarized emergency startup lines."""
+    def _encode_emergency_log(value: str) -> bytes:
+        """Include the bounded emergency startup log verbatim."""
 
-        safe_lines: list[str] = []
-        exact_lines = {
-            "[nebula] Nebula Core startup diagnostics (sensitive values redacted)",
-            "[nebula] startup log truncated at 256 KiB",
-        }
-        summary = re.compile(
-            r"^\[nebula\] Core stderr line redacted; bytes=\d+"
-            r"(?:; exception_type=[A-Za-z_][A-Za-z0-9_.]{0,127})?$"
-        )
-        for line in value.splitlines():
-            if line in exact_lines or summary.fullmatch(line):
-                safe_lines.append(line)
-                continue
-            structured: dict[str, Any] | None = None
-            prefix: str | None = None
-            for candidate in (
-                ERROR_MIRROR_PREFIX,
-                "NEBULA_DIAGNOSTICS_UNAVAILABLE ",
-            ):
-                if line.startswith(candidate):
-                    try:
-                        decoded = json.loads(line.removeprefix(candidate))
-                    except json.JSONDecodeError:
-                        # diagnostic-expected: untrusted emergency text is replaced.
-                        break
-                    if isinstance(decoded, dict):
-                        structured = DiagnosticManager._sanitize_export_record(decoded)
-                        prefix = candidate
-                    break
-            if structured is not None and prefix is not None:
-                safe_lines.append(
-                    prefix
-                    + json.dumps(structured, sort_keys=True, separators=(",", ":"))
-                )
-            else:
-                byte_count = len(line.encode("utf-8", errors="replace"))
-                safe_lines.append(
-                    f"[nebula] Core stderr line redacted; bytes={byte_count}"
-                )
-        return ("\n".join(safe_lines) + ("\n" if safe_lines else "")).encode("utf-8")
+        return value.encode("utf-8", errors="replace")
 
     @staticmethod
     def _sanitize_export_value(value: Any, *, depth: int) -> Any:

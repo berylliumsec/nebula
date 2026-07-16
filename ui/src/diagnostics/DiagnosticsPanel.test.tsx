@@ -210,7 +210,7 @@ describe("DiagnosticsPanel", () => {
 
     await user.selectOptions(screen.getByLabelText("Filter diagnostic errors by feature"), "chat");
     await waitFor(() => expect(mocks.api.diagnosticErrors).toHaveBeenCalledWith("chat"));
-    await user.click(screen.getByRole("button", { name: "Export sanitized ZIP" }));
+    await user.click(screen.getByRole("button", { name: "Export diagnostics ZIP" }));
     expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
       title: "Export local diagnostics?",
       confirmLabel: "Export diagnostics",
@@ -317,7 +317,7 @@ describe("DiagnosticsPanel", () => {
     expect(screen.getByText("desktop.log")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Open logs folder" }));
     expect(mocks.reveal).toHaveBeenCalledOnce();
-    expect(screen.getByRole("button", { name: "Export sanitized ZIP" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export diagnostics ZIP" })).toBeDisabled();
   });
 
   it("shows runtime and logger degradation as active status", async () => {

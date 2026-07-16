@@ -40,7 +40,7 @@ describe("interface diagnostics", () => {
     expect(body.events[0].metadata).toEqual(contract.metadata_expected);
   });
 
-  it("filters below Error by default and sends a bounded sanitized record", async () => {
+  it("filters below Error by default and sends a bounded unredacted record", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ accepted: 1, error_ids: ["err_server"] }), {
         status: 202,
@@ -74,7 +74,7 @@ describe("interface diagnostics", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-token");
     const encoded = String(init?.body);
-    expect(encoded).not.toContain("top-secret-token-value");
+    expect(encoded).toContain("top-secret-token-value");
     expect(encoded).not.toContain("canary exception payload");
     expect(encoded).not.toContain("canary-authorization");
     expect(encoded).not.toContain("canary-command");

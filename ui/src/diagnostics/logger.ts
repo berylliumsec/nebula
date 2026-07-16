@@ -163,13 +163,7 @@ export function diagnosticErrorPresentation(
 }
 
 function safeText(value: string, limit = 2_048): string {
-  let result = value.replaceAll("\0", "�");
-  if (/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(result)) return "[REDACTED PRIVATE KEY]";
-  result = result
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, "Bearer [REDACTED]")
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED JWT]")
-    .replace(/\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,})\b/g, "[REDACTED TOKEN]")
-    .replace(/(api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret)\s*[:=]\s*[^\s,;]{8,}/gi, "$1=[REDACTED]");
+  const result = value.replaceAll("\0", "�");
   return result.length <= limit ? result : `${result.slice(0, limit - 1)}…`;
 }
 

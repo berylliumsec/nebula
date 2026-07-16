@@ -114,7 +114,7 @@ export const diagnosticRemediationCatalog = {
       "steps": [
         "Do not retry or replace the affected data until its source is verified.",
         "Open the affected component and review its integrity status.",
-        "Create a redacted support bundle if the expected source cannot be verified."
+        "Create a diagnostics support bundle if the expected source cannot be verified."
       ],
       "verification": "Confirm the source digest, signature, or revision matches a trusted expected value before continuing.",
       "retryable": false
@@ -165,7 +165,7 @@ export const diagnosticRemediationCatalog = {
       "steps": [
         "Review the technical evidence and correlation identifiers in this incident.",
         "Run the affected component's health check when available.",
-        "Generate a redacted support bundle if the fault recurs."
+        "Generate a diagnostics support bundle if the fault recurs."
       ],
       "verification": "Confirm the affected component is healthy and a separately initiated operation completes successfully.",
       "retryable": false

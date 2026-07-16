@@ -369,53 +369,23 @@ fn read_handshake(
     }
 }
 
-fn redact_startup_log(input: &[u8], ipc_token: &str) -> Vec<u8> {
-    let replaced = String::from_utf8_lossy(input).replace(ipc_token, "[REDACTED]");
-    let mut redacted = String::new();
-    for line in replaced.split_inclusive('\n') {
-        let value = line.trim_end_matches(['\r', '\n']);
-        let candidate = value.split_once(':').map_or(value, |(prefix, _)| prefix);
-        let exception_type = (candidate.len() <= 128
-            && candidate.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '_' | '.')
-            })
-            && [
-                "Error",
-                "Exception",
-                "Warning",
-                "Interrupt",
-                "Exit",
-                "Panic",
-            ]
-            .iter()
-            .any(|suffix| candidate.ends_with(suffix)))
-        .then_some(candidate);
-        redacted.push_str("[nebula] Core stderr line redacted; bytes=");
-        redacted.push_str(value.len().to_string().as_str());
-        if let Some(exception_type) = exception_type {
-            redacted.push_str("; exception_type=");
-            redacted.push_str(exception_type);
-        }
-        if line.ends_with('\n') {
-            redacted.push('\n');
-        }
-    }
-    redacted.into_bytes()
+fn preserve_startup_log(input: &[u8]) -> Vec<u8> {
+    input.to_vec()
 }
 
-fn sanitize_startup_line(input: &[u8], ipc_token: &str, diagnostics: &DiagnosticsState) -> Vec<u8> {
+fn process_startup_line(input: &[u8], diagnostics: &DiagnosticsState) -> Vec<u8> {
     let text = String::from_utf8_lossy(input);
     if let Some(frame) = text.trim_end().strip_prefix(ERROR_MIRROR_PREFIX) {
         match diagnostics.aggregate_core_error(frame) {
-            Ok(sanitized) => {
+            Ok(validated) => {
                 let newline = if input.ends_with(b"\n") { "\n" } else { "" };
-                return format!("{ERROR_MIRROR_PREFIX}{sanitized}{newline}").into_bytes();
+                return format!("{ERROR_MIRROR_PREFIX}{validated}{newline}").into_bytes();
             }
             Err(_) => {
                 diagnostics.record_desktop(
                     DiagnosticLevel::Error,
                     "desktop.core_error_aggregation.failed",
-                    "A sanitized Core error frame could not be added to the aggregate error log.",
+                    "A Core error frame could not be validated for the aggregate error log.",
                     Some("failure"),
                     Some("stderr-aggregation"),
                     Some(true),
@@ -424,7 +394,7 @@ fn sanitize_startup_line(input: &[u8], ipc_token: &str, diagnostics: &Diagnostic
             }
         }
     }
-    redact_startup_log(input, ipc_token)
+    preserve_startup_log(input)
 }
 
 fn write_bounded_log(
@@ -452,14 +422,13 @@ fn write_bounded_log(
 fn capture_startup_log(
     mut stderr: ChildStderr,
     mut file: File,
-    ipc_token: String,
     diagnostics: DiagnosticsState,
 ) -> Result<(), String> {
     let mut written = 0;
     let mut truncated = false;
     write_bounded_log(
         &mut file,
-        b"[nebula] Nebula Core startup diagnostics (sensitive values redacted)\n",
+        b"[nebula] Nebula Core startup diagnostics\n",
         &mut written,
         &mut truncated,
     )
@@ -478,18 +447,16 @@ fn capture_startup_log(
 
         while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=newline).collect();
-            let line = sanitize_startup_line(&line, &ipc_token, &diagnostics);
+            let line = process_startup_line(&line, &diagnostics);
             write_bounded_log(&mut file, &line, &mut written, &mut truncated).map_err(|error| {
                 format!("cannot write Nebula Core startup diagnostics: {error}")
             })?;
         }
 
         if pending.len() > MAX_PENDING_LOG_BYTES {
-            // Retain enough bytes to catch a secret split across read boundaries.
-            let guard = ipc_token.len().saturating_sub(1).clamp(32, 512);
-            let flush_len = pending.len().saturating_sub(guard);
+            let flush_len = pending.len();
             let fragment: Vec<u8> = pending.drain(..flush_len).collect();
-            let fragment = sanitize_startup_line(&fragment, &ipc_token, &diagnostics);
+            let fragment = process_startup_line(&fragment, &diagnostics);
             write_bounded_log(&mut file, &fragment, &mut written, &mut truncated).map_err(
                 |error| format!("cannot write Nebula Core startup diagnostics: {error}"),
             )?;
@@ -497,7 +464,7 @@ fn capture_startup_log(
     }
 
     if !pending.is_empty() {
-        let fragment = sanitize_startup_line(&pending, &ipc_token, &diagnostics);
+        let fragment = process_startup_line(&pending, &diagnostics);
         write_bounded_log(&mut file, &fragment, &mut written, &mut truncated)
             .map_err(|error| format!("cannot write Nebula Core startup diagnostics: {error}"))?;
     }
@@ -774,9 +741,9 @@ fn startup_failure(
     let diagnostics = startup_log.path.display().to_string();
     let log_error = startup_log.finish().err();
     match (terminate_error, log_error) {
-        (None, None) => format!("{error}; redacted startup diagnostics: {diagnostics}"),
+        (None, None) => format!("{error}; startup diagnostics: {diagnostics}"),
         (Some(cleanup_error), None) => format!(
-            "{error}; sidecar cleanup also failed: {cleanup_error}; redacted startup diagnostics: {diagnostics}"
+            "{error}; sidecar cleanup also failed: {cleanup_error}; startup diagnostics: {diagnostics}"
         ),
         (None, Some(log_error)) => format!(
             "{error}; startup diagnostic capture also failed: {log_error}; diagnostic path: {diagnostics}"
@@ -899,7 +866,7 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
             eprintln!("NEBULA_DIAGNOSTICS_UNAVAILABLE sidecar spawn: {log_error}");
         }
         format!(
-            "{message}; redacted startup diagnostics: {}",
+            "{message}; startup diagnostics: {}",
             startup_log_path.display()
         )
     })?;
@@ -916,11 +883,9 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
             ));
         }
     };
-    let log_token = token.clone();
     let log_diagnostics = diagnostics.clone();
-    let log_thread = std::thread::spawn(move || {
-        capture_startup_log(stderr, startup_log_file, log_token, log_diagnostics)
-    });
+    let log_thread =
+        std::thread::spawn(move || capture_startup_log(stderr, startup_log_file, log_diagnostics));
     let mut startup_log = StartupLogCapture {
         path: startup_log_path,
         thread: Some(log_thread),
@@ -1164,7 +1129,7 @@ pub(crate) fn backend_status(
                     state: "stopped",
                     endpoint: None,
                     message: Some(format!(
-                        "Nebula Core exited with {status}; redacted diagnostics: {diagnostic_path}"
+                        "Nebula Core exited with {status}; diagnostics: {diagnostic_path}"
                     )),
                 };
             }
@@ -1194,7 +1159,7 @@ pub(crate) fn backend_status(
                     state: "unavailable",
                     endpoint: None,
                     message: Some(format!(
-                        "cannot inspect Nebula Core: {error}; redacted diagnostics: {diagnostic_path}"
+                        "cannot inspect Nebula Core: {error}; diagnostics: {diagnostic_path}"
                     )),
                 };
             }
@@ -1279,18 +1244,14 @@ mod tests {
     }
 
     #[test]
-    fn startup_logs_redact_ipc_tokens_and_credential_fields() {
+    fn startup_logs_preserve_stderr_content() {
         let token = "secret-sidecar-token";
         let input = format!(
             "starting with {token}\nRuntimeError: canary-prompt-command-output\n-----BEGIN PRIVATE KEY-----canary-key\n"
         );
-        let output = String::from_utf8(redact_startup_log(input.as_bytes(), token))
-            .expect("redacted logs should be UTF-8");
-        assert!(!output.contains(token));
-        assert!(!output.contains("canary-prompt-command-output"));
-        assert!(!output.contains("canary-key"));
-        assert!(output.contains("exception_type=RuntimeError"));
-        assert_eq!(output.matches("Core stderr line redacted").count(), 3);
+        let output = String::from_utf8(preserve_startup_log(input.as_bytes()))
+            .expect("startup logs should be UTF-8");
+        assert_eq!(output, input);
     }
 
     #[test]

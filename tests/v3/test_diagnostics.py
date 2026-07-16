@@ -190,7 +190,7 @@ def test_corrupt_settings_fail_closed_and_create_a_diagnostic(tmp_path: Path) ->
         manager.close()
 
 
-def test_recursive_sanitization_excludes_payloads_and_exception_values(
+def test_diagnostic_text_is_unredacted_while_payload_metadata_is_excluded(
     manager: DiagnosticManager,
 ) -> None:
     try:
@@ -211,7 +211,7 @@ def test_recursive_sanitization_excludes_payloads_and_exception_values(
         )
 
     encoded = (manager.log_dir / "sandbox.log").read_text(encoding="utf-8")
-    assert "top-secret-token-value" not in encoded
+    assert "top-secret-token-value" in encoded
     assert "canary-command" not in encoded
     assert "canary-password" not in encoded
     record = json.loads(encoded)
@@ -542,7 +542,7 @@ def test_caught_exception_severity_uses_http_and_integrity_semantics(
     assert "canary" not in json.dumps([denial_record, integrity_record])
 
 
-def test_export_is_redacted_bounded_and_manifested(
+def test_export_is_unredacted_bounded_and_manifested(
     manager: DiagnosticManager, tmp_path: Path
 ) -> None:
     manager.record(
@@ -577,14 +577,15 @@ def test_export_is_redacted_bounded_and_manifested(
         assert b"canary-credential" not in contents
         assert b"canary-database" not in contents
         assert b"canary-workspace" not in contents
-        assert b"canary-prompt-command-output" not in contents
-        assert b"canary-key" not in contents
-        assert b"sk-abcdefghijklmnopqrstuvwxyz123456" not in contents
+        assert b"canary-prompt-command-output" in contents
+        assert b"canary-key" in contents
+        assert b"sk-abcdefghijklmnopqrstuvwxyz123456" in contents
         metadata = json.loads(archive.read("metadata.json"))
         assert "log_directory" not in metadata["health"]
         assert "settings_path" not in metadata["health"]
         emergency = archive.read("logs/nebula-core-startup.log")
-        assert emergency.count(b"Core stderr line redacted") == 2
+        assert b"RuntimeError: canary-prompt-command-output" in emergency
+        assert b"canary-key" in emergency
         manifest = json.loads(archive.read("SHA256SUMS.json"))
         assert manifest["schema"] == "nebula.diagnostics-manifest/v1"
         assert set(manifest["sha256"]) == names - {"SHA256SUMS.json"}
@@ -616,7 +617,7 @@ def test_unwritable_initialization_retains_errors_and_logger_failure_in_memory(
         manager.close()
 
 
-def test_desktop_child_mirrors_sanitized_error_without_owning_aggregate(
+def test_desktop_child_mirrors_validated_error_without_owning_aggregate(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     manager = DiagnosticManager(tmp_path, desktop_parent=True, watch_settings=False)

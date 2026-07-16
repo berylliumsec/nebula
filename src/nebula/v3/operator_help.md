@@ -31,7 +31,7 @@ clients.
 If startup still fails, preserve the exact launcher or Core error and run
 `nebula-core doctor --json` against the same data directory. Do not recommend the
 Nebula 2 PyQt launcher, delete application data, or expose Core remotely as a
-recovery step. The native desktop captures redacted Core startup diagnostics in
+recovery step. The native desktop captures bounded Core startup diagnostics in
 `logs/nebula-core-startup.log` below its platform application-data directory; a
 startup failure reports the exact path and preserves two bounded rotations. Use
 that reported path rather than guessing an operating-system-specific location.
@@ -58,7 +58,7 @@ and `NEBULA_V3_ARTIFACT_DIR` may select another artifact root. Record the report
 own `data_dir`, database, artifact path, corrupt IDs, audit error records, diagnostics
 health, and sandbox detail before proposing recovery. In the native application,
 use **Settings → Diagnostics** to inspect an error reference, open only the computed
-log directory, or create a redacted support bundle. For a native startup failure,
+log directory, or create a support bundle. For a native startup failure,
 use the exact startup-diagnostic path printed by the desktop; the current file is
 bounded to 256 KiB, named `nebula-core-startup.log`, and retains two prior launches.
 

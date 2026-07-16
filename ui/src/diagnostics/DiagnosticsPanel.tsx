@@ -581,12 +581,12 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
 
   const exportBundle = async () => {
     if (!api) {
-      setFailure(new Error("Nebula Core must be connected to create a sanitized support bundle."));
+      setFailure(new Error("Nebula Core must be connected to create a diagnostics support bundle."));
       return;
     }
     const approved = await confirm({
       title: "Export local diagnostics?",
-      message: "The ZIP is sanitized again before export and contains logs, build/platform metadata, logger health, settings, and a SHA-256 manifest. It excludes project databases, workspaces, evidence, terminal results, provider configuration, and credentials.",
+      message: "The ZIP contains unredacted logs, build/platform metadata, logger health, settings, and a SHA-256 manifest. It excludes project databases, workspaces, evidence, terminal results, and provider configuration. Treat the exported logs as sensitive data.",
       confirmLabel: "Export diagnostics",
     });
     if (!approved) return;
@@ -602,7 +602,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
       void logDiagnostic({
         level: "info",
         eventCode: "interface.diagnostics.export_downloaded",
-        message: "A sanitized diagnostics export was downloaded.",
+        message: "A diagnostics export was downloaded.",
         outcome: "success",
         stage: "export",
       });
@@ -611,7 +611,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
       void logDiagnostic({
         level: "error",
         eventCode: "interface.diagnostics.export_failed",
-        message: "A sanitized diagnostics export could not be downloaded.",
+        message: "A diagnostics export could not be downloaded.",
         outcome: "failure",
         stage: "export",
         retryable: true,
@@ -679,7 +679,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
 
       <details className="diagnostics-advanced">
         <summary>Advanced diagnostics and logging</summary>
-        <p>Configure diagnostic detail, inspect logger storage, or prepare a sanitized support bundle.</p>
+        <p>Configure diagnostic detail, inspect logger storage, or prepare a diagnostics support bundle.</p>
         <div className="diagnostics-grid">
           <article className="panel diagnostics-settings-card">
             <header className="panel-header compact"><div><h3>Log levels</h3><p>Changes apply live and persist across restarts.</p></div></header>
@@ -715,7 +715,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
             <dl><div><dt>Disk usage</dt><dd>{formatBytes(status?.disk_usage_bytes ?? 0)}</dd></div><div><dt>Dropped lower-level records</dt><dd>{status?.dropped_record_count ?? 0}</dd></div><div><dt>Last rotation</dt><dd>{status?.last_rotation ? new Date(status.last_rotation).toLocaleString() : "Not yet"}</dd></div></dl>
             <div className="diagnostics-actions">
               {native && <button className="button secondary" type="button" onClick={() => void reveal()}><FolderOpen size={15} /> Open logs folder</button>}
-              <button className="button secondary" type="button" disabled={!api || busy} onClick={() => void exportBundle()}><Download size={15} /> Export sanitized ZIP</button>
+              <button className="button secondary" type="button" disabled={!api || busy} onClick={() => void exportBundle()}><Download size={15} /> Export diagnostics ZIP</button>
             </div>
           </article>
         </div>

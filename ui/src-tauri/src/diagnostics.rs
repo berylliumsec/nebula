@@ -1,7 +1,7 @@
 //! Native Nebula 3 diagnostics owner.
 //!
 //! The desktop owns `desktop.log`, `interface.log`, and the aggregate
-//! `errors.log`. Core errors arrive as already-sanitized JSON frames on the
+//! `errors.log`. Core errors arrive as validated JSON frames on the
 //! supervised stderr channel and are copied without adding payload fields.
 
 use std::{
@@ -9,7 +9,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
 
@@ -18,7 +18,6 @@ use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tauri::{AppHandle, State};
@@ -1204,7 +1203,7 @@ impl Diagnostics {
             return Err(error);
         }
         String::from_utf8(line)
-            .map_err(|_| "a sanitized Core diagnostic error was not UTF-8".to_string())
+            .map_err(|_| "a validated Core diagnostic error was not UTF-8".to_string())
     }
 
     fn files(&self) -> Result<Vec<DiagnosticFile>, String> {
@@ -2002,39 +2001,7 @@ fn insert_safe_text(record: &mut Map<String, Value>, key: &str, value: Option<&s
 }
 
 fn sanitize_text(input: &str) -> String {
-    if input.contains("-----BEGIN") && input.contains("PRIVATE KEY-----") {
-        return "[REDACTED PRIVATE KEY]".to_string();
-    }
-    static BEARER: OnceLock<Regex> = OnceLock::new();
-    static JWT: OnceLock<Regex> = OnceLock::new();
-    static TOKEN: OnceLock<Regex> = OnceLock::new();
-    static ASSIGNMENT: OnceLock<Regex> = OnceLock::new();
     let mut value = input.replace('\0', "�");
-    value = BEARER
-        .get_or_init(|| {
-            Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
-                .expect("valid bearer redaction expression")
-        })
-        .replace_all(&value, "Bearer [REDACTED]")
-        .into_owned();
-    value = JWT
-        .get_or_init(|| {
-            Regex::new(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
-                .expect("valid JWT redaction expression")
-        })
-        .replace_all(&value, "[REDACTED JWT]")
-        .into_owned();
-    value = TOKEN
-        .get_or_init(|| {
-            Regex::new(r"\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,})\b")
-                .expect("valid token redaction expression")
-        })
-        .replace_all(&value, "[REDACTED TOKEN]")
-        .into_owned();
-    value = ASSIGNMENT
-        .get_or_init(|| Regex::new(r"(?i)(api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret)\s*[:=]\s*[^\s,;]{8,}").expect("valid assignment redaction expression"))
-        .replace_all(&value, "$1=[REDACTED]")
-        .into_owned();
     if value.len() > MAX_STRING_BYTES {
         let mut boundary = MAX_STRING_BYTES - 3;
         while !value.is_char_boundary(boundary) {
@@ -2375,7 +2342,7 @@ mod tests {
     }
 
     #[test]
-    fn error_default_is_secure_sanitized_and_correlated_across_native_files() {
+    fn error_default_is_bounded_unredacted_and_correlated_across_native_files() {
         let directory = temporary_directory("routing");
         let mut manager = Diagnostics::new(&directory).expect("diagnostics should initialize");
         manager
@@ -2415,9 +2382,9 @@ mod tests {
             .expect("aggregate log should be readable");
         assert_eq!(desktop, errors);
         assert!(desktop.contains(&error_id));
-        assert!(!desktop.contains("sk-abcdefghijklmnopqrstuvwxyz123456"));
+        assert!(desktop.contains("sk-abcdefghijklmnopqrstuvwxyz123456"));
         assert!(!desktop.contains("CANARY"));
-        assert!(desktop.contains("[REDACTED TOKEN]"));
+        assert!(!desktop.contains("[REDACTED TOKEN]"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -2434,7 +2401,7 @@ mod tests {
     }
 
     #[test]
-    fn core_error_aggregation_rejects_payload_fields_and_resanitizes_text() {
+    fn core_error_aggregation_rejects_payload_fields_and_preserves_text() {
         let directory = temporary_directory("aggregation");
         let mut manager = Diagnostics::new(&directory).expect("diagnostics should initialize");
         let base = json!({
@@ -2468,7 +2435,7 @@ mod tests {
         let aggregate = fs::read_to_string(manager.log_dir.join("errors.log"))
             .expect("aggregate should be readable");
         assert!(aggregate.contains("err_shared_123"));
-        assert!(!aggregate.contains("top-secret-token-value"));
+        assert!(aggregate.contains("top-secret-token-value"));
         assert!(!aggregate.contains("CANARY-PAYLOAD"));
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }

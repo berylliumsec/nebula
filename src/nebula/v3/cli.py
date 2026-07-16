@@ -1182,7 +1182,7 @@ def diagnostics_export(
     output: Annotated[Path, typer.Argument(help="Destination .zip file.")],
     data_dir: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
-    """Generate a local, redacted diagnostics support bundle."""
+    """Generate a local diagnostics support bundle."""
 
     root = _data_dir(data_dir)
     destination = _diagnostic_manager(root).export(output)
