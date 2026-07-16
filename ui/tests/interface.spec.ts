@@ -477,6 +477,30 @@ test("all task workspaces keep responsive content inside its owning surface", as
   }
 });
 
+test("assistant composer remains fully visible inside the workbench viewport", async ({ page }) => {
+  await openWorkspace(page, "/", "Workbench");
+  await page.getByRole("tab", { name: "Analyst chat", exact: true }).click();
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+
+  const composer = page.locator(".chat-composer");
+  await expect(composer).toBeVisible();
+  const bounds = await composer.evaluate((element) => {
+    const composerRect = element.getBoundingClientRect();
+    const workspace = element.closest<HTMLElement>(".session-workspace");
+    const workspaceRect = workspace?.getBoundingClientRect();
+    return {
+      composerTop: composerRect.top,
+      composerBottom: composerRect.bottom,
+      workspaceTop: workspaceRect?.top ?? 0,
+      workspaceBottom: workspaceRect?.bottom ?? window.innerHeight,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  expect(bounds.composerTop).toBeGreaterThanOrEqual(bounds.workspaceTop - 1);
+  expect(bounds.composerBottom).toBeLessThanOrEqual(bounds.workspaceBottom + 1);
+  expect(bounds.composerBottom).toBeLessThanOrEqual(bounds.viewportHeight + 1);
+});
+
 test("the populated finding editor stays contained and accessible", async ({ page }) => {
   const finding = {
     ...entity,

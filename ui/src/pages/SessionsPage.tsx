@@ -1665,7 +1665,7 @@ export function SessionsPage() {
   ), [executionCapabilities]);
 
   return (
-    <div className="page sessions-page">
+    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}`}>
       <PageHeader
         title="Workbench"
         description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
