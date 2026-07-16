@@ -59,6 +59,7 @@ import { WorkspacePanel } from "../components/WorkspacePanel";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { AgentsPage } from "./AgentsPage";
+import { finalAssistantContent, isTimelineActivity } from "./harnessActivity";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 type SessionView = "chat" | "terminal" | "missions" | "activity" | "workspace" | "notes";
@@ -207,10 +208,6 @@ function reduceHarnessActivity(
     ? items.map((item, index) => index === existingIndex ? next : item)
     : [...items, next];
   return updated.sort((left, right) => left.sequence - right.sequence);
-}
-
-function isTimelineActivity(event: HarnessActivityEvent): boolean {
-  return !["message_delta", "started", "status", "completed"].includes(event.type);
 }
 
 export function SessionsPage() {
@@ -1047,7 +1044,9 @@ export function SessionsPage() {
     }
     if (["turn_status", "item_upsert", "output_delta", "approval", "interaction", "checkpoint", "notice"].includes(streamEvent.type)) {
       const activityEvent = streamEvent as HarnessActivityEvent;
-      setActivityItems((current) => reduceHarnessActivity(current, activityEvent, assistantId));
+      if (isTimelineActivity(activityEvent)) {
+        setActivityItems((current) => reduceHarnessActivity(current, activityEvent, assistantId));
+      }
       if (activityEvent.harnessTurnId) {
         setMessages((current) => current.map((message) => message.id === assistantId
           ? { ...message, harnessTurnId: activityEvent.harnessTurnId }
@@ -1177,7 +1176,7 @@ export function SessionsPage() {
         return {
           ...message,
           id: streamEvent.message.id ?? message.id,
-          content: streamEvent.message.content,
+          content: finalAssistantContent(message.content, streamEvent.message.content),
           citations: streamEvent.citations,
           usage: streamEvent.usage,
           state: "complete",
@@ -1803,7 +1802,7 @@ export function SessionsPage() {
                       <header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>
                       {message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}
                       {activityItems.some((item) => item.assistantId === message.id) && <section className="harness-timeline" aria-label="Harness activity">
-                        {activityItems.filter((item) => item.assistantId === message.id).map((item) => <details className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} open={item.kind !== "reasoning" && item.kind !== "compaction"} key={item.key}>
+                        {activityItems.filter((item) => item.assistantId === message.id).map((item) => <details className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} open={["running", "streaming", "waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? "") || item.kind === "plan"} key={item.key}>
                           <summary><span className={`status-dot ${["completed", "complete", "success"].includes(item.status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(item.status ?? "") ? "unavailable" : "pending"}`} /><strong>{item.title}</strong>{item.kind && <code>{item.kind.replaceAll("_", " ")}</code>}{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</summary>
                           <div className="harness-activity-body">
                             {item.summary && <p>{item.summary}</p>}
@@ -1811,7 +1810,7 @@ export function SessionsPage() {
                             {item.kind === "file_change" && Array.isArray(item.payload.files) && <ul className="harness-file-list">{item.payload.files.map((file, index) => <li key={index}><FileClock size={13} /> {typeof file === "string" ? file : JSON.stringify(file)}</li>)}</ul>}
                             {Object.entries(item.streams).map(([stream, output]) => <div className="harness-output" key={stream}><small>{stream}</small><pre tabIndex={0}>{output}</pre></div>)}
                             {typeof item.payload.diff === "string" && item.payload.diff && <div className="harness-output diff"><small>Unified diff</small><pre tabIndex={0}>{item.payload.diff}</pre></div>}
-                            {item.kind && ["command", "tool", "web_search", "browser", "image", "skill", "hook", "review", "subagent"].includes(item.kind) && Object.keys(item.payload).length > 0 && <pre className="harness-structured" tabIndex={0}>{JSON.stringify(item.payload, null, 2)}</pre>}
+                            {item.kind && ["command", "tool", "web_search", "browser", "image", "skill", "hook", "review", "subagent"].includes(item.kind) && Object.keys(item.payload).length > 0 && <details className="harness-structured-details"><summary>Arguments and result details</summary><pre className="harness-structured" tabIndex={0}>{JSON.stringify(item.payload, null, 2)}</pre></details>}
                             {item.usage && <small>{item.usage.totalTokens.toLocaleString()} tokens{item.usage.reasoningTokens ? ` · ${item.usage.reasoningTokens.toLocaleString()} reasoning` : ""}{item.usage.costUsd ? ` · $${item.usage.costUsd.toFixed(4)}` : ""}{item.usage.durationMs ? ` · ${(item.usage.durationMs / 1000).toFixed(1)}s` : ""}</small>}
                             {item.artifactIds.length > 0 && <div className="scope-chip-list">{item.artifactIds.map((id) => <span title={id} key={id}>Artifact {id.slice(0, 8)}</span>)}</div>}
                             {item.kind === "subagent" && item.status === "running" && selectedHarness?.capabilities?.subagentControl && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void stopSubagent(item)}>Stop subagent</button>}

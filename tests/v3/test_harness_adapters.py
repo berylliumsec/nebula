@@ -322,6 +322,17 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
                 return {}
             events = [
                 {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "item": {
+                            "id": "user-1",
+                            "type": "userMessage",
+                            "content": [{"type": "text", "text": "scan"}],
+                        },
+                    },
+                },
+                {
                     "method": "item/started",
                     "params": {
                         "turnId": "turn-phase",
@@ -370,6 +381,18 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
                     },
                 },
                 {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "turn-phase",
+                        "item": {
+                            "id": "final-1",
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "The authoritative final answer.",
+                        },
+                    },
+                },
+                {
                     "method": "turn/completed",
                     "params": {
                         "turnId": "turn-phase",
@@ -398,7 +421,8 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
         assert [item.delta for item in events if item.type == "message_delta"] == [
             "The scan completed."
         ]
-        assert events[-1].message == "The scan completed."
+        assert events[-1].message == "The authoritative final answer."
+        assert not any(item.title == "User Message" for item in events)
         assert rpc.responses == [(92, {"action": "decline"})]
 
         trusted_rpc = PhaseRpc("nebula")
@@ -412,7 +436,7 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
         trusted_events = [
             item async for item in trusted_connection.run_turn("scan", model="gpt-test")
         ]
-        assert trusted_events[-1].message == "The scan completed."
+        assert trusted_events[-1].message == "The authoritative final answer."
         assert trusted_rpc.responses == [(92, {"action": "accept", "content": {}})]
 
     asyncio.run(scenario())

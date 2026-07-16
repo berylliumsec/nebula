@@ -178,6 +178,12 @@ _CODEX_NATIVE_ITEM_TYPES = {
     "imageView",
     "skill",
     "collabAgentToolCall",
+    "subAgentActivity",
+    "hookPrompt",
+    "sleep",
+    "enteredReviewMode",
+    "exitedReviewMode",
+    "contextCompaction",
 }
 
 _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
@@ -1094,6 +1100,7 @@ class CodexAppServerConnection(HarnessConnection):
             external_turn_id=self.active_turn_id,
         )
         message_parts: list[str] = []
+        authoritative_message: str | None = None
         message_phases: dict[str, str] = {}
         reasoning_items: set[str] = set()
         while True:
@@ -1438,12 +1445,10 @@ class CodexAppServerConnection(HarnessConnection):
                     if item_id:
                         message_phases[item_id] = str(item.get("phase") or "")
                 if item_type == "agentMessage":
-                    if (
-                        str(
-                            item.get("phase") or message_phases.get(item_id or "") or ""
-                        )
-                        == "commentary"
-                    ):
+                    phase = str(
+                        item.get("phase") or message_phases.get(item_id or "") or ""
+                    )
+                    if phase == "commentary":
                         yield HarnessEvent(
                             type="item_upsert",
                             vendor=HarnessKind.CODEX_APP_SERVER,
@@ -1454,6 +1459,18 @@ class CodexAppServerConnection(HarnessConnection):
                             title="Commentary",
                             payload=_bounded(item, limit=MAX_TOOL_RESULT_TEXT),
                         )
+                    elif method == "item/completed" and isinstance(
+                        item.get("text"), str
+                    ):
+                        # The completed item is authoritative. Some app-server
+                        # builds omit final-answer deltas, and reconnects may start
+                        # after those deltas, so never depend on deltas alone.
+                        authoritative_message = str(item["text"])
+                    continue
+                if item_type == "userMessage":
+                    # The operator message is already a first-class chat message.
+                    # Mirroring the vendor's thread item leaks protocol internals
+                    # into the assistant activity timeline.
                     continue
                 if item_type == "mcpToolCall":
                     yield HarnessEvent(
@@ -1491,17 +1508,16 @@ class CodexAppServerConnection(HarnessConnection):
                         payload=_bounded(item, limit=MAX_TOOL_RESULT_TEXT),
                     )
                 else:
-                    kind = _codex_item_kind(item_type)
                     yield HarnessEvent(
-                        type="item_upsert",
+                        type="notice",
                         external_turn_id=self.active_turn_id,
                         vendor=HarnessKind.CODEX_APP_SERVER,
                         item_id=item_id or f"{item_type}-{len(message_phases)}",
                         parent_item_id=str(item.get("parentId") or "") or None,
-                        item_kind=kind,
                         item_status=item_status,
-                        title=_codex_item_title(item_type, item),
-                        payload=_bounded(item, limit=MAX_TOOL_RESULT_TEXT),
+                        title="Codex activity",
+                        summary=f"Codex reported an unsupported {item_type} item.",
+                        payload={"item_type": item_type, "status": item_status},
                     )
                 continue
             if method == "thread/tokenUsage/updated":
@@ -1573,7 +1589,7 @@ class CodexAppServerConnection(HarnessConnection):
                 yield HarnessEvent(
                     type="completed",
                     vendor=HarnessKind.CODEX_APP_SERVER,
-                    message="".join(message_parts),
+                    message=(authoritative_message or "".join(message_parts)),
                     external_turn_id=str(completed.get("id") or "") or None,
                 )
                 return
@@ -1747,6 +1763,9 @@ def _codex_item_kind(item_type: str) -> Any:
         "imageView": "image",
         "skill": "skill",
         "collabAgentToolCall": "subagent",
+        "subAgentActivity": "subagent",
+        "hookPrompt": "hook",
+        "sleep": "tool",
         "contextCompaction": "compaction",
         "enteredReviewMode": "review",
         "exitedReviewMode": "review",
