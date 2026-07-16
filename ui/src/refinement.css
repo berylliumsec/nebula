@@ -747,8 +747,7 @@ kbd { font-size: 11px; }
 .note-empty-state { max-width: 430px; padding: 36px; }
 .note-empty-state .button, .report-empty-state .button { margin-top: 18px; }
 .note-editor > header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }.note-editor > header > input { min-width: 0; flex: 1; min-height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface-raised); font-weight: 650; }.note-editor > header > div { display: flex; gap: 5px; }
-.note-editor-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }.note-editor-body > label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }.note-editor-body textarea { width: 100%; min-height: 390px; resize: vertical; padding: 12px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--text); background: var(--canvas); font: 12px/1.55 var(--mono); }
-.note-preview { min-height: 390px; padding: 12px 16px; overflow: auto; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-muted); font-size: 12px; line-height: 1.55; }.note-preview > :first-child { margin-top: 0; }.note-preview > :last-child { margin-bottom: 0; }
+.note-editor-body { display: grid; }.note-editor-body > label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }.note-editor-body textarea { width: 100%; min-height: 510px; resize: vertical; padding: 12px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--text); background: var(--canvas); font: 12px/1.55 var(--mono); }
 .note-editor > details { margin-top: 10px; padding: 9px 11px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--muted); font-size: 11px; }.note-editor > details summary { cursor: pointer; }.note-editor > details label { display: inline-flex; align-items: center; gap: 5px; margin: 9px 12px 0 0; }
 
 .data-panel, .tool-progress, .provider-card, .artifact-card, .tool-pack-card {
@@ -1279,7 +1278,7 @@ kbd { font-size: 11px; }
   .workspace-reset { grid-template-columns: 1fr; }
   .workspace-reset > div { grid-column: auto; }
   .workspace-browser-toolbar { align-items: stretch; flex-direction: column; gap: 7px; }.workspace-browser-toolbar > div { justify-content: flex-end; }
-  .notes-panel { display: block; }.notes-list { max-height: 210px; border-right: 0; border-bottom: 1px solid var(--border-soft); }.note-editor.is-empty { min-height: 360px; }.note-editor > header { align-items: stretch; flex-direction: column; }.note-editor > header > div { flex-wrap: wrap; }.note-editor-body { grid-template-columns: 1fr; }.note-editor-body textarea, .note-preview { min-height: 240px; }
+  .notes-panel { display: block; }.notes-list { max-height: 210px; border-right: 0; border-bottom: 1px solid var(--border-soft); }.note-editor.is-empty { min-height: 360px; }.note-editor > header { align-items: stretch; flex-direction: column; }.note-editor > header > div { flex-wrap: wrap; }.note-editor-body textarea { min-height: 360px; }
   .workspace-entry-list > .empty-state { min-height: 180px; }
   .chat-panel { min-height: 600px; }
   .chat-context-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }

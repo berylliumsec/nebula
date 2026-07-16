@@ -39,6 +39,7 @@ describe("NotesPanel", () => {
 
     const body = await screen.findByRole("textbox", { name: "Note body" });
     await waitFor(() => expect(body).toHaveValue("**Useful** context"));
+    expect(screen.queryByRole("region", { name: "Note preview" })).not.toBeInTheDocument();
     await user.clear(body);
     await user.type(body, "Changed");
     await user.click(screen.getByRole("button", { name: /save/i }));

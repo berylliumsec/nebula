@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { ApiClient } from "../api/client";
 import type {
   ObservationCreateRequest,
@@ -276,7 +274,6 @@ export function NotesPanel({
           </header>
           <div className="note-editor-body">
             <label>Markdown<textarea aria-label="Note body" rows={18} value={draft.body} placeholder="Capture observations, test ideas, or conclusions…" onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))} /></label>
-            <section className="note-preview" aria-label="Note preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.body || "_Nothing to preview yet._"}</ReactMarkdown></section>
           </div>
           {(evidenceOptions.length > 0 || assetOptions.length > 0) && <details><summary>Links · {draft.evidenceIds.length} evidence · {draft.assetIds.length} assets</summary>
             {evidenceOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.evidenceIds.includes(option.id)} onChange={() => toggleLink("evidenceIds", option.id)} /> {option.label}</label>)}
