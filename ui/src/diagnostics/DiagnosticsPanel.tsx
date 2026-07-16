@@ -22,20 +22,24 @@ import {
   nativeDiagnosticSettings,
   nativeDiagnosticStatus,
   nativeRecentErrors,
+  nativeSensitiveDiagnosticDetail,
   normalizeDiagnosticSettings,
   revealNativeLogs,
   setDiagnosticSettings,
   updateNativeDiagnosticSettings,
 } from "./logger";
 import {
+  diagnosticIncidentMatchesReference,
   diagnosticFailurePresentation,
-  diagnosticRecordMatchesReference,
   diagnosticTechnicalDetails,
   humanizeDiagnosticValue,
+  resolveDiagnosticIncidents,
 } from "./presentation";
 import {
   diagnosticFeatures,
   type DiagnosticFile,
+  type DiagnosticAction,
+  type DiagnosticIncident,
   type DiagnosticLevel,
   type DiagnosticRecord,
   type DiagnosticSettings,
@@ -64,8 +68,13 @@ function formatBytes(value: number): string {
 function mergeErrors(...groups: DiagnosticRecord[][]): DiagnosticRecord[] {
   const records = new Map<string, DiagnosticRecord>();
   for (const record of groups.flat()) {
-    const key = record.error_id
-      ?? `${record.timestamp ?? "session"}:${record.sequence ?? 0}:${record.event_code}`;
+    const key = [
+      record.source ?? "unknown",
+      record.launch_id ?? "session",
+      record.sequence ?? 0,
+      record.event_code,
+      record.error_id ?? record.request_id ?? record.timestamp ?? "unreferenced",
+    ].join(":");
     records.set(key, record);
   }
   return [...records.values()].sort((left, right) => {
@@ -91,9 +100,22 @@ function StatusCard({ label, title, detail, tone }: {
   );
 }
 
-function FailureCard({ record, targeted }: { record: DiagnosticRecord; targeted: boolean }) {
+function FailureCard({
+  incident,
+  targeted,
+  onAction,
+  onSensitiveDetail,
+}: {
+  incident: DiagnosticIncident;
+  targeted: boolean;
+  onAction: (incident: DiagnosticIncident, action: DiagnosticAction) => Promise<void>;
+  onSensitiveDetail: (incident: DiagnosticIncident, action: "reveal" | "copy") => Promise<string | undefined>;
+}) {
+  const record = incident.primary;
   const presentation = diagnosticFailurePresentation(record);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [sensitiveDetail, setSensitiveDetail] = useState<string>();
+  const [sensitiveBusy, setSensitiveBusy] = useState(false);
   const correlations = [
     ["Error reference", record.error_id],
     ["Request reference", record.request_id],
@@ -120,29 +142,91 @@ function FailureCard({ record, targeted }: { record: DiagnosticRecord; targeted:
     }
   };
 
+  const accessSensitiveDetail = async (action: "reveal" | "copy") => {
+    setSensitiveBusy(true);
+    try {
+      const detail = await onSensitiveDetail(incident, action);
+      if (!detail) return;
+      if (action === "copy") {
+        await navigator.clipboard.writeText(detail);
+        setCopyState("copied");
+      } else {
+        setSensitiveDetail(detail);
+      }
+    } catch (error) {
+      setCopyState("failed");
+      void logCaughtDiagnostic(
+        "interface.diagnostics.sensitive_detail_failed",
+        "Protected diagnostic detail could not be accessed.",
+        error,
+        "sensitive-detail",
+      );
+    } finally {
+      setSensitiveBusy(false);
+    }
+  };
+
   return (
     <article className={`diagnostic-failure-card${targeted ? " targeted" : ""}`} tabIndex={targeted ? -1 : undefined}>
       <header>
         <span className={`diagnostic-level ${String(record.level).toLowerCase()}`}>{record.level}</span>
         <div>
           <small>{presentation.operationLabel}</small>
-          <h4>{record.message}</h4>
+          <h4>{incident.guidance.title}</h4>
+          <p>{record.message}</p>
         </div>
         <time dateTime={record.timestamp}>{record.timestamp ? new Date(record.timestamp).toLocaleString() : "This session"}</time>
       </header>
       <div className="diagnostic-failure-explanation">
-        <span><small>Why it failed</small><p>{presentation.cause}</p></span>
-        <span><small>Verified next step</small><p>{presentation.recovery}</p></span>
+        <span><small>Exact sanitized cause</small><p>{incident.guidance.cause}</p></span>
+        <span><small>Operational impact</small><p>{incident.guidance.impact}</p></span>
+        <span><small>Confirmed safe state</small><p>{incident.guidance.confirmed_safe_state}</p></span>
+      </div>
+      <div className="diagnostic-remediation">
+        <small>How to fix</small>
+        <ol>{incident.guidance.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+        <small>How to verify recovery</small>
+        <p>{incident.guidance.verification}</p>
       </div>
       <div className="diagnostic-failure-actions">
-        {presentation.destination && presentation.actionLabel && (
-          <a className="button secondary" href={presentation.destination}>{presentation.actionLabel} <ExternalLink size={13} /></a>
-        )}
+        {incident.actions.map((action) => action.kind === "navigate" && action.destination ? (
+          <a className="button secondary" href={action.destination} key={action.id}>{action.label} <ExternalLink size={13} /></a>
+        ) : (
+          <button
+            className="button secondary"
+            type="button"
+            key={action.id}
+            disabled={!action.enabled}
+            title={!action.enabled ? action.disabled_reason ?? undefined : undefined}
+            onClick={() => void onAction(incident, action)}
+          >{action.label}</button>
+        ))}
       </div>
+      {incident.actions.some((action) => !action.enabled && action.disabled_reason) && (
+        <ul className="diagnostic-disabled-reasons">
+          {incident.actions.filter((action) => !action.enabled && action.disabled_reason).map((action) => (
+            <li key={action.id}><strong>{action.label}:</strong> {action.disabled_reason}</li>
+          ))}
+        </ul>
+      )}
+      {incident.sensitive_detail_available ? (
+        <div className="diagnostic-sensitive-detail">
+          <small>Protected detail expires {incident.sensitive_detail_expires_at ? new Date(incident.sensitive_detail_expires_at).toLocaleString() : "within 24 hours"}. Confirmation is required every time it is revealed or copied.</small>
+          <span>
+            <button className="button quiet" type="button" disabled={sensitiveBusy} onClick={() => void accessSensitiveDetail("reveal")}>Reveal sensitive detail</button>
+            <button className="button quiet" type="button" disabled={sensitiveBusy} onClick={() => void accessSensitiveDetail("copy")}>Copy sensitive detail</button>
+          </span>
+          {sensitiveDetail && <pre aria-label="Sensitive diagnostic detail">{sensitiveDetail}</pre>}
+        </div>
+      ) : (
+        <p className="diagnostic-sensitive-unavailable">Protected source detail was not captured for this incident. Historical incidents cannot recover it.</p>
+      )}
       <details className="diagnostic-technical-details" open={targeted || undefined}>
         <summary>Technical details</summary>
         <dl>
           <div><dt>Technical code</dt><dd>{record.event_code}</dd></div>
+          <div><dt>Reason family</dt><dd>{record.reason_code ?? "unavailable for this historical record"}</dd></div>
+          <div><dt>Remediation</dt><dd>{incident.guidance.remediation_id}</dd></div>
           <div><dt>Feature</dt><dd>{record.feature}</dd></div>
           <div><dt>Stage</dt><dd>{record.stage ?? "unspecified"}</dd></div>
           <div><dt>Outcome</dt><dd>{record.outcome ?? "unspecified"}</dd></div>
@@ -153,6 +237,7 @@ function FailureCard({ record, targeted }: { record: DiagnosticRecord; targeted:
           {correlations.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
           {record.source && <div><dt>Source</dt><dd>{record.source}</dd></div>}
           {record.application_version && <div><dt>Application version</dt><dd>{record.application_version}</dd></div>}
+          {incident.related_records.length > 0 && <div><dt>Correlated records</dt><dd>{incident.related_records.length + 1}</dd></div>}
         </dl>
         {record.stack_frames?.length ? (
           <div className="diagnostic-stack"><small>Sanitized stack</small><ol>{record.stack_frames.map((frame, index) => <li key={`${frame.module}-${frame.function}-${frame.line}-${index}`}><code>{frame.module}.{frame.function}:{frame.line}</code></li>)}</ol></div>
@@ -204,6 +289,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
   const [liveSetup, setLiveSetup] = useState<SetupStatus>();
   const [files, setFiles] = useState<DiagnosticFile[]>([]);
   const [errors, setErrors] = useState<DiagnosticRecord[]>([]);
+  const [incidents, setIncidents] = useState<DiagnosticIncident[]>([]);
   const [errorsLoaded, setErrorsLoaded] = useState(false);
   const [loadFailures, setLoadFailures] = useState<string[]>([]);
   const [feature, setFeature] = useState("");
@@ -246,12 +332,14 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
         if (filesResult.status === "rejected") noteFailure("local file inventory", filesResult.reason);
         const recent = errorsResult.status === "fulfilled" && Array.isArray(errorsResult.value) ? errorsResult.value : [];
         if (errorsResult.status === "rejected") noteFailure("recent failures", errorsResult.reason);
-        setErrors(mergeErrors(recent, diagnosticsFallbackErrors()));
+        let nextErrors = mergeErrors(recent, diagnosticsFallbackErrors());
+        setErrors(nextErrors);
         setErrorsLoaded(true);
 
         if (api && workspaceState !== "failed") {
-          const [coreFilesResult, healthResult, setupResult] = await Promise.allSettled([
+          const [coreFilesResult, coreErrorsResult, healthResult, setupResult] = await Promise.allSettled([
             api.diagnosticsFiles(),
+            api.diagnosticErrors(feature || undefined),
             api.health(),
             api.setupStatus(),
           ]);
@@ -274,6 +362,10 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
               }) : coreStatus);
             }
           } else noteFailure("Core diagnostic health", coreFilesResult.reason);
+          if (coreErrorsResult.status === "fulfilled") {
+            nextErrors = mergeErrors(nextErrors, coreErrorsResult.value);
+            setErrors(nextErrors);
+          } else noteFailure("Core recent failures", coreErrorsResult.reason);
           if (healthResult.status === "fulfilled") setLiveHealth(healthResult.value);
           else noteFailure("Core status", healthResult.reason);
           if (setupResult.status === "fulfilled") setLiveSetup(setupResult.value);
@@ -334,19 +426,100 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
     void refresh();
   }, [refresh]);
 
-  const targetedRecord = useMemo(
-    () => targetReference ? errors.find((record) => diagnosticRecordMatchesReference(record, targetReference)) : undefined,
-    [errors, targetReference],
+  useEffect(() => {
+    let active = true;
+    const local = resolveDiagnosticIncidents(errors);
+    setIncidents(local);
+    const resolver = api && "resolveDiagnosticIncidents" in api
+      ? api.resolveDiagnosticIncidents(errors)
+      : undefined;
+    void resolver?.then((resolved) => {
+      if (active) setIncidents(resolved);
+    }).catch((error: unknown) => {
+      void logCaughtDiagnostic(
+        "interface.diagnostics.incident_resolution_failed",
+        "Core incident enrichment was unavailable; bundled offline guidance is shown.",
+        error,
+        "incident-resolution",
+      );
+    });
+    return () => { active = false; };
+  }, [api, errors]);
+
+  const displayedIncidents = useMemo(
+    () => incidents.length ? incidents : resolveDiagnosticIncidents(errors),
+    [errors, incidents],
+  );
+
+  const targetedIncident = useMemo(
+    () => targetReference ? displayedIncidents.find((incident) => diagnosticIncidentMatchesReference(incident, targetReference)) : undefined,
+    [displayedIncidents, targetReference],
   );
 
   useEffect(() => {
-    if (!targetedRecord) return;
+    if (!targetedIncident) return;
     window.requestAnimationFrame(() => {
       const element = document.querySelector<HTMLElement>(".diagnostic-failure-card.targeted");
       element?.scrollIntoView?.({ block: "center" });
       element?.focus();
     });
-  }, [targetedRecord]);
+  }, [targetedIncident]);
+
+  const runIncidentAction = async (incident: DiagnosticIncident, action: DiagnosticAction) => {
+    if (!api) {
+      setFailure(new Error(action.disabled_reason ?? "Nebula Core must be connected to run this action."));
+      return;
+    }
+    if (action.confirmation_required) {
+      const approved = await confirm({
+        title: `${action.label}?`,
+        message: action.kind === "retry"
+          ? "This creates a linked replacement operation and does not mutate the failed history."
+          : "This runs a bounded, allowlisted health check and does not change configuration.",
+        confirmLabel: action.label,
+      });
+      if (!approved) return;
+    }
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      await api.runDiagnosticAction(incident.error_id, action.id, action.confirmation_required);
+      await refresh();
+    } catch (error) {
+      setFailure(error);
+      void logCaughtDiagnostic(
+        "interface.diagnostics.incident_action_failed",
+        "An allowlisted incident action failed.",
+        error,
+        "incident-action",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const accessSensitiveDetail = async (
+    incident: DiagnosticIncident,
+    action: "reveal" | "copy",
+  ): Promise<string | undefined> => {
+    const approved = await confirm({
+      title: `${action === "copy" ? "Copy" : "Reveal"} sensitive detail?`,
+      message: "This detail may contain local technical identifiers. Access is audited, it is never included in support exports, and confirmation is required for every reveal or copy.",
+      confirmLabel: action === "copy" ? "Copy detail" : "Reveal detail",
+    });
+    if (!approved) return undefined;
+    const nativeOwned = native && incident.primary.source === "desktop";
+    if (nativeOwned) {
+      const response = await nativeSensitiveDiagnosticDetail(incident.error_id, action);
+      return response.detail;
+    }
+    if (!api) {
+      setFailure(new Error("Nebula Core must be connected to access protected diagnostic detail."));
+      return undefined;
+    }
+    const response = await api.diagnosticSensitiveDetail(incident.error_id, action);
+    return response.detail;
+  };
 
   const changed = useMemo(
     () => JSON.stringify(settings) !== JSON.stringify(draft),
@@ -499,9 +672,9 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
 
       <article className="panel diagnostics-errors-card">
         <header className="panel-header compact"><div><h3>Recent recorded failures</h3><p>Historical records do not mean the issue is still active.</p></div><label>Feature<select aria-label="Filter diagnostic errors by feature" value={feature} onChange={(event) => setFeature(event.target.value)}><option value="">All features</option>{diagnosticFeatures.map((item) => <option value={item} key={item}>{humanizeDiagnosticValue(item)}</option>)}</select></label></header>
-        {targetReference && errorsLoaded && targetedRecord && <div className="diagnostic-target-notice" role="status">Showing requested failure <code>{targetReference}</code>.</div>}
-        {targetReference && errorsLoaded && !targetedRecord && <div className="diagnostic-target-notice missing" role="status">The referenced failure <code>{targetReference}</code> is no longer in recent diagnostics.</div>}
-        {errors.length ? <div className="diagnostics-error-list">{errors.slice().reverse().map((record, index) => <FailureCard record={record} targeted={record === targetedRecord} key={`${record.error_id ?? record.timestamp}-${index}`} />)}</div> : <div className="empty-state compact"><CheckCircle2 size={22} /><strong>No matching recorded failures</strong><p>No retained error record matches this filter. Check Current status for live health.</p></div>}
+        {targetReference && errorsLoaded && targetedIncident && <div className="diagnostic-target-notice" role="status">Showing requested failure <code>{targetReference}</code>.</div>}
+        {targetReference && errorsLoaded && !targetedIncident && <div className="diagnostic-target-notice missing" role="status">The referenced failure <code>{targetReference}</code> is no longer in recent diagnostics.</div>}
+        {displayedIncidents.length ? <div className="diagnostics-error-list">{displayedIncidents.map((incident) => <FailureCard incident={incident} targeted={incident === targetedIncident} onAction={runIncidentAction} onSensitiveDetail={accessSensitiveDetail} key={incident.error_id} />)}</div> : <div className="empty-state compact"><CheckCircle2 size={22} /><strong>No matching recorded failures</strong><p>No retained error record matches this filter. Check Current status for live health.</p></div>}
       </article>
 
       <details className="diagnostics-advanced">
@@ -516,6 +689,15 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
               </select>
             </label>
             <p className="diagnostics-level-help">{levels.find((level) => level.value === (draft?.global_level ?? "error"))?.description}</p>
+            <label className="diagnostics-sensitive-setting">
+              <input
+                type="checkbox"
+                checked={draft?.sensitive_detail_capture === true}
+                disabled={!draft || busy}
+                onChange={(event) => setDraft((current) => current && ({ ...current, sensitive_detail_capture: event.target.checked }))}
+              />
+              <span><strong>Capture encrypted sensitive error detail for 24 hours</strong><small>Off by default. Uses the OS credential vault when available, falls back to session memory, and never enters support exports.</small></span>
+            </label>
             <details className="diagnostics-overrides">
               <summary>Per-feature overrides ({Object.keys(draft?.feature_levels ?? {}).length})</summary>
               <div>{diagnosticFeatures.map((item) => <label key={item}><span>{item}</span><select value={draft?.feature_levels?.[item] ?? "inherit"} disabled={!draft || busy} onChange={(event) => setDraft((current) => {

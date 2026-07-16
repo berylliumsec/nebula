@@ -715,7 +715,7 @@ def build_mcp_tool_plugins(
                     tool_name=self.snapshot.name,
                     arguments=invocation.arguments,
                 )
-            except Exception as exc:
+            except Exception as exc:  # diagnostic-expected: converted to a bounded tool failure receipt
                 failure = exc
             completed = utc_now()
             blocks: list[dict[str, Any]] = []
@@ -876,7 +876,8 @@ class McpGatewaySession:
             await self.server.wait_closed()
             self.server = None
         self.socket_path.unlink(missing_ok=True)
-        shutil.rmtree(self.root, ignore_errors=True)
+        if self.root.exists():
+            shutil.rmtree(self.root)
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -895,7 +896,11 @@ class McpGatewaySession:
                     and secrets.compare_digest(supplied_token, self.token)
                     and authentication.get("method") == "authenticate"
                 )
-            except (AttributeError, json.JSONDecodeError, TypeError):
+            except (
+                AttributeError,
+                json.JSONDecodeError,
+                TypeError,
+            ):  # diagnostic-expected: authentication fails closed
                 authenticated = False
             if not authenticated:
                 writer.write(
@@ -935,7 +940,9 @@ class McpGatewaySession:
                     if asyncio.iscoroutine(result):
                         result = await result
                     response = {"id": request_id, "result": result}
-                except Exception as exc:
+                except (
+                    Exception
+                ) as exc:  # diagnostic-expected: serialized as a bounded gateway error
                     response = {
                         "id": request_id,
                         "error": {"message": _safe(exc), "type": type(exc).__name__},

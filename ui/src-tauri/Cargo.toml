@@ -18,6 +18,7 @@ direct-updater = ["dep:tauri-plugin-updater"]
 tauri-build = { version = "2.5.6", features = [] }
 
 [dependencies]
+aes-gcm = "0.10.3"
 base64 = "0.22.1"
 getrandom = "0.4.1"
 minisign-verify = "0.2.5"
@@ -28,13 +29,20 @@ sha2 = "0.10.9"
 tauri = { version = "2.11.5", features = ["unstable"] }
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-updater = { version = "2.10.1", optional = true }
-time = { version = "0.3.45", features = ["formatting"] }
+time = { version = "0.3.45", features = ["formatting", "parsing"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }
+objc2-foundation = { version = "0.3.2", features = ["NSProcessInfo"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.177"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-foundation = { version = "0.3.2", features = ["NSProcessInfo"] }
 
 [profile.release]
 codegen-units = 1

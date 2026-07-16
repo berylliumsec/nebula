@@ -19,7 +19,10 @@ use tauri::{
     webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder},
 };
 
-use crate::sidecar::BackendState;
+use crate::{
+    diagnostics::{DiagnosticLevel, DiagnosticsState},
+    sidecar::BackendState,
+};
 
 const MAX_TABS_PER_PROJECT: usize = 16;
 const MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
@@ -211,11 +214,40 @@ fn safe_filename(value: &str) -> String {
 }
 
 fn emit_page(app: &AppHandle, event: BrowserPageEvent) {
-    let _ = app.emit_to("main", "nebula-browser-page", event);
+    if app.emit_to("main", "nebula-browser-page", event).is_err() {
+        record_browser_failure(
+            app,
+            "desktop.browser.page_event_delivery_failed",
+            "A browser page update could not be delivered to the interface.",
+            "event-delivery",
+        );
+    }
 }
 
 fn emit_download(app: &AppHandle, event: BrowserDownloadEvent) {
-    let _ = app.emit_to("main", "nebula-browser-download", event);
+    if app
+        .emit_to("main", "nebula-browser-download", event)
+        .is_err()
+    {
+        record_browser_failure(
+            app,
+            "desktop.browser.download_event_delivery_failed",
+            "A browser download update could not be delivered to the interface.",
+            "event-delivery",
+        );
+    }
+}
+
+fn record_browser_failure(app: &AppHandle, event_code: &str, message: &str, stage: &str) {
+    drop(app.state::<DiagnosticsState>().record_desktop(
+        DiagnosticLevel::Error,
+        event_code,
+        message,
+        Some("failure"),
+        Some(stage),
+        Some(true),
+        serde_json::Map::new(),
+    ));
 }
 
 fn find_tab(state: &BrowserState, tab_id: &str, project_id: &str) -> Result<String, String> {
@@ -351,9 +383,25 @@ pub(crate) fn browser_create_tab(
                             std::thread::sleep(Duration::from_millis(250));
                             if fs::metadata(&path).map(|meta| meta.len() > MAX_DOWNLOAD_BYTES).unwrap_or(false) {
                                 finished.store(true, Ordering::Relaxed);
-                                let _ = fs::remove_file(&path);
+                                if let Err(error) = fs::remove_file(&path)
+                                    && error.kind() != std::io::ErrorKind::NotFound
+                                {
+                                    record_browser_failure(
+                                        &monitor_app,
+                                        "desktop.browser.staged_download_cleanup_failed",
+                                        "An oversized staged browser download could not be removed.",
+                                        "download-cleanup",
+                                    );
+                                }
                                 if let Ok(mut downloads) = monitor_app.state::<BrowserState>().downloads.lock() { downloads.remove(&path); }
-                                let _ = close_tab_internal(&monitor_app, &monitor_app.state::<BrowserState>(), &monitor_tab);
+                                if close_tab_internal(&monitor_app, &monitor_app.state::<BrowserState>(), &monitor_tab).is_err() {
+                                    record_browser_failure(
+                                        &monitor_app,
+                                        "desktop.browser.oversized_download_tab_close_failed",
+                                        "The browser tab for an oversized download could not be closed.",
+                                        "download-cleanup",
+                                    );
+                                }
                                 emit_download(&monitor_app, BrowserDownloadEvent { tab_id: monitor_tab.clone(), download_id: None, filename: None, size: None, state: "rejected", detail: Some("The download exceeded the 1 GiB Project file limit. Reload the tab to continue browsing.".to_string()) });
                                 break;
                             }
@@ -377,11 +425,29 @@ pub(crate) fn browser_create_tab(
                                 if let Ok(mut downloads) = download_app.state::<BrowserState>().downloads.lock() { downloads.insert(pending.path.clone(), pending); }
                                 emit_download(&download_app, BrowserDownloadEvent { tab_id, download_id: Some(download_id), filename: Some(filename), size: Some(size), state: "ready", detail: None });
                             } else {
-                                let _ = fs::remove_file(&pending.path);
+                                if let Err(error) = fs::remove_file(&pending.path)
+                                    && error.kind() != std::io::ErrorKind::NotFound
+                                {
+                                    record_browser_failure(
+                                        &download_app,
+                                        "desktop.browser.staged_download_cleanup_failed",
+                                        "An oversized staged browser download could not be removed.",
+                                        "download-cleanup",
+                                    );
+                                }
                                 emit_download(&download_app, BrowserDownloadEvent { tab_id: pending.tab_id, download_id: Some(pending.id), filename: Some(pending.filename), size: Some(size), state: "rejected", detail: Some("The download exceeded the 1 GiB Project file limit.".to_string()) });
                             }
                         } else {
-                            let _ = fs::remove_file(&pending.path);
+                            if let Err(error) = fs::remove_file(&pending.path)
+                                && error.kind() != std::io::ErrorKind::NotFound
+                            {
+                                record_browser_failure(
+                                    &download_app,
+                                    "desktop.browser.staged_download_cleanup_failed",
+                                    "A failed staged browser download could not be removed.",
+                                    "download-cleanup",
+                                );
+                            }
                             emit_download(&download_app, BrowserDownloadEvent { tab_id: pending.tab_id, download_id: Some(pending.id), filename: Some(pending.filename), size: None, state: "failed", detail: Some("The website download did not complete.".to_string()) });
                         }
                     }
@@ -419,7 +485,14 @@ pub(crate) fn browser_create_tab(
         )
         .map_err(|error| format!("cannot create browser tab: {error}"))?;
     if let Err(error) = webview.hide() {
-        let _ = webview.close();
+        if webview.close().is_err() {
+            record_browser_failure(
+                &app,
+                "desktop.browser.failed_tab_cleanup_failed",
+                "A browser tab that failed to initialize could not be closed.",
+                "tab-cleanup",
+            );
+        }
         return Err(format!("cannot initialize browser tab visibility: {error}"));
     }
     state
@@ -536,7 +609,9 @@ pub(crate) fn browser_clear_project_data(
         .collect();
     for (_, label) in &tabs {
         if let Some(webview) = app.get_webview(label) {
-            let _ = webview.clear_all_browsing_data();
+            webview
+                .clear_all_browsing_data()
+                .map_err(|error| format!("cannot clear browser storage: {error}"))?;
         }
     }
     for (id, _) in tabs {
@@ -714,7 +789,8 @@ pub(crate) async fn browser_import_download(
             .lock()
             .map_err(|_| "Browser download state is unavailable.".to_string())?
             .remove(&path);
-        let _ = fs::remove_file(path);
+        fs::remove_file(path)
+            .map_err(|error| format!("cannot remove imported staged download: {error}"))?;
     }
     Ok(result)
 }
@@ -738,7 +814,8 @@ pub(crate) fn browser_discard_download(
         .lock()
         .map_err(|_| "Browser download state is unavailable.".to_string())?
         .remove(&path);
-    let _ = fs::remove_file(path);
+    fs::remove_file(path)
+        .map_err(|error| format!("cannot remove discarded staged download: {error}"))?;
     Ok(())
 }
 
@@ -758,7 +835,17 @@ pub(crate) fn initialize(app: &AppHandle) -> Result<(), String> {
 
 pub(crate) fn shutdown(app: &AppHandle) {
     if let Ok(staging) = app.path().app_cache_dir() {
-        let _ = fs::remove_dir_all(staging.join("browser-downloads"));
+        let downloads = staging.join("browser-downloads");
+        if let Err(error) = fs::remove_dir_all(downloads)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            record_browser_failure(
+                app,
+                "desktop.browser.shutdown_cleanup_failed",
+                "Staged browser downloads could not be removed during shutdown.",
+                "shutdown-cleanup",
+            );
+        }
     }
 }
 

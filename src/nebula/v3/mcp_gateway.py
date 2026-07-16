@@ -126,7 +126,9 @@ async def serve(socket_path: Path, token: str) -> int:
                 else:
                     raise ValueError(f"unsupported MCP method: {method}")
                 response = {"jsonrpc": "2.0", "id": request_id, "result": result}
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # diagnostic-expected: serialized as a bounded MCP protocol error
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,

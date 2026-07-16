@@ -12,7 +12,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 
 if __package__:
@@ -26,6 +26,7 @@ else:
         exception: BaseException,
         *,
         stage: str,
+        metadata: Mapping[str, Any] | None = None,
     ) -> str | None:
         """Skip host diagnostics when this file runs standalone in the image build."""
 

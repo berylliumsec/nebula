@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS: DiagnosticSettings = {
   schema: "nebula.diagnostics-settings/v1",
   global_level: "error",
   feature_levels: {},
+  sensitive_detail_capture: false,
 };
 const levelValues: Record<DiagnosticLevel, number> = {
   debug: 10,
@@ -61,8 +62,10 @@ const allowedMetadata = new Set([
   "mode",
   "model_id",
   "operation",
+  "operator_id",
   "origin",
   "policy",
+  "persistence",
   "port_class",
   "provider",
   "queue_depth",
@@ -95,9 +98,13 @@ const deniedMetadata = /secret|credential|authorization|cookie|header|body|promp
 const maxFallbackRecords = 250;
 const maxErrorPresentations = 250;
 
-interface DiagnosticErrorPresentation {
+export interface DiagnosticErrorPresentation {
   retryable?: boolean;
   code?: string;
+  reasonCode?: string;
+  operatorDetail?: string;
+  impact?: string;
+  remediationId?: string;
 }
 
 interface BrowserSink {
@@ -137,6 +144,10 @@ export function rememberDiagnosticErrorPresentation(
     code: presentation.code && /^[a-z][a-z0-9._-]{1,159}$/.test(presentation.code)
       ? presentation.code
       : undefined,
+    reasonCode: presentation.reasonCode,
+    operatorDetail: presentation.operatorDetail ? safeText(presentation.operatorDetail) : undefined,
+    impact: presentation.impact ? safeText(presentation.impact) : undefined,
+    remediationId: presentation.remediationId,
   });
   while (errorPresentations.size > maxErrorPresentations) {
     const oldest = errorPresentations.keys().next().value;
@@ -232,6 +243,7 @@ export function normalizeDiagnosticSettings(value: unknown): DiagnosticSettings 
   const candidate = value as {
     global_level?: unknown;
     feature_levels?: unknown;
+    sensitive_detail_capture?: unknown;
   };
   const globalLevel = typeof candidate.global_level === "string"
     && candidate.global_level in levelValues
@@ -250,6 +262,7 @@ export function normalizeDiagnosticSettings(value: unknown): DiagnosticSettings 
     schema: "nebula.diagnostics-settings/v1",
     global_level: globalLevel,
     feature_levels: featureLevels,
+    sensitive_detail_capture: candidate.sensitive_detail_capture === true,
   };
 }
 
@@ -317,14 +330,21 @@ function wireRecord(input: DiagnosticInput): DiagnosticRecord {
       : undefined,
     retryable: input.retryable,
     safe_failure_cause: input.safeFailureCause ? safeText(input.safeFailureCause) : undefined,
+    reason_code: input.reasonCode,
+    operator_detail: input.operatorDetail ? safeText(input.operatorDetail) : undefined,
+    impact: input.impact ? safeText(input.impact) : undefined,
+    remediation_id: input.remediationId,
     exception_type: exceptionType(input.exception),
     stack_frames: stackFrames(input.exception),
     metadata: sanitizeMetadata(input.metadata),
   };
 }
 
-async function sendNative(record: DiagnosticRecord): Promise<string | undefined> {
-  return (await invoke<string | null>("diagnostics_log_frontend", { record })) ?? undefined;
+async function sendNative(
+  record: DiagnosticRecord,
+  sensitiveDetail?: string,
+): Promise<string | undefined> {
+  return (await invoke<string | null>("diagnostics_log_frontend", { record, sensitiveDetail })) ?? undefined;
 }
 
 async function sendBrowser(records: DiagnosticRecord[]): Promise<string[]> {
@@ -386,7 +406,12 @@ export async function logDiagnostic(input: DiagnosticInput): Promise<string | un
   const record = wireRecord(input);
   try {
     const errorId = isTauri()
-      ? await sendNative(record)
+      ? await sendNative(
+        record,
+        settings.sensitive_detail_capture && input.exception instanceof Error
+          ? `${safeText(input.exception.name || "Error", 128)}: ${safeText(input.exception.message, 64 * 1_024)}`
+          : undefined,
+      )
       : (await sendBrowser([record]))[0];
     setAvailability(true);
     void flushFallback();
@@ -412,6 +437,10 @@ export function logCaughtDiagnostic(
       requestId?: unknown;
       retryable?: unknown;
       code?: unknown;
+      reasonCode?: unknown;
+      operatorDetail?: unknown;
+      impact?: unknown;
+      remediationId?: unknown;
     }
     : undefined;
   const cancelled = classified?.name === "AbortError";
@@ -448,6 +477,10 @@ export function logCaughtDiagnostic(
   rememberDiagnosticErrorPresentation(reference, {
     retryable,
     code: typeof classified?.code === "string" ? classified.code : undefined,
+    reasonCode: typeof classified?.reasonCode === "string" ? classified.reasonCode : undefined,
+    operatorDetail: typeof classified?.operatorDetail === "string" ? classified.operatorDetail : undefined,
+    impact: typeof classified?.impact === "string" ? classified.impact : undefined,
+    remediationId: typeof classified?.remediationId === "string" ? classified.remediationId : undefined,
   });
   void logDiagnostic({
     level,
@@ -457,6 +490,10 @@ export function logCaughtDiagnostic(
     stage,
     retryable,
     safeFailureCause: caughtFailureCause(error, status, cancelled),
+    reasonCode: typeof classified?.reasonCode === "string" ? classified.reasonCode : undefined,
+    operatorDetail: typeof classified?.operatorDetail === "string" ? classified.operatorDetail : undefined,
+    impact: typeof classified?.impact === "string" ? classified.impact : undefined,
+    remediationId: typeof classified?.remediationId === "string" ? classified.remediationId : undefined,
     exception: error,
     requestId: typeof classified?.requestId === "string" ? classified.requestId : undefined,
     errorId: typeof classified?.errorId === "string" ? classified.errorId : localErrorId,
@@ -543,4 +580,16 @@ export function nativeRecentErrors(feature?: string, after?: string, limit = 100
 
 export function revealNativeLogs(): Promise<void> {
   return invoke<void>("diagnostics_reveal_logs");
+}
+
+export function nativeSensitiveDiagnosticDetail(
+  errorId: string,
+  action: "reveal" | "copy",
+): Promise<{ error_id: string; action: "reveal" | "copy"; detail: string }> {
+  return invoke("diagnostics_sensitive_detail", {
+    errorId,
+    action,
+    confirmed: true,
+    operatorId: "local-operator",
+  });
 }

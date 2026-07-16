@@ -159,6 +159,42 @@ describe("ApiClient", () => {
     });
   });
 
+  it("preserves the Core diagnosis instead of inventing an interface error", async () => {
+    const envelope = {
+      detail: "Harness transport failed.",
+      code: "harness_stream_failed",
+      feature: "harnesses",
+      request_id: "req_harness_shared",
+      operation_id: "op_harness_shared",
+      error_id: "err_harness_shared",
+      retryable: true,
+      reason_code: "transport_closed",
+      operator_detail: "Codex app-server closed stdout before turn completion.",
+      impact: "The harness turn did not complete.",
+      remediation_id: "harnesses.transport_closed",
+      help_article: "harnesses",
+    };
+    const client = new ApiClient({
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify(envelope), { status: 502 }),
+      ),
+    });
+
+    const error = await client.health().catch((value) => value);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 502,
+      requestId: "req_harness_shared",
+      operationId: "op_harness_shared",
+      errorId: "err_harness_shared",
+      reasonCode: "transport_closed",
+      operatorDetail: envelope.operator_detail,
+      impact: envelope.impact,
+      remediationId: "harnesses.transport_closed",
+    });
+  });
+
   it("maps zero-setup readiness and refreshes runtime detection idempotently", async () => {
     const status = {
       core: { status: "degraded", detail: "A model is optional" },

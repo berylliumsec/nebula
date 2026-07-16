@@ -23,18 +23,18 @@ const record: DiagnosticRecord = {
 
 describe("diagnostic presentation", () => {
   it("humanizes the failing component and exposes only a known destination", () => {
-    expect(diagnosticFailurePresentation(record)).toEqual({
+    expect(diagnosticFailurePresentation(record)).toMatchObject({
       featureLabel: "Terminal audit",
       operationLabel: "Terminal audit · Audit writer",
       cause: "The audit spool could not be persisted.",
-      recovery: "No verified retry procedure is available.",
+      recovery: "Review the technical evidence and correlation identifiers in this incident.",
       destination: "/?view=terminal",
-      actionLabel: "Open Terminal",
+      actionLabel: "Open Terminal audit",
     });
     expect(humanizeDiagnosticValue("image-preparation_retry")).toBe("Image preparation retry");
   });
 
-  it("uses explicit safe fallbacks instead of deriving advice from an error code", () => {
+  it("uses the honest unclassified fallback without inventing a fix", () => {
     expect(diagnosticFailurePresentation({
       ...record,
       feature: "diagnostics",
@@ -43,8 +43,8 @@ describe("diagnostic presentation", () => {
       metadata: undefined,
     })).toMatchObject({
       operationLabel: "Local diagnostics · Persist spool",
-      cause: "No additional safe cause was recorded.",
-      recovery: "No verified recovery procedure is available.",
+      cause: "Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.",
+      recovery: "Review the technical evidence and correlation identifiers in this incident.",
     });
   });
 

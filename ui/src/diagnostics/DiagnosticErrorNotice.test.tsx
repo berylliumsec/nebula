@@ -51,4 +51,20 @@ describe("DiagnosticErrorNotice", () => {
     expect(screen.getByText("Review Diagnostics for the recorded cause and recovery guidance.")).toBeVisible();
     expect(screen.getByText("Reference: pending local diagnostic")).toBeVisible();
   });
+
+  it("shows the correlated exact cause and impact inline", () => {
+    const error = Object.assign(new Error("Harness transport failed."), {
+      errorId: "err_harness_shared",
+      reasonCode: "transport_closed",
+      operatorDetail: "Codex app-server closed stdout before turn completion.",
+      impact: "The harness turn did not complete.",
+      retryable: true,
+    });
+
+    render(<DiagnosticErrorNotice error={error} />);
+
+    expect(screen.getByText("Cause:").closest("small")).toHaveTextContent(error.operatorDetail);
+    expect(screen.getByText("Impact:").closest("small")).toHaveTextContent(error.impact);
+    expect(screen.getByText("Reference: err_harness_shared · transport closed")).toBeVisible();
+  });
 });

@@ -536,7 +536,9 @@ class BrokeredToolSpecialist:
             provider_result = serialize_model_result(result.model_result())
             try:
                 delivered = json.loads(provider_result)
-            except json.JSONDecodeError:
+            except (
+                json.JSONDecodeError
+            ):  # diagnostic-expected: untrusted tool results fail closed
                 delivered = {}
             delivery_truncated = (
                 isinstance(delivered, dict)

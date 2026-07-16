@@ -388,7 +388,9 @@ async def test_closing_terminal_keeps_capacity_and_workspace_reserved(tmp_path):
     assert (await service.capacity()).active_sessions == 1
     with pytest.raises(ContainerTerminalError, match="workspace cannot be changed"):
         async with service.guard_workspace_operation(engagement.id):
-            pytest.fail("workspace reset guard ignored a terminal that was still stopping")
+            pytest.fail(
+                "workspace reset guard ignored a terminal that was still stopping"
+            )
     duplicate_close = asyncio.create_task(service.close(started.session_id))
     await asyncio.sleep(0)
     assert not duplicate_close.done()
@@ -1018,9 +1020,7 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
             assert started.json()["created_at"]
             session_ids.append(started.json()["session_id"])
 
-        capacity = client.get(
-            "/api/v1/container-terminal/capacity", headers=headers
-        )
+        capacity = client.get("/api/v1/container-terminal/capacity", headers=headers)
         assert capacity.status_code == 200
         assert capacity.headers["Cache-Control"] == "private, no-store"
         assert capacity.json() == {
@@ -1062,7 +1062,9 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
         )
         assert recovered.status_code == 200
         assert recovered.headers["Cache-Control"] == "private, no-store"
-        assert [item["session"]["session_id"] for item in recovered.json()["sessions"]] == session_ids
+        assert [
+            item["session"]["session_id"] for item in recovered.json()["sessions"]
+        ] == session_ids
 
         unauthenticated = client.get("/api/v1/container-terminal/capacity")
         assert unauthenticated.status_code == 401
@@ -1071,12 +1073,18 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
         )
         assert stopped.status_code == 204
         assert stopped.headers["Cache-Control"] == "private, no-store"
-        assert client.delete(
-            f"/api/v1/container-terminals/{session_ids[0]}", headers=headers
-        ).status_code == 204
-        assert client.get(
-            "/api/v1/container-terminal/capacity", headers=headers
-        ).json()["active_sessions"] == 31
+        assert (
+            client.delete(
+                f"/api/v1/container-terminals/{session_ids[0]}", headers=headers
+            ).status_code
+            == 204
+        )
+        assert (
+            client.get("/api/v1/container-terminal/capacity", headers=headers).json()[
+                "active_sessions"
+            ]
+            == 31
+        )
 
 
 def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):

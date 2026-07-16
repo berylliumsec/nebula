@@ -2517,7 +2517,9 @@ async def _read_limited_stream(
         if on_chunk is not None and callback_error is None:
             try:
                 await on_chunk(stream, chunk)
-            except BaseException as exc:
+            except (
+                BaseException
+            ) as exc:  # diagnostic-expected: re-raised after both pipes reach EOF
                 # Keep draining both pipes so a failed capture destination can
                 # never deadlock the child process.  Surface the persistence
                 # failure only after EOF.

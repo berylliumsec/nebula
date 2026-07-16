@@ -53,6 +53,9 @@ export function DiagnosticErrorNotice({
   const remembered = diagnosticErrorPresentation(reference);
   const retryable = typeof value?.retryable === "boolean" ? value.retryable : remembered?.retryable;
   const code = stringField(value, "code") ?? remembered?.code;
+  const operatorDetail = stringField(value, "operatorDetail", "operator_detail") ?? remembered?.operatorDetail;
+  const impact = stringField(value, "impact") ?? remembered?.impact;
+  const reasonCode = stringField(value, "reasonCode", "reason_code") ?? remembered?.reasonCode;
   const href = reference
     ? `/settings?diagnostic=${encodeURIComponent(reference)}#diagnostics-settings`
     : "/settings#diagnostics-settings";
@@ -67,6 +70,8 @@ export function DiagnosticErrorNotice({
       <span>
         <strong>{title ?? safeReason(rawMessage, fallback)}</strong>
         {title && <small>{safeReason(rawMessage, fallback)}</small>}
+        {operatorDetail && <small><b>Cause:</b> {safeReason(operatorDetail, fallback)}</small>}
+        {impact && <small><b>Impact:</b> {safeReason(impact, "Impact was not classified.")}</small>}
         <small>
           {retryable === true
             ? "This operation can be retried."
@@ -74,9 +79,13 @@ export function DiagnosticErrorNotice({
               ? "No verified retry procedure is available."
               : "Review Diagnostics for the recorded cause and recovery guidance."}
         </small>
-        <small>Reference: {reference ?? "pending local diagnostic"}{code ? ` · ${code}` : ""}</small>
+        <small>Reference: {reference ?? "pending local diagnostic"}{reasonCode ? ` · ${humanize(reasonCode)}` : code ? ` · ${code}` : ""}</small>
       </span>
       <a href={href}>View diagnostics</a>
     </Root>
   );
+}
+
+function humanize(value: string): string {
+  return value.replaceAll("_", " ").replaceAll("-", " ");
 }
