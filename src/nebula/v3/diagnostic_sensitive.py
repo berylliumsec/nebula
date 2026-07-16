@@ -20,8 +20,6 @@ from typing import Callable, Protocol, cast
 import keyring
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .redaction import redact_text
-
 SENSITIVE_DETAIL_SCHEMA = "nebula.diagnostic-sensitive-detail/v1"
 SENSITIVE_DETAIL_SERVICE = "io.berylliumsec.nebula.diagnostic-details"
 SENSITIVE_DETAIL_KEY_NAME = "aes-256-gcm-v1"
@@ -184,7 +182,7 @@ class SensitiveDiagnosticStore:
         self._validate_error_id(error_id)
         if not self.enabled or self._key is None:
             return SensitiveDetailCapture(False)
-        encoded = redact_text(detail).replace("\x00", "�").encode("utf-8")
+        encoded = detail.replace("\x00", "�").encode("utf-8")
         if not encoded:
             return SensitiveDetailCapture(False, persistence=self.persistence)
         if len(encoded) > MAX_SENSITIVE_DETAIL_BYTES:

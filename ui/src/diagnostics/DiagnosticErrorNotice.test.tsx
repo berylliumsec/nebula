@@ -24,7 +24,7 @@ describe("DiagnosticErrorNotice", () => {
     );
   });
 
-  it("supports legacy string errors without duplicating their reference and redacts secrets", () => {
+  it("supports legacy string errors without duplicating their reference or redacting text", () => {
     rememberDiagnosticErrorPresentation("err_provider_456", {
       retryable: false,
       code: "providers.request.failed",
@@ -38,8 +38,8 @@ describe("DiagnosticErrorNotice", () => {
 
     const alert = screen.getByRole("alert");
     expect(alert.tagName).toBe("SPAN");
-    expect(alert).toHaveTextContent("Provider failed with Bearer [REDACTED]");
-    expect(alert).not.toHaveTextContent("top-secret-token-value");
+    expect(alert).toHaveTextContent("Provider failed with Bearer top-secret-token-value");
+    expect(alert).not.toHaveTextContent("[REDACTED]");
     expect(screen.getByText("No verified retry procedure is available.")).toBeVisible();
     expect(screen.getByText("Reference: err_provider_456 · providers.request.failed")).toBeVisible();
   });
