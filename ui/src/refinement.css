@@ -472,12 +472,13 @@ kbd { font-size: 11px; }
 .sessions-page.chat-active { display: flex; height: 100%; min-height: 0; flex-direction: column; overflow: hidden; }
 .sessions-page.chat-active > .page-header, .sessions-page.chat-active > .session-toolbar { flex: 0 0 auto; }
 .sessions-page.chat-active > .session-layout.chat { height: auto; min-height: 0; flex: 1 1 auto; }
-.session-layout.chat { grid-template-columns: 220px minmax(420px, 1fr) 280px; }
+.session-layout.chat { grid-template-columns: 220px minmax(420px, 1fr) 280px; grid-template-rows: minmax(0, 1fr); }
 .session-layout.chat.conversation-panel-expanded { grid-template-columns: 340px minmax(420px, 1fr) 280px; }
-.session-layout.chat .session-workspace, .session-layout.chat .chat-panel { height: 100%; min-height: 0; }
+.session-layout.chat .session-workspace, .session-layout.chat .chat-panel { min-height: 0; }
 .session-layout.chat .session-list { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
-.session-layout.chat .session-list nav { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.session-layout.chat .session-workspace { overflow: hidden; }
+.session-layout.chat .session-list nav { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; }
+.session-layout.chat .session-workspace { display: flex; flex-direction: column; overflow: hidden; }
+.session-layout.chat .session-workspace > :where(.chat-panel, .chat-empty-state) { min-height: 0; flex: 1 1 0; }
 .session-layout.terminal, .session-layout.browser { grid-template-columns: minmax(0, 1fr); }
 .session-layout.code, .session-layout.executions, .session-layout.activity, .session-layout.workspace, .session-layout.notes { grid-template-columns: minmax(0, 1fr); }
 .session-list { min-width: 0; border-right: 1px solid var(--border-soft); background: var(--surface); }
@@ -542,10 +543,11 @@ kbd { font-size: 11px; }
 .session-inspector > header { min-height: 54px; }
 .session-inspector > header span, .session-inspector dt, .session-inspector dd, .session-inspector code { font-size: 11px; }
 .session-inspector > header strong, .session-inspector h3 { font-size: 12px; }
-.chat-panel { min-height: 594px; border-color: var(--border-soft); border-radius: 11px; }
-.chat-empty-state { min-height: 594px; }
+.chat-panel { min-height: 0; container: chat-panel / size; border-color: var(--border-soft); border-radius: 11px; }
+.chat-empty-state { min-height: 0; padding: 24px; }
 .chat-empty-state .button { margin-top: 16px; }
-.chat-settings { border-bottom: 1px solid var(--border-soft); background: var(--surface-muted); }
+.chat-settings { min-height: 36px; flex: 0 1 auto; overflow-y: auto; overscroll-behavior: contain; border-bottom: 1px solid var(--border-soft); background: var(--surface-muted); }
+.chat-settings[open] { max-height: clamp(120px, 45%, 360px); }
 .chat-settings > summary { min-height: 36px; padding: 10px 12px; color: var(--muted); font-size: 11px; font-weight: 650; cursor: pointer; }
 .chat-settings[open] > summary { border-bottom: 1px solid var(--border-soft); }
 .chat-context-bar { grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto; gap: 10px; padding: 10px 12px; }
@@ -553,6 +555,18 @@ kbd { font-size: 11px; }
 .chat-context-bar select, .chat-context-bar input:not([type="checkbox"]) { height: 34px; border-radius: 8px; font-size: 12px; }
 .chat-scroll { padding: 28px 30px; overscroll-behavior: contain; }
 .chat-panel > .chat-composer { flex: 0 0 auto; }
+
+/* The panoramic shell can leave a deliberately shallow chat surface on short
+   windows. Compact the fixed controls against the panel's real height so the
+   composer never competes with intrinsic content or escapes its workspace. */
+@container chat-panel (max-height: 260px) {
+  .chat-settings, .chat-settings[open] { min-height: 36px; max-height: 36px; flex-basis: 36px; }
+  .chat-scroll { padding-block: 6px; }
+  .chat-composer { margin: 4px 6px 6px; }
+  .chat-composer textarea { height: 40px; min-height: 40px; padding: 8px 10px; }
+  .chat-composer footer { padding: 3px 5px; }
+}
+
 .chat-message { grid-template-columns: 34px minmax(0, 1fr); }
 .chat-avatar { width: 32px; height: 32px; border-radius: 10px; font-size: 11px; }
 :root[data-theme="light"] .chat-message.operator .chat-avatar { color: #fff; }
@@ -1323,8 +1337,8 @@ kbd { font-size: 11px; }
   .session-tabs button > svg { flex: 0 0 auto; }
   .session-scope { display: none; }
   .session-mobile-list { display: inline-flex; width: 100%; min-height: 44px; align-items: center; justify-content: center; gap: 6px; margin-left: 0; padding: 0 9px; border: 0; border-radius: 8px; color: var(--muted-strong); background: var(--surface-hover); }
-  .session-layout.chat { display: block; min-height: 620px; }
-  .session-layout.chat .session-list { display: none; min-height: 620px; border-right: 0; }
+  .session-layout.chat { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  .session-layout.chat .session-list { display: none; min-height: 0; border-right: 0; }
   .session-layout.chat.mobile-list-open .session-list { display: flex; }
   .session-layout.chat.mobile-list-open .session-workspace { display: none; }
   .session-workspace { padding: 8px; }
@@ -1352,7 +1366,7 @@ kbd { font-size: 11px; }
   .code-editor-panel { display: block; }.code-editor-sidebar { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--border-soft); }.code-editor-files { max-height: 160px; }.code-editor-main { min-height: 460px; }.code-mirror-host { min-height: 340px; }.code-editor-conflict { grid-template-columns: auto minmax(0, 1fr); }.code-editor-conflict .button { grid-column: span 1; }.code-editor-main > footer { flex-wrap: wrap; }.code-editor-main > footer span:last-child { width: 100%; margin-left: 0; }
   .notes-panel { display: block; }.notes-list { max-height: 210px; border-right: 0; border-bottom: 1px solid var(--border-soft); }.note-editor.is-empty { min-height: 360px; }.note-editor > header { align-items: stretch; flex-direction: column; }.note-editor > header > div { flex-wrap: wrap; }.note-editor-body textarea { min-height: 360px; }
   .workspace-entry-list > .empty-state { min-height: 180px; }
-  .chat-panel { min-height: 600px; }
+  .chat-panel { min-height: 0; }
   .chat-context-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .chat-context-bar .chat-knowledge-toggle { min-width: 0; }
   .chat-knowledge-toggle > span { min-width: 0; white-space: normal; }
@@ -1398,8 +1412,8 @@ kbd { font-size: 11px; }
   .icon-button, .connection-chip, .command-trigger { width: 44px; height: 44px; }
   .settings-tabs a { min-height: 44px; }
   .settings-section { scroll-margin-top: 190px; }
-  .session-layout.chat .session-list { min-height: 100%; }
-  .session-layout.chat .session-workspace, .session-layout.chat .chat-panel { height: 100%; min-height: 0; }
+  .session-layout.chat .session-list { height: 100%; min-height: 0; }
+  .session-layout.chat .session-workspace, .session-layout.chat .chat-panel { min-height: 0; }
 }
 
 @media (max-width: 600px) {

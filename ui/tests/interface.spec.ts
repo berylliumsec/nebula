@@ -477,28 +477,68 @@ test("all task workspaces keep responsive content inside its owning surface", as
   }
 });
 
-test("assistant composer remains fully visible inside the workbench viewport", async ({ page }) => {
+test("all assistant states remain fully visible inside the workbench viewport", async ({ page }, testInfo) => {
+  if (testInfo.project.name === "desktop") await page.setViewportSize({ width: 2048, height: 868 });
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("tab", { name: "Analyst chat", exact: true }).click();
-  await page.getByRole("button", { name: "New chat", exact: true }).click();
 
-  const composer = page.locator(".chat-composer");
-  await expect(composer).toBeVisible();
-  const bounds = await composer.evaluate((element) => {
-    const composerRect = element.getBoundingClientRect();
-    const workspace = element.closest<HTMLElement>(".session-workspace");
-    const workspaceRect = workspace?.getBoundingClientRect();
+  const workspace = page.locator(".session-layout.chat .session-workspace");
+  const emptyState = page.locator(".chat-empty-state");
+  const startChat = emptyState.getByRole("button", { name: "Start new chat" });
+  await expect(emptyState).toBeVisible();
+  await expect(startChat).toBeVisible();
+
+  const emptyBounds = await workspace.evaluate((element) => {
+    const workspaceRect = element.getBoundingClientRect();
+    const emptyRect = element.querySelector<HTMLElement>(".chat-empty-state")!.getBoundingClientRect();
+    const buttonRect = element.querySelector<HTMLElement>(".chat-empty-state .button")!.getBoundingClientRect();
     return {
-      composerTop: composerRect.top,
-      composerBottom: composerRect.bottom,
-      workspaceTop: workspaceRect?.top ?? 0,
-      workspaceBottom: workspaceRect?.bottom ?? window.innerHeight,
-      viewportHeight: window.innerHeight,
+      workspaceBottom: workspaceRect.bottom,
+      emptyBottom: emptyRect.bottom,
+      buttonBottom: buttonRect.bottom,
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
     };
   });
-  expect(bounds.composerTop).toBeGreaterThanOrEqual(bounds.workspaceTop - 1);
-  expect(bounds.composerBottom).toBeLessThanOrEqual(bounds.workspaceBottom + 1);
-  expect(bounds.composerBottom).toBeLessThanOrEqual(bounds.viewportHeight + 1);
+  expect(emptyBounds.emptyBottom).toBeLessThanOrEqual(emptyBounds.workspaceBottom + 1);
+  expect(emptyBounds.buttonBottom).toBeLessThanOrEqual(emptyBounds.workspaceBottom + 1);
+  expect(emptyBounds.scrollHeight).toBeLessThanOrEqual(emptyBounds.clientHeight + 1);
+
+  await startChat.click();
+  const composer = page.locator(".chat-composer");
+  await expect(composer).toBeVisible();
+  const composerBounds = await workspace.evaluate((element) => {
+    const workspaceRect = element.getBoundingClientRect();
+    const panel = element.querySelector<HTMLElement>(".chat-panel")!;
+    const settings = element.querySelector<HTMLElement>(".chat-settings")!;
+    const scroll = element.querySelector<HTMLElement>(".chat-scroll")!;
+    const composer = element.querySelector<HTMLElement>(".chat-composer")!;
+    const panelRect = panel.getBoundingClientRect();
+    const settingsRect = settings.getBoundingClientRect();
+    const scrollRect = scroll.getBoundingClientRect();
+    const composerRect = composer.getBoundingClientRect();
+    return {
+      workspaceTop: workspaceRect.top,
+      workspaceBottom: workspaceRect.bottom,
+      panelTop: panelRect.top,
+      panelBottom: panelRect.bottom,
+      panelClientHeight: panel.clientHeight,
+      panelScrollHeight: panel.scrollHeight,
+      settingsHeight: settingsRect.height,
+      scrollHeight: scrollRect.height,
+      composerTop: composerRect.top,
+      composerBottom: composerRect.bottom,
+      viewportHeight: window.innerHeight,
+      clientHeight: element.clientHeight,
+      workspaceScrollHeight: element.scrollHeight,
+    };
+  });
+  const geometry = JSON.stringify(composerBounds);
+  expect(composerBounds.composerTop, geometry).toBeGreaterThanOrEqual(composerBounds.workspaceTop - 1);
+  expect(composerBounds.composerBottom, geometry).toBeLessThanOrEqual(composerBounds.workspaceBottom + 1);
+  expect(composerBounds.composerBottom).toBeLessThanOrEqual(composerBounds.viewportHeight + 1);
+  expect(composerBounds.workspaceScrollHeight).toBeLessThanOrEqual(composerBounds.clientHeight + 1);
 });
 
 test("the populated finding editor stays contained and accessible", async ({ page }) => {
