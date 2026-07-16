@@ -13,6 +13,11 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, Payload},
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -31,6 +36,12 @@ const MAX_STRING_BYTES: usize = 2_048;
 const MAX_METADATA_ITEMS: usize = 64;
 const MAX_METADATA_DEPTH: usize = 5;
 const MAX_RECENT_ERRORS: usize = 500;
+const MAX_SENSITIVE_DETAIL_BYTES: usize = 64 * 1024;
+const MAX_SENSITIVE_DIRECTORY_BYTES: u64 = 32 * 1024 * 1024;
+const SENSITIVE_DETAIL_TTL_SECONDS: i64 = 24 * 60 * 60;
+const SENSITIVE_DETAIL_SCHEMA: &str = "nebula.diagnostic-sensitive-detail/v1";
+const SENSITIVE_DETAIL_SERVICE: &str = "io.berylliumsec.nebula.diagnostic-details";
+const SENSITIVE_DETAIL_KEY_NAME: &str = "aes-256-gcm-v1";
 
 const FEATURES: &[&str] = &[
     "desktop",
@@ -98,8 +109,10 @@ const SAFE_METADATA_KEYS: &[&str] = &[
     "mode",
     "model_id",
     "operation",
+    "operator_id",
     "origin",
     "policy",
+    "persistence",
     "port_class",
     "provider",
     "queue_depth",
@@ -202,6 +215,8 @@ pub(crate) struct DiagnosticSettings {
     schema: String,
     global_level: DiagnosticLevel,
     feature_levels: BTreeMap<String, DiagnosticLevel>,
+    #[serde(default)]
+    sensitive_detail_capture: bool,
 }
 
 impl Default for DiagnosticSettings {
@@ -210,6 +225,7 @@ impl Default for DiagnosticSettings {
             schema: SETTINGS_SCHEMA.to_string(),
             global_level: DiagnosticLevel::Error,
             feature_levels: BTreeMap::new(),
+            sensitive_detail_capture: false,
         }
     }
 }
@@ -270,6 +286,10 @@ pub(crate) struct FrontendDiagnosticRecord {
     duration_ms: Option<f64>,
     retryable: Option<bool>,
     safe_failure_cause: Option<String>,
+    reason_code: Option<String>,
+    operator_detail: Option<String>,
+    impact: Option<String>,
+    remediation_id: Option<String>,
     exception_type: Option<String>,
     #[serde(default)]
     stack_frames: Vec<FrontendStackFrame>,
@@ -307,6 +327,25 @@ impl FrontendDiagnosticRecord {
                 return Err("invalid frontend diagnostic correlation identifier".to_string());
             }
         }
+        if self
+            .reason_code
+            .as_deref()
+            .is_some_and(|value| !valid_reason_code(value))
+            || self
+                .operator_detail
+                .as_ref()
+                .is_some_and(|value| value.len() > MAX_STRING_BYTES)
+            || self
+                .impact
+                .as_ref()
+                .is_some_and(|value| value.len() > MAX_STRING_BYTES)
+            || self
+                .remediation_id
+                .as_ref()
+                .is_some_and(|value| value.len() > 160)
+        {
+            return Err("invalid frontend diagnostic guidance".to_string());
+        }
         Ok(())
     }
 }
@@ -331,6 +370,10 @@ struct Diagnostics {
     last_rotation: Option<String>,
     dropped_records: u64,
     memory_errors: VecDeque<Value>,
+    sensitive_dir: PathBuf,
+    sensitive_key: Option<[u8; 32]>,
+    sensitive_memory: BTreeMap<String, (i64, String)>,
+    sensitive_persistence: &'static str,
 }
 
 #[derive(Clone, Default)]
@@ -347,6 +390,7 @@ impl DiagnosticsState {
                 manager.settings = DiagnosticSettings::default();
                 manager.atomic_write_settings()?;
             }
+            manager.configure_sensitive_detail();
             manager.record(
                 DiagnosticLevel::Info,
                 "desktop",
@@ -476,9 +520,15 @@ struct DiagnosticFields<'a> {
     duration_ms: Option<f64>,
     retryable: Option<bool>,
     safe_failure_cause: Option<&'a str>,
+    reason_code: Option<&'a str>,
+    operator_detail: Option<&'a str>,
+    impact: Option<&'a str>,
+    remediation_id: Option<&'a str>,
     exception_type: Option<&'a str>,
     stack_frames: Vec<FrontendStackFrame>,
     metadata: Map<String, Value>,
+    sensitive_detail: Option<&'a str>,
+    force: bool,
 }
 
 impl Diagnostics {
@@ -519,6 +569,22 @@ impl Diagnostics {
             Value::String("A required native diagnostics path was unavailable.".into()),
         );
         record.insert(
+            "reason_code".into(),
+            Value::String("storage_write_failed".into()),
+        );
+        record.insert(
+            "operator_detail".into(),
+            Value::String("A required native diagnostics path was unavailable.".into()),
+        );
+        record.insert(
+            "impact".into(),
+            Value::String("New desktop diagnostics cannot be written durably; error records remain available in memory for this launch.".into()),
+        );
+        record.insert(
+            "remediation_id".into(),
+            Value::String("desktop.storage_write_failed".into()),
+        );
+        record.insert(
             "exception_type".into(),
             Value::String("NativeDiagnosticsInitializationError".into()),
         );
@@ -535,6 +601,10 @@ impl Diagnostics {
             last_rotation: None,
             dropped_records: 0,
             memory_errors: VecDeque::from([Value::Object(record)]),
+            sensitive_dir: app_data_dir.join("diagnostic-details").join("desktop"),
+            sensitive_key: None,
+            sensitive_memory: BTreeMap::new(),
+            sensitive_persistence: "disabled",
         }
     }
 
@@ -572,6 +642,10 @@ impl Diagnostics {
             last_rotation: None,
             dropped_records: 0,
             memory_errors: VecDeque::new(),
+            sensitive_dir: app_data_dir.join("diagnostic-details").join("desktop"),
+            sensitive_key: None,
+            sensitive_memory: BTreeMap::new(),
+            sensitive_persistence: "disabled",
         };
         manager.prune()?;
         Ok(manager)
@@ -598,6 +672,253 @@ impl Diagnostics {
                 .effective_level(feature, self.process_override)
     }
 
+    fn configure_sensitive_detail(&mut self) {
+        if !self.settings.sensitive_detail_capture {
+            self.sensitive_key = None;
+            self.sensitive_memory.clear();
+            self.sensitive_persistence = "disabled";
+            let _ = self.prune_sensitive_detail(); // diagnostic-expected: best-effort disabled-store cleanup
+            return;
+        }
+        match load_or_create_sensitive_key() {
+            Ok(key) => {
+                self.sensitive_key = Some(key);
+                self.sensitive_persistence = "encrypted-vault";
+                if secure_directory(&self.sensitive_dir).is_err() {
+                    self.sensitive_key = random_key().ok(); // diagnostic-expected: unavailable randomness disables capture
+                    self.sensitive_persistence = "session-memory";
+                }
+            }
+            Err(_) => {
+                self.sensitive_key = random_key().ok(); // diagnostic-expected: unavailable randomness disables capture
+                self.sensitive_persistence = "session-memory";
+            }
+        }
+        let _ = self.prune_sensitive_detail(); // diagnostic-expected: startup pruning is best-effort
+    }
+
+    fn capture_sensitive_detail(
+        &mut self,
+        error_id: &str,
+        detail: &str,
+        source: &str,
+    ) -> Result<Option<String>, String> {
+        if !self.settings.sensitive_detail_capture || !valid_error_id(error_id) {
+            return Ok(None);
+        }
+        let Some(key) = self.sensitive_key else {
+            return Ok(None);
+        };
+        let detail = bounded_sensitive_detail(&sanitize_text(detail));
+        if detail.is_empty() {
+            return Ok(None);
+        }
+        let now = OffsetDateTime::now_utc();
+        let expires = now + time::Duration::seconds(SENSITIVE_DETAIL_TTL_SECONDS);
+        let expires_at = expires
+            .format(&Rfc3339)
+            .map_err(|error| error.to_string())?;
+        if self.sensitive_persistence != "encrypted-vault" {
+            self.sensitive_memory
+                .insert(error_id.to_string(), (expires.unix_timestamp(), detail));
+            return Ok(Some(expires_at));
+        }
+        let metadata = json!({
+            "schema": SENSITIVE_DETAIL_SCHEMA,
+            "error_id": error_id,
+            "source": sanitize_text(source),
+            "owner": "desktop",
+            "application_version": env!("CARGO_PKG_VERSION"),
+            "created_at": now.format(&Rfc3339).map_err(|error| error.to_string())?,
+            "expires_at": expires_at,
+        });
+        let aad = serde_json::to_vec(&metadata)
+            .map_err(|error| format!("cannot encode protected detail metadata: {error}"))?;
+        let mut nonce = [0_u8; 12];
+        getrandom::fill(&mut nonce)
+            .map_err(|error| format!("cannot generate protected detail nonce: {error}"))?;
+        let cipher = Aes256Gcm::new_from_slice(&key)
+            .map_err(|_| "protected detail key is invalid".to_string())?;
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: detail.as_bytes(),
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| "protected detail encryption failed".to_string())?;
+        let mut envelope = metadata
+            .as_object()
+            .cloned()
+            .ok_or_else(|| "protected detail metadata is invalid".to_string())?;
+        envelope.insert("algorithm".into(), Value::String("AES-256-GCM".into()));
+        envelope.insert("nonce".into(), Value::String(BASE64.encode(nonce)));
+        envelope.insert(
+            "ciphertext".into(),
+            Value::String(BASE64.encode(ciphertext)),
+        );
+        let destination = self.sensitive_dir.join(format!("{error_id}.json"));
+        if let Err(_error) = atomic_write_json(&destination, &Value::Object(envelope)) {
+            self.sensitive_memory
+                .insert(error_id.to_string(), (expires.unix_timestamp(), detail));
+            self.sensitive_persistence = "session-memory";
+            return Ok(Some(expires_at));
+        }
+        self.prune_sensitive_detail()?;
+        Ok(Some(expires_at))
+    }
+
+    fn reveal_sensitive_detail(&mut self, error_id: &str) -> Result<String, String> {
+        if !self.settings.sensitive_detail_capture || !valid_error_id(error_id) {
+            return Err("protected diagnostic detail is unavailable".to_string());
+        }
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        if let Some((expires, detail)) = self.sensitive_memory.get(error_id).cloned() {
+            if expires <= now {
+                self.sensitive_memory.remove(error_id);
+                return Err("protected diagnostic detail has expired".to_string());
+            }
+            return Ok(detail);
+        }
+        let key = self
+            .sensitive_key
+            .ok_or_else(|| "protected diagnostic detail key is unavailable".to_string())?;
+        let path = self.sensitive_dir.join(format!("{error_id}.json"));
+        let envelope: Value = serde_json::from_reader(
+            File::open(&path)
+                .map_err(|_| "protected diagnostic detail is unavailable".to_string())?,
+        )
+        .map_err(|_| "protected diagnostic detail is malformed".to_string())?;
+        let object = envelope
+            .as_object()
+            .ok_or_else(|| "protected diagnostic detail is malformed".to_string())?;
+        if object.get("schema").and_then(Value::as_str) != Some(SENSITIVE_DETAIL_SCHEMA)
+            || object.get("error_id").and_then(Value::as_str) != Some(error_id)
+            || object.get("owner").and_then(Value::as_str) != Some("desktop")
+        {
+            return Err("protected diagnostic detail metadata is invalid".to_string());
+        }
+        let expires_at = object
+            .get("expires_at")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "protected diagnostic detail expiry is invalid".to_string())?;
+        let expires = OffsetDateTime::parse(expires_at, &Rfc3339)
+            .map_err(|_| "protected diagnostic detail expiry is invalid".to_string())?;
+        if expires.unix_timestamp() <= now {
+            let _ = fs::remove_file(path); // diagnostic-expected: expired detail is already inaccessible
+            return Err("protected diagnostic detail has expired".to_string());
+        }
+        let mut metadata = Map::new();
+        for field in [
+            "schema",
+            "error_id",
+            "source",
+            "owner",
+            "application_version",
+            "created_at",
+            "expires_at",
+        ] {
+            metadata.insert(
+                field.into(),
+                object
+                    .get(field)
+                    .cloned()
+                    .ok_or_else(|| "protected diagnostic detail metadata is invalid".to_string())?,
+            );
+        }
+        let aad = serde_json::to_vec(&Value::Object(metadata))
+            .map_err(|error| format!("cannot encode protected detail metadata: {error}"))?;
+        let nonce = BASE64
+            .decode(
+                object
+                    .get("nonce")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "protected diagnostic detail nonce is invalid".to_string())?,
+            )
+            .map_err(|_| "protected diagnostic detail nonce is invalid".to_string())?;
+        let ciphertext = BASE64
+            .decode(
+                object
+                    .get("ciphertext")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        "protected diagnostic detail ciphertext is invalid".to_string()
+                    })?,
+            )
+            .map_err(|_| "protected diagnostic detail ciphertext is invalid".to_string())?;
+        if nonce.len() != 12 {
+            return Err("protected diagnostic detail nonce is invalid".to_string());
+        }
+        let cipher = Aes256Gcm::new_from_slice(&key)
+            .map_err(|_| "protected diagnostic detail key is invalid".to_string())?;
+        let cleartext = cipher
+            .decrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: &ciphertext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| "protected diagnostic detail authentication failed".to_string())?;
+        String::from_utf8(cleartext)
+            .map_err(|_| "protected diagnostic detail is not valid text".to_string())
+    }
+
+    fn prune_sensitive_detail(&mut self) -> Result<(), String> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        self.sensitive_memory
+            .retain(|_, (expires, _)| *expires > now);
+        if !self.sensitive_dir.exists() {
+            return Ok(());
+        }
+        let mut retained = Vec::new();
+        for entry in fs::read_dir(&self.sensitive_dir)
+            .map_err(|error| format!("cannot inspect protected diagnostic details: {error}"))?
+        {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            if !entry
+                .file_type()
+                .map_err(|error| error.to_string())?
+                .is_file()
+                || path.extension().and_then(|value| value.to_str()) != Some("json")
+            {
+                continue;
+            }
+            let value = File::open(&path)
+                .ok()
+                .and_then(|file| serde_json::from_reader::<_, Value>(file).ok());
+            let expires = value
+                .as_ref()
+                .and_then(|item| item.get("expires_at"))
+                .and_then(Value::as_str)
+                .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+                .map(|value| value.unix_timestamp());
+            let size = entry.metadata().map(|value| value.len()).unwrap_or(0);
+            match expires {
+                Some(expires) if expires > now => retained.push((path, expires, size)),
+                _ => {
+                    fs::remove_file(path).map_err(|error| {
+                        format!("cannot prune protected diagnostic detail: {error}")
+                    })?;
+                }
+            }
+        }
+        let mut total: u64 = retained.iter().map(|(_, _, size)| size).sum();
+        retained.sort_by_key(|(_, expires, _)| *expires);
+        for (path, _, size) in retained {
+            if total <= MAX_SENSITIVE_DIRECTORY_BYTES {
+                break;
+            }
+            fs::remove_file(path).map_err(|error| {
+                format!("cannot enforce protected diagnostic detail cap: {error}")
+            })?;
+            total = total.saturating_sub(size);
+        }
+        Ok(())
+    }
+
     fn record(
         &mut self,
         level: DiagnosticLevel,
@@ -606,21 +927,28 @@ impl Diagnostics {
         message: &str,
         fields: DiagnosticFields<'_>,
     ) -> Result<Option<String>, String> {
-        if !matches!(feature, "desktop" | "interface")
-            || !valid_event_code(event_code)
-            || !self.enabled(level, feature)
-        {
+        if !matches!(feature, "desktop" | "interface") || !valid_event_code(event_code) {
             return Ok(None);
         }
-        self.sequence = self.sequence.saturating_add(1);
-        // A lower-level interface record may refer to an error that Core has
-        // already recorded. Preserve that identifier for cross-layer
-        // correlation without copying the handled record into errors.log.
-        let error_id = match fields.error_id.filter(|value| valid_identifier(value)) {
+        let supplied_error_id = fields.error_id.filter(|value| valid_identifier(value));
+        let error_id = match supplied_error_id {
             Some(value) => Some(value.to_string()),
             None if level >= DiagnosticLevel::Error => Some(random_id("err")?),
             None => None,
         };
+        if !fields.force && !self.enabled(level, feature) {
+            return Ok(error_id);
+        }
+        let sensitive_expires_at = match (error_id.as_deref(), fields.sensitive_detail) {
+            (Some(error_id), Some(detail)) if level >= DiagnosticLevel::Error => self
+                .capture_sensitive_detail(error_id, detail, feature)
+                .unwrap_or(None),
+            _ => None,
+        };
+        self.sequence = self.sequence.saturating_add(1);
+        // A lower-level interface record may refer to an error that Core has
+        // already recorded. Preserve that identifier for cross-layer
+        // correlation without copying the handled record into errors.log.
         let mut record = Map::new();
         record.insert("schema".into(), Value::String(RECORD_SCHEMA.into()));
         record.insert("timestamp".into(), Value::String(timestamp()));
@@ -664,6 +992,49 @@ impl Diagnostics {
             record.insert("retryable".into(), Value::Bool(value));
         }
         insert_safe_text(&mut record, "safe_failure_cause", fields.safe_failure_cause);
+        let reason_code = fields
+            .reason_code
+            .filter(|value| valid_reason_code(value))
+            .unwrap_or_else(|| {
+                classify_reason(
+                    event_code,
+                    fields.exception_type,
+                    fields.metadata.get("http_status"),
+                )
+            });
+        if level >= DiagnosticLevel::Warning {
+            record.insert("reason_code".into(), Value::String(reason_code.to_string()));
+            insert_safe_text(
+                &mut record,
+                "operator_detail",
+                fields
+                    .operator_detail
+                    .or(fields.safe_failure_cause)
+                    .or_else(|| Some(reason_cause(reason_code))),
+            );
+            insert_safe_text(
+                &mut record,
+                "impact",
+                fields.impact.or_else(|| Some(reason_impact(reason_code))),
+            );
+            if let Some(remediation_id) = fields.remediation_id {
+                insert_safe_text(&mut record, "remediation_id", Some(remediation_id));
+            } else {
+                record.insert(
+                    "remediation_id".into(),
+                    Value::String(format!("{feature}.{reason_code}")),
+                );
+            }
+        }
+        if let Some(expires_at) = sensitive_expires_at {
+            record.insert("sensitive_detail_available".into(), Value::Bool(true));
+            record.insert(
+                "sensitive_detail_expires_at".into(),
+                Value::String(expires_at),
+            );
+        } else if level >= DiagnosticLevel::Error {
+            record.insert("sensitive_detail_available".into(), Value::Bool(false));
+        }
         insert_safe_text(&mut record, "exception_type", fields.exception_type);
         if !fields.stack_frames.is_empty() {
             record.insert(
@@ -947,11 +1318,20 @@ impl Diagnostics {
         }
         let mut seen = BTreeSet::new();
         records.retain(|record| {
-            let key = record
-                .get("error_id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| record.to_string());
+            let key = format!(
+                "{}:{}:{}:{}:{}",
+                record.get("source").and_then(Value::as_str).unwrap_or(""),
+                record
+                    .get("launch_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                record.get("sequence").and_then(Value::as_u64).unwrap_or(0),
+                record
+                    .get("event_code")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                record.get("error_id").and_then(Value::as_str).unwrap_or("")
+            );
             seen.insert(key)
         });
         records.sort_by(|left, right| {
@@ -1004,6 +1384,8 @@ impl Diagnostics {
             "last_rotation": self.last_rotation,
             "dropped_record_count": self.dropped_records,
             "last_failure": self.last_failure,
+            "sensitive_detail_capture": self.settings.sensitive_detail_capture,
+            "sensitive_detail_persistence": self.sensitive_persistence,
         })
     }
 }
@@ -1042,6 +1424,7 @@ pub(crate) fn diagnostics_update_settings(
             }
             return Err(error);
         }
+        manager.configure_sensitive_detail();
         if let Err(log_error) = manager.record(
             DiagnosticLevel::Info,
             "desktop",
@@ -1062,6 +1445,7 @@ pub(crate) fn diagnostics_update_settings(
 #[tauri::command]
 pub(crate) fn diagnostics_log_frontend(
     record: FrontendDiagnosticRecord,
+    sensitive_detail: Option<String>,
     state: State<'_, DiagnosticsState>,
 ) -> Result<Option<String>, String> {
     record.validate()?;
@@ -1085,11 +1469,59 @@ pub(crate) fn diagnostics_log_frontend(
                 duration_ms: record.duration_ms,
                 retryable: record.retryable,
                 safe_failure_cause: record.safe_failure_cause.as_deref(),
+                reason_code: record.reason_code.as_deref(),
+                operator_detail: record.operator_detail.as_deref(),
+                impact: record.impact.as_deref(),
+                remediation_id: record.remediation_id.as_deref(),
                 exception_type: record.exception_type.as_deref(),
                 stack_frames: record.stack_frames,
                 metadata: record.metadata,
+                sensitive_detail: sensitive_detail.as_deref(),
+                ..DiagnosticFields::default()
             },
         )
+    })
+}
+
+#[tauri::command]
+pub(crate) fn diagnostics_sensitive_detail(
+    error_id: String,
+    action: String,
+    confirmed: bool,
+    operator_id: String,
+    state: State<'_, DiagnosticsState>,
+) -> Result<Value, String> {
+    if !confirmed {
+        return Err(
+            "operator confirmation is required to access protected diagnostic detail".to_string(),
+        );
+    }
+    if !matches!(action.as_str(), "reveal" | "copy")
+        || !valid_identifier(&operator_id)
+        || !valid_error_id(&error_id)
+    {
+        return Err("invalid protected diagnostic detail request".to_string());
+    }
+    state.with_manager(|manager| {
+        let detail = manager.reveal_sensitive_detail(&error_id)?;
+        manager.record(
+            DiagnosticLevel::Info,
+            "desktop",
+            "desktop.diagnostics.sensitive_detail_accessed",
+            "An operator accessed protected diagnostic detail.",
+            DiagnosticFields {
+                error_id: Some(&error_id),
+                outcome: Some("success"),
+                stage: Some("sensitive-detail"),
+                metadata: Map::from_iter([
+                    ("operator_id".into(), Value::String(operator_id.clone())),
+                    ("action".into(), Value::String(action.clone())),
+                ]),
+                force: true,
+                ..DiagnosticFields::default()
+            },
+        )?;
+        Ok(json!({"error_id": error_id, "action": action, "detail": detail}))
     })
 }
 
@@ -1201,6 +1633,12 @@ fn sanitize_core_error(value: Value) -> Result<Value, String> {
         "duration_ms",
         "retryable",
         "safe_failure_cause",
+        "reason_code",
+        "operator_detail",
+        "impact",
+        "remediation_id",
+        "sensitive_detail_available",
+        "sensitive_detail_expires_at",
         "exception_type",
         "exception_chain",
         "stack_frames",
@@ -1225,6 +1663,11 @@ fn sanitize_core_error(value: Value) -> Result<Value, String> {
         "outcome",
         "stage",
         "safe_failure_cause",
+        "reason_code",
+        "operator_detail",
+        "impact",
+        "remediation_id",
+        "sensitive_detail_expires_at",
         "exception_type",
     ];
 
@@ -1300,6 +1743,12 @@ fn sanitize_core_error(value: Value) -> Result<Value, String> {
                 "retryable" => {
                     if !item.is_boolean() {
                         return Err("Core diagnostic retryability is invalid".to_string());
+                    }
+                    item.clone()
+                }
+                "sensitive_detail_available" => {
+                    if !item.is_boolean() {
+                        return Err("Core diagnostic protected-detail state is invalid".to_string());
                     }
                     item.clone()
                 }
@@ -1383,6 +1832,141 @@ fn sanitize_core_stack_frame(value: &Value) -> Result<Value, String> {
     }))
 }
 
+fn valid_reason_code(value: &str) -> bool {
+    matches!(
+        value,
+        "transport_closed"
+            | "protocol_invalid"
+            | "dependency_unavailable"
+            | "authentication_failed"
+            | "timeout"
+            | "rate_limited"
+            | "permission_denied"
+            | "storage_write_failed"
+            | "integrity_failed"
+            | "stale_state"
+            | "invalid_input"
+            | "cancelled"
+            | "unknown_internal_fault"
+    )
+}
+
+fn classify_reason(
+    event_code: &str,
+    exception_type: Option<&str>,
+    status: Option<&Value>,
+) -> &'static str {
+    let evidence = format!(
+        "{} {}",
+        event_code.to_ascii_lowercase(),
+        exception_type.unwrap_or_default().to_ascii_lowercase()
+    );
+    let status = status.and_then(Value::as_u64);
+    if status == Some(429) || evidence.contains("rate_limit") {
+        "rate_limited"
+    } else if status == Some(401)
+        || evidence.contains("authentication")
+        || evidence.contains("credential")
+    {
+        "authentication_failed"
+    } else if status == Some(403) || evidence.contains("permission") || evidence.contains("denied")
+    {
+        "permission_denied"
+    } else if matches!(status, Some(408 | 504)) || evidence.contains("timeout") {
+        "timeout"
+    } else if evidence.contains("integrity")
+        || evidence.contains("digest")
+        || evidence.contains("signature")
+    {
+        "integrity_failed"
+    } else if evidence.contains("conflict")
+        || evidence.contains("stale")
+        || evidence.contains("revision")
+    {
+        "stale_state"
+    } else if evidence.contains("transport")
+        || evidence.contains("disconnect")
+        || evidence.contains("closed")
+    {
+        "transport_closed"
+    } else if evidence.contains("protocol")
+        || evidence.contains("malformed")
+        || evidence.contains("parse")
+        || evidence.contains("decode")
+    {
+        "protocol_invalid"
+    } else if matches!(status, Some(502 | 503)) || evidence.contains("unavailable") {
+        "dependency_unavailable"
+    } else if evidence.contains("write_failed") || evidence.contains("persist") {
+        "storage_write_failed"
+    } else if evidence.contains("invalid")
+        || evidence.contains("validation")
+        || evidence.contains("configuration")
+    {
+        "invalid_input"
+    } else if evidence.contains("cancel") || evidence.contains("interrupt") {
+        "cancelled"
+    } else {
+        "unknown_internal_fault"
+    }
+}
+
+fn reason_cause(reason: &str) -> &'static str {
+    match reason {
+        "transport_closed" => {
+            "The connection to a required runtime closed before Nebula received a complete response."
+        }
+        "protocol_invalid" => {
+            "A required component returned a response that does not match the supported Nebula protocol."
+        }
+        "dependency_unavailable" => {
+            "Nebula could not reach or start a component required by this operation."
+        }
+        "authentication_failed" => {
+            "The configured credential was missing, expired, or rejected by the required service."
+        }
+        "timeout" => "The operation exceeded its configured bounded time limit.",
+        "rate_limited" => {
+            "The service temporarily rejected the operation because its usage limit was reached."
+        }
+        "permission_denied" => {
+            "A policy, operating-system permission, or service permission denied the operation."
+        }
+        "storage_write_failed" => "Nebula could not durably write a required local record or file.",
+        "integrity_failed" => "A required integrity value did not match the expected value.",
+        "stale_state" => {
+            "The operation used a revision or runtime state that changed before it finished."
+        }
+        "invalid_input" => {
+            "The supplied configuration or state did not satisfy the validated contract."
+        }
+        "cancelled" => {
+            "The operation ended because its viewer disconnected or a stop request was received."
+        }
+        _ => {
+            "Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause."
+        }
+    }
+}
+
+fn reason_impact(reason: &str) -> &'static str {
+    match reason {
+        "permission_denied" | "invalid_input" => "The rejected operation was not performed.",
+        "integrity_failed" => {
+            "Nebula rejected the affected data or transition to prevent unverified state from being used."
+        }
+        "storage_write_failed" => {
+            "The affected change may not have been saved and must not be assumed complete."
+        }
+        "authentication_failed" => {
+            "Requests that require this credential cannot complete; no credential value was added to diagnostics."
+        }
+        _ => {
+            "The affected operation did not complete; previously committed Nebula data remains unchanged."
+        }
+    }
+}
+
 fn valid_event_code(value: &str) -> bool {
     if value.len() < 3 || value.len() > 160 || !value.contains('.') {
         return false;
@@ -1399,6 +1983,10 @@ fn valid_identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn valid_error_id(value: &str) -> bool {
+    value.starts_with("err_") && !value.contains("..") && valid_identifier(value)
 }
 
 fn insert_identifier(record: &mut Map<String, Value>, key: &str, value: Option<&str>) {
@@ -1511,6 +2099,56 @@ fn system_time(value: SystemTime) -> String {
         .ok()
         .and_then(|value| value.format(&Rfc3339).ok())
         .unwrap_or_default()
+}
+
+fn random_key() -> Result<[u8; 32], String> {
+    let mut key = [0_u8; 32];
+    getrandom::fill(&mut key)
+        .map_err(|error| format!("cannot generate a protected diagnostic detail key: {error}"))?;
+    Ok(key)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn load_or_create_sensitive_key() -> Result<[u8; 32], String> {
+    let entry = keyring::Entry::new(SENSITIVE_DETAIL_SERVICE, SENSITIVE_DETAIL_KEY_NAME)
+        .map_err(|error| format!("cannot open the operating-system credential vault: {error}"))?;
+    let encoded = match entry.get_password() {
+        Ok(value) => value,
+        Err(_) => {
+            let key = random_key()?;
+            let value = BASE64.encode(key);
+            entry
+                .set_password(&value)
+                .map_err(|error| format!("cannot save the protected detail key: {error}"))?;
+            value
+        }
+    };
+    let decoded = BASE64
+        .decode(encoded)
+        .map_err(|_| "the protected detail key is malformed".to_string())?;
+    decoded
+        .try_into()
+        .map_err(|_| "the protected detail key has invalid length".to_string())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn load_or_create_sensitive_key() -> Result<[u8; 32], String> {
+    Err("the operating-system credential vault is unsupported".to_string())
+}
+
+fn bounded_sensitive_detail(value: &str) -> String {
+    if value.len() <= MAX_SENSITIVE_DETAIL_BYTES {
+        return value.to_string();
+    }
+    const MARKER: &str = "\n[TRUNCATED]";
+    let limit = MAX_SENSITIVE_DETAIL_BYTES.saturating_sub(MARKER.len());
+    let boundary = value
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= limit)
+        .last()
+        .unwrap_or(0);
+    format!("{}{MARKER}", &value[..boundary])
 }
 
 fn random_id(prefix: &str) -> Result<String, String> {
@@ -1882,6 +2520,59 @@ mod tests {
                 && record["level"] == "CRITICAL"
                 && record["error_id"].as_str().is_some()
         }));
+        fs::remove_dir_all(directory).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn native_sensitive_detail_is_encrypted_bounded_and_authenticated() {
+        let directory = temporary_directory("sensitive-detail");
+        let mut manager = Diagnostics::new(&directory).expect("diagnostics should initialize");
+        manager.settings.sensitive_detail_capture = true;
+        manager.sensitive_key = Some([7_u8; 32]);
+        manager.sensitive_persistence = "encrypted-vault";
+        secure_directory(&manager.sensitive_dir).expect("protected directory should be secured");
+        let error_id = "err_native_sensitive_detail";
+        let cleartext = "transport refused connection at local runtime";
+
+        manager
+            .record(
+                DiagnosticLevel::Error,
+                "interface",
+                "interface.transport.closed",
+                "The harness transport closed.",
+                DiagnosticFields {
+                    error_id: Some(error_id),
+                    sensitive_detail: Some(cleartext),
+                    ..DiagnosticFields::default()
+                },
+            )
+            .expect("diagnostic and protected detail should be recorded");
+
+        let path = manager.sensitive_dir.join(format!("{error_id}.json"));
+        let encoded = fs::read_to_string(&path).expect("encrypted detail should be readable");
+        assert!(!encoded.contains(cleartext));
+        assert_eq!(
+            manager.reveal_sensitive_detail(error_id).unwrap(),
+            cleartext
+        );
+        assert_eq!(
+            bounded_sensitive_detail(&"x".repeat(MAX_SENSITIVE_DETAIL_BYTES + 100)).len(),
+            MAX_SENSITIVE_DETAIL_BYTES
+        );
+
+        let mut envelope: Value = serde_json::from_str(&encoded).unwrap();
+        let ciphertext = envelope["ciphertext"].as_str().unwrap();
+        let mut bytes = BASE64.decode(ciphertext).unwrap();
+        bytes[0] ^= 1;
+        envelope["ciphertext"] = Value::String(BASE64.encode(bytes));
+        atomic_write_json(&path, &envelope).unwrap();
+        assert!(
+            manager
+                .reveal_sensitive_detail(error_id)
+                .unwrap_err()
+                .contains("authentication failed")
+        );
+
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }
 

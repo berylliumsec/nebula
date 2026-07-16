@@ -17,7 +17,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Any, BinaryIO, Iterator, Literal, TypeAlias
 
-import regex
+import regex  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field
 
 from .artifacts import ArtifactStore
@@ -404,7 +404,7 @@ class ToolOutputService:
         if call.origin == ToolCallOrigin.CHAT and call.chat_session_id is not None:
             try:
                 owner = self.store.get(ChatTurn, owner_id)
-            except NotFoundError:
+            except NotFoundError:  # diagnostic-expected: authorization fails closed
                 owner = None
             if (
                 owner is not None
@@ -801,7 +801,9 @@ def sanitize_model_history_result(
     else:
         try:
             candidate = json.loads(value)
-        except json.JSONDecodeError:
+        except (
+            json.JSONDecodeError
+        ):  # diagnostic-expected: persisted legacy output fails closed
             candidate = None
         decoded = candidate if isinstance(candidate, dict) else None
     if trusted_result and decoded is not None:
@@ -814,7 +816,7 @@ def sanitize_model_history_result(
     if decoded is not None and decoded.get("schema") == TOOL_RESULT_SCHEMA:
         try:
             return ToolResultReceipt.model_validate(decoded).as_model_result()
-        except ValueError:
+        except ValueError:  # diagnostic-expected: invalid legacy receipts fail closed
             decoded = None
     if decoded is not None and decoded.get("schema") in _HISTORY_RESULT_SCHEMAS:
         bounded = json.loads(serialize_model_result(decoded))

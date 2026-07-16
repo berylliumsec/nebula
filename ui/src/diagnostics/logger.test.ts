@@ -34,6 +34,7 @@ describe("interface diagnostics", () => {
       schema: "nebula.diagnostics-settings/v1",
       global_level: "error",
       feature_levels: {},
+      sensitive_detail_capture: false,
     });
     expect(contract.features).toEqual(diagnosticFeatures);
     expect(body.events[0].metadata).toEqual(contract.metadata_expected);
@@ -104,6 +105,7 @@ describe("interface diagnostics", () => {
       schema: "nebula.diagnostics-settings/v1",
       global_level: "error",
       feature_levels: { interface: "debug" },
+      sensitive_detail_capture: false,
     });
 
     await logger.logDiagnostic({
@@ -148,6 +150,7 @@ describe("interface diagnostics", () => {
       schema: "nebula.diagnostics-settings/v1",
       global_level: "debug",
       feature_levels: {},
+      sensitive_detail_capture: false,
     });
     const failure = Object.assign(new Error("safe API detail"), {
       status: 503,
@@ -183,6 +186,7 @@ describe("interface diagnostics", () => {
       schema: "nebula.diagnostics-settings/v1",
       global_level: "warning",
       feature_levels: {},
+      sensitive_detail_capture: false,
     });
 
     logger.logCaughtDiagnostic(

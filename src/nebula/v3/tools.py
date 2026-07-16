@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterator
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -704,7 +704,8 @@ class SandboxCommandTool(ToolPlugin):
             stderr_stream.close()
             Path(stdout_name).unlink(missing_ok=True)
             Path(stderr_name).unlink(missing_ok=True)
-            shutil.rmtree(output_directory, ignore_errors=True)
+            if output_directory.exists():
+                shutil.rmtree(output_directory)
             raise
         finally:
             if not stdout_stream.closed:
@@ -1076,7 +1077,7 @@ def _path_has_symlink_component(root: Path, candidate: Path) -> bool:
 
     try:
         relative = candidate.relative_to(root)
-    except ValueError:
+    except ValueError:  # diagnostic-expected: a path outside the root is rejected
         return True
     current = root
     for component in relative.parts:
@@ -1106,7 +1107,9 @@ def _regular_files_beneath(root: Path) -> Iterator[Path]:
             try:
                 if candidate.is_file():
                     yield candidate
-            except OSError:
+            except (
+                OSError
+            ):  # diagnostic-expected: inaccessible files are excluded from capture
                 continue
 
 
@@ -1154,7 +1157,7 @@ def _compact_tool_observations(result: ToolExecutionResult) -> list[ToolObservat
         observations.append(
             ToolObservation(
                 kind="network_port",
-                protocol=match.group("protocol"),
+                protocol=cast(Literal["tcp", "udp", "sctp"], match.group("protocol")),
                 port=port,
                 state=match.group("state"),
                 service=match.group("service"),
@@ -1196,7 +1199,8 @@ class StoreToolEvidenceRecorder:
                 if temporary_path is not None:
                     temporary_path.unlink(missing_ok=True)
             if result.output_directory is not None:
-                shutil.rmtree(result.output_directory, ignore_errors=True)
+                if result.output_directory.exists():
+                    shutil.rmtree(result.output_directory)
 
     async def _record(
         self,
@@ -1361,7 +1365,10 @@ class StoreToolEvidenceRecorder:
                         block.get("mimeType") or "application/octet-stream"
                     )
                     filename = f"tool-call-{call.id}-mcp-{index:03d}.bin"
-                except (ValueError, TypeError):
+                except (
+                    ValueError,
+                    TypeError,
+                ):  # diagnostic-expected: invalid MCP images are retained as JSON
                     payload = json.dumps(block, ensure_ascii=False).encode()
                     warnings.append(f"MCP image block {index} had invalid base64 data")
             else:
@@ -1406,7 +1413,9 @@ class StoreToolEvidenceRecorder:
                     break
                 try:
                     size = path.stat().st_size
-                except OSError:
+                except (
+                    OSError
+                ):  # diagnostic-expected: inaccessible generated files are skipped
                     continue
                 if generated_bytes + size > MAX_GENERATED_BYTES:
                     warnings.append(
@@ -1456,7 +1465,9 @@ class StoreToolEvidenceRecorder:
                 continue
             try:
                 root = unresolved.resolve(strict=True)
-            except OSError:
+            except (
+                OSError
+            ):  # diagnostic-expected: absent configured capture paths become warnings
                 warnings.append(
                     f"configured capture path was not created: {configured}"
                 )
@@ -1655,7 +1666,8 @@ class StoreToolEvidenceRecorder:
                 if temporary_path is not None:
                     temporary_path.unlink(missing_ok=True)
             if result.output_directory is not None:
-                shutil.rmtree(result.output_directory, ignore_errors=True)
+                if result.output_directory.exists():
+                    shutil.rmtree(result.output_directory)
         return result.model_copy(
             update={
                 "output": receipt.as_model_result(),
@@ -2096,7 +2108,7 @@ class ToolBroker:
                             self._validate(
                                 plugin.spec.output_schema, result.output, "output"
                             )
-                        except InvalidToolArguments as exc:
+                        except InvalidToolArguments as exc:  # diagnostic-expected: parser enrichment failures retain raw evidence
                             # Parsing is optional enrichment.  A schema problem
                             # must not erase a successful process execution or
                             # its raw evidence.
@@ -2127,7 +2139,7 @@ class ToolBroker:
                                 running, invocation, plugin.spec, partial
                             )
                         )
-                    except Exception as exc:
+                    except Exception as exc:  # diagnostic-expected: persisted on the failed tool-call ledger state
                         await self.ledger.transition(
                             running,
                             ToolCallStatus.FAILED,

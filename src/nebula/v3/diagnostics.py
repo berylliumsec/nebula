@@ -33,6 +33,10 @@ from types import TracebackType
 from typing import Any, Literal, TypeVar
 from uuid import uuid4
 
+from .diagnostic_sensitive import (
+    SensitiveDetailUnavailable,
+    SensitiveDiagnosticStore,
+)
 from .redaction import redact_text
 from .version import __version__, build_metadata
 
@@ -140,8 +144,10 @@ _ALLOWED_METADATA_KEYS = frozenset(
         "mode",
         "model_id",
         "operation",
+        "operator_id",
         "origin",
         "policy",
+        "persistence",
         "port_class",
         "provider",
         "queue_depth",
@@ -316,13 +322,19 @@ def _normalize_feature(value: str) -> str:
 class DiagnosticSettings:
     global_level: DiagnosticLevel = "error"
     feature_levels: dict[str, DiagnosticLevel] = field(default_factory=dict)
+    sensitive_detail_capture: bool = False
     schema: str = SETTINGS_SCHEMA
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> DiagnosticSettings:
         if payload.get("schema") != SETTINGS_SCHEMA:
             raise ValueError("unsupported diagnostics settings schema")
-        if set(payload) - {"schema", "global_level", "feature_levels"}:
+        if set(payload) - {
+            "schema",
+            "global_level",
+            "feature_levels",
+            "sensitive_detail_capture",
+        }:
             raise ValueError("diagnostics settings contain unsupported fields")
         global_level = _normalize_level(str(payload.get("global_level", "")))
         raw_features = payload.get("feature_levels", {})
@@ -331,13 +343,21 @@ class DiagnosticSettings:
         features: dict[str, DiagnosticLevel] = {}
         for feature, level in raw_features.items():
             features[_normalize_feature(str(feature))] = _normalize_level(str(level))
-        return cls(global_level=global_level, feature_levels=features)
+        sensitive_detail_capture = payload.get("sensitive_detail_capture", False)
+        if not isinstance(sensitive_detail_capture, bool):
+            raise ValueError("sensitive_detail_capture must be a boolean")
+        return cls(
+            global_level=global_level,
+            feature_levels=features,
+            sensitive_detail_capture=sensitive_detail_capture,
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "schema": self.schema,
             "global_level": self.global_level,
             "feature_levels": dict(sorted(self.feature_levels.items())),
+            "sensitive_detail_capture": self.sensitive_detail_capture,
         }
 
     def effective_level(self, feature: str) -> DiagnosticLevel:
@@ -363,6 +383,7 @@ class DiagnosticManager:
         desktop_parent: bool = False,
         level_override: str | None = None,
         feature_level_overrides: Mapping[str, str] | None = None,
+        sensitive_detail_store: SensitiveDiagnosticStore | None = None,
         queue_capacity: int = MAX_QUEUE_RECORDS,
         watch_settings: bool = True,
     ) -> None:
@@ -376,6 +397,8 @@ class DiagnosticManager:
         self.desktop_parent = desktop_parent
         self.launch_id = _new_id("launch")
         self._settings = DiagnosticSettings()
+        self._sensitive_detail_store_override = sensitive_detail_store
+        self._sensitive_detail_store: SensitiveDiagnosticStore | None = None
         self._level_override = level_override or os.getenv("NEBULA_DIAGNOSTICS_LEVEL")
         self._feature_level_overrides = dict(feature_level_overrides or {})
         raw_feature_override = os.getenv("NEBULA_DIAGNOSTICS_FEATURE_LEVELS")
@@ -437,6 +460,7 @@ class DiagnosticManager:
                 )
                 sys.stderr.flush()
         self._settings = self._load_settings(record_failure=False)
+        self._configure_sensitive_detail_store()
         self._writer_thread = threading.Thread(
             target=self._writer_loop,
             name="nebula-diagnostics-writer",
@@ -506,6 +530,16 @@ class DiagnosticManager:
             self._secure_permissions(self.settings_path)
         self._remember_settings_mtime()
         self._prune(force=True)
+
+    def _configure_sensitive_detail_store(self) -> None:
+        if self._sensitive_detail_store_override is not None:
+            self._sensitive_detail_store = self._sensitive_detail_store_override
+            return
+        self._sensitive_detail_store = SensitiveDiagnosticStore(
+            self.data_dir / "diagnostic-details",
+            enabled=self._settings.sensitive_detail_capture,
+            owner="core",
+        )
 
     def _secure_touch(self, path: Path) -> None:
         try:
@@ -668,6 +702,12 @@ class DiagnosticManager:
         exception_type_override: str | None,
         stack_frames_override: Sequence[Mapping[str, Any]] | None,
         metadata: Mapping[str, Any] | None,
+        reason_code: str | None,
+        operator_detail: str | None,
+        impact: str | None,
+        remediation_id: str | None,
+        sensitive_detail_available: bool | None,
+        sensitive_detail_expires_at: str | None,
     ) -> dict[str, Any]:
         exception_type, exception_chain, stack_frames = self._exception_fields(
             exception
@@ -722,6 +762,18 @@ class DiagnosticManager:
             "exception_type": exception_type,
             "exception_chain": exception_chain or None,
             "stack_frames": stack_frames or None,
+            "reason_code": _safe_text(reason_code, limit=64) if reason_code else None,
+            "operator_detail": _safe_text(operator_detail) if operator_detail else None,
+            "impact": _safe_text(impact) if impact else None,
+            "remediation_id": _safe_text(remediation_id, limit=160)
+            if remediation_id
+            else None,
+            "sensitive_detail_available": sensitive_detail_available,
+            "sensitive_detail_expires_at": _safe_text(
+                sensitive_detail_expires_at, limit=64
+            )
+            if sensitive_detail_expires_at
+            else None,
         }
         record.update(
             {key: value for key, value in optional.items() if value is not None}
@@ -756,15 +808,74 @@ class DiagnosticManager:
         exception_type: str | None = None,
         stack_frames: Sequence[Mapping[str, Any]] | None = None,
         metadata: Mapping[str, Any] | None = None,
+        reason_code: str | None = None,
+        operator_detail: str | None = None,
+        impact: str | None = None,
+        remediation_id: str | None = None,
+        force: bool = False,
     ) -> str | None:
         normalized_level = _normalize_level(level)
         normalized_feature = _normalize_feature(feature)
         if not _EVENT_CODE.fullmatch(event_code):
             raise ValueError("diagnostic event codes must be stable dotted identifiers")
-        if not self.enabled(normalized_level, normalized_feature):
-            return None
         if normalized_level in {"error", "critical"}:
             error_id = _safe_identifier(error_id) or new_error_id()
+        if not force and not self.enabled(normalized_level, normalized_feature):
+            return error_id
+        if normalized_level in {"warning", "error", "critical"}:
+            from .diagnostic_guidance import guidance_for, reason_code_for
+
+            status_code = None
+            if isinstance(metadata, Mapping) and isinstance(
+                metadata.get("http_status"), int
+            ):
+                status_code = int(metadata["http_status"])
+            reason_code = reason_code_for(
+                exception,
+                feature=normalized_feature,
+                event_code=event_code,
+                status_code=status_code,
+                supplied=reason_code,
+            )
+            guidance = guidance_for(
+                normalized_feature,
+                reason_code,
+                operator_detail=operator_detail or safe_failure_cause,
+                impact=impact,
+                remediation_id=remediation_id,
+            )
+            operator_detail = guidance.cause
+            impact = guidance.impact
+            remediation_id = guidance.remediation_id
+        sensitive_available: bool | None = None
+        sensitive_expires: str | None = None
+        if (
+            error_id
+            and exception is not None
+            and normalized_level in {"error", "critical"}
+            and self._sensitive_detail_store is not None
+        ):
+            detail = (
+                f"{type(exception).__name__}: {redact_text(str(exception)).strip()}"
+            )
+            try:
+                capture = self._sensitive_detail_store.capture(
+                    error_id,
+                    detail,
+                    source=source,
+                    application_version=self._application_version,
+                )
+            except Exception as exc:
+                # Protected detail is strictly best effort. Its failure must not
+                # prevent the sanitized incident or its emergency ID from being
+                # recorded.
+                self._mark_degraded(
+                    "Protected diagnostic detail could not be captured.", exc
+                )
+                sensitive_available = False
+            else:
+                sensitive_available = capture.available
+                sensitive_expires = capture.expires_at
         wait_for: threading.Event | None = None
         with self._condition:
             record = self._build_record(
@@ -790,6 +901,12 @@ class DiagnosticManager:
                 exception_type_override=exception_type,
                 stack_frames_override=stack_frames,
                 metadata=metadata,
+                reason_code=reason_code,
+                operator_detail=operator_detail,
+                impact=impact,
+                remediation_id=remediation_id,
+                sensitive_detail_available=sensitive_available,
+                sensitive_detail_expires_at=sensitive_expires,
             )
             line = (
                 json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
@@ -854,6 +971,12 @@ class DiagnosticManager:
             exception_type_override=None,
             stack_frames_override=None,
             metadata={"dropped_count": self._dropped_count},
+            reason_code="storage_write_failed",
+            operator_detail=None,
+            impact=None,
+            remediation_id=None,
+            sensitive_detail_available=False,
+            sensitive_detail_expires_at=None,
         )
         completed = threading.Event()
         pending = _PendingRecord(
@@ -969,6 +1092,12 @@ class DiagnosticManager:
                 exception_type_override=None,
                 stack_frames_override=None,
                 metadata={"component": "writer"},
+                reason_code="storage_write_failed",
+                operator_detail=None,
+                impact=None,
+                remediation_id=None,
+                sensitive_detail_available=False,
+                sensitive_detail_expires_at=None,
             )
         self._memory_errors.append(failure)
         encoded_failure = json.dumps(failure, sort_keys=True, separators=(",", ":"))
@@ -1121,6 +1250,7 @@ class DiagnosticManager:
                 f"diagnostics preferences could not be saved ({error_id})"
             ) from exc
         self._settings = settings
+        self._configure_sensitive_detail_store()
         self._remember_settings_mtime()
         self.record(
             "info",
@@ -1194,6 +1324,12 @@ class DiagnosticManager:
             "dropped_record_count": self._dropped_count,
             "queued_record_count": len(self._queue) + self._in_flight,
             "last_failure": self._last_failure,
+            "sensitive_detail_capture": self._settings.sensitive_detail_capture,
+            "sensitive_detail_persistence": (
+                self._sensitive_detail_store.persistence
+                if self._sensitive_detail_store is not None
+                else "disabled"
+            ),
         }
 
     def list_files(self) -> list[dict[str, Any]]:
@@ -1286,7 +1422,18 @@ class DiagnosticManager:
         unique: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in records:
-            key = str(item.get("error_id") or json.dumps(item, sort_keys=True))
+            key = ":".join(
+                str(item.get(name, ""))
+                for name in (
+                    "source",
+                    "launch_id",
+                    "sequence",
+                    "event_code",
+                    "error_id",
+                )
+            )
+            if not key.strip(":"):
+                key = json.dumps(item, sort_keys=True)
             if key in seen:
                 continue
             seen.add(key)
@@ -1464,6 +1611,12 @@ class DiagnosticManager:
             "duration_ms",
             "retryable",
             "safe_failure_cause",
+            "reason_code",
+            "operator_detail",
+            "impact",
+            "remediation_id",
+            "sensitive_detail_available",
+            "sensitive_detail_expires_at",
             "exception_type",
             "exception_chain",
             "stack_frames",
@@ -1478,6 +1631,52 @@ class DiagnosticManager:
             else:
                 result[key] = DiagnosticManager._sanitize_export_value(value, depth=0)
         return result
+
+    def resolve_incidents(
+        self, records: Sequence[Mapping[str, Any]]
+    ) -> list[dict[str, Any]]:
+        from .diagnostic_guidance import resolve_incidents
+
+        return [
+            incident.model_dump(mode="json", by_alias=True)
+            for incident in resolve_incidents(records)
+        ]
+
+    def incident(self, error_id: str) -> dict[str, Any] | None:
+        matching = [
+            record
+            for record in self.recent_errors(limit=500)
+            if record.get("error_id") == error_id
+            or record.get("request_id") == error_id
+            or record.get("operation_id") == error_id
+            or record.get("parent_operation_id") == error_id
+        ]
+        if not matching:
+            return None
+        incidents = self.resolve_incidents(matching)
+        return incidents[0] if incidents else None
+
+    def reveal_sensitive_detail(
+        self,
+        error_id: str,
+        *,
+        operator_id: str,
+        action: Literal["reveal", "copy"],
+    ) -> str:
+        if self._sensitive_detail_store is None:
+            raise SensitiveDetailUnavailable("sensitive detail capture is unavailable")
+        detail = self._sensitive_detail_store.reveal(error_id)
+        self.record(
+            "info",
+            "diagnostics",
+            "diagnostics.sensitive_detail.accessed",
+            "An operator accessed protected diagnostic detail.",
+            outcome="success",
+            stage="sensitive-detail",
+            metadata={"operator_id": operator_id, "action": action},
+            force=True,
+        )
+        return detail
 
     @staticmethod
     def _sanitize_emergency_log(value: str) -> bytes:
@@ -1673,6 +1872,7 @@ def record_caught_exception(
     exception: BaseException,
     *,
     stage: str,
+    metadata: Mapping[str, Any] | None = None,
 ) -> str | None:
     """Classify a reviewed catch site without recording exception messages.
 
@@ -1766,24 +1966,52 @@ def record_caught_exception(
         if existing is not None:
             return existing
     stable_code = getattr(exception, "code", None)
-    metadata = (
-        {"code": stable_code}
-        if isinstance(stable_code, str)
-        and re.fullmatch(r"[a-z][a-z0-9._-]{1,159}", stable_code)
-        else None
+    stable_metadata: dict[str, Any] = dict(metadata or {})
+    if isinstance(stable_code, str) and re.fullmatch(
+        r"[a-z][a-z0-9._-]{1,159}", stable_code
+    ):
+        stable_metadata["code"] = stable_code
+    metadata = stable_metadata if stable_metadata else None
+    from .diagnostic_guidance import reason_code_for
+
+    reason_code = reason_code_for(
+        exception,
+        feature=feature,
+        event_code=event_code,
+        status_code=status_code,
     )
-    error_id = record_diagnostic(
+    if reason_code in {
+        "transport_closed",
+        "dependency_unavailable",
+        "timeout",
+        "rate_limited",
+        "storage_write_failed",
+        "stale_state",
+    }:
+        retryable = True
+    operator_detail: str | None = None
+    exception_module = type(exception).__module__
+    if exception_module.startswith("nebula."):
+        detail = _safe_text(str(exception)).strip()
+        if detail:
+            operator_detail = detail
+    emergency_error_id = new_error_id() if level in {"error", "critical"} else None
+    recorded_error_id = record_diagnostic(
         level,
         feature,
         event_code,
         message,
+        error_id=emergency_error_id,
         outcome=outcome,
         stage=stage,
         retryable=retryable,
         safe_failure_cause=safe_cause,
+        reason_code=reason_code,
+        operator_detail=operator_detail,
         exception=exception,
         metadata=metadata,
     )
+    error_id = recorded_error_id or emergency_error_id
     if level in {"error", "critical"}:
         _attach_error_id(exception, error_id, feature)
     return error_id

@@ -369,7 +369,10 @@ def test_chat_compaction_failure_is_explicitly_retryable(tmp_path, monkeypatch):
 
     assert response.status_code == 503
     assert response.headers["retry-after"] == "1"
-    assert response.json() == {
-        "detail": "required context compaction failed",
-        "retryable": True,
-    }
+    payload = response.json()
+    assert payload["detail"] == "required context compaction failed"
+    assert payload["retryable"] is True
+    assert payload["error_id"].startswith("err_")
+    assert payload["request_id"].startswith("req_")
+    assert payload["reason_code"]
+    assert payload["remediation_id"].startswith("chat.")

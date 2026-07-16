@@ -3,7 +3,8 @@
   "settings": {
     "schema": "nebula.diagnostics-settings/v1",
     "global_level": "error",
-    "feature_levels": {}
+    "feature_levels": {},
+    "sensitive_detail_capture": false
   },
   "features": [
     "desktop",

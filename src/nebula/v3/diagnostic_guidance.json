@@ -1,0 +1,198 @@
+{
+  "schema": "nebula.diagnostic-remediation-catalog/v1",
+  "reason_families": {
+    "transport_closed": {
+      "title": "Connection closed before the operation finished",
+      "cause": "The connection to a required local or remote runtime closed before Nebula received a complete response.",
+      "impact": "The affected operation did not complete. Previously committed Nebula data remains unchanged.",
+      "confirmed_safe_state": "Nebula stopped consuming the incomplete response and did not treat it as a successful result.",
+      "steps": [
+        "Check the affected runtime's health from this incident.",
+        "Restart or reconnect the runtime if its health check is unavailable or failing.",
+        "Retry only the durable failed operation shown by this incident."
+      ],
+      "verification": "Run the health check and confirm the affected runtime reports ready, then confirm a retry reaches a terminal success state.",
+      "retryable": true
+    },
+    "protocol_invalid": {
+      "title": "Runtime response was invalid",
+      "cause": "A required component returned a response that does not match the supported Nebula protocol.",
+      "impact": "Nebula rejected the response and the affected operation did not complete.",
+      "confirmed_safe_state": "The invalid response was not applied to durable application state.",
+      "steps": [
+        "Check the component version and compatibility status.",
+        "Upgrade or restart the component when the compatibility check identifies a mismatch.",
+        "Retry the durable operation after compatibility is restored."
+      ],
+      "verification": "Confirm the component health check reports a supported protocol version and the retry completes without a protocol notice.",
+      "retryable": true
+    },
+    "dependency_unavailable": {
+      "title": "Required dependency is unavailable",
+      "cause": "Nebula could not reach or start a component required by this operation.",
+      "impact": "The affected operation is unavailable until the dependency becomes healthy.",
+      "confirmed_safe_state": "Nebula did not partially complete the operation after the dependency failure.",
+      "steps": [
+        "Run the affected component's health check.",
+        "Open its settings and correct the reported availability or configuration problem.",
+        "Retry the durable failed operation after the health check passes."
+      ],
+      "verification": "Confirm the component health check reports ready and a new operation can connect successfully.",
+      "retryable": true
+    },
+    "authentication_failed": {
+      "title": "Authentication failed",
+      "cause": "The configured credential was missing, expired, or rejected by the required service.",
+      "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+      "confirmed_safe_state": "Nebula retained only the credential reference and did not log the credential value.",
+      "steps": [
+        "Open the affected provider or service settings.",
+        "Replace or re-authorize the rejected credential.",
+        "Run its connection verification before retrying the operation."
+      ],
+      "verification": "Confirm connection verification succeeds with the updated credential.",
+      "retryable": false
+    },
+    "timeout": {
+      "title": "Operation timed out",
+      "cause": "The operation exceeded its configured bounded time limit before a complete result was available.",
+      "impact": "Nebula stopped waiting; the affected operation is not recorded as successful.",
+      "confirmed_safe_state": "The timed-out result was not committed as a completed operation.",
+      "steps": [
+        "Check the affected component's current health and load.",
+        "Wait for any still-running external work to settle or stop it explicitly.",
+        "Retry the durable operation once health is restored."
+      ],
+      "verification": "Confirm the health check passes and the retried operation completes within its time limit.",
+      "retryable": true
+    },
+    "rate_limited": {
+      "title": "Service rate limit reached",
+      "cause": "The service temporarily rejected the operation because its request or usage limit was reached.",
+      "impact": "The operation did not complete and similar requests may be delayed until the limit resets.",
+      "confirmed_safe_state": "Nebula did not repeatedly replay the rejected request automatically.",
+      "steps": [
+        "Review the service's current limit and reset status.",
+        "Wait until the reported retry window has elapsed.",
+        "Retry the durable operation once."
+      ],
+      "verification": "Confirm the service health or usage view no longer reports an active rate limit and the retry is accepted.",
+      "retryable": true
+    },
+    "permission_denied": {
+      "title": "Permission denied",
+      "cause": "A Nebula policy, operating-system permission, or service permission denied the requested operation.",
+      "impact": "The denied operation was not performed.",
+      "confirmed_safe_state": "Nebula failed closed and did not bypass the denied permission.",
+      "steps": [
+        "Review the affected policy or permission in its settings.",
+        "Grant only the minimum required permission outside Diagnostics if the operation is authorized.",
+        "Run the relevant health or permission check before retrying."
+      ],
+      "verification": "Confirm the permission check passes and the authorized retry no longer reports a denial.",
+      "retryable": false
+    },
+    "storage_write_failed": {
+      "title": "Local storage write failed",
+      "cause": "Nebula could not durably write a required local record or file.",
+      "impact": "The affected change may not have been saved and must not be assumed complete.",
+      "confirmed_safe_state": "Nebula reports the operation as failed instead of claiming an unconfirmed durable write.",
+      "steps": [
+        "Check available disk space and the reported storage path permissions.",
+        "Run the local storage health check.",
+        "Retry only after the health check confirms writable storage."
+      ],
+      "verification": "Confirm storage health reports writable and a new bounded write succeeds.",
+      "retryable": true
+    },
+    "integrity_failed": {
+      "title": "Integrity verification failed",
+      "cause": "A required signature, digest, revision, or state invariant did not match the expected value.",
+      "impact": "Nebula rejected the affected data or transition to prevent unverified state from being used.",
+      "confirmed_safe_state": "The unverified data was not trusted or committed.",
+      "steps": [
+        "Do not retry or replace the affected data until its source is verified.",
+        "Open the affected component and review its integrity status.",
+        "Create a redacted support bundle if the expected source cannot be verified."
+      ],
+      "verification": "Confirm the source digest, signature, or revision matches a trusted expected value before continuing.",
+      "retryable": false
+    },
+    "stale_state": {
+      "title": "Saved state changed",
+      "cause": "The operation was based on a revision or runtime state that changed before it could finish.",
+      "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+      "confirmed_safe_state": "No newer state was overwritten.",
+      "steps": [
+        "Refresh the affected view to load the current state.",
+        "Review any changes that occurred since the operation started.",
+        "Repeat the action against the current revision if it is still needed."
+      ],
+      "verification": "Confirm the view shows the current revision and the repeated action completes without a conflict.",
+      "retryable": true
+    },
+    "invalid_input": {
+      "title": "Operation input was rejected",
+      "cause": "The supplied configuration or state did not satisfy the operation's validated contract.",
+      "impact": "The operation was not applied.",
+      "confirmed_safe_state": "Invalid input was rejected before the requested change was committed.",
+      "steps": [
+        "Review the specific invalid field or state shown in this incident.",
+        "Correct it in the affected view.",
+        "Submit the operation again after validation passes."
+      ],
+      "verification": "Confirm the affected view reports valid configuration and accepts the operation.",
+      "retryable": false
+    },
+    "cancelled": {
+      "title": "Operation stopped",
+      "cause": "The operation ended because its viewer disconnected or a stop request was received.",
+      "impact": "The stopped operation did not reach a successful terminal result.",
+      "confirmed_safe_state": "Nebula did not represent the stopped operation as complete.",
+      "steps": [
+        "Open the affected operation and inspect its terminal state.",
+        "Retry only if the prior operation is durably marked stopped or interrupted."
+      ],
+      "verification": "Confirm the prior operation is terminal before starting a replacement.",
+      "retryable": true
+    },
+    "unknown_internal_fault": {
+      "title": "Unclassified internal fault",
+      "cause": "Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.",
+      "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+      "confirmed_safe_state": "Nebula did not invent a diagnosis or automatically replay the failed request.",
+      "steps": [
+        "Review the technical evidence and correlation identifiers in this incident.",
+        "Run the affected component's health check when available.",
+        "Generate a redacted support bundle if the fault recurs."
+      ],
+      "verification": "Confirm the affected component is healthy and a separately initiated operation completes successfully.",
+      "retryable": false
+    }
+  },
+  "features": {
+    "desktop": {"label": "Desktop", "operation": "Nebula desktop lifecycle", "destination": "/settings", "help_article": "core-startup"},
+    "interface": {"label": "Interface", "operation": "Operator interface action", "destination": "/", "help_article": "diagnostics"},
+    "api": {"label": "Nebula Core", "operation": "Core API request", "destination": "/settings#diagnostics-settings", "help_article": "core-startup"},
+    "setup": {"label": "Setup", "operation": "Runtime setup", "destination": "/settings#setup-settings", "help_article": "runner-setup"},
+    "storage": {"label": "Local storage", "operation": "Durable local storage", "destination": "/settings#diagnostics-settings", "help_article": "diagnostics"},
+    "projects": {"label": "Projects", "operation": "Project operation", "destination": "/project", "help_article": "diagnostics"},
+    "terminal": {"label": "Terminal", "operation": "Terminal session", "destination": "/?view=terminal", "help_article": "human-terminal"},
+    "terminal-audit": {"label": "Terminal audit", "operation": "Terminal audit record", "destination": "/?view=terminal", "help_article": "human-terminal"},
+    "workspace": {"label": "Project files", "operation": "Workspace file operation", "destination": "/?view=files", "help_article": "diagnostics"},
+    "notes": {"label": "Notes", "operation": "Notes operation", "destination": "/?view=notes", "help_article": "diagnostics"},
+    "capture": {"label": "Capture", "operation": "Capture operation", "destination": "/?view=terminal", "help_article": "diagnostics"},
+    "providers": {"label": "Model providers", "operation": "Provider request", "destination": "/settings#advanced-settings", "help_article": "provider-model"},
+    "chat": {"label": "Assistant chat", "operation": "Chat turn", "destination": "/?view=chat", "help_article": "provider-model"},
+    "knowledge": {"label": "Project sources", "operation": "Knowledge retrieval", "destination": "/project?view=sources", "help_article": "diagnostics"},
+    "harnesses": {"label": "Agent harnesses", "operation": "Harness turn", "destination": "/settings#advanced-settings", "help_article": "provider-model"},
+    "missions": {"label": "Missions", "operation": "Mission run", "destination": "/?view=missions", "help_article": "provider-model"},
+    "toolbox": {"label": "Toolbox", "operation": "Toolbox operation", "destination": "/settings#advanced-settings", "help_article": "toolbox-availability"},
+    "sandbox": {"label": "Execution sandbox", "operation": "Sandbox boundary", "destination": "/settings#advanced-settings", "help_article": "runner-setup"},
+    "executions": {"label": "Reviewed executions", "operation": "Reviewed execution", "destination": "/?view=activity", "help_article": "human-terminal"},
+    "findings": {"label": "Findings", "operation": "Finding operation", "destination": "/findings", "help_article": "diagnostics"},
+    "evidence": {"label": "Evidence", "operation": "Evidence operation", "destination": "/project?view=evidence", "help_article": "diagnostics"},
+    "reports": {"label": "Reports", "operation": "Report operation", "destination": "/reports", "help_article": "diagnostics"},
+    "diagnostics": {"label": "Local diagnostics", "operation": "Diagnostics operation", "destination": "/settings#diagnostics-settings", "help_article": "diagnostics"}
+  }
+}

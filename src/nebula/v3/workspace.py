@@ -404,9 +404,7 @@ class WorkspaceService:
                             current.update(payload)
                     finally:
                         os.close(current_descriptor)
-                    if not hmac.compare_digest(
-                        current.hexdigest(), expected_sha256
-                    ):
+                    if not hmac.compare_digest(current.hexdigest(), expected_sha256):
                         raise ExecutionServiceError(
                             "workspace_file_changed",
                             "workspace file changed after it was opened",

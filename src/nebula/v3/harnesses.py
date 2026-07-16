@@ -8,9 +8,13 @@ from __future__ import annotations
 
 from .diagnostics import (
     create_diagnostic_task,
+    current_operation_id,
+    current_request_id,
+    diagnostic_context,
     gather_diagnostic,
     record_caught_exception,
 )
+from .diagnostic_guidance import guidance_for, reason_code_for
 
 import asyncio
 import difflib
@@ -19,7 +23,7 @@ import json
 import os
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -75,9 +79,11 @@ from .domain import (
     McpToolSnapshot,
     McpTransport,
     NebulaModel,
+    OperationEvent,
     RiskClass,
     RunBackend,
     RunBudget,
+    RunEvent,
     RunStatus,
     ScopePolicy,
     ToolCall,
@@ -125,6 +131,27 @@ MAX_TOOL_ARGUMENT_TEXT = 64_000
 MAX_TOOL_RESULT_TEXT = 64_000
 ADAPTER_CONTRACT_VERSION = "nebula-harness-v2"
 HARNESS_ACTIVITY_SCHEMA_VERSION = "nebula.harness-activity/v1"
+HarnessItemStatus = Literal[
+    "queued",
+    "running",
+    "streaming",
+    "waiting_approval",
+    "waiting_input",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+]
+HarnessOutputStream = Literal[
+    "stdout",
+    "stderr",
+    "terminal",
+    "reasoning_summary",
+    "commentary",
+    "tool_input",
+    "tool_output",
+    "patch",
+]
 CLAUDE_ACTIVITY_MINIMUM_VERSION = Version("0.2.118")
 ACTIVITY_DELTA_FLUSH_SECONDS = 0.1
 ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
@@ -405,9 +432,7 @@ class HarnessTransportError(HarnessError):
 
 
 class HarnessEvent(NebulaModel):
-    schema_version: Literal["nebula.harness-activity/v1"] = (
-        HARNESS_ACTIVITY_SCHEMA_VERSION
-    )
+    schema_version: Literal["nebula.harness-activity/v1"] = "nebula.harness-activity/v1"
     id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=200)
     sequence: int = Field(default=0, ge=0)
     type: Literal[
@@ -439,6 +464,15 @@ class HarnessEvent(NebulaModel):
     vendor: HarnessKind | None = None
     external_session_id: str | None = None
     external_turn_id: str | None = None
+    request_id: str | None = Field(default=None, max_length=128)
+    operation_id: str | None = Field(default=None, max_length=128)
+    error_id: str | None = Field(default=None, max_length=128)
+    reason_code: str | None = Field(default=None, max_length=64)
+    retryable: bool | None = None
+    operator_detail: str | None = Field(default=None, max_length=2_048)
+    impact: str | None = Field(default=None, max_length=2_048)
+    remediation_id: str | None = Field(default=None, max_length=160)
+    help_article: str | None = Field(default=None, max_length=160)
     occurred_at: datetime = Field(default_factory=utc_now)
     item_id: str | None = Field(default=None, max_length=500)
     parent_item_id: str | None = Field(default=None, max_length=500)
@@ -460,35 +494,10 @@ class HarnessEvent(NebulaModel):
         ]
         | None
     ) = None
-    item_status: (
-        Literal[
-            "queued",
-            "running",
-            "streaming",
-            "waiting_approval",
-            "waiting_input",
-            "completed",
-            "failed",
-            "cancelled",
-            "interrupted",
-        ]
-        | None
-    ) = None
+    item_status: HarnessItemStatus | None = None
     title: str | None = Field(default=None, max_length=1_000)
     summary: str | None = Field(default=None, max_length=4_000)
-    stream: (
-        Literal[
-            "stdout",
-            "stderr",
-            "terminal",
-            "reasoning_summary",
-            "commentary",
-            "tool_input",
-            "tool_output",
-            "patch",
-        ]
-        | None
-    ) = None
+    stream: HarnessOutputStream | None = None
     # Stream fragments commonly carry their word separator as leading or trailing
     # whitespace. NebulaModel trims ordinary metadata strings, so opt these exact
     # text fields out or coalescing fragments would collapse adjacent words.
@@ -521,7 +530,10 @@ async def _coalesce_activity_deltas(
     iterator = source.__aiter__()
     pending: HarnessEvent | None = None
     pending_since = 0.0
-    next_event: asyncio.Task[HarnessEvent] | None = asyncio.create_task(anext(iterator))
+    # diagnostic-expected: this iterator-owned task is cancelled and awaited in finally.
+    next_event: asyncio.Future[HarnessEvent] | None = asyncio.ensure_future(
+        anext(iterator)
+    )
     try:
         while next_event is not None:
             timeout: float | None = None
@@ -539,10 +551,13 @@ async def _coalesce_activity_deltas(
                 continue
             try:
                 event = next_event.result()
-            except StopAsyncIteration:
+            except (
+                StopAsyncIteration
+            ):  # diagnostic-expected: normal async iterator exhaustion
                 next_event = None
                 break
-            next_event = asyncio.create_task(anext(iterator))
+            # diagnostic-expected: this iterator-owned task is cancelled and awaited in finally.
+            next_event = asyncio.ensure_future(anext(iterator))
             if event.type != "output_delta" or not event.delta:
                 if pending is not None:
                     yield pending
@@ -561,9 +576,11 @@ async def _coalesce_activity_deltas(
                 pending = event
                 pending_since = asyncio.get_running_loop().time()
             else:
+                assert pending is not None
                 pending = pending.model_copy(
                     update={"delta": (pending.delta or "") + event.delta}
                 )
+            assert pending is not None
             if len(pending.delta or "") >= ACTIVITY_DELTA_FLUSH_CHARS:
                 yield pending
                 pending = None
@@ -1369,9 +1386,12 @@ class CodexAppServerConnection(HarnessConnection):
                 "item/commandExecution/outputDelta",
                 "item/commandExecution/terminalInteraction",
             }:
-                stream = "terminal"
-                if str(params.get("stream") or "").lower() in {"stdout", "stderr"}:
-                    stream = str(params["stream"]).lower()
+                stream: HarnessOutputStream = "terminal"
+                raw_stream = str(params.get("stream") or "").lower()
+                if raw_stream == "stdout":
+                    stream = "stdout"
+                elif raw_stream == "stderr":
+                    stream = "stderr"
                 yield HarnessEvent(
                     type="output_delta",
                     vendor=HarnessKind.CODEX_APP_SERVER,
@@ -1442,25 +1462,27 @@ class CodexAppServerConnection(HarnessConnection):
                 if not isinstance(item, dict):
                     continue
                 item_type = str(item.get("type") or "unknown")
-                item_id = str(item.get("id") or "") or None
-                item_status = (
+                completed_item_id: str | None = str(item.get("id") or "") or None
+                item_status: HarnessItemStatus = (
                     "running"
                     if method == "item/started"
                     else _codex_item_terminal_status(item)
                 )
                 if item_type == "agentMessage" and method == "item/started":
-                    if item_id:
-                        message_phases[item_id] = str(item.get("phase") or "")
+                    if completed_item_id:
+                        message_phases[completed_item_id] = str(item.get("phase") or "")
                 if item_type == "agentMessage":
                     phase = str(
-                        item.get("phase") or message_phases.get(item_id or "") or ""
+                        item.get("phase")
+                        or message_phases.get(completed_item_id or "")
+                        or ""
                     )
                     if phase == "commentary":
                         yield HarnessEvent(
                             type="item_upsert",
                             vendor=HarnessKind.CODEX_APP_SERVER,
                             external_turn_id=self.active_turn_id,
-                            item_id=item_id or "commentary",
+                            item_id=completed_item_id or "commentary",
                             item_kind="reasoning",
                             item_status=item_status,
                             title="Commentary",
@@ -1492,7 +1514,7 @@ class CodexAppServerConnection(HarnessConnection):
                         type="item_upsert",
                         vendor=HarnessKind.CODEX_APP_SERVER,
                         external_turn_id=self.active_turn_id,
-                        item_id=item_id or item_type,
+                        item_id=completed_item_id or item_type,
                         parent_item_id=str(item.get("parentId") or "") or None,
                         item_kind=_codex_item_kind(item_type),
                         item_status=item_status,
@@ -1514,7 +1536,7 @@ class CodexAppServerConnection(HarnessConnection):
                         ),
                         external_turn_id=self.active_turn_id,
                         vendor=HarnessKind.CODEX_APP_SERVER,
-                        item_id=item_id,
+                        item_id=completed_item_id,
                         item_kind="tool",
                         item_status=item_status,
                         server_id=str(item.get("server") or ""),
@@ -1531,7 +1553,7 @@ class CodexAppServerConnection(HarnessConnection):
                         ),
                         external_turn_id=self.active_turn_id,
                         vendor=HarnessKind.CODEX_APP_SERVER,
-                        item_id=item_id,
+                        item_id=completed_item_id,
                         parent_item_id=str(item.get("parentId") or "") or None,
                         item_kind=kind,
                         item_status=item_status,
@@ -1545,7 +1567,8 @@ class CodexAppServerConnection(HarnessConnection):
                         type="notice",
                         external_turn_id=self.active_turn_id,
                         vendor=HarnessKind.CODEX_APP_SERVER,
-                        item_id=item_id or f"{item_type}-{len(message_phases)}",
+                        item_id=completed_item_id
+                        or f"{item_type}-{len(message_phases)}",
                         parent_item_id=str(item.get("parentId") or "") or None,
                         item_status=item_status,
                         title="Codex activity",
@@ -1817,7 +1840,7 @@ def _codex_item_title(item_type: str, item: dict[str, Any]) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", " ", item_type).replace("_", " ").title()[:1_000]
 
 
-def _codex_item_terminal_status(item: dict[str, Any]) -> Any:
+def _codex_item_terminal_status(item: dict[str, Any]) -> HarnessItemStatus:
     status = str(item.get("status") or "completed").lower()
     if status in {"failed", "error", "declined"}:
         return "failed"
@@ -1943,7 +1966,9 @@ class CodexAppServerAdapter(HarnessAdapter):
                     checked_at=utc_now(),
                 ),
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # diagnostic-expected: converted to a bounded MCP result
             record_caught_exception(
                 "harnesses",
                 "harnesses.harnesses.caught_failure_006",
@@ -2961,7 +2986,7 @@ def _workspace_snapshot(root: Path) -> dict[str, dict[str, Any]]:
             continue
         try:
             data = path.read_bytes()
-        except OSError:
+        except OSError:  # diagnostic-expected: inaccessible workspace files are omitted
             continue
         text: str | None = None
         if len(data) <= 2_000_000 and b"\x00" not in data[:8_192]:
@@ -3042,7 +3067,9 @@ def _claude_sdk_version(sdk: Any) -> str | None:
         return raw.strip()
     try:
         return package_version("claude-agent-sdk")
-    except PackageNotFoundError:
+    except (
+        PackageNotFoundError
+    ):  # diagnostic-expected: compatibility probe reports the missing SDK
         return None
 
 
@@ -3149,7 +3176,9 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             )
         try:
             compatible = Version(version) >= CLAUDE_ACTIVITY_MINIMUM_VERSION
-        except InvalidVersion:
+        except (
+            InvalidVersion
+        ):  # diagnostic-expected: compatibility probe rejects malformed versions
             compatible = False
         if not compatible:
             raise HarnessConfigurationError(
@@ -3413,13 +3442,16 @@ def _find_tool_receipt(value: Any, *, depth: int = 0) -> ToolResultReceipt | Non
     if isinstance(value, str) and len(value) <= 64_000:
         try:
             value = json.loads(value)
-        except (json.JSONDecodeError, TypeError):
+        except (
+            json.JSONDecodeError,
+            TypeError,
+        ):  # diagnostic-expected: untrusted receipts fail closed
             return None
     if isinstance(value, dict):
         if value.get("schema") == "nebula.tool-result/v2":
             try:
                 return ToolResultReceipt.model_validate(value)
-            except ValueError:
+            except ValueError:  # diagnostic-expected: untrusted receipts fail closed
                 return None
         for item in value.values():
             receipt = _find_tool_receipt(item, depth=depth + 1)
@@ -3735,7 +3767,9 @@ class HarnessRuntimeService:
                 frozen_tool_names=frozen_names,
                 frozen_pack_digests=frozen_digests,
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # diagnostic-expected: converted to a bounded MCP result
             raise HarnessConfigurationError(
                 "could not resolve the harness OCI tool snapshot: " + _safe_error(exc)
             ) from exc
@@ -4080,6 +4114,11 @@ class HarnessRuntimeService:
                 "citations": [
                     item.model_dump(mode="json") for item in (citations or [])
                 ],
+                "diagnostic_context": {
+                    "request_id": current_request_id(),
+                    "operation_id": current_operation_id(),
+                    "session_id": chat.id,
+                },
             },
         )
         chat_turn = chat_turn.model_copy(update={"harness_turn_id": harness_turn.id})
@@ -4131,8 +4170,16 @@ class HarnessRuntimeService:
 
     async def _drive_chat_turn(self, turn_id: str) -> None:
         try:
-            async for _event in self.stream_turn(turn_id):
-                pass
+            turn = self.store.get(HarnessTurn, turn_id)
+            raw_context = turn.metadata.get("diagnostic_context")
+            context = raw_context if isinstance(raw_context, dict) else {}
+            with diagnostic_context(
+                request_id=context.get("request_id"),
+                operation_id=context.get("operation_id"),
+                session_id=turn.chat_session_id,
+            ):
+                async for _event in self.stream_turn(turn_id):
+                    pass
         finally:
             self._chat_turn_tasks.pop(turn_id, None)
 
@@ -4259,15 +4306,38 @@ class HarnessRuntimeService:
             try:
                 connection = await self._connection(session, turn)
             except Exception as exc:
-                record_caught_exception(
+                error_id = record_caught_exception(
                     "harnesses",
-                    "harnesses.harnesses.connection_failure",
+                    "harnesses.connection.failed",
                     "The harness connection could not be opened.",
                     exc,
-                    stage="harnesses",
+                    stage="connection",
+                    metadata={"entity_type": "harness_turn", "entity_id": turn.id},
                 )
                 error = _safe_error(exc)
-                self._fail_turn(turn.id, HarnessTurnStatus.INTERRUPTED, error)
+                reason = reason_code_for(
+                    exc,
+                    feature="harnesses",
+                    event_code="harnesses.connection.failed",
+                )
+                guidance = guidance_for("harnesses", reason, operator_detail=error)
+                retryable = reason in {
+                    "transport_closed",
+                    "dependency_unavailable",
+                    "timeout",
+                    "rate_limited",
+                    "stale_state",
+                }
+                self._fail_turn(
+                    turn.id,
+                    HarnessTurnStatus.INTERRUPTED,
+                    error,
+                    diagnostic={
+                        "error_id": error_id,
+                        "reason_code": reason,
+                        "remediation_id": guidance.remediation_id,
+                    },
+                )
                 yield self._persist_activity(
                     turn,
                     session,
@@ -4279,6 +4349,15 @@ class HarnessRuntimeService:
                         harness_turn_id=turn.id,
                         model=session.model,
                         message=error,
+                        request_id=current_request_id(),
+                        operation_id=current_operation_id(),
+                        error_id=error_id,
+                        reason_code=reason,
+                        retryable=retryable,
+                        operator_detail=guidance.cause,
+                        impact=guidance.impact,
+                        remediation_id=guidance.remediation_id,
+                        help_article=guidance.help_article,
                     ),
                 )
                 return
@@ -4329,6 +4408,7 @@ class HarnessRuntimeService:
             external_turn_id: str | None = None
             interrupted_reason: str | None = None
             terminal_error: str | None = None
+            terminal_diagnostic: dict[str, Any] | None = None
             try:
                 async for event in _coalesce_activity_deltas(
                     connection.run_turn(turn.prompt, model=session.model)
@@ -4356,6 +4436,55 @@ class HarnessRuntimeService:
                         )
                     elif event.type == "error":
                         terminal_error = event.message or "Harness reported an error"
+                        terminal_exception = HarnessTransportError(terminal_error)
+                        error_id = record_caught_exception(
+                            "harnesses",
+                            "harnesses.turn.runtime_failed",
+                            "The harness runtime reported a turn failure.",
+                            terminal_exception,
+                            stage="turn-runtime",
+                            metadata={
+                                "entity_type": "harness_turn",
+                                "entity_id": turn.id,
+                                "provider": session.harness_profile_id,
+                            },
+                        )
+                        reason = reason_code_for(
+                            terminal_exception,
+                            feature="harnesses",
+                            event_code=str(
+                                event.payload.get("code")
+                                or "harnesses.turn.runtime_failed"
+                            ),
+                        )
+                        guidance = guidance_for(
+                            "harnesses", reason, operator_detail=terminal_error
+                        )
+                        retryable = reason in {
+                            "transport_closed",
+                            "dependency_unavailable",
+                            "timeout",
+                            "rate_limited",
+                            "stale_state",
+                        }
+                        terminal_diagnostic = {
+                            "error_id": error_id,
+                            "reason_code": reason,
+                            "remediation_id": guidance.remediation_id,
+                        }
+                        event = event.model_copy(
+                            update={
+                                "request_id": current_request_id(),
+                                "operation_id": current_operation_id(),
+                                "error_id": error_id,
+                                "reason_code": reason,
+                                "retryable": retryable,
+                                "operator_detail": guidance.cause,
+                                "impact": guidance.impact,
+                                "remediation_id": guidance.remediation_id,
+                                "help_article": guidance.help_article,
+                            }
+                        )
                     elif event.type == "usage" and event.usage is not None:
                         usage = event.usage
                     elif event.type in {"tool_started", "tool_completed"}:
@@ -4371,6 +4500,7 @@ class HarnessRuntimeService:
                         interrupted_reason
                         or terminal_error
                         or "Harness turn interrupted",
+                        diagnostic=terminal_diagnostic,
                     )
                     return
                 yield self._persist_activity(
@@ -4440,15 +4570,28 @@ class HarnessRuntimeService:
                     )
                 raise
             except Exception as exc:
-                record_caught_exception(
+                error_id = record_caught_exception(
                     "harnesses",
-                    "harnesses.harnesses.caught_failure_013",
-                    "A handled harnesses operation raised an exception.",
+                    "harnesses.turn.failed",
+                    "The harness turn stopped unexpectedly.",
                     exc,
-                    stage="harnesses",
+                    stage="turn",
+                    metadata={"entity_type": "harness_turn", "entity_id": turn.id},
                 )
+                error = _safe_error(exc)
+                reason = reason_code_for(
+                    exc, feature="harnesses", event_code="harnesses.turn.failed"
+                )
+                guidance = guidance_for("harnesses", reason, operator_detail=error)
                 self._fail_turn(
-                    turn.id, HarnessTurnStatus.INTERRUPTED, _safe_error(exc)
+                    turn.id,
+                    HarnessTurnStatus.INTERRUPTED,
+                    error,
+                    diagnostic={
+                        "error_id": error_id,
+                        "reason_code": reason,
+                        "remediation_id": guidance.remediation_id,
+                    },
                 )
                 yield self._persist_activity(
                     turn,
@@ -4457,7 +4600,23 @@ class HarnessRuntimeService:
                         type="error",
                         harness_session_id=session.id,
                         harness_turn_id=turn.id,
-                        message=_safe_error(exc),
+                        message=error,
+                        request_id=current_request_id(),
+                        operation_id=current_operation_id(),
+                        error_id=error_id,
+                        reason_code=reason,
+                        retryable=reason
+                        in {
+                            "transport_closed",
+                            "dependency_unavailable",
+                            "timeout",
+                            "rate_limited",
+                            "stale_state",
+                        },
+                        operator_detail=guidance.cause,
+                        impact=guidance.impact,
+                        remediation_id=guidance.remediation_id,
+                        help_article=guidance.help_article,
                     ),
                 )
             finally:
@@ -4562,7 +4721,14 @@ class HarnessRuntimeService:
             origin=HarnessTurnOrigin.MISSION,
             run_id=run.id,
             prompt=run.objective,
-            metadata={"forked_from_session_id": forked_from_session_id},
+            metadata={
+                "forked_from_session_id": forked_from_session_id,
+                "diagnostic_context": {
+                    "request_id": current_request_id(),
+                    "operation_id": current_operation_id(),
+                    "run_id": run.id,
+                },
+            },
         )
         with self.store.transaction() as transaction:
             transaction.add(run)
@@ -4601,10 +4767,18 @@ class HarnessRuntimeService:
     async def _execute_mission(self, run_id: str, turn_id: str) -> None:
         try:
             run = self.store.get(AgentRun, run_id)
+            turn = self.store.get(HarnessTurn, turn_id)
+            raw_context = turn.metadata.get("diagnostic_context")
+            context = raw_context if isinstance(raw_context, dict) else {}
             try:
-                async with asyncio.timeout(run.budget.max_duration_seconds):
-                    async for _event in self.stream_turn(turn_id):
-                        pass
+                with diagnostic_context(
+                    request_id=context.get("request_id"),
+                    operation_id=context.get("operation_id"),
+                    run_id=run.id,
+                ):
+                    async with asyncio.timeout(run.budget.max_duration_seconds):
+                        async for _event in self.stream_turn(turn_id):
+                            pass
             except TimeoutError as caught_error:
                 record_caught_exception(
                     "harnesses",
@@ -5136,7 +5310,7 @@ class HarnessRuntimeService:
             and interaction.status == HarnessInteractionStatus.PENDING
         ]
         for interaction in pending_interactions:
-            future = self._interaction_futures.pop(interaction.id, None)
+            interaction_future = self._interaction_futures.pop(interaction.id, None)
             self.store.update(
                 HarnessInteraction,
                 interaction.id,
@@ -5147,8 +5321,8 @@ class HarnessRuntimeService:
                 },
                 expected_revision=interaction.revision,
             )
-            if future is not None and not future.done():
-                future.set_result({"action": "cancel", "response": {}})
+            if interaction_future is not None and not interaction_future.done():
+                interaction_future.set_result({"action": "cancel", "response": {}})
         return self.store.get(HarnessTurn, turn.id)
 
     def attach_run_to_chat(self, run_id: str) -> ChatSession:
@@ -5619,7 +5793,9 @@ class HarnessRuntimeService:
                 tool_name=tool.name,
                 arguments=arguments,
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # diagnostic-expected: converted to a bounded MCP result
             failure = exc
         completed = utc_now()
         blocks: list[dict[str, Any]] = []
@@ -5757,7 +5933,9 @@ class HarnessRuntimeService:
         )
         try:
             result = await components.broker.execute(invocation, components.scope)
-        except ApprovalRequired as paused:
+        except (
+            ApprovalRequired
+        ) as paused:  # diagnostic-expected: durable approval interaction flow
             decision = await self._wait_for_broker_approval(turn, paused.approval)
             approval = self.store.get(Approval, paused.approval.id)
             if not decision.allowed and approval.status == ApprovalStatus.PENDING:
@@ -5778,14 +5956,20 @@ class HarnessRuntimeService:
                 result = await components.broker.execute(
                     invocation, components.scope, approval=approval
                 )
-            except PolicyDenied as denial:
+            except (
+                PolicyDenied
+            ) as denial:  # diagnostic-expected: returned as a bounded gateway denial
                 return self._gateway_denial(denial.decision.reason)
-        except PolicyDenied as denial:
+        except (
+            PolicyDenied
+        ) as denial:  # diagnostic-expected: returned as a bounded gateway denial
             return self._gateway_denial(denial.decision.reason)
         finally:
             try:
                 self._attach_gateway_tool_call(turn, invocation.id)
-            except NotFoundError:
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: no provisional call exists before reservation
                 # Validation or budget reservation can fail before a call exists.
                 pass
         receipt = result.receipt
@@ -6027,7 +6211,9 @@ class HarnessRuntimeService:
             return "Call environment.get_interface before structured environment execution."
         try:
             expected_capability = selected_environment_capability(selection)
-        except ToolInterfaceError as exc:
+        except (
+            ToolInterfaceError
+        ) as exc:  # diagnostic-expected: validation detail is returned to the harness
             return str(exc)
         if tool_name != expected_capability:
             return (
@@ -6066,7 +6252,9 @@ class HarnessRuntimeService:
             canonical_path = catalog.canonical_command_path(
                 str(arguments["tool"]), invocation["command_path"]
             )
-        except ToolInterfaceError as exc:
+        except (
+            ToolInterfaceError
+        ) as exc:  # diagnostic-expected: validation detail is returned to the harness
             return str(exc)
         if canonical_path != selected_command.get("path"):
             return "The structured invocation changed the selected command path."
@@ -6709,7 +6897,9 @@ class HarnessRuntimeService:
                 return event
             try:
                 gateway_call = self.store.get(ToolCall, receipt.tool_call_id)
-            except NotFoundError:
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: stale tool receipts are ignored safely
                 return event
             payload = {
                 **event.payload,
@@ -7003,7 +7193,7 @@ class HarnessRuntimeService:
             for active in self._active.values():
                 try:
                     active_turn = self.store.get(HarnessTurn, active.turn_id)
-                except NotFoundError:
+                except NotFoundError:  # diagnostic-expected: completed turns leave the active set asynchronously
                     continue
                 if active_turn.engagement_id == turn.engagement_id:
                     concurrent += 1
@@ -7100,6 +7290,7 @@ class HarnessRuntimeService:
                     canonical_payload,
                 )
         payload = self._activity_payload(turn, session, event)
+        durable: OperationEvent | RunEvent
         if turn.origin == HarnessTurnOrigin.CHAT:
             durable = self.store.append_operation_event(
                 turn.id,
@@ -7134,6 +7325,7 @@ class HarnessRuntimeService:
         if not 1 <= limit <= 10_000:
             raise ValueError("limit must be between 1 and 10000")
         turn = self.store.get(HarnessTurn, turn_id)
+        durable_events: Sequence[OperationEvent | RunEvent]
         if turn.origin == HarnessTurnOrigin.CHAT:
             durable_events = self.store.replay_operation_events(
                 turn.id, after_sequence=after_sequence, limit=limit
@@ -7345,7 +7537,14 @@ class HarnessRuntimeService:
                     expected_revision=run_owner.revision,
                 )
 
-    def _fail_turn(self, turn_id: str, status: HarnessTurnStatus, error: str) -> None:
+    def _fail_turn(
+        self,
+        turn_id: str,
+        status: HarnessTurnStatus,
+        error: str,
+        *,
+        diagnostic: Mapping[str, Any] | None = None,
+    ) -> None:
         turn = self.store.get(HarnessTurn, turn_id)
         if turn.status not in {
             HarnessTurnStatus.COMPLETE,
@@ -7356,7 +7555,26 @@ class HarnessRuntimeService:
             turn = self.store.update(
                 HarnessTurn,
                 turn.id,
-                {"status": status, "error": error, "completed_at": utc_now()},
+                {
+                    "status": status,
+                    "error": error,
+                    "completed_at": utc_now(),
+                    "metadata": {
+                        **turn.metadata,
+                        **(
+                            {
+                                "diagnostic": dict(diagnostic),
+                                "diagnostic_error_id": diagnostic.get("error_id"),
+                                "diagnostic_reason_code": diagnostic.get("reason_code"),
+                                "diagnostic_remediation_id": diagnostic.get(
+                                    "remediation_id"
+                                ),
+                            }
+                            if diagnostic
+                            else {}
+                        ),
+                    },
+                },
                 expected_revision=turn.revision,
             )
         self._interrupt_owner(turn)

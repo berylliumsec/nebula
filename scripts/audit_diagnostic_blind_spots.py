@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import re
 import subprocess
 import sys
@@ -135,6 +136,39 @@ def audit_python() -> list[str]:
     return failures
 
 
+def audit_remediation_catalog() -> list[str]:
+    commands = [
+        [
+            sys.executable,
+            "-c",
+            (
+                "from nebula.v3.diagnostic_guidance import load_catalog, validate_catalog; "
+                "validate_catalog(load_catalog())"
+            ),
+        ],
+        [
+            sys.executable,
+            str(ROOT / "scripts/generate_diagnostic_catalog.py"),
+            "--check",
+        ],
+    ]
+    failures: list[str] = []
+    environment = {**dict(os.environ), "PYTHONPATH": str(ROOT / "src")}
+    for command in commands:
+        completed = subprocess.run(
+            command,
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode:
+            output = (completed.stderr or completed.stdout).strip()
+            failures.append(output or f"catalog validation failed: {' '.join(command)}")
+    return failures
+
+
 def audit_typescript() -> list[str]:
     completed = subprocess.run(
         ["node", str(ROOT / "scripts" / "audit_typescript_diagnostics.mjs")],
@@ -176,6 +210,7 @@ def main() -> int:
     failures: list[str] = []
     if args.check_python:
         failures.extend(audit_python())
+        failures.extend(audit_remediation_catalog())
     if args.check_typescript:
         failures.extend(audit_typescript())
     if args.check_rust:

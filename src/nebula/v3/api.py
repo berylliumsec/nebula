@@ -89,6 +89,12 @@ from .diagnostics import (
     new_request_id,
     record_diagnostic,
 )
+from .diagnostic_guidance import (
+    DiagnosticIncident,
+    guidance_for,
+    reason_code_for,
+)
+from .diagnostic_sensitive import SensitiveDetailUnavailable
 from .context import (
     DEFAULT_CONTEXT_WINDOW,
     ContextCompactor,
@@ -613,6 +619,7 @@ class DiagnosticsSettingsRequest(NebulaModel):
     feature_levels: dict[
         str, Literal["debug", "info", "warning", "error", "critical"]
     ] = Field(default_factory=dict, max_length=64)
+    sensitive_detail_capture: bool = False
 
 
 class BrowserDiagnosticStackFrame(NebulaModel):
@@ -686,6 +693,12 @@ class BrowserDiagnosticEvent(NebulaModel):
     duration_ms: float | None = Field(default=None, ge=0, le=86_400_000)
     retryable: bool | None = None
     safe_failure_cause: str | None = Field(default=None, max_length=2_048)
+    reason_code: str | None = Field(default=None, min_length=1, max_length=64)
+    operator_detail: str | None = Field(default=None, max_length=2_048)
+    impact: str | None = Field(default=None, max_length=2_048)
+    remediation_id: str | None = Field(default=None, max_length=160)
+    sensitive_detail_available: bool | None = None
+    sensitive_detail_expires_at: str | None = Field(default=None, max_length=64)
     exception_type: str | None = Field(default=None, min_length=1, max_length=128)
     stack_frames: list[BrowserDiagnosticStackFrame] = Field(
         default_factory=list, max_length=32
@@ -695,6 +708,21 @@ class BrowserDiagnosticEvent(NebulaModel):
 
 class BrowserDiagnosticBatch(NebulaModel):
     events: list[BrowserDiagnosticEvent] = Field(min_length=1, max_length=100)
+
+
+class DiagnosticIncidentResolveRequest(NebulaModel):
+    records: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
+
+
+class DiagnosticIncidentActionRequest(NebulaModel):
+    confirmed: bool = False
+    operator_id: str = Field(default="local-operator", min_length=1, max_length=128)
+
+
+class DiagnosticSensitiveDetailRequest(NebulaModel):
+    confirmed: bool = False
+    action: Literal["reveal", "copy"] = "reveal"
+    operator_id: str = Field(default="local-operator", min_length=1, max_length=128)
 
 
 def create_app(
@@ -767,6 +795,12 @@ def create_app(
         session_id: str | None = None,
         execution_id: str | None = None,
         run_id: str | None = None,
+        error_id: str | None = None,
+        operation_id: str | None = None,
+        reason_code: str | None = None,
+        operator_detail: str | None = None,
+        impact: str | None = None,
+        remediation_id: str | None = None,
     ) -> dict[str, Any]:
         """Record and return the compatible safe WebSocket/SSE error envelope."""
 
@@ -776,15 +810,30 @@ def create_app(
             if exception is not None and level == "error"
             else None
         )
-        error_id = existing_error_id
-        if existing_error_id is None:
-            error_id = emit_diagnostic(
+        provided_error_id = error_id
+        error_id = existing_error_id or provided_error_id or new_error_id()
+        resolved_reason = reason_code_for(
+            exception,
+            feature=feature,
+            event_code=code,
+            supplied=reason_code,
+        )
+        guidance = guidance_for(
+            feature,
+            resolved_reason,
+            operator_detail=operator_detail or detail,
+            impact=impact,
+            remediation_id=remediation_id,
+        )
+        if existing_error_id is None and provided_error_id is None:
+            emit_diagnostic(
                 level,
                 feature,
                 f"{feature}.stream.rejected"
                 if expected
                 else f"{feature}.stream.failed",
                 f"A {feature.replace('-', ' ')} stream could not continue.",
+                error_id=error_id,
                 outcome="denied" if expected else "failure",
                 stage="stream",
                 retryable=retryable,
@@ -793,8 +842,13 @@ def create_app(
                     if expected
                     else "The streaming operation failed."
                 ),
+                reason_code=resolved_reason,
+                operator_detail=guidance.cause,
+                impact=guidance.impact,
+                remediation_id=guidance.remediation_id,
                 exception=exception,
                 request_id=request_id or current_request_id(),
+                operation_id=operation_id or current_operation_id(),
                 session_id=session_id,
                 execution_id=execution_id,
                 run_id=run_id,
@@ -807,12 +861,18 @@ def create_app(
             "feature": feature,
             "retryable": retryable,
             "help_article": help_article_for(feature, code),
+            "error_id": error_id,
+            "reason_code": resolved_reason,
+            "operator_detail": guidance.cause,
+            "impact": guidance.impact,
+            "remediation_id": guidance.remediation_id,
         }
         correlation_request = request_id or current_request_id()
         if correlation_request:
             frame["request_id"] = correlation_request
-        if error_id:
-            frame["error_id"] = error_id
+        correlation_operation = operation_id or current_operation_id()
+        if correlation_operation:
+            frame["operation_id"] = correlation_operation
         return frame
 
     if bootstrap_workspace:
@@ -1281,9 +1341,9 @@ def create_app(
         if feature == "setup":
             return "runner-setup"
         if feature == "toolbox":
-            return "toolbox"
+            return "toolbox-availability"
         if feature == "harnesses":
-            return "harnesses"
+            return "provider-model"
         if code.startswith("api."):
             return "core-startup"
         return None
@@ -1299,13 +1359,29 @@ def create_app(
         headers: Mapping[str, str] | None = None,
     ) -> JSONResponse:
         feature = diagnostic_error_feature(exc) or exception_feature(exc, request)
-        explicit_code = code is not None
         stable_code = code or exception_code(exc, feature)
         severity = "error" if status_code >= 500 else "warning"
         request_id = getattr(request.state, "request_id", None)
+        operation_id = request.headers.get("X-Nebula-Operation-ID")
         existing_error_id = diagnostic_error_id(exc) if severity == "error" else None
-        error_id = existing_error_id or (
-            new_error_id() if severity == "error" else None
+        error_id = existing_error_id or new_error_id()
+        resolved_reason = reason_code_for(
+            exc,
+            feature=feature,
+            event_code=stable_code,
+            status_code=status_code,
+            supplied=getattr(exc, "_nebula_diagnostic_reason_code", None),
+        )
+        guidance = guidance_for(
+            feature,
+            resolved_reason,
+            operator_detail=getattr(
+                exc,
+                "_nebula_diagnostic_operator_detail",
+                detail if isinstance(detail, str) else None,
+            ),
+            impact=getattr(exc, "_nebula_diagnostic_impact", None),
+            remediation_id=getattr(exc, "_nebula_diagnostic_remediation_id", None),
         )
         recorded_id = existing_error_id
         if existing_error_id is None:
@@ -1316,6 +1392,7 @@ def create_app(
                 f"A {feature.replace('-', ' ')} request could not complete.",
                 error_id=error_id,
                 request_id=request_id,
+                operation_id=operation_id,
                 outcome="failure" if severity == "error" else "denied",
                 stage="request",
                 retryable=retryable,
@@ -1324,30 +1401,31 @@ def create_app(
                     if status_code >= 500
                     else "The request was rejected safely."
                 ),
+                reason_code=resolved_reason,
+                operator_detail=guidance.cause,
+                impact=guidance.impact,
+                remediation_id=guidance.remediation_id,
                 exception=exc,
                 metadata={"http_status": status_code, "code": stable_code},
             )
         request.state.diagnostic_error_recorded = True
         request.state.diagnostic_error_id = recorded_id or error_id
-        content: dict[str, Any] = {"detail": detail}
-        if explicit_code:
-            content["code"] = stable_code
-        # Keep direct embedding/tests compatible when no diagnostics owner was
-        # configured. Production Core always has one.
-        if diagnostics is not None:
-            content.update(
-                {
-                    "code": stable_code,
-                    "feature": feature,
-                    "request_id": request_id,
-                    "retryable": retryable,
-                    "help_article": help_article_for(feature, stable_code),
-                }
-            )
-            if recorded_id or error_id:
-                content["error_id"] = recorded_id or error_id
-        elif retryable:
-            content["retryable"] = True
+        content: dict[str, Any] = {
+            "detail": detail,
+            "code": stable_code,
+            "feature": feature,
+            "request_id": request_id,
+            "error_id": recorded_id or error_id,
+            "retryable": retryable,
+            "help_article": guidance.help_article
+            or help_article_for(feature, stable_code),
+            "reason_code": resolved_reason,
+            "operator_detail": guidance.cause,
+            "impact": guidance.impact,
+            "remediation_id": guidance.remediation_id,
+        }
+        if operation_id:
+            content["operation_id"] = operation_id
         return JSONResponse(
             status_code=status_code,
             content=jsonable_encoder(content),
@@ -1396,18 +1474,17 @@ def create_app(
                     )
                 content: dict[str, Any] = {
                     "detail": "The operation failed unexpectedly. No verified recovery procedure is available.",
+                    "code": "api.unhandled_exception",
+                    "feature": failure_feature,
+                    "request_id": request_id,
+                    "error_id": error_id,
+                    "retryable": False,
+                    "help_article": None,
+                    "reason_code": "unknown_internal_fault",
+                    "operator_detail": "Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.",
+                    "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+                    "remediation_id": f"{failure_feature}.unknown_internal_fault",
                 }
-                if diagnostics is not None:
-                    content.update(
-                        {
-                            "code": "api.unhandled_exception",
-                            "feature": failure_feature,
-                            "request_id": request_id,
-                            "error_id": error_id,
-                            "retryable": False,
-                            "help_article": None,
-                        }
-                    )
                 response = JSONResponse(status_code=500, content=content)
                 request.state.diagnostic_error_recorded = True
                 request.state.diagnostic_error_id = error_id
@@ -1791,6 +1868,170 @@ def create_app(
         return {"errors": records}
 
     @app.post(
+        f"{API_PREFIX}/diagnostics/incidents/resolve",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+        response_model=list[DiagnosticIncident],
+    )
+    async def resolve_diagnostic_incidents(
+        request: DiagnosticIncidentResolveRequest,
+    ) -> list[dict[str, Any]]:
+        manager = require_diagnostic_manager()
+        records = [*manager.recent_errors(limit=500), *request.records]
+        return manager.resolve_incidents(records[-500:])
+
+    @app.get(
+        f"{API_PREFIX}/diagnostics/incidents/{{error_id}}",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+        response_model=DiagnosticIncident,
+    )
+    async def get_diagnostic_incident(error_id: str) -> dict[str, Any]:
+        incident = require_diagnostic_manager().incident(error_id)
+        if incident is None:
+            raise HTTPException(status_code=404, detail="diagnostic incident not found")
+        return incident
+
+    @app.post(
+        f"{API_PREFIX}/diagnostics/incidents/{{error_id}}/actions/{{action_id}}",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def run_diagnostic_incident_action(
+        error_id: str,
+        action_id: str,
+        request: DiagnosticIncidentActionRequest,
+    ) -> dict[str, Any]:
+        manager = require_diagnostic_manager()
+        incident = manager.incident(error_id)
+        if incident is None:
+            raise HTTPException(status_code=404, detail="diagnostic incident not found")
+        actions = {
+            item["id"]: item
+            for item in incident.get("actions", [])
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        action = actions.get(action_id)
+        if action is None:
+            raise HTTPException(
+                status_code=404, detail="diagnostic action is not allowed"
+            )
+        if not action.get("enabled", True):
+            raise HTTPException(
+                status_code=409,
+                detail=action.get("disabled_reason")
+                or "diagnostic action is currently unavailable",
+            )
+        if action.get("confirmation_required") and not request.confirmed:
+            raise HTTPException(
+                status_code=409,
+                detail="operator confirmation is required for this diagnostic action",
+            )
+        result: dict[str, Any]
+        if action.get("kind") == "navigate":
+            result = {
+                "kind": "navigate",
+                "destination": action.get("destination"),
+                "status": "ready",
+            }
+        elif action.get("kind") == "health_check":
+            primary = incident["primary"]
+            feature = str(primary.get("feature") or "diagnostics")
+            metadata = primary.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
+            entity_id = metadata.get("entity_id")
+            entity_type = metadata.get("entity_type")
+            if (
+                feature == "harnesses"
+                and entity_type == "harness_turn"
+                and isinstance(entity_id, str)
+            ):
+                turn = store.get(HarnessTurn, entity_id)
+                session = store.get(HarnessSession, turn.harness_session_id)
+                health_result = await harness_runtime.health(session.harness_profile_id)
+                health_payload: Any = health_result.model_dump(mode="json")
+            else:
+                health_payload = {
+                    "diagnostics": manager.status(),
+                    "storage": store.database.health(),
+                }
+            result = {
+                "kind": "health_check",
+                "status": "completed",
+                "health": health_payload,
+                "incident_active": manager.incident(error_id) is not None,
+            }
+        elif action.get("kind") == "retry":
+            primary = incident["primary"]
+            metadata = primary.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
+            entity_id = metadata.get("entity_id")
+            if metadata.get("entity_type") != "harness_turn" or not isinstance(
+                entity_id, str
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="the failed operation is not retained in a retryable form",
+                )
+            replacement = await harness_runtime.retry_turn(
+                entity_id, actor_id=request.operator_id
+            )
+            result = {
+                "kind": "retry",
+                "status": "started",
+                "original_turn_id": entity_id,
+                "replacement_turn_id": replacement.id,
+                "replacement_run_id": replacement.run_id,
+            }
+        else:
+            raise HTTPException(
+                status_code=404, detail="diagnostic action is not allowed"
+            )
+        manager.record(
+            "info",
+            "diagnostics",
+            "diagnostics.incident.action_completed",
+            "An allowlisted diagnostic incident action completed.",
+            error_id=error_id,
+            outcome="success",
+            stage="incident-action",
+            metadata={"operator_id": request.operator_id, "action": action_id},
+            force=True,
+        )
+        return {"error_id": error_id, "action_id": action_id, "result": result}
+
+    @app.post(
+        f"{API_PREFIX}/diagnostics/incidents/{{error_id}}/sensitive-detail",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def reveal_diagnostic_sensitive_detail(
+        error_id: str,
+        request: DiagnosticSensitiveDetailRequest,
+    ) -> JSONResponse:
+        if not request.confirmed:
+            raise HTTPException(
+                status_code=409,
+                detail="operator confirmation is required to access sensitive diagnostic detail",
+            )
+        try:
+            detail = require_diagnostic_manager().reveal_sensitive_detail(
+                error_id,
+                operator_id=request.operator_id,
+                action=request.action,
+            )
+        except SensitiveDetailUnavailable as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(
+            content={
+                "error_id": error_id,
+                "action": request.action,
+                "detail": detail,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post(
         f"{API_PREFIX}/diagnostics/events",
         tags=["diagnostics"],
         dependencies=[Depends(require_auth)],
@@ -1825,6 +2066,10 @@ def create_app(
                 duration_ms=event.duration_ms,
                 retryable=event.retryable,
                 safe_failure_cause=event.safe_failure_cause,
+                reason_code=event.reason_code,
+                operator_detail=event.operator_detail,
+                impact=event.impact,
+                remediation_id=event.remediation_id,
                 exception_type=event.exception_type,
                 stack_frames=[frame.model_dump() for frame in event.stack_frames],
                 metadata=event.metadata,
@@ -2079,7 +2324,9 @@ def create_app(
             return
         try:
             harness_runtime.activity_events(turn_id, after_sequence=after, limit=1)
-        except NotFoundError:
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: WebSocket close is the protocol response
             await websocket.close(code=4404, reason="harness turn not found")
             return
         protocol = (
@@ -2098,7 +2345,9 @@ def create_app(
                     {"kind": "event", "event": event.model_dump(mode="json")}
                 )
             await websocket.send_json({"kind": "complete"})
-        except WebSocketDisconnect:
+        except (
+            WebSocketDisconnect
+        ):  # diagnostic-expected: disconnect only detaches the viewer
             return
 
     @app.post(
@@ -5339,13 +5588,34 @@ def create_app(
             harness_runtime.start_chat_turn(harness_turn.id)
 
             async def harness_events() -> Any:
-                failed: str | None = None
+                failed: dict[str, Any] | None = None
                 async for event in harness_runtime.follow_turn(harness_turn.id):
                     if event.type == "error":
-                        failed = event.message or "harness turn failed"
+                        detail = (
+                            event.operator_detail
+                            or event.message
+                            or "harness turn failed"
+                        )
+                        failed = stream_error_frame(
+                            feature="harnesses",
+                            code=str(
+                                event.payload.get("code") or "harness_stream_failed"
+                            ),
+                            detail=detail,
+                            retryable=bool(event.retryable),
+                            request_id=event.request_id,
+                            operation_id=event.operation_id,
+                            session_id=event.harness_session_id,
+                            run_id=harness_turn.run_id,
+                            error_id=event.error_id,
+                            reason_code=event.reason_code,
+                            operator_detail=event.operator_detail,
+                            impact=event.impact,
+                            remediation_id=event.remediation_id,
+                        )
                     payload = event.model_dump(mode="json")
                     if event.type == "error":
-                        payload["detail"] = failed
+                        payload.update(failed or {})
                     yield event.type, payload
                 if failed:
                     return
@@ -5376,16 +5646,45 @@ def create_app(
 
             if not request.stream:
                 completion: ChatCompletionResponse | None = None
-                failure: str | None = None
+                failure: dict[str, Any] | None = None
                 async for event_name, payload in harness_events():
                     if event_name == "error":
-                        failure = str(payload.get("message") or "harness turn failed")
+                        failure = payload
                     if event_name == "done":
                         body = dict(payload)
                         body.pop("type", None)
                         completion = ChatCompletionResponse.model_validate(body)
                 if failure:
-                    raise HarnessError(failure)
+                    failure_error = HarnessError(
+                        str(
+                            failure.get("operator_detail")
+                            or failure.get("detail")
+                            or failure.get("message")
+                            or "harness turn failed"
+                        )
+                    )
+                    error_id = failure.get("error_id")
+                    if isinstance(error_id, str):
+                        setattr(
+                            failure_error,
+                            "_nebula_diagnostic_error_id",
+                            error_id,
+                        )
+                        setattr(
+                            failure_error,
+                            "_nebula_diagnostic_feature",
+                            "harnesses",
+                        )
+                        for attribute, key in (
+                            ("_nebula_diagnostic_reason_code", "reason_code"),
+                            ("_nebula_diagnostic_operator_detail", "operator_detail"),
+                            ("_nebula_diagnostic_impact", "impact"),
+                            ("_nebula_diagnostic_remediation_id", "remediation_id"),
+                        ):
+                            value = failure.get(key)
+                            if isinstance(value, str):
+                                setattr(failure_error, attribute, value)
+                    raise failure_error
                 if completion is None:
                     raise HarnessError("harness response ended before completion")
                 return completion

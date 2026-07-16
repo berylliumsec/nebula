@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.diagnostics import DiagnosticManager, SETTINGS_SCHEMA
+from nebula.v3.diagnostic_sensitive import SensitiveDiagnosticStore
+from nebula.v3.harnesses import HarnessTransportError
 from nebula.v3.storage import NebulaStore
 
 
@@ -47,6 +49,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                 "schema": SETTINGS_SCHEMA,
                 "global_level": "error",
                 "feature_levels": {},
+                "sensitive_detail_capture": False,
             }
             updated = client.put(
                 "/api/v1/diagnostics/settings",
@@ -55,6 +58,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                     "schema": SETTINGS_SCHEMA,
                     "global_level": "debug",
                     "feature_levels": {"storage": "debug"},
+                    "sensitive_detail_capture": False,
                 },
             )
             assert updated.status_code == 200
@@ -75,6 +79,10 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                 "error_id": body["error_id"],
                 "retryable": False,
                 "help_article": None,
+                "reason_code": "unknown_internal_fault",
+                "operator_detail": "Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.",
+                "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+                "remediation_id": "storage.unknown_internal_fault",
             }
 
             matching = [
@@ -231,6 +239,118 @@ def test_browser_ingress_is_disabled_outside_development_mode(tmp_path: Path) ->
         assert response.status_code == 403
         assert response.json()["detail"] == (
             "browser diagnostic ingress is disabled outside development mode"
+        )
+    finally:
+        manager.close()
+
+
+def test_actionable_incident_resolution_and_guarded_sensitive_detail(
+    tmp_path: Path,
+) -> None:
+    detail_store = SensitiveDiagnosticStore(
+        tmp_path / "protected",
+        enabled=True,
+        keyring_backend=None,
+    )
+    manager = DiagnosticManager(
+        tmp_path / "data",
+        watch_settings=False,
+        sensitive_detail_store=detail_store,
+    )
+    store = NebulaStore(tmp_path / "nebula.db")
+    app = create_app(
+        store,
+        auth_token="test-token",
+        diagnostic_manager=manager,
+        allow_browser_diagnostic_events=True,
+    )
+    failure = HarnessTransportError(
+        "Codex app-server closed stdout before turn completion"
+    )
+    error_id = manager.record(
+        "error",
+        "harnesses",
+        "harnesses.turn.runtime_failed",
+        "The harness runtime reported a turn failure.",
+        request_id="req_shared_harness",
+        operation_id="op_shared_harness",
+        outcome="failure",
+        stage="turn-runtime",
+        retryable=True,
+        reason_code="transport_closed",
+        operator_detail=str(failure),
+        exception=failure,
+        metadata={"transport": "stdio", "adapter": "codex"},
+    )
+    assert error_id
+
+    try:
+        with TestClient(app) as client:
+            wrapper = {
+                "schema": "nebula.diagnostic/v1",
+                "level": "ERROR",
+                "feature": "interface",
+                "event_code": "interface.sessions_page.caught_failure_13",
+                "message": "A handled interface operation failed.",
+                "error_id": error_id,
+                "request_id": "req_shared_harness",
+                "operation_id": "op_shared_harness",
+                "reason_code": "transport_closed",
+            }
+            resolved = client.post(
+                "/api/v1/diagnostics/incidents/resolve",
+                headers=_auth(),
+                json={"records": [wrapper]},
+            )
+            assert resolved.status_code == 200, resolved.text
+            [incident] = resolved.json()
+            assert incident["error_id"] == error_id
+            assert incident["primary"]["source"] == "core"
+            assert incident["guidance"]["cause"] == str(failure)
+            assert incident["guidance"]["verification"]
+            assert len(incident["related_records"]) == 1
+
+            fetched = client.get(
+                f"/api/v1/diagnostics/incidents/{error_id}", headers=_auth()
+            )
+            assert fetched.status_code == 200
+            assert fetched.json()["sensitive_detail_available"] is True
+
+            unconfirmed = client.post(
+                f"/api/v1/diagnostics/incidents/{error_id}/sensitive-detail",
+                headers=_auth(),
+                json={"confirmed": False, "action": "reveal"},
+            )
+            assert unconfirmed.status_code == 409
+
+            revealed = client.post(
+                f"/api/v1/diagnostics/incidents/{error_id}/sensitive-detail",
+                headers=_auth(),
+                json={"confirmed": True, "action": "reveal"},
+            )
+            assert revealed.status_code == 200
+            assert revealed.headers["cache-control"] == "no-store"
+            assert revealed.json()["detail"] == f"HarnessTransportError: {failure}"
+
+            rejected = client.post(
+                f"/api/v1/diagnostics/incidents/{error_id}/actions/arbitrary_command",
+                headers=_auth(),
+                json={"confirmed": True},
+            )
+            assert rejected.status_code == 404
+
+        assert manager.flush()
+        audit = [
+            record
+            for record in _records(manager.log_dir / "diagnostics.log")
+            if record["event_code"] == "diagnostics.sensitive_detail.accessed"
+        ]
+        assert audit[-1]["metadata"] == {
+            "action": "reveal",
+            "operator_id": "local-operator",
+        }
+        assert str(failure) not in (manager.log_dir / "diagnostics.log").read_text(
+            encoding="utf-8"
         )
     finally:
         manager.close()

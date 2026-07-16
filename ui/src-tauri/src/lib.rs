@@ -8,7 +8,8 @@ mod sidecar;
 use diagnostics::{
     DiagnosticLevel, DiagnosticsState, diagnostics_files, diagnostics_get_settings,
     diagnostics_log_frontend, diagnostics_recent_errors, diagnostics_reveal_logs,
-    diagnostics_status, diagnostics_update_settings, install_panic_hook,
+    diagnostics_sensitive_detail, diagnostics_status, diagnostics_update_settings,
+    install_panic_hook,
 };
 use release::{check_for_update, install_available_update, release_info, restart_application};
 use sidecar::{BackendState, backend_status, start_local_backend, stop_local_backend};
@@ -150,6 +151,7 @@ fn build_app() -> tauri::App<Wry> {
             diagnostics_recent_errors,
             diagnostics_status,
             diagnostics_reveal_logs,
+            diagnostics_sensitive_detail,
             browser::browser_capabilities,
             browser::browser_create_tab,
             browser::browser_navigate,

@@ -104,6 +104,8 @@ import {
   newOperationId,
   rememberDiagnosticErrorPresentation,
   type DiagnosticFile,
+  type DiagnosticActionResult,
+  type DiagnosticIncident,
   type DiagnosticRecord,
   type DiagnosticSettings,
   type DiagnosticStatus,
@@ -1107,6 +1109,11 @@ export class ApiError extends Error {
   readonly feature?: string;
   readonly retryable?: boolean;
   readonly helpArticle?: string;
+  readonly operationId?: string;
+  readonly reasonCode?: string;
+  readonly operatorDetail?: string;
+  readonly impact?: string;
+  readonly remediationId?: string;
 
   constructor(message: string, status: number, requestId?: string, details?: unknown) {
     const envelope = details && typeof details === "object"
@@ -1125,9 +1132,18 @@ export class ApiError extends Error {
     this.feature = stringField(envelope?.feature);
     this.retryable = typeof envelope?.retryable === "boolean" ? envelope.retryable : undefined;
     this.helpArticle = stringField(envelope?.help_article);
+    this.operationId = stringField(envelope?.operation_id);
+    this.reasonCode = stringField(envelope?.reason_code);
+    this.operatorDetail = stringField(envelope?.operator_detail);
+    this.impact = stringField(envelope?.impact);
+    this.remediationId = stringField(envelope?.remediation_id);
     rememberDiagnosticErrorPresentation(reference, {
       retryable: this.retryable,
       code: this.code,
+      reasonCode: this.reasonCode,
+      operatorDetail: this.operatorDetail,
+      impact: this.impact,
+      remediationId: this.remediationId,
     });
   }
 }
@@ -2629,6 +2645,55 @@ export class ApiClient {
     if (after) parameters.set("after", after);
     return this.request<{ errors: DiagnosticRecord[] }>(`diagnostics/errors?${parameters}` , { signal })
       .then((result) => result.errors);
+  }
+
+  resolveDiagnosticIncidents(
+    records: DiagnosticRecord[],
+    signal?: AbortSignal,
+  ): Promise<DiagnosticIncident[]> {
+    return this.request<DiagnosticIncident[]>("diagnostics/incidents/resolve", {
+      method: "POST",
+      body: JSON.stringify({ records }),
+      signal,
+    });
+  }
+
+  diagnosticIncident(errorId: string, signal?: AbortSignal): Promise<DiagnosticIncident> {
+    return this.request<DiagnosticIncident>(
+      `diagnostics/incidents/${encodeURIComponent(errorId)}`,
+      { signal },
+    );
+  }
+
+  runDiagnosticAction(
+    errorId: string,
+    actionId: string,
+    confirmed: boolean,
+    signal?: AbortSignal,
+  ): Promise<DiagnosticActionResult> {
+    return this.request<DiagnosticActionResult>(
+      `diagnostics/incidents/${encodeURIComponent(errorId)}/actions/${encodeURIComponent(actionId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ confirmed, operator_id: "local-operator" }),
+        signal,
+      },
+    );
+  }
+
+  diagnosticSensitiveDetail(
+    errorId: string,
+    action: "reveal" | "copy",
+    signal?: AbortSignal,
+  ): Promise<{ error_id: string; action: "reveal" | "copy"; detail: string }> {
+    return this.request(
+      `diagnostics/incidents/${encodeURIComponent(errorId)}/sensitive-detail`,
+      {
+        method: "POST",
+        body: JSON.stringify({ confirmed: true, action, operator_id: "local-operator" }),
+        signal,
+      },
+    );
   }
 
   async exportDiagnostics(signal?: AbortSignal): Promise<Blob> {

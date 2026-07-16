@@ -18,6 +18,7 @@ from pydantic import SecretStr
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
+from nebula.v3.diagnostics import DiagnosticManager
 from nebula.v3.domain import (
     AgentRun,
     Approval,
@@ -1480,6 +1481,65 @@ def test_streamable_http_mcp_probe_injects_bearer_and_closes_session(tmp_path):
     assert report.compatible is True
     assert all(auth == "Bearer mcp-bearer-fixture" for _, auth in observed)
     assert deleted.is_set()
+
+
+def test_harness_transport_error_keeps_one_reference_from_ledger_to_api(tmp_path):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path, fail=True)
+    manager = DiagnosticManager(tmp_path / "diagnostics", watch_settings=False)
+    app = create_app(
+        store,
+        auth_token="test-token",
+        harness_runtime_service=runtime,
+        diagnostic_manager=manager,
+    )
+    headers = {
+        "Authorization": "Bearer test-token",
+        "X-Nebula-Operation-ID": "op_harness_transport_test",
+    }
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/chat/completions",
+                headers=headers,
+                json={
+                    "backend": "harness",
+                    "engagement_id": engagement.id,
+                    "harness_profile_id": profile.id,
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "Trigger transport loss"}],
+                },
+            )
+            assert response.status_code == 502, response.text
+            envelope = response.json()
+            assert envelope["error_id"].startswith("err_")
+            assert envelope["reason_code"] == "transport_closed"
+            assert "uncertain transport loss" in envelope["operator_detail"]
+            assert envelope["remediation_id"] == "harnesses.transport_closed"
+
+            [turn] = store.list_entities(
+                HarnessTurn, engagement_id=engagement.id, limit=100
+            )
+            replay = client.get(
+                f"/api/v1/harness-turns/{turn.id}/events", headers=headers
+            )
+            assert replay.status_code == 200
+            error_event = [
+                event for event in replay.json()["events"] if event["type"] == "error"
+            ][-1]
+            assert error_event["error_id"] == envelope["error_id"]
+            assert error_event["reason_code"] == "transport_closed"
+            assert error_event["operation_id"] == "op_harness_transport_test"
+            durable_turn = store.get(HarnessTurn, turn.id)
+            assert durable_turn.metadata["diagnostic_error_id"] == envelope["error_id"]
+
+            incident = client.get(
+                f"/api/v1/diagnostics/incidents/{envelope['error_id']}",
+                headers=headers,
+            )
+            assert incident.status_code == 200, incident.text
+            assert incident.json()["guidance"]["verification"]
+    finally:
+        manager.close()
 
 
 def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   nativeStatus: vi.fn(),
   nativeFiles: vi.fn(),
   nativeErrors: vi.fn(),
+  nativeSensitiveDetail: vi.fn(),
   clipboard: vi.fn(),
   api: {
     diagnosticsSettings: vi.fn(),
@@ -20,6 +21,8 @@ const mocks = vi.hoisted(() => ({
     diagnosticErrors: vi.fn(),
     updateDiagnosticsSettings: vi.fn(),
     exportDiagnostics: vi.fn(),
+    diagnosticSensitiveDetail: vi.fn(),
+    runDiagnosticAction: vi.fn(),
     health: vi.fn(),
     setupStatus: vi.fn(),
   },
@@ -49,12 +52,14 @@ vi.mock("./logger", () => ({
   nativeDiagnosticSettings: mocks.nativeSettings,
   nativeDiagnosticStatus: mocks.nativeStatus,
   nativeRecentErrors: mocks.nativeErrors,
+  nativeSensitiveDiagnosticDetail: mocks.nativeSensitiveDetail,
   normalizeDiagnosticSettings: (value: unknown) => {
     const candidate = value && typeof value === "object" ? value as Record<string, unknown> : {};
     return {
       schema: "nebula.diagnostics-settings/v1",
       global_level: candidate.global_level ?? "error",
       feature_levels: candidate.feature_levels ?? {},
+      sensitive_detail_capture: candidate.sensitive_detail_capture === true,
     };
   },
   revealNativeLogs: mocks.reveal,
@@ -66,6 +71,7 @@ const settings = {
   schema: "nebula.diagnostics-settings/v1" as const,
   global_level: "error" as const,
   feature_levels: {},
+  sensitive_detail_capture: false,
 };
 
 const status = {
@@ -143,6 +149,16 @@ describe("DiagnosticsPanel", () => {
     mocks.api.setupStatus.mockResolvedValue(setup);
     mocks.api.updateDiagnosticsSettings.mockImplementation(async (value: unknown) => value);
     mocks.api.exportDiagnostics.mockResolvedValue(new Blob(["zip"]));
+    mocks.api.diagnosticSensitiveDetail.mockResolvedValue({
+      error_id: "err_visible_123",
+      action: "reveal",
+      detail: "protected transport detail",
+    });
+    mocks.api.runDiagnosticAction.mockResolvedValue({
+      error_id: "err_visible_123",
+      action_id: "run_health_check",
+      result: { status: "ok" },
+    });
     mocks.confirm.mockResolvedValue(true);
     mocks.clipboard.mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: mocks.clipboard } });
@@ -162,8 +178,8 @@ describe("DiagnosticsPanel", () => {
     expect(screen.getByText("A chat stream could not complete.")).toBeVisible();
     expect(screen.getByText("Assistant chat · Response stream")).toBeVisible();
     expect(screen.getByText("The configured model provider stopped the stream.")).toBeVisible();
-    expect(screen.getByText("Retry the original action.")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Open Assistant" })).toHaveAttribute("href", "/?view=chat");
+    expect(screen.getByText("Review the technical evidence and correlation identifiers in this incident.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open Assistant chat" })).toHaveAttribute("href", "/?view=chat");
 
     expect(screen.getByText("err_visible_123")).not.toBeVisible();
     await user.click(screen.getByText("Technical details"));
@@ -200,6 +216,69 @@ describe("DiagnosticsPanel", () => {
       confirmLabel: "Export diagnostics",
     }));
     await waitFor(() => expect(mocks.api.exportDiagnostics).toHaveBeenCalledOnce());
+  });
+
+  it("confirms every protected reveal and copy and keeps detail out of exports", async () => {
+    const user = userEvent.setup();
+    const clipboard = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    mocks.api.diagnosticErrors.mockResolvedValue([{
+      ...errorRecord,
+      reason_code: "transport_closed",
+      sensitive_detail_available: true,
+      sensitive_detail_expires_at: "2026-07-15T12:00:00Z",
+    }]);
+    render(<DiagnosticsPanel />);
+
+    await user.click(await screen.findByRole("button", { name: "Reveal sensitive detail" }));
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Reveal sensitive detail?",
+    }));
+    expect(mocks.api.diagnosticSensitiveDetail).toHaveBeenCalledWith("err_visible_123", "reveal");
+    expect(await screen.findByLabelText("Sensitive diagnostic detail")).toHaveTextContent("protected transport detail");
+
+    mocks.api.diagnosticSensitiveDetail.mockResolvedValueOnce({
+      error_id: "err_visible_123",
+      action: "copy",
+      detail: "protected transport detail",
+    });
+    const copyButton = screen.getByRole("button", { name: "Copy sensitive detail" });
+    await waitFor(() => expect(copyButton).toBeEnabled());
+    await user.click(copyButton);
+    expect(mocks.confirm).toHaveBeenLastCalledWith(expect.objectContaining({
+      title: "Copy sensitive detail?",
+    }));
+    await waitFor(() => {
+      expect(mocks.api.diagnosticSensitiveDetail).toHaveBeenCalledWith("err_visible_123", "copy");
+      expect(clipboard).toHaveBeenCalledWith("protected transport detail");
+    });
+    expect(mocks.api.exportDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it("groups Core and handled interface records and confirms allowlisted recovery actions", async () => {
+    const user = userEvent.setup();
+    mocks.api.diagnosticErrors.mockResolvedValue([
+      { ...errorRecord, source: "interface", event_code: "interface.api.handled_failure" },
+      {
+        ...errorRecord,
+        source: "core",
+        event_code: "chat.transport.closed",
+        reason_code: "transport_closed",
+        operator_detail: "The provider closed the response stream before completion.",
+      },
+    ]);
+    render(<DiagnosticsPanel />);
+
+    await screen.findByText("The provider closed the response stream before completion.");
+    expect(document.querySelectorAll(".diagnostic-failure-card")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Run health check" }));
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Run health check?",
+    }));
+    await waitFor(() => expect(mocks.api.runDiagnosticAction).toHaveBeenCalledWith(
+      "err_visible_123",
+      "run_health_check",
+      true,
+    ));
   });
 
   it("keeps available failures visible when an independent source fails", async () => {
@@ -286,7 +365,7 @@ describe("DiagnosticsPanel", () => {
     render(<DiagnosticsPanel />);
 
     expect(await screen.findByText(/is no longer in recent diagnostics/)).toBeVisible();
-    expect(screen.getByText("No additional safe cause was recorded.")).toBeVisible();
-    expect(screen.getByText("No verified recovery procedure is available.")).toBeVisible();
+    expect(screen.getByText("Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.")).toBeVisible();
+    expect(screen.getByText("Review the technical evidence and correlation identifiers in this incident.")).toBeVisible();
   });
 });

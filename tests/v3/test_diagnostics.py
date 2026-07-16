@@ -700,6 +700,7 @@ def test_diagnostics_cli_status_levels_reset_and_export(tmp_path: Path) -> None:
         "schema": SETTINGS_SCHEMA,
         "global_level": "error",
         "feature_levels": {},
+        "sensitive_detail_capture": False,
     }
 
     diagnostics.shutdown_diagnostics()

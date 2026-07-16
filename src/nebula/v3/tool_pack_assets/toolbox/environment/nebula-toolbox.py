@@ -419,7 +419,9 @@ def _execute(
             check=False,
         )
         return int(completed.returncode)
-    except subprocess.TimeoutExpired:
+    except (
+        subprocess.TimeoutExpired
+    ):  # diagnostic-expected: exit 124 is the wrapper timeout contract
         # Child output was already relayed. Core records this status and the
         # partial streams even though the adapter-level deadline fired.
         print(

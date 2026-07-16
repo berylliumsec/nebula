@@ -578,7 +578,9 @@ def _decoded_result(value: object) -> dict[str, Any] | None:
         return None
     try:
         decoded = json.loads(value)
-    except json.JSONDecodeError:
+    except (
+        json.JSONDecodeError
+    ):  # diagnostic-expected: legacy tool history fails closed
         return None
     return decoded if isinstance(decoded, dict) else None
 
