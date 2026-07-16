@@ -1440,6 +1440,10 @@ export function SessionsPage() {
 
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "ArrowUp" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && draft.length === 0) {
+      // An empty textarea has no caret movement to consume ArrowUp, so WebKit can
+      // pass the key through to the scrolling workbench. Keep history navigation
+      // owned by the composer even when there is no message to restore.
+      event.preventDefault();
       let lastUserMessage: ConversationMessage | undefined;
       for (let index = messages.length - 1; index >= 0; index -= 1) {
         if (messages[index]?.role === "user") {
@@ -1448,7 +1452,6 @@ export function SessionsPage() {
         }
       }
       if (lastUserMessage) {
-        event.preventDefault();
         setDraft(lastUserMessage.content);
         globalThis.requestAnimationFrame?.(() => {
           const composer = composerRef.current;

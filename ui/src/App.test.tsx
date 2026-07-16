@@ -344,12 +344,15 @@ describe("Nebula workspace", () => {
     expect(await screen.findByText("Bounded answer")).toBeVisible();
     expect(composer).toHaveValue("");
     await user.click(composer);
-    await user.keyboard("{ArrowUp}");
+    expect(fireEvent.keyDown(composer, { key: "ArrowUp" })).toBe(false);
     expect(composer).toHaveValue("Review the scope");
     await user.clear(composer);
     await user.type(composer, "Keep this draft");
     await user.keyboard("{ArrowUp}");
     expect(composer).toHaveValue("Keep this draft");
+    await user.clear(composer);
+    fireEvent.change(composer, { target: { value: "" } });
+    expect(fireEvent.keyDown(composer, { key: "ArrowUp" })).toBe(false);
     const chatCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/chat/completions"));
     expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({
       provider_id: "provider-1",

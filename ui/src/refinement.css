@@ -469,8 +469,9 @@ kbd { font-size: 11px; }
 .session-scope { font-size: 11px; }
 .session-mobile-list { display: none; }
 .session-layout { min-height: 620px; border-color: var(--border-soft); border-radius: 0 0 13px 13px; }
-.session-layout.chat { grid-template-columns: 220px minmax(420px, 1fr) 280px; }
+.session-layout.chat { height: calc(100dvh - var(--top-height) - 210px); grid-template-columns: 220px minmax(420px, 1fr) 280px; }
 .session-layout.chat.conversation-panel-expanded { grid-template-columns: 340px minmax(420px, 1fr) 280px; }
+.session-layout.chat .session-workspace, .session-layout.chat .chat-panel { height: 100%; min-height: 0; }
 .session-layout.terminal, .session-layout.browser { grid-template-columns: minmax(0, 1fr); }
 .session-layout.code, .session-layout.executions, .session-layout.activity, .session-layout.workspace, .session-layout.notes { grid-template-columns: minmax(0, 1fr); }
 .session-list { min-width: 0; border-right: 1px solid var(--border-soft); background: var(--surface); }
@@ -544,7 +545,7 @@ kbd { font-size: 11px; }
 .chat-context-bar { grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto; gap: 10px; padding: 10px 12px; }
 .chat-context-bar > label, .chat-knowledge-toggle > span, .chat-knowledge-toggle small { font-size: 11px; }
 .chat-context-bar select, .chat-context-bar input:not([type="checkbox"]) { height: 34px; border-radius: 8px; font-size: 12px; }
-.chat-scroll { padding: 28px 30px; }
+.chat-scroll { padding: 28px 30px; overscroll-behavior: contain; }
 .chat-message { grid-template-columns: 34px minmax(0, 1fr); }
 .chat-avatar { width: 32px; height: 32px; border-radius: 10px; font-size: 11px; }
 :root[data-theme="light"] .chat-message.operator .chat-avatar { color: #fff; }
