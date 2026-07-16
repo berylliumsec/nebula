@@ -34,7 +34,12 @@ from .providers import (
     ToolDefinition,
 )
 from .redaction import redact_text
-from .tool_interfaces import ToolInterfaceCatalog, ToolInterfaceError
+from .tool_interfaces import (
+    ToolInterfaceCatalog,
+    ToolInterfaceError,
+    normalize_selected_invocation_values,
+    select_command_interface,
+)
 from .tools import ApprovalRequired, PolicyDenied, ToolBroker, ToolInvocation, ToolSpec
 from .tool_results import (
     ToolResultStatus,
@@ -252,8 +257,13 @@ class BrokeredToolSpecialist:
                             selection["tool"], selection["command_path"]
                         )
                     )
-                    selected_interface = self.interface_catalog.command(
-                        selection["tool"], selection["command_path"]
+                    selected_interface = select_command_interface(
+                        (self.interface_catalog,),
+                        {
+                            "tool": selection["tool"],
+                            "command_path": selection["command_path"],
+                            "requested_options": selection["requested_options"],
+                        },
                     )
                 except ToolInterfaceError as exc:
                     record_caught_exception(
@@ -291,6 +301,7 @@ class BrokeredToolSpecialist:
                     context,
                     selected_allowed,
                     interface_context=interface_context,
+                    selected_interface=selected_interface,
                 )
             )
             usage = (
@@ -336,7 +347,37 @@ class BrokeredToolSpecialist:
                 raise MissionError(
                     "model changed the command path after interface selection"
                 )
-            invocation_payload = {**invocation_payload, "command_path": execution_path}
+            selected_command = selected_interface["command"]
+            allowed_options = {
+                item.get("id")
+                for item in selected_command.get("options", [])
+                if isinstance(item, dict)
+            }
+            allowed_positionals = {
+                item.get("id")
+                for item in selected_command.get("positionals", [])
+                if isinstance(item, dict)
+            }
+            if any(
+                not isinstance(item, dict) or item.get("id") not in allowed_options
+                for item in invocation_payload.get("options", [])
+            ):
+                raise MissionError(
+                    "structured invocation used an option absent from the selected interface"
+                )
+            if any(
+                not isinstance(item, dict) or item.get("id") not in allowed_positionals
+                for item in invocation_payload.get("positionals", [])
+            ):
+                raise MissionError(
+                    "structured invocation used a positional absent from the selected interface"
+                )
+            invocation_payload = {
+                **normalize_selected_invocation_values(
+                    selected_interface, invocation_payload
+                ),
+                "command_path": execution_path,
+            }
             call = call.model_copy(
                 update={
                     "arguments": {
@@ -410,6 +451,7 @@ class BrokeredToolSpecialist:
         allowed: frozenset[str],
         *,
         interface_context: str,
+        selected_interface: dict[str, Any] | None,
     ) -> ModelRequest:
         return ModelRequest(
             model=self.model,
@@ -419,7 +461,12 @@ class BrokeredToolSpecialist:
                 "of the supplied execution capabilities.\n" + interface_context
             ),
             messages=[ModelMessage(role="user", content=self._prompt(context))],
-            tools=[self._definition(self.specs[name]) for name in sorted(allowed)],
+            tools=[
+                self._selected_execution_definition(
+                    self.specs[name], selected_interface
+                )
+                for name in sorted(allowed)
+            ],
             tool_choice=ToolChoice.REQUIRED,
             parallel_tool_calls=False,
             tool_results=self._provider_tool_history(context),
@@ -616,9 +663,23 @@ class BrokeredToolSpecialist:
                         "maxItems": 16,
                         "items": {"type": "string"},
                     },
+                    "requested_options": {
+                        "type": "array",
+                        "maxItems": 12,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "description": (
+                            "Exact flags or short behavior phrases needed for the objective."
+                        ),
+                    },
                     "rationale": {"type": "string", "minLength": 1, "maxLength": 1000},
                 },
-                "required": ["mode", "tool", "command_path", "rationale"],
+                "required": [
+                    "mode",
+                    "tool",
+                    "command_path",
+                    "requested_options",
+                    "rationale",
+                ],
                 "additionalProperties": False,
             },
             strict=True,
@@ -626,7 +687,13 @@ class BrokeredToolSpecialist:
 
     @staticmethod
     def _validate_interface_selection(selection: dict[str, Any]) -> dict[str, Any]:
-        if set(selection) != {"mode", "tool", "command_path", "rationale"}:
+        if set(selection) != {
+            "mode",
+            "tool",
+            "command_path",
+            "requested_options",
+            "rationale",
+        }:
             raise MissionError("interface selection has invalid fields")
         if selection["mode"] not in {"structured", "shell"}:
             raise MissionError("interface selection has an invalid mode")
@@ -636,6 +703,11 @@ class BrokeredToolSpecialist:
             not isinstance(item, str) for item in selection["command_path"]
         ):
             raise MissionError("interface selection has an invalid command path")
+        if not isinstance(selection["requested_options"], list) or any(
+            not isinstance(item, str) or not item
+            for item in selection["requested_options"]
+        ):
+            raise MissionError("interface selection has invalid requested options")
         return selection
 
     @staticmethod
@@ -974,6 +1046,50 @@ class BrokeredToolSpecialist:
             input_schema=input_schema,
             strict=True,
         )
+
+    @classmethod
+    def _selected_execution_definition(
+        cls, spec: ToolSpec, selection: dict[str, Any] | None
+    ) -> ToolDefinition:
+        definition = cls._definition(spec)
+        if selection is None or not spec.name.startswith("environment.run_"):
+            return definition
+        schema = deepcopy(definition.input_schema)
+        properties = schema.get("properties")
+        command = selection.get("command")
+        tool = selection.get("tool")
+        if not isinstance(properties, dict) or not isinstance(command, dict):
+            return definition
+        if isinstance(tool, dict) and isinstance(tool.get("name"), str):
+            properties["tool"] = {"type": "string", "const": tool["name"]}
+        invocation = properties.get("invocation")
+        invocation_properties = (
+            invocation.get("properties") if isinstance(invocation, dict) else None
+        )
+        if not isinstance(invocation_properties, dict):
+            return definition.model_copy(update={"input_schema": schema})
+        invocation_properties["command_path"] = {
+            "type": "array",
+            "const": command.get("path", []),
+        }
+        for field, descriptors in (
+            ("options", command.get("options", [])),
+            ("positionals", command.get("positionals", [])),
+        ):
+            collection = invocation_properties.get(field)
+            items = collection.get("items") if isinstance(collection, dict) else None
+            item_properties = (
+                items.get("properties") if isinstance(items, dict) else None
+            )
+            if not isinstance(item_properties, dict):
+                continue
+            identifiers = sorted(
+                item["id"]
+                for item in descriptors
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            )
+            item_properties["id"] = {"type": "string", "enum": identifiers}
+        return definition.model_copy(update={"input_schema": schema})
 
     @staticmethod
     def _prior(context: SpecialistContext) -> str | dict[str, str]:

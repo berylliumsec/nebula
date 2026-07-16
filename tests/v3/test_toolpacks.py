@@ -965,6 +965,114 @@ def test_chat_components_ignore_stale_assignment_when_ready_digest_exists(
     }
 
 
+def test_chat_components_use_latest_assignment_for_overlapping_tool_names(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(Database(tmp_path / "overlapping-platform.db"))
+    engagement = store.create(Engagement(name="Overlapping environments"))
+    scope = store.create(ScopePolicy(engagement_id=engagement.id))
+    engagement = store.update(
+        Engagement,
+        engagement.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=engagement.revision,
+    )
+    store.create(
+        RunnerProfile(
+            id="local",
+            name="Local",
+            runtime=RunnerRuntime.DOCKER,
+            executable="/usr/bin/docker",
+            platform="linux/amd64",
+            isolation=RunnerIsolation.ROOTLESS,
+            healthy=True,
+        )
+    )
+    assignment_names = {
+        DIGEST_B: ["environment.search", "environment.inspect"],
+        DIGEST_C: ["environment.search", "environment.hash"],
+    }
+    for digest, name in ((DIGEST_B, "staging"), (DIGEST_C, "official")):
+        store.create(
+            ToolPackInstallation(
+                publisher="example",
+                name=name,
+                version="1.0.0",
+                manifest_digest=digest,
+                source="test",
+                trust=ToolPackTrust.LOCAL_UNSIGNED,
+                runtime_profile_id="local",
+                status=ToolPackInstallationStatus.READY,
+                manifest_path=str(tmp_path / f"{name}.json"),
+                installed_at=utc_now(),
+                verified_at=utc_now(),
+            )
+        )
+        store.create(
+            EngagementToolAssignment(
+                engagement_id=engagement.id,
+                manifest_digest=digest,
+                allowed_tool_names=assignment_names[digest],
+                assigned_by="operator",
+            )
+        )
+
+    selected_digests = []
+
+    async def search(_arguments):
+        return {"result": "ok"}
+
+    def registry_for(installations, **_kwargs):
+        selected_digests.extend(item.manifest_digest for item in installations)
+        registry = ToolRegistry()
+        for installation in installations:
+            for tool_name in assignment_names[installation.manifest_digest]:
+                registry.register(
+                    AnalysisTool(
+                        ToolSpec(
+                            name=tool_name,
+                            description="Use the selected environment",
+                            input_schema={
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": False,
+                            },
+                            output_schema={
+                                "type": "object",
+                                "additionalProperties": True,
+                            },
+                            risk_class=RiskClass.LOCAL_READ,
+                        ),
+                        search,
+                    )
+                )
+        return registry
+
+    monkeypatch.setattr("nebula.v3.tool_platform.build_tool_registry", registry_for)
+    platform = ToolPlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "core-data",
+        tool_pack_root=tmp_path / "packs",
+        execution_enabled=True,
+    )
+
+    components = platform.chat_components(
+        engagement_id=engagement.id,
+        turn_id="turn-1",
+        provider=object(),
+        model="model-1",
+    )
+
+    assert selected_digests == [DIGEST_B, DIGEST_C]
+    assert components.tool_pack_digests == (DIGEST_B, DIGEST_C)
+    assert {
+        "environment.hash",
+        "environment.inspect",
+        "environment.search",
+    }.issubset(components.specs)
+
+
 def test_chat_components_allow_analysis_only_harness_without_saved_scope(tmp_path):
     store = NebulaStore(Database(tmp_path / "analysis-only-platform.db"))
     engagement = store.create(Engagement(name="Fresh project"))

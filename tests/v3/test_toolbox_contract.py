@@ -451,6 +451,16 @@ def test_core_selects_compact_exact_nmap_interface(tmp_path):
     assert selected_environment_capability(selected) == "environment.run_network"
     assert "help_documents" not in json.dumps(selected)
 
+    port_only = select_command_interface(
+        (catalog,),
+        {
+            "tool": "nmap",
+            "command_path": [],
+            "requested_options": ["-p"],
+        },
+    )
+    assert [item["id"] for item in port_only["command"]["options"]] == ["p"]
+
 
 def test_toolbox_mission_groups_structured_and_shell_capabilities():
     names = (
@@ -645,6 +655,7 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
                         "mode": "structured",
                         "tool": "jq",
                         "command_path": ["jq"],
+                        "requested_options": ["filter expression"],
                         "rationale": "Use the exact jq interface.",
                     },
                 )
@@ -691,7 +702,35 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
             "type": "object",
             "properties": {
                 "tool": {"type": "string"},
-                "invocation": {"type": "object"},
+                "invocation": {
+                    "type": "object",
+                    "properties": {
+                        "command_path": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "options": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "value": {},
+                                },
+                            },
+                        },
+                        "positionals": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "value": {},
+                                },
+                            },
+                        },
+                    },
+                },
                 "cwd": {"type": "string"},
             },
             "required": ["tool", "invocation", "cwd"],
@@ -744,6 +783,18 @@ def test_specialist_injects_selected_exact_interface_before_execution(tmp_path):
         "type": "string",
         "const": ".",
         "description": "Engagement workspace root; supplied by Nebula Core.",
+    }
+    execution_schema = provider.requests[1].tools[0].input_schema["properties"]
+    assert execution_schema["tool"] == {"type": "string", "const": "jq"}
+    selected_invocation = execution_schema["invocation"]["properties"]
+    assert selected_invocation["command_path"] == {"type": "array", "const": []}
+    assert selected_invocation["options"]["items"]["properties"]["id"] == {
+        "type": "string",
+        "enum": [],
+    }
+    assert selected_invocation["positionals"]["items"]["properties"]["id"] == {
+        "type": "string",
+        "enum": ["files", "filter"],
     }
     assert spec.input_schema["properties"]["cwd"] == {"type": "string"}
 

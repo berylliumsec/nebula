@@ -426,19 +426,6 @@ def select_command_interface(
             }
         )
 
-    example_flags = {
-        argument
-        for example in interface["tool"].get("examples", [])
-        if isinstance(example, dict)
-        for argument in example.get("arguments", [])
-        if isinstance(argument, str) and argument.startswith(("-", "+"))
-    }
-    selected_ids.update(
-        option["id"]
-        for option in options
-        if any(flag in example_flags for flag in option["flags"])
-    )
-
     selected_options = [option for option in options if option["id"] in selected_ids]
     return {
         "schema": COMMAND_SELECTION_SCHEMA,

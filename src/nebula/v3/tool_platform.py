@@ -121,6 +121,26 @@ IMPLICIT_ENVIRONMENT_TOOL_NAMES = frozenset(
 )
 
 
+def _effective_assignment_digests(
+    assignments: list[EngagementToolAssignment],
+) -> dict[str, str]:
+    """Resolve flat capability names with deterministic last-writer precedence.
+
+    Tool packs intentionally share the ``environment.*`` adapter names.  An
+    engagement can retain assignments for an older, staging, or local pack, so
+    loading every enabled assignment into one registry makes those legitimate
+    states fail with a duplicate-name exception.  The most recently updated
+    assignment is the operator's latest choice for an overlapping capability;
+    non-overlapping capabilities continue to compose across packs.
+    """
+
+    effective: dict[str, str] = {}
+    for assignment in sorted(assignments, key=lambda item: (item.updated_at, item.id)):
+        for name in assignment.allowed_tool_names:
+            effective[name] = assignment.manifest_digest
+    return effective
+
+
 @dataclass(frozen=True)
 class ChatToolComponents:
     broker: ToolBroker
@@ -1070,22 +1090,20 @@ class ToolPlatform:
             for item in self.store.list_entities(EngagementToolAssignment, limit=1_000)
             if item.engagement_id == engagement.id and item.enabled
         ]
-        digest_by_tool = {
-            name: item.manifest_digest
-            for item in assignments
-            for name in item.allowed_tool_names
-        }
+        digest_by_tool = _effective_assignment_digests(assignments)
         if any(name not in digest_by_tool for name in selected_oci):
             raise MissionConfigurationError("tool assignment changed before execution")
         digests = sorted({digest_by_tool[name] for name in selected_oci})
         if digests != sorted(run.tool_pack_digests):
             raise MissionConfigurationError("tool-pack lock changed before execution")
         all_installations = self.store.list_entities(ToolPackInstallation, limit=1_000)
-        installations = [
-            item
+        ready_by_digest = {
+            item.manifest_digest: item
             for item in all_installations
-            if item.manifest_digest in digests
-            and item.status == ToolPackInstallationStatus.READY
+            if item.status == ToolPackInstallationStatus.READY
+        }
+        installations = [
+            ready_by_digest[digest] for digest in digests if digest in ready_by_digest
         ]
         if {item.manifest_digest for item in installations} != set(digests):
             raise MissionConfigurationError("a locked tool pack is no longer ready")
@@ -1125,10 +1143,11 @@ class ToolPlatform:
             parser_executor = SandboxParserExecutor(
                 runner=runner, parser_root=self.parser_root
             )
-            registry_all = build_tool_registry(
+            registry_all = self._build_selected_tool_registry(
                 installations,
+                selected_digests=digest_by_tool,
+                selected_names=selected_oci,
                 platform=runner_platform,
-                manifests=self.manifests,
                 parser_executor=parser_executor,
             )
             for name in selected_oci:
@@ -1291,15 +1310,17 @@ class ToolPlatform:
             selected_oci = list(dict.fromkeys(frozen_tool_names or ()))
             digests = list(dict.fromkeys(frozen_pack_digests))
             installations = [ready_by_digest[digest] for digest in digests]
+            digest_by_tool = {}
+            for installation in installations:
+                manifest = self.manifests.get(installation.manifest_digest)
+                available = {tool.name for tool in manifest.tools}
+                for name in selected_oci:
+                    if name in available:
+                        digest_by_tool[name] = installation.manifest_digest
         else:
-            selected_oci = list(
-                dict.fromkeys(
-                    name
-                    for item in ready_assignments
-                    for name in item.allowed_tool_names
-                )
-            )
-            digests = sorted({item.manifest_digest for item in ready_assignments})
+            digest_by_tool = _effective_assignment_digests(ready_assignments)
+            selected_oci = sorted(digest_by_tool)
+            digests = sorted(set(digest_by_tool.values()))
             installations = [ready_by_digest[digest] for digest in digests]
         if selected_oci and not self.execution_enabled:
             raise ToolPlatformError("Toolbox OCI execution is disabled in this Core")
@@ -1342,10 +1363,11 @@ class ToolPlatform:
             parser_executor = SandboxParserExecutor(
                 runner=self._runner(runner_profile), parser_root=self.parser_root
             )
-            registry_all = build_tool_registry(
+            registry_all = self._build_selected_tool_registry(
                 installations,
+                selected_digests=digest_by_tool,
+                selected_names=selected_oci,
                 platform=runner_platform,
-                manifests=self.manifests,
                 parser_executor=parser_executor,
             )
             for name in selected_oci:
@@ -1803,6 +1825,36 @@ class ToolPlatform:
             ),
             developer_mode=self.developer_mode,
         )
+
+    def _build_selected_tool_registry(
+        self,
+        installations: list[ToolPackInstallation],
+        *,
+        selected_digests: Mapping[str, str],
+        selected_names: list[str],
+        platform: Literal["linux/amd64", "linux/arm64"],
+        parser_executor: SandboxParserExecutor,
+    ) -> ToolRegistry:
+        """Build packs separately so unselected duplicate names never collide."""
+
+        registry = ToolRegistry()
+        for installation in installations:
+            names = [
+                name
+                for name in selected_names
+                if selected_digests.get(name) == installation.manifest_digest
+            ]
+            if not names:
+                continue
+            pack_registry = build_tool_registry(
+                [installation],
+                platform=platform,
+                manifests=self.manifests,
+                parser_executor=parser_executor,
+            )
+            for name in names:
+                registry.register(pack_registry.get(name))
+        return registry
 
     def _runner(
         self,
