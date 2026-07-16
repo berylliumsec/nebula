@@ -427,7 +427,7 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
 test(firstRunThemeTest, async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
-  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
@@ -862,7 +862,7 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
 
-  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   await expect(page.getByRole("complementary", { name: "Primary navigation" })).toHaveCount(1);
   await expect(page.locator("main#main-content")).toHaveCount(1);
   for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
@@ -879,12 +879,11 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
       viewport,
       shellOverflow: document.documentElement.scrollWidth > viewport.width || document.documentElement.scrollHeight > viewport.height,
       main: bounds(".main-content"),
-      deck: bounds(".zero-layer-deck"),
       navigation: bounds(".side-nav"),
     };
   });
   expect(geometry.shellOverflow).toBe(false);
-  for (const surface of [geometry.main, geometry.deck, geometry.navigation]) {
+  for (const surface of [geometry.main, geometry.navigation]) {
     expect(surface.left).toBeGreaterThanOrEqual(0);
     expect(surface.right).toBeLessThanOrEqual(geometry.viewport.width + 1);
     expect(surface.top).toBeGreaterThanOrEqual(0);
@@ -916,37 +915,6 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   await page.getByRole("option", { name: /Use dark theme/ }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   expect(await terminal.evaluate((element) => (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal === element)).toBe(true);
-});
-
-test("Zero contextual modules use existing route actions", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Context actions only need one browser project.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
-  await page.route("**/api/v1/approvals**", async (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify([{
-      ...entity,
-      id: "approval-zero",
-      engagement_id: "scratch-project",
-      run_id: "run-zero",
-      status: "pending",
-      risk_class: "active_scan",
-      exact_request: { tool_name: "scan.tcp", arguments: { target: "gateway.local", ports: [443] } },
-      policy_rationale: "Confirm the exposed service.",
-      requested_by: "network-analyst",
-      requested_at: entity.created_at,
-      expected_effects: ["Probe one in-scope target"],
-    }]),
-  }));
-  await openWorkspace(page, "/", "Workbench");
-  const context = page.getByRole("region", { name: "Zero Layer context" });
-  await context.getByRole("button", { name: /Review request/ }).click();
-  await expect(page.getByRole("complementary", { name: "Activity inspector" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: /Approvals/ })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("button", { name: "Close activity center" }).click();
-  await context.getByRole("link", { name: /Connect an assistant model.*Open setup/ }).click();
-  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
 });
 
 for (const [name, route, heading] of workspaces) {

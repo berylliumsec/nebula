@@ -74,7 +74,7 @@
   isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 64px auto minmax(0, 1fr) 78px;
+  grid-template-rows: 64px minmax(0, 1fr) 78px;
   gap: 10px;
   padding: 12px;
   overflow: hidden;
@@ -253,7 +253,7 @@
   z-index: 30;
   inset: auto;
   grid-column: 1;
-  grid-row: 4;
+  grid-row: 3;
   display: grid;
   min-width: 0;
   min-height: 0;
@@ -372,7 +372,7 @@
   position: relative;
   z-index: auto;
   grid-column: 1;
-  grid-row: 3;
+  grid-row: 2;
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -601,7 +601,7 @@
   :root[data-theme="zero"] .app-shell.zero-layer-shell.with-activity,
   :root[data-theme="zero"] .app-shell.zero-layer-shell.sidebar-collapsed,
   :root[data-theme="zero"] .app-shell.zero-layer-shell.sidebar-collapsed.with-activity {
-    grid-template-rows: 58px auto minmax(0, 1fr) 70px;
+    grid-template-rows: 58px minmax(0, 1fr) 70px;
     gap: 8px;
     padding: 8px;
   }

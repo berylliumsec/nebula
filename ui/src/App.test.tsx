@@ -79,7 +79,8 @@ describe("Nebula workspace", () => {
   it("uses Zero as the first-run theme while preserving explicit preferences", async () => {
     const firstRender = renderApp();
     expect(document.documentElement).toHaveAttribute("data-theme", "zero");
-    expect(await screen.findByRole("region", { name: "Zero Layer context" })).toBeVisible();
+    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
+    expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
     expect(localStorage.getItem("nebula.theme")).toBeNull();
 
     firstRender.unmount();
@@ -134,9 +135,9 @@ describe("Nebula workspace", () => {
   it("renders the contextual Zero shell only for the restored Zero preference", async () => {
     localStorage.setItem("nebula.theme", "zero");
     const firstRender = renderApp();
-    expect(await screen.findByRole("region", { name: "Zero Layer context" })).toBeVisible();
     expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
-    expect(screen.getByRole("link", { name: /Open overview/ })).toHaveAttribute("href", "/project");
+    expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Primary navigation" }).querySelector('a[href="/project"]')).toBeInTheDocument();
 
     firstRender.unmount();
     localStorage.setItem("nebula.theme", "dark");
