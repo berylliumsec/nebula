@@ -1246,8 +1246,13 @@ class ToolPlatform:
             raise ToolPlatformError("frozen Toolbox snapshots require OCI tools")
         engagement = self.store.get(Engagement, engagement_id)
         if not engagement.scope_policy_id:
-            raise ToolPlatformError("engagement has no scope policy")
-        scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if not allow_empty:
+                raise ToolPlatformError("engagement has no scope policy")
+            scope = ScopePolicy(
+                id=f"scope:{engagement.id}", engagement_id=engagement.id
+            )
+        else:
+            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
 
         assignments = (
             [

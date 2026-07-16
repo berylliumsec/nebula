@@ -135,6 +135,11 @@ def main() -> None:
     operator_help = root / "src" / "nebula" / "v3" / "operator_help.md"
     if not operator_help.is_file():
         raise RuntimeError("the bundled Nebula 3 operator-help corpus is required")
+    diagnostic_guidance = (
+        root / "src" / "nebula" / "v3" / "diagnostic_guidance.json"
+    )
+    if not diagnostic_guidance.is_file():
+        raise RuntimeError("the bundled diagnostic guidance catalog is required")
     kali_tool_inventory = root / "src" / "nebula" / "v3" / "kali_tool_inventory.py"
     if not kali_tool_inventory.is_file():
         raise RuntimeError("the Kali security-tool inventory helper is required")
@@ -183,6 +188,8 @@ def main() -> None:
         f"{report_assets}:nebula/v3/report_assets",
         "--add-data",
         f"{operator_help}:nebula/v3",
+        "--add-data",
+        f"{diagnostic_guidance}:nebula/v3",
         "--add-data",
         f"{kali_tool_inventory}:nebula/v3",
     ]

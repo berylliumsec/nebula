@@ -965,6 +965,37 @@ def test_chat_components_ignore_stale_assignment_when_ready_digest_exists(
     }
 
 
+def test_chat_components_allow_analysis_only_harness_without_saved_scope(tmp_path):
+    store = NebulaStore(Database(tmp_path / "analysis-only-platform.db"))
+    engagement = store.create(Engagement(name="Fresh project"))
+    platform = ToolPlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "core-data",
+        tool_pack_root=tmp_path / "packs",
+        execution_enabled=True,
+    )
+
+    components = platform.chat_components(
+        engagement_id=engagement.id,
+        turn_id="harness-gateway",
+        provider=object(),
+        model="model-1",
+        allow_empty=True,
+    )
+
+    assert components.scope.id == f"scope:{engagement.id}"
+    assert components.scope.engagement_id == engagement.id
+    assert components.tool_pack_digests == ()
+    assert set(components.specs) == {
+        "tool_output.search",
+        "tool_output.read",
+        "workspace.search",
+        "workspace.read",
+    }
+    assert store.count(ScopePolicy, engagement_id=engagement.id) == 0
+
+
 def test_human_terminal_runner_prefers_local_and_rejects_ambiguity(tmp_path):
     store = NebulaStore(Database(tmp_path / "human-runner.db"))
     engagement = store.create(Engagement(name="Kali lab"))
