@@ -4329,10 +4329,12 @@ export class ApiClient {
     file: Blob,
     overwrite = false,
     signal?: AbortSignal,
+    expectedSha256?: string,
   ): Promise<WorkspaceUploadResult> {
     const headers = new Headers({ "Content-Type": "application/octet-stream" });
     const token = this.getToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
+    if (expectedSha256) headers.set("If-Match", expectedSha256);
     const parameters = new URLSearchParams({ path, overwrite: String(overwrite) });
     const response = await this.fetchImpl(
       `${this.baseUrl}/engagements/${encodeURIComponent(engagementId)}/workspace/file?${parameters}`,

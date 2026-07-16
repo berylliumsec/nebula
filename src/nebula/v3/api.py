@@ -3718,6 +3718,11 @@ def create_app(
         request: Request,
         path: str = Query(min_length=1, max_length=4096),
         overwrite: bool = Query(default=False),
+        if_match: str | None = Header(
+            default=None,
+            alias="If-Match",
+            pattern=r"^[0-9a-f]{64}$",
+        ),
     ) -> WorkspaceUploadResult:
         workspace = require_workspace_service()
 
@@ -3727,6 +3732,7 @@ def create_app(
                 path,
                 request.stream(),
                 overwrite=overwrite,
+                expected_sha256=if_match,
             )
 
         # Uploads use a private file plus an atomic directory-fd rename and are

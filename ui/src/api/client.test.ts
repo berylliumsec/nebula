@@ -299,7 +299,8 @@ describe("ApiClient", () => {
     });
     const file = new Blob(["proof"], { type: "text/plain" });
 
-    const result = await client.uploadWorkspaceFile("project-1", "notes/proof.txt", file, true);
+    const expectedSha256 = "b".repeat(64);
+    const result = await client.uploadWorkspaceFile("project-1", "notes/proof.txt", file, true, undefined, expectedSha256);
 
     expect(result).toMatchObject({ path: "notes/proof.txt", size: 5, overwritten: true });
     const [url, init] = fetchMock.mock.calls[0];
@@ -308,6 +309,7 @@ describe("ApiClient", () => {
     expect(init?.body).toBe(file);
     expect(new Headers(init?.headers).get("Content-Type")).toBe("application/octet-stream");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer local-token");
+    expect(new Headers(init?.headers).get("If-Match")).toBe(expectedSha256);
   });
 
   it("maps snake_case Core arrays into engagement and run summaries", async () => {
