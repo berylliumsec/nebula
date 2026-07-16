@@ -71,7 +71,13 @@ export interface MissionCreateRequest {
   allowCloudToolResults?: boolean;
 }
 
-export type ToolPackStatus = "pending" | "pulling" | "verifying" | "ready" | "failed" | "disabled";
+export type ToolPackStatus =
+  | "pending"
+  | "pulling"
+  | "verifying"
+  | "ready"
+  | "failed"
+  | "disabled";
 
 export interface ToolPackCatalogEntry {
   id: Identifier;
@@ -119,7 +125,16 @@ export interface ToolSummary {
   packId: Identifier;
   packManifestDigest: string;
   description: string;
-  riskClass: "local_read" | "passive" | "active_scan" | "workspace_write" | "credential_use" | "exploitation" | "persistence" | "destructive" | "scope_change";
+  riskClass:
+    | "local_read"
+    | "passive"
+    | "active_scan"
+    | "workspace_write"
+    | "credential_use"
+    | "exploitation"
+    | "persistence"
+    | "destructive"
+    | "scope_change";
   requiresNetwork: boolean;
   requiresApproval: boolean;
   available: boolean;
@@ -128,7 +143,13 @@ export interface ToolSummary {
 
 export interface CustomToolArgumentDefinition {
   name: string;
-  valueType: "string" | "integer" | "number" | "boolean" | "string_list" | "integer_list";
+  valueType:
+    | "string"
+    | "integer"
+    | "number"
+    | "boolean"
+    | "string_list"
+    | "integer_list";
   description?: string;
   required?: boolean;
   flag?: string;
@@ -168,7 +189,13 @@ export interface CustomToolBundle {
 
 export interface ToolArtifactReference {
   artifactId: Identifier;
-  kind: "stdout" | "stderr" | "parsed" | "receipt" | "mcp_content" | "generated_file";
+  kind:
+    | "stdout"
+    | "stderr"
+    | "parsed"
+    | "receipt"
+    | "mcp_content"
+    | "generated_file";
   filename?: string;
   mediaType: string;
   byteCount: number;
@@ -206,7 +233,11 @@ export interface ToolOutputReadResult {
 }
 
 export type RunnerRuntime = "podman" | "docker";
-export type RunnerIsolation = "rootless" | "podman_machine" | "docker_desktop_vm" | "unverified";
+export type RunnerIsolation =
+  | "rootless"
+  | "podman_machine"
+  | "docker_desktop_vm"
+  | "unverified";
 
 export interface RunnerProfile {
   id: Identifier;
@@ -263,8 +294,64 @@ export interface MissionGrant {
   grantedBy: string;
 }
 
-export interface EngagementScopeUpdateRequest extends Omit<EngagementScopePolicy, "engagementId" | "revision"> {
+export interface EngagementScopeUpdateRequest
+  extends Omit<EngagementScopePolicy, "engagementId" | "revision"> {
   expectedRevision: number;
+}
+
+export interface ScopeImportCandidate {
+  id: Identifier;
+  targetType: "cidr" | "domain" | "url";
+  classification: "allowed" | "excluded" | "ambiguous";
+  rawValue: string;
+  normalizedValue?: string;
+  sourceLocation: string;
+  sourceExcerpt: string;
+  warnings: string[];
+}
+
+export interface ScopeImportProvenance {
+  providerProfileId: Identifier;
+  model: string;
+  promptVersion: string;
+  sourceSha256: string;
+  generatedAt: string;
+  providerRequestIds: string[];
+}
+
+export interface ScopeImport {
+  id: Identifier;
+  engagementId: Identifier;
+  artifactId: Identifier;
+  filename: string;
+  sourceType: string;
+  sourceSha256: string;
+  baseScopeRevision: number;
+  status: "generating" | "ready" | "applied" | "discarded" | "failed";
+  candidates: ScopeImportCandidate[];
+  warnings: string[];
+  provenance?: ScopeImportProvenance;
+  usage: ChatUsage;
+  errorDetail?: string;
+  appliedCandidateIds: string[];
+  appliedScopePolicyId?: string;
+  appliedScopeRevision?: number;
+  revision: number;
+}
+
+export interface ScopeImportCreateRequest {
+  engagementId: Identifier;
+  providerId: Identifier;
+  model: string;
+  filename: string;
+  mediaType?: string;
+  contentBase64: string;
+  cloudConfirmed: boolean;
+}
+
+export interface ScopeImportApplyResult {
+  scope: EngagementScopePolicy;
+  scopeImport: ScopeImport;
 }
 
 export interface EngagementToolAssignment {
@@ -783,9 +870,19 @@ export interface HarnessDetailedUsage extends ChatUsage {
 }
 
 export type HarnessActivityItemKind =
-  | "reasoning" | "plan" | "command" | "file_change" | "tool"
-  | "web_search" | "browser" | "image" | "skill" | "subagent"
-  | "hook" | "review" | "compaction";
+  | "reasoning"
+  | "plan"
+  | "command"
+  | "file_change"
+  | "tool"
+  | "web_search"
+  | "browser"
+  | "image"
+  | "skill"
+  | "subagent"
+  | "hook"
+  | "review"
+  | "compaction";
 
 export interface HarnessActivityEvent {
   schemaVersion: "nebula.harness-activity/v1";
@@ -820,7 +917,14 @@ export interface HarnessActivityEventPage {
 
 export interface HarnessTurnDetail {
   id: Identifier;
-  status: "queued" | "running" | "waiting_approval" | "complete" | "failed" | "cancelled" | "interrupted";
+  status:
+    | "queued"
+    | "running"
+    | "waiting_approval"
+    | "complete"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
   origin: "chat" | "mission";
   harnessSessionId: Identifier;
   chatSessionId?: Identifier;
@@ -923,21 +1027,94 @@ export interface ContextStatus {
 }
 
 export type ChatStreamEvent =
-  | { type: "started"; providerId?: Identifier; harnessProfileId?: Identifier; harnessSessionId?: Identifier; harnessTurnId?: Identifier; model: string; sessionId?: Identifier; turnId?: Identifier }
-  | { type: "delta" | "message_delta"; providerId?: Identifier; harnessSessionId?: Identifier; model: string; delta: string; turnId?: Identifier }
-  | { type: "tool_started"; turnId: Identifier; toolCallId: Identifier; capability: string; arguments: Record<string, unknown>; step: number }
-  | { type: "tool_completed"; turnId: Identifier; toolCallId: Identifier; capability: string; status: string; summary: string; evidenceIds: Identifier[]; resultArtifactId?: Identifier; artifacts: ToolArtifactReference[]; receipt?: Record<string, unknown>; step: number }
-  | { type: "approval_required"; turnId: Identifier; toolCallId: Identifier; approval: Record<string, unknown> }
-  | { type: "status"; phase: string; detail: string; harnessSessionId?: Identifier; harnessTurnId?: Identifier; previousSessionId?: Identifier }
-  | ({ type: "turn_status" | "item_upsert" | "output_delta" | "approval" | "interaction" | "checkpoint" | "notice" } & HarnessActivityEvent)
-  | { type: "item_started" | "item_completed" | "usage" | "interrupted" | "completed"; harnessSessionId?: Identifier; harnessTurnId?: Identifier; payload?: Record<string, unknown> }
+  | {
+      type: "started";
+      providerId?: Identifier;
+      harnessProfileId?: Identifier;
+      harnessSessionId?: Identifier;
+      harnessTurnId?: Identifier;
+      model: string;
+      sessionId?: Identifier;
+      turnId?: Identifier;
+    }
+  | {
+      type: "delta" | "message_delta";
+      providerId?: Identifier;
+      harnessSessionId?: Identifier;
+      model: string;
+      delta: string;
+      turnId?: Identifier;
+    }
+  | {
+      type: "tool_started";
+      turnId: Identifier;
+      toolCallId: Identifier;
+      capability: string;
+      arguments: Record<string, unknown>;
+      step: number;
+    }
+  | {
+      type: "tool_completed";
+      turnId: Identifier;
+      toolCallId: Identifier;
+      capability: string;
+      status: string;
+      summary: string;
+      evidenceIds: Identifier[];
+      resultArtifactId?: Identifier;
+      artifacts: ToolArtifactReference[];
+      receipt?: Record<string, unknown>;
+      step: number;
+    }
+  | {
+      type: "approval_required";
+      turnId: Identifier;
+      toolCallId: Identifier;
+      approval: Record<string, unknown>;
+    }
+  | {
+      type: "status";
+      phase: string;
+      detail: string;
+      harnessSessionId?: Identifier;
+      harnessTurnId?: Identifier;
+      previousSessionId?: Identifier;
+    }
+  | ({
+      type:
+        | "turn_status"
+        | "item_upsert"
+        | "output_delta"
+        | "approval"
+        | "interaction"
+        | "checkpoint"
+        | "notice";
+    } & HarnessActivityEvent)
+  | {
+      type:
+        | "item_started"
+        | "item_completed"
+        | "usage"
+        | "interrupted"
+        | "completed";
+      harnessSessionId?: Identifier;
+      harnessTurnId?: Identifier;
+      payload?: Record<string, unknown>;
+    }
   | ({ type: "done" } & ChatCompletionResponse)
   | { type: "error"; detail: string };
 
 export interface ChatTurn {
   id: Identifier;
   sessionId: Identifier;
-  status: "routing" | "waiting_approval" | "finalizing" | "complete" | "failed" | "cancelled" | "interrupted";
+  status:
+    | "routing"
+    | "waiting_approval"
+    | "finalizing"
+    | "complete"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
   approvalId?: Identifier;
   harnessTurnId?: Identifier;
   toolCallIds: Identifier[];
@@ -1055,7 +1232,14 @@ export interface HarnessSessionSummary {
   engagementId: Identifier;
   harnessProfileId: Identifier;
   model: string;
-  status: "starting" | "idle" | "running" | "waiting_approval" | "closed" | "failed" | "interrupted";
+  status:
+    | "starting"
+    | "idle"
+    | "running"
+    | "waiting_approval"
+    | "closed"
+    | "failed"
+    | "interrupted";
   mcpServerIds: Identifier[];
   lastActivityAt: string;
 }
@@ -1066,7 +1250,14 @@ export interface HarnessSessionActivity {
   busy: boolean;
   live: boolean;
   turnId?: Identifier;
-  turnStatus?: "queued" | "running" | "waiting_approval" | "complete" | "failed" | "cancelled" | "interrupted";
+  turnStatus?:
+    | "queued"
+    | "running"
+    | "waiting_approval"
+    | "complete"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
   turnOrigin?: "chat" | "mission";
   startedAt?: string;
   lastActivityAt: string;
@@ -1148,7 +1339,15 @@ export interface RunnerCandidate {
 }
 
 export interface SetupImagePreparation {
-  phase: "not_started" | "queued" | "resolving_runtime" | "preparing_image" | "ready" | "cancelling" | "cancelled" | "error";
+  phase:
+    | "not_started"
+    | "queued"
+    | "resolving_runtime"
+    | "preparing_image"
+    | "ready"
+    | "cancelling"
+    | "cancelled"
+    | "error";
   operationId?: Identifier;
   projectId?: Identifier;
   progressPercent?: number;
@@ -1168,7 +1367,13 @@ export interface SetupStatus {
   };
   scratchProjectId?: Identifier;
   terminal: {
-    status: "detecting_runner" | "needs_runner" | "preparing_image" | "ready" | "disabled" | "error";
+    status:
+      | "detecting_runner"
+      | "needs_runner"
+      | "preparing_image"
+      | "ready"
+      | "disabled"
+      | "error";
     runnerProfileId?: Identifier;
     candidates: RunnerCandidate[];
     imagePreparation: SetupImagePreparation;
@@ -1182,7 +1387,11 @@ export interface SetupStatus {
 }
 
 export interface SetupControlResponse {
-  operation: "runner_selection" | "image_preparation" | "image_preparation_retry" | "image_preparation_cancellation";
+  operation:
+    | "runner_selection"
+    | "image_preparation"
+    | "image_preparation_retry"
+    | "image_preparation_cancellation";
   accepted: boolean;
   idempotent: boolean;
   operationId?: Identifier;
@@ -1414,7 +1623,12 @@ export interface TerminalCommandRecord {
   command: string;
   commandSha256?: string;
   cwd: string;
-  status: "completed" | "interrupted" | "framing_lost" | "capture_failed" | "legacy_metadata_only";
+  status:
+    | "completed"
+    | "interrupted"
+    | "framing_lost"
+    | "capture_failed"
+    | "legacy_metadata_only";
   exitCode?: number;
   startedAt?: string;
   completedAt?: string;
@@ -1427,7 +1641,13 @@ export interface TerminalCommandRecord {
   outputTruncated: boolean;
   outputPreview: string;
   captureError?: string;
-  captureDecision: "selected_tool" | "not_selected" | "classification_failed" | "capture_failed" | "legacy_all_commands" | "legacy_metadata_only";
+  captureDecision:
+    | "selected_tool"
+    | "not_selected"
+    | "classification_failed"
+    | "capture_failed"
+    | "legacy_all_commands"
+    | "legacy_metadata_only";
   matchedTools: string[];
   recordingPolicyRevision?: number;
   runtimeImageDigest?: string;

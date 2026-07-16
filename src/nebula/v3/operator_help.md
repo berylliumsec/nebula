@@ -182,6 +182,14 @@ scope is current. Nebula resolves and pins a scoped target at confirmation and
 permits reviewed or agent network execution only through its per-invocation egress
 boundary.
 
+Under **Settings → Engagement policy**, **Import targets from document** accepts
+bounded PDF, DOCX, XLSX, CSV, text, HTML, or JSON sources. A configured provider
+with verified strict structured output proposes IP/CIDR, domain, and HTTP(S) URL
+entries. Excluded or ambiguous targets are warnings, not selectable authorization.
+Review each proposed entry before applying it; application only adds selected
+targets and fails if the saved scope revision changed during review. Cloud providers
+require one-request consent, while local-only scope blocks cloud processing entirely.
+
 Ordinary permitted local commands and in-scope scans do not need a per-command
 approval. Credential use, exploitation, persistence, destructive actions, scope
 changes, and external filesystem writes require explicit operator approval. An

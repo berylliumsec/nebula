@@ -207,7 +207,7 @@ export function KnowledgePage() {
         title="Knowledge"
         description="Sources available for cited retrieval."
         actions={<>
-          <input ref={inputRef} className="sr-only" type="file" aria-label="Choose knowledge source" accept=".txt,.md,.markdown,.rst,.log,.csv,.json,.jsonl,.ndjson,.html,.htm,.pdf,.docx,text/plain,text/markdown,text/x-markdown,text/csv,application/csv,application/json,application/jsonl,application/x-jsonlines,application/x-ndjson,text/html,application/xhtml+xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => void uploadFile(event)} />
+          <input ref={inputRef} className="sr-only" type="file" aria-label="Choose knowledge source" accept=".txt,.md,.markdown,.rst,.log,.csv,.json,.jsonl,.ndjson,.html,.htm,.pdf,.docx,.xlsx,text/plain,text/markdown,text/x-markdown,text/csv,application/csv,application/json,application/jsonl,application/x-jsonlines,application/x-ndjson,text/html,application/xhtml+xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => void uploadFile(event)} />
           <button className="button primary" type="button" disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} {uploading ? "Adding source…" : "Add source"}</button>
         </>}
       />

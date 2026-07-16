@@ -156,6 +156,7 @@ from .domain import (
     RunBackend,
     RunEvent,
     RunStatus,
+    ScopeImport,
     ScopePolicy,
     ToolCall,
     ToolPackInstallation,
@@ -243,6 +244,13 @@ from .setup import (
     SetupServiceError,
     SetupStatus,
     bootstrap_scratch_project,
+)
+from .scope_import import (
+    ScopeImportApplyRequest,
+    ScopeImportApplyResult,
+    ScopeImportCreateRequest,
+    ScopeImportError,
+    ScopeImportService,
 )
 from .writing_ai import (
     WritingAIError,
@@ -747,6 +755,7 @@ def create_app(
     report_render_service: ReportRenderService | None = None,
     execution_ai_service: ExecutionAIService | None = None,
     writing_ai_service: WritingAIService | None = None,
+    scope_import_service: ScopeImportService | None = None,
     credential_store: CredentialStore | None = None,
     bootstrap_workspace: bool = False,
     diagnostic_manager: DiagnosticManager | None = None,
@@ -1046,6 +1055,16 @@ def create_app(
     )
     if writing_ai.store is not store:
         raise ValueError("writing_ai_service must use the API store")
+    scope_imports = scope_import_service
+    if scope_imports is None and artifact_store is not None:
+        scope_imports = ScopeImportService(
+            store=store,
+            artifact_store=artifact_store,
+            provider_factory=provider_factory,
+            operator_id=active_operator_id,
+        )
+    if scope_imports is not None and scope_imports.store is not store:
+        raise ValueError("scope_import_service must use the API store")
     setup = SetupService(store, tool_platform)
 
     @asynccontextmanager
@@ -1192,6 +1211,7 @@ def create_app(
     app.state.report_render_service = report_renders
     app.state.execution_ai_service = execution_ai
     app.state.writing_ai_service = writing_ai
+    app.state.scope_import_service = scope_imports
     app.state.setup_service = setup
     app.state.terminal_command_history = terminal_commands
     app.state.executable_missions_enabled = executable_missions_enabled
@@ -1768,6 +1788,19 @@ def create_app(
     @app.exception_handler(WritingAIError)
     async def writing_ai_error_handler(
         request: Request, exc: WritingAIError
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            retryable=exc.status_code >= 500,
+        )
+
+    @app.exception_handler(ScopeImportError)
+    async def scope_import_error_handler(
+        request: Request, exc: ScopeImportError
     ) -> JSONResponse:
         return diagnostic_error_response(
             request,
@@ -2594,6 +2627,15 @@ def create_app(
 
     def require_writing_ai_service() -> WritingAIService:
         return writing_ai
+
+    def require_scope_import_service() -> ScopeImportService:
+        if scope_imports is None:
+            raise ScopeImportError(
+                "scope_import_unavailable",
+                "scope import requires an artifact store",
+                status_code=503,
+            )
+        return scope_imports
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminal/capabilities",
@@ -4484,6 +4526,97 @@ def create_app(
                 },
             )
         return evidence
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/scope-imports",
+        response_model=ScopeImport,
+        status_code=201,
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_scope_import(
+        engagement_id: str, request: ScopeImportCreateRequest
+    ) -> ScopeImport:
+        if request.engagement_id != engagement_id:
+            raise HTTPException(status_code=422, detail="engagement_id does not match route")
+        try:
+            content = base64.b64decode(request.content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="content_base64 must be valid base64") from exc
+        if len(content) > MAX_DOCUMENT_BYTES:
+            raise HTTPException(status_code=413, detail="document exceeds the 20 MiB limit")
+        try:
+            return await require_scope_import_service().create(
+                engagement_id=engagement_id,
+                provider_id=request.provider_id,
+                model=request.model,
+                filename=request.filename,
+                data=content,
+                media_type=request.media_type,
+                cloud_confirmed=request.cloud_confirmed,
+            )
+        except DocumentTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except UnsupportedDocumentError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        except InvalidDocumentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/scope-imports",
+        response_model=list[ScopeImport],
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_scope_imports(engagement_id: str) -> list[ScopeImport]:
+        store.get(Engagement, engagement_id)
+        return store.list_entities(
+            ScopeImport, engagement_id=engagement_id, limit=1000
+        )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/scope-imports/{{scope_import_id}}",
+        response_model=ScopeImport,
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_scope_import(
+        engagement_id: str, scope_import_id: str
+    ) -> ScopeImport:
+        result = store.get(ScopeImport, scope_import_id)
+        if result.engagement_id != engagement_id:
+            raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
+        return result
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/scope-imports/{{scope_import_id}}/apply",
+        response_model=ScopeImportApplyResult,
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def apply_scope_import(
+        engagement_id: str,
+        scope_import_id: str,
+        request: ScopeImportApplyRequest,
+    ) -> ScopeImportApplyResult:
+        result = store.get(ScopeImport, scope_import_id)
+        if result.engagement_id != engagement_id:
+            raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
+        return require_scope_import_service().apply(scope_import_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/scope-imports/{{scope_import_id}}/discard",
+        response_model=ScopeImport,
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def discard_scope_import(
+        engagement_id: str, scope_import_id: str
+    ) -> ScopeImport:
+        result = store.get(ScopeImport, scope_import_id)
+        if result.engagement_id != engagement_id:
+            raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
+        return require_scope_import_service().discard(scope_import_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope",

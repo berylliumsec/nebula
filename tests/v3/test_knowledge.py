@@ -252,6 +252,44 @@ def test_docx_rejects_entity_and_doctype_declarations():
         extract_document(archive_buffer.getvalue(), filename="unsafe.docx")
 
 
+def test_xlsx_extraction_preserves_sheet_rows_and_never_executes_formulas():
+    workbook = b"""<?xml version="1.0"?>
+    <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+      xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <sheets><sheet name="Targets" sheetId="1" r:id="rId1"/>
+      <sheet name="Excluded" state="hidden" sheetId="2" r:id="rId2"/></sheets>
+    </workbook>"""
+    relationships = b"""<?xml version="1.0"?>
+    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
+      <Relationship Id="rId2" Target="worksheets/sheet2.xml"/>
+    </Relationships>"""
+    sheet1 = b"""<?xml version="1.0"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <sheetData><row r="7"><c r="A7" t="inlineStr"><is><t>In scope</t></is></c>
+      <c r="B7" t="inlineStr"><is><t>192.0.2.7</t></is></c>
+      <c r="C7"><f>HYPERLINK(&quot;https://example.test&quot;)</f><v>0</v></c></row></sheetData>
+    </worksheet>"""
+    sheet2 = b"""<?xml version="1.0"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <sheetData><row r="2"><c r="A2" t="inlineStr"><is><t>admin.example.test</t></is></c></row></sheetData>
+    </worksheet>"""
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("xl/workbook.xml", workbook)
+        archive.writestr("xl/_rels/workbook.xml.rels", relationships)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet1)
+        archive.writestr("xl/worksheets/sheet2.xml", sheet2)
+
+    extracted = extract_document(archive_buffer.getvalue(), filename="scope.xlsx")
+
+    assert extracted.source_type == "xlsx"
+    assert extracted.sections[0].location == "Targets, row 7"
+    assert "B7: 192.0.2.7" in extracted.sections[0].text
+    assert '=HYPERLINK("https://example.test")' in extracted.sections[0].text
+    assert extracted.sections[1].location == "Excluded (hidden), row 2"
+
+
 def test_pdf_extraction_stops_when_the_text_budget_is_exceeded(monkeypatch):
     extracted_pages: list[int] = []
 

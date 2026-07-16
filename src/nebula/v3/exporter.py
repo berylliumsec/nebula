@@ -40,6 +40,7 @@ from .domain import (
     ProviderProfile,
     Report,
     ReportRender,
+    ScopeImport,
     SourceSnapshot,
     utc_now,
 )
@@ -240,6 +241,8 @@ def _include_referenced_globals(
                     if citation.artifact_id
                 )
             elif isinstance(entity, KnowledgeSource) and entity.artifact_id:
+                artifact_ids.add(entity.artifact_id)
+            elif isinstance(entity, ScopeImport):
                 artifact_ids.add(entity.artifact_id)
             if isinstance(entity, Artifact) and entity.parent_artifact_id:
                 artifact_ids.add(entity.parent_artifact_id)

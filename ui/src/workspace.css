@@ -423,6 +423,16 @@
 .policy-editor-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .75fr); gap: 12px; }
 .policy-form { overflow: hidden; }
 .policy-form-body { display: grid; gap: 11px; padding: 13px; }
+.scope-import-trigger { justify-self: start; }
+.scope-import-dialog { width: min(780px, calc(100vw - 32px)); }
+.scope-import-file { display: flex; align-items: center; gap: 11px; width: 100%; padding: 14px; border: 1px dashed var(--border); border-radius: 8px; color: var(--text); background: var(--surface); text-align: left; cursor: pointer; }
+.scope-import-file span, .scope-import-candidate span { display: grid; gap: 3px; min-width: 0; }
+.scope-import-file small, .scope-import-candidate small, .scope-import-candidate em { color: var(--muted); font-size: 11px; font-style: normal; }
+.scope-import-review { display: grid; gap: 12px; }
+.scope-import-candidates { display: grid; gap: 7px; max-height: 360px; overflow: auto; }
+.scope-import-candidate { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; padding: 9px; border: 1px solid var(--border-soft); border-radius: 7px; background: var(--surface); }
+.scope-import-candidate.excluded, .scope-import-candidate.ambiguous { background: var(--surface-subtle); }
+.scope-import-candidate strong { overflow-wrap: anywhere; }
 .policy-form textarea { resize: vertical; }
 .digest-lock { display: block; padding: 7px; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--surface-muted); }
 .policy-form .resource-checklist label, .mission-tool-selection .resource-checklist label { display: flex; align-items: center; flex-direction: row; gap: 7px; padding: 5px; color: var(--muted); font-size: 11px; }

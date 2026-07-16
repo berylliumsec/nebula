@@ -38,6 +38,9 @@ import type {
   EvidenceUploadRequest,
   EngagementScopePolicy,
   EngagementScopeUpdateRequest,
+  ScopeImport,
+  ScopeImportApplyResult,
+  ScopeImportCreateRequest,
   FindingCreateRequest,
   FindingSummary,
   FindingUpdateRequest,
@@ -379,13 +382,16 @@ interface WireProvider extends WireEntity {
   secret_ref?: string | null;
   model_allowlist?: string[];
   capabilities?: Record<string, boolean>;
-  capability_verifications?: Record<string, {
-    model: string;
-    status: "verified" | "failed";
-    checked_at: string;
-    contract_version: string;
-    failure_detail?: string | null;
-  }>;
+  capability_verifications?: Record<
+    string,
+    {
+      model: string;
+      status: "verified" | "failed";
+      checked_at: string;
+      contract_version: string;
+      failure_detail?: string | null;
+    }
+  >;
   privacy?: {
     local_only?: boolean;
     retention?: string | null;
@@ -533,7 +539,28 @@ interface WireContextStatus extends JsonObject {
 }
 
 interface WireChatStreamEvent extends JsonObject {
-  type: "started" | "delta" | "message_delta" | "item_started" | "item_completed" | "usage" | "interrupted" | "completed" | "tool_started" | "tool_completed" | "approval_required" | "status" | "turn_status" | "item_upsert" | "output_delta" | "approval" | "interaction" | "checkpoint" | "notice" | "done" | "error";
+  type:
+    | "started"
+    | "delta"
+    | "message_delta"
+    | "item_started"
+    | "item_completed"
+    | "usage"
+    | "interrupted"
+    | "completed"
+    | "tool_started"
+    | "tool_completed"
+    | "approval_required"
+    | "status"
+    | "turn_status"
+    | "item_upsert"
+    | "output_delta"
+    | "approval"
+    | "interaction"
+    | "checkpoint"
+    | "notice"
+    | "done"
+    | "error";
   schema_version?: "nebula.harness-activity/v1";
   id?: string;
   sequence?: number;
@@ -1081,6 +1108,44 @@ interface WireEngagementScope extends JsonObject {
   revision?: number;
 }
 
+interface WireScopeImport extends WireEntity {
+  engagement_id: string;
+  artifact_id: string;
+  filename: string;
+  source_type: string;
+  source_sha256: string;
+  base_scope_revision: number;
+  status: ScopeImport["status"];
+  candidates?: Array<{
+    id: string;
+    target_type: "cidr" | "domain" | "url";
+    classification: "allowed" | "excluded" | "ambiguous";
+    raw_value: string;
+    normalized_value?: string | null;
+    source_location?: string;
+    source_excerpt?: string;
+    warnings?: string[];
+  }>;
+  warnings?: string[];
+  provenance?: {
+    provider_profile_id: string;
+    model: string;
+    prompt_version: string;
+    source_sha256: string;
+    generated_at: string;
+    provider_request_ids?: string[];
+  } | null;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  };
+  error_detail?: string | null;
+  applied_candidate_ids?: string[];
+  applied_scope_policy_id?: string | null;
+  applied_scope_revision?: number | null;
+}
+
 interface WireEngagementToolAssignment extends JsonObject {
   id?: string;
   engagement_id: string;
@@ -1115,10 +1180,16 @@ export class ApiError extends Error {
   readonly impact?: string;
   readonly remediationId?: string;
 
-  constructor(message: string, status: number, requestId?: string, details?: unknown) {
-    const envelope = details && typeof details === "object"
-      ? details as Record<string, unknown>
-      : undefined;
+  constructor(
+    message: string,
+    status: number,
+    requestId?: string,
+    details?: unknown,
+  ) {
+    const envelope =
+      details && typeof details === "object"
+        ? (details as Record<string, unknown>)
+        : undefined;
     const errorId = stringField(envelope?.error_id);
     const correlatedRequestId = requestId ?? stringField(envelope?.request_id);
     const reference = errorId ?? correlatedRequestId;
@@ -1130,7 +1201,8 @@ export class ApiError extends Error {
     this.errorId = errorId;
     this.code = stringField(envelope?.code);
     this.feature = stringField(envelope?.feature);
-    this.retryable = typeof envelope?.retryable === "boolean" ? envelope.retryable : undefined;
+    this.retryable =
+      typeof envelope?.retryable === "boolean" ? envelope.retryable : undefined;
     this.helpArticle = stringField(envelope?.help_article);
     this.operationId = stringField(envelope?.operation_id);
     this.reasonCode = stringField(envelope?.reason_code);
@@ -1149,9 +1221,12 @@ export class ApiError extends Error {
 }
 
 function normalizeBaseUrl(value?: string): string {
-  const origin = value?.trim() || globalThis.location?.origin || "http://127.0.0.1";
+  const origin =
+    value?.trim() || globalThis.location?.origin || "http://127.0.0.1";
   const withoutSlash = origin.replace(/\/+$/, "");
-  return withoutSlash.endsWith("/api/v1") ? withoutSlash : `${withoutSlash}/api/v1`;
+  return withoutSlash.endsWith("/api/v1")
+    ? withoutSlash
+    : `${withoutSlash}/api/v1`;
 }
 
 function numberField(value: unknown): number {
@@ -1171,15 +1246,24 @@ function configuredDefaultModel(value?: string): string | undefined {
   return value?.trim() || undefined;
 }
 
-function configuredModelAllowlist(values: string[] | undefined, defaultModel?: string): string[] {
-  const selected = [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
+function configuredModelAllowlist(
+  values: string[] | undefined,
+  defaultModel?: string,
+): string[] {
+  const selected = [
+    ...new Set((values ?? []).map((value) => value.trim()).filter(Boolean)),
+  ];
   return selected.length && defaultModel
     ? [...new Set([defaultModel, ...selected])]
     : selected;
 }
 
 function normalizedIdentifiers(values?: string[]): string[] {
-  return [...new Set((values ?? []).map((value) => value.trim().toUpperCase()).filter(Boolean))];
+  return [
+    ...new Set(
+      (values ?? []).map((value) => value.trim().toUpperCase()).filter(Boolean),
+    ),
+  ];
 }
 
 function page<T>(items: T[]): Page<T> {
@@ -1210,7 +1294,9 @@ function mapEngagement(value: WireEngagement): EngagementSummary {
   };
 }
 
-function mapTerminalRecordingTools(value: WireTerminalRecordingTools): TerminalRecordingTools {
+function mapTerminalRecordingTools(
+  value: WireTerminalRecordingTools,
+): TerminalRecordingTools {
   return {
     engagementId: value.engagement_id,
     inventoryStatus: value.inventory_status,
@@ -1235,7 +1321,10 @@ function mapRun(value: WireAgentRun): AgentRunSummary {
     updatedAt: value.updated_at,
     completedTasks: numberField(value.metadata?.completed_tasks),
     totalTasks: numberField(value.metadata?.total_tasks),
-    spentUsd: typeof value.metadata?.spent_usd === "number" ? value.metadata.spent_usd : undefined,
+    spentUsd:
+      typeof value.metadata?.spent_usd === "number"
+        ? value.metadata.spent_usd
+        : undefined,
     backend: value.backend ?? "native",
     harnessProfileId: value.harness_profile_id ?? undefined,
     harnessSessionId: value.harness_session_id ?? undefined,
@@ -1244,7 +1333,9 @@ function mapRun(value: WireAgentRun): AgentRunSummary {
 
 function mapApprovalStatus(value: string): ApprovalSummary["status"] {
   if (value === "edited") return "approved";
-  if (["pending", "approved", "rejected", "expired", "cancelled"].includes(value)) {
+  if (
+    ["pending", "approved", "rejected", "expired", "cancelled"].includes(value)
+  ) {
     return value as ApprovalSummary["status"];
   }
   return "cancelled";
@@ -1252,10 +1343,11 @@ function mapApprovalStatus(value: string): ApprovalSummary["status"] {
 
 function mapApproval(value: WireApproval): ApprovalSummary {
   const request = value.exact_request ?? {};
-  const command = Array.isArray(request.argv)
-    && request.argv.every((item) => typeof item === "string")
-    ? request.argv as string[]
-    : undefined;
+  const command =
+    Array.isArray(request.argv) &&
+    request.argv.every((item) => typeof item === "string")
+      ? (request.argv as string[])
+      : undefined;
   return {
     id: value.id,
     runId: value.run_id,
@@ -1267,10 +1359,12 @@ function mapApproval(value: WireApproval): ApprovalSummary {
     agentName: value.requested_by,
     target: value.target ?? "No network target",
     rationale: value.policy_rationale,
-    expectedEffects: (value.expected_effects ?? []).join("; ") || "No effects declared",
-    arguments: request.arguments && typeof request.arguments === "object"
-      ? (request.arguments as JsonObject)
-      : {},
+    expectedEffects:
+      (value.expected_effects ?? []).join("; ") || "No effects declared",
+    arguments:
+      request.arguments && typeof request.arguments === "object"
+        ? (request.arguments as JsonObject)
+        : {},
     command,
     image: stringField(request.image),
     manifestDigest: stringField(request.manifest_digest),
@@ -1285,7 +1379,8 @@ function mapRiskClass(value: string): ApprovalSummary["risk"] {
   if (value === "credential_use") return "credentialed";
   if (["exploitation", "persistence"].includes(value)) return "exploit";
   if (value === "destructive") return "destructive";
-  if (["active_scan", "workspace_write", "scope_change"].includes(value)) return "active";
+  if (["active_scan", "workspace_write", "scope_change"].includes(value))
+    return "active";
   return "passive";
 }
 
@@ -1310,10 +1405,21 @@ function mapAsset(value: WireAsset): AssetSummary {
     address: value.address ?? undefined,
     hostname: value.hostname ?? undefined,
     criticality: value.criticality ?? "medium",
-    exposure: value.exposed === true ? "external" : value.exposed === false ? "internal" : "unknown",
+    exposure:
+      value.exposed === true
+        ? "external"
+        : value.exposed === false
+          ? "internal"
+          : "unknown",
     tags: value.tags ?? [],
-    serviceCount: typeof value.metadata?.service_count === "number" ? value.metadata.service_count : undefined,
-    findingCount: typeof value.metadata?.finding_count === "number" ? value.metadata.finding_count : undefined,
+    serviceCount:
+      typeof value.metadata?.service_count === "number"
+        ? value.metadata.service_count
+        : undefined,
+    findingCount:
+      typeof value.metadata?.finding_count === "number"
+        ? value.metadata.finding_count
+        : undefined,
     lastSeenAt: stringField(value.metadata?.last_seen_at),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
@@ -1332,7 +1438,10 @@ const findingStatuses = new Set<FindingSummary["status"]>([
 ]);
 
 function mapFinding(value: WireFinding): FindingSummary {
-  const normalizedStatus = value.status.replaceAll("-", "_") as FindingSummary["status"];
+  const normalizedStatus = value.status.replaceAll(
+    "-",
+    "_",
+  ) as FindingSummary["status"];
   return {
     id: value.id,
     engagementId: value.engagement_id,
@@ -1340,7 +1449,9 @@ function mapFinding(value: WireFinding): FindingSummary {
     description: value.description ?? "",
     severity: value.severity,
     severityRationale: value.severity_rationale ?? "",
-    status: findingStatuses.has(normalizedStatus) ? normalizedStatus : "candidate",
+    status: findingStatuses.has(normalizedStatus)
+      ? normalizedStatus
+      : "candidate",
     assetIds: value.asset_ids ?? [],
     evidenceIds: value.evidence_ids ?? [],
     affectedAssetCount: value.asset_ids?.length ?? 0,
@@ -1388,7 +1499,9 @@ function mapAIWritingProvenance(value: WireAIWritingProvenance) {
   };
 }
 
-function mapReportNoteTransform(value: WireReportNoteTransform): ReportNoteTransform {
+function mapReportNoteTransform(
+  value: WireReportNoteTransform,
+): ReportNoteTransform {
   return {
     observationId: value.observation_id,
     sourceRevision: value.source_revision,
@@ -1398,7 +1511,9 @@ function mapReportNoteTransform(value: WireReportNoteTransform): ReportNoteTrans
   };
 }
 
-function writingProvenanceBody(value: ReportNoteTransform["provenance"]): JsonObject {
+function writingProvenanceBody(
+  value: ReportNoteTransform["provenance"],
+): JsonObject {
   return {
     provider_profile_id: value.providerProfileId,
     model: value.model,
@@ -1466,16 +1581,20 @@ function mapGeneratedDraft(value: WireGeneratedDraft): GeneratedDraft {
     promptVersion: value.prompt_version,
     contextFingerprint: value.context_fingerprint,
     status: value.status,
-    content: value.content ? {
-      title: value.content.title,
-      summary: value.content.summary ?? "",
-      observations: value.content.observations ?? [],
-      potentialFindings: (value.content.potential_findings ?? []).map((item) => ({
-        title: item.title,
-        rationale: item.rationale ?? "",
-      })),
-      evidenceIds: value.content.evidence_ids ?? [],
-    } : undefined,
+    content: value.content
+      ? {
+          title: value.content.title,
+          summary: value.content.summary ?? "",
+          observations: value.content.observations ?? [],
+          potentialFindings: (value.content.potential_findings ?? []).map(
+            (item) => ({
+              title: item.title,
+              rationale: item.rationale ?? "",
+            }),
+          ),
+          evidenceIds: value.content.evidence_ids ?? [],
+        }
+      : undefined,
     observationId: value.observation_id ?? undefined,
     providerRequestId: value.provider_request_id ?? undefined,
     errorDetail: value.error_detail ?? undefined,
@@ -1550,9 +1669,8 @@ function mapProvider(value: WireProvider): ProviderHealth {
   const metadata = value.metadata ?? {};
   const defaultModel = stringField(metadata.default_model);
   const effectiveDefaultModel = defaultModel ?? value.model_allowlist?.[0];
-  const state: ProviderHealth["state"] = value.enabled === false
-    ? "offline"
-    : "unchecked";
+  const state: ProviderHealth["state"] =
+    value.enabled === false ? "offline" : "unchecked";
   return {
     id: value.id,
     revision: value.revision,
@@ -1585,21 +1703,29 @@ function mapProvider(value: WireProvider): ProviderHealth {
         : "cloud",
     capabilities,
     capabilityVerifications: Object.fromEntries(
-      Object.entries(value.capability_verifications ?? {}).map(([model, result]) => [model, {
-        model: result.model,
-        status: result.status,
-        checkedAt: result.checked_at,
-        contractVersion: result.contract_version,
-        failureDetail: result.failure_detail ?? undefined,
-      }]),
+      Object.entries(value.capability_verifications ?? {}).map(
+        ([model, result]) => [
+          model,
+          {
+            model: result.model,
+            status: result.status,
+            checkedAt: result.checked_at,
+            contractVersion: result.contract_version,
+            failureDetail: result.failure_detail ?? undefined,
+          },
+        ],
+      ),
     ),
-    message: value.enabled === false
-      ? "Provider profile is disabled."
-      : "Profile loaded; run a health check to discover available models.",
+    message:
+      value.enabled === false
+        ? "Provider profile is disabled."
+        : "Profile loaded; run a health check to discover available models.",
   };
 }
 
-function mapProviderRuntimeHealth(value: WireProviderRuntimeHealth): ProviderRuntimeHealth {
+function mapProviderRuntimeHealth(
+  value: WireProviderRuntimeHealth,
+): ProviderRuntimeHealth {
   return {
     providerId: value.provider_id,
     healthy: value.healthy,
@@ -1608,7 +1734,9 @@ function mapProviderRuntimeHealth(value: WireProviderRuntimeHealth): ProviderRun
   };
 }
 
-function mapProviderCatalog(value: WireProviderCatalogEntry): ProviderCatalogEntry {
+function mapProviderCatalog(
+  value: WireProviderCatalogEntry,
+): ProviderCatalogEntry {
   return {
     flavor: value.flavor,
     adapter: value.adapter,
@@ -1621,7 +1749,9 @@ function mapProviderCatalog(value: WireProviderCatalogEntry): ProviderCatalogEnt
   };
 }
 
-function mapLocalProviderDetection(value: WireLocalProviderDetection): LocalProviderDetection {
+function mapLocalProviderDetection(
+  value: WireLocalProviderDetection,
+): LocalProviderDetection {
   return {
     flavor: value.flavor,
     displayName: value.display_name,
@@ -1649,7 +1779,10 @@ function mapKnowledgeSource(value: WireKnowledgeSource): KnowledgeSource {
       mediaType: stringField(metadata.media_type),
       size: typeof metadata.size === "number" ? metadata.size : undefined,
       sha256: stringField(metadata.sha256),
-      chunkCount: typeof metadata.chunk_count === "number" ? metadata.chunk_count : undefined,
+      chunkCount:
+        typeof metadata.chunk_count === "number"
+          ? metadata.chunk_count
+          : undefined,
       indexedAt: stringField(metadata.indexed_at),
     },
   };
@@ -1689,24 +1822,30 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
     usage: {
       inputTokens,
       outputTokens,
-      totalTokens: typeof value.usage?.total_tokens === "number"
-        ? value.usage.total_tokens
-        : inputTokens + outputTokens,
+      totalTokens:
+        typeof value.usage?.total_tokens === "number"
+          ? value.usage.total_tokens
+          : inputTokens + outputTokens,
     },
-    contextUsage: value.context_usage ? {
-      inputTokens: contextInputTokens,
-      outputTokens: contextOutputTokens,
-      totalTokens: typeof value.context_usage.total_tokens === "number"
-        ? value.context_usage.total_tokens
-        : contextInputTokens + contextOutputTokens,
-    } : undefined,
+    contextUsage: value.context_usage
+      ? {
+          inputTokens: contextInputTokens,
+          outputTokens: contextOutputTokens,
+          totalTokens:
+            typeof value.context_usage.total_tokens === "number"
+              ? value.context_usage.total_tokens
+              : contextInputTokens + contextOutputTokens,
+        }
+      : undefined,
     finishReason: value.finish_reason ?? undefined,
     providerRequestId: value.provider_request_id ?? undefined,
     citations: (value.citations ?? []).map(mapChatCitation),
   };
 }
 
-function mapContextSource(value: WireContextSourceReference): ContextSourceReference {
+function mapContextSource(
+  value: WireContextSourceReference,
+): ContextSourceReference {
   return {
     sourceKind: value.source_kind,
     sourceId: value.source_id,
@@ -1715,10 +1854,11 @@ function mapContextSource(value: WireContextSourceReference): ContextSourceRefer
 }
 
 function mapContextMemory(value: WireContextMemory): ContextMemory {
-  const items = (values?: WireContextMemoryItem[]) => (values ?? []).map((item) => ({
-    text: item.text,
-    sources: (item.sources ?? []).map(mapContextSource),
-  }));
+  const items = (values?: WireContextMemoryItem[]) =>
+    (values ?? []).map((item) => ({
+      text: item.text,
+      sources: (item.sources ?? []).map(mapContextSource),
+    }));
   return {
     objective: value.objective ?? undefined,
     summary: value.summary,
@@ -1750,9 +1890,10 @@ function mapContextSnapshot(value: WireContextSnapshot): ContextSnapshot {
     usage: {
       inputTokens,
       outputTokens,
-      totalTokens: typeof value.usage?.total_tokens === "number"
-        ? value.usage.total_tokens
-        : inputTokens + outputTokens,
+      totalTokens:
+        typeof value.usage?.total_tokens === "number"
+          ? value.usage.total_tokens
+          : inputTokens + outputTokens,
     },
     costUsd: numberField(value.cost_usd),
     error: value.error ?? undefined,
@@ -1761,8 +1902,12 @@ function mapContextSnapshot(value: WireContextSnapshot): ContextSnapshot {
 }
 
 function mapContextStatus(value: WireContextStatus): ContextStatus {
-  const compactionInputTokens = numberField(value.compaction_usage?.input_tokens);
-  const compactionOutputTokens = numberField(value.compaction_usage?.output_tokens);
+  const compactionInputTokens = numberField(
+    value.compaction_usage?.input_tokens,
+  );
+  const compactionOutputTokens = numberField(
+    value.compaction_usage?.output_tokens,
+  );
   return {
     ownerType: value.owner_type,
     ownerId: value.owner_id,
@@ -1776,9 +1921,10 @@ function mapContextStatus(value: WireContextStatus): ContextStatus {
     compactionUsage: {
       inputTokens: compactionInputTokens,
       outputTokens: compactionOutputTokens,
-      totalTokens: typeof value.compaction_usage?.total_tokens === "number"
-        ? value.compaction_usage.total_tokens
-        : compactionInputTokens + compactionOutputTokens,
+      totalTokens:
+        typeof value.compaction_usage?.total_tokens === "number"
+          ? value.compaction_usage.total_tokens
+          : compactionInputTokens + compactionOutputTokens,
     },
     compactionCostUsd: numberField(value.compaction_cost_usd),
     snapshot: value.snapshot ? mapContextSnapshot(value.snapshot) : undefined,
@@ -1874,7 +2020,9 @@ function mapOperatorExecution(value: WireOperatorExecution): OperatorExecution {
   };
 }
 
-function mapExecutionPreflight(value: WireExecutionPreflight): ExecutionPreflight {
+function mapExecutionPreflight(
+  value: WireExecutionPreflight,
+): ExecutionPreflight {
   return {
     allowed: value.allowed,
     errorCode: value.error_code ?? undefined,
@@ -1947,7 +2095,9 @@ function mapContainerTerminalPreflight(
     allowed: value.allowed,
     errorCode: value.error_code ?? undefined,
     detail: value.detail,
-    runtime: value.runtime ? mapContainerTerminalRuntime(value.runtime) : undefined,
+    runtime: value.runtime
+      ? mapContainerTerminalRuntime(value.runtime)
+      : undefined,
     network: mapContainerTerminalNetwork(value.network),
     security: mapContainerTerminalSecurity(value.security),
     limits: mapExecutionLimits(value.limits),
@@ -2030,7 +2180,10 @@ function mapWorkspacePreview(value: WireWorkspacePreview): WorkspacePreview {
   };
 }
 
-function chatRequestBody(body: ChatCompletionRequest, stream: boolean): JsonObject {
+function chatRequestBody(
+  body: ChatCompletionRequest,
+  stream: boolean,
+): JsonObject {
   return {
     backend: body.backend ?? "provider",
     provider_id: body.providerId,
@@ -2104,8 +2257,13 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
       skills: value.native_capabilities?.skills === true,
       subagents: value.native_capabilities?.subagents === true,
     },
-    healthy: Boolean(value.capabilities?.checked_at && !value.capabilities?.detail),
-    version: value.capabilities?.harness_version ?? value.capabilities?.protocol_version ?? undefined,
+    healthy: Boolean(
+      value.capabilities?.checked_at && !value.capabilities?.detail,
+    ),
+    version:
+      value.capabilities?.harness_version ??
+      value.capabilities?.protocol_version ??
+      undefined,
     detail: value.capabilities?.detail ?? undefined,
     capabilities: {
       activityReplay: value.capabilities?.activity_replay === true,
@@ -2126,7 +2284,9 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
   };
 }
 
-function mapHarnessInteraction(value: WireHarnessInteraction): HarnessInteraction {
+function mapHarnessInteraction(
+  value: WireHarnessInteraction,
+): HarnessInteraction {
   return {
     id: value.id,
     harnessTurnId: value.harness_turn_id,
@@ -2181,7 +2341,9 @@ function mapHarnessSession(value: WireHarnessSession): HarnessSessionSummary {
   };
 }
 
-function mapHarnessSessionActivity(value: WireHarnessSessionActivity): HarnessSessionActivity {
+function mapHarnessSessionActivity(
+  value: WireHarnessSessionActivity,
+): HarnessSessionActivity {
   return {
     sessionId: value.session_id,
     sessionStatus: value.session_status,
@@ -2207,7 +2369,9 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
   };
 }
 
-function mapHarnessDetailedUsage(value?: JsonObject): HarnessDetailedUsage | undefined {
+function mapHarnessDetailedUsage(
+  value?: JsonObject,
+): HarnessDetailedUsage | undefined {
   if (!value) return undefined;
   const inputTokens = numberField(value.input_tokens);
   const outputTokens = numberField(value.output_tokens);
@@ -2220,21 +2384,37 @@ function mapHarnessDetailedUsage(value?: JsonObject): HarnessDetailedUsage | und
     cacheReadTokens: numberField(value.cache_read_input_tokens),
     reasoningTokens: numberField(value.reasoning_output_tokens),
     costUsd: numberField(value.cost_usd),
-    durationMs: typeof value.duration_ms === "number" ? value.duration_ms : undefined,
-    apiDurationMs: typeof value.duration_api_ms === "number" ? value.duration_api_ms : undefined,
+    durationMs:
+      typeof value.duration_ms === "number" ? value.duration_ms : undefined,
+    apiDurationMs:
+      typeof value.duration_api_ms === "number"
+        ? value.duration_api_ms
+        : undefined,
     turnCount: numberField(value.num_turns),
-    contextUsedTokens: typeof value.context_used === "number" ? value.context_used : undefined,
-    contextLimitTokens: typeof value.context_window === "number" ? value.context_window : undefined,
-    modelUsage: value.model_usage && typeof value.model_usage === "object" && !Array.isArray(value.model_usage)
-      ? value.model_usage as Record<string, Record<string, unknown>>
-      : {},
-    rateLimit: value.rate_limit && typeof value.rate_limit === "object" && !Array.isArray(value.rate_limit)
-      ? value.rate_limit as Record<string, unknown>
-      : {},
+    contextUsedTokens:
+      typeof value.context_used === "number" ? value.context_used : undefined,
+    contextLimitTokens:
+      typeof value.context_window === "number"
+        ? value.context_window
+        : undefined,
+    modelUsage:
+      value.model_usage &&
+      typeof value.model_usage === "object" &&
+      !Array.isArray(value.model_usage)
+        ? (value.model_usage as Record<string, Record<string, unknown>>)
+        : {},
+    rateLimit:
+      value.rate_limit &&
+      typeof value.rate_limit === "object" &&
+      !Array.isArray(value.rate_limit)
+        ? (value.rate_limit as Record<string, unknown>)
+        : {},
   };
 }
 
-function mapHarnessActivityEvent(value: WireChatStreamEvent): HarnessActivityEvent {
+function mapHarnessActivityEvent(
+  value: WireChatStreamEvent,
+): HarnessActivityEvent {
   const inputTokens = numberField(value.usage?.input_tokens);
   const outputTokens = numberField(value.usage?.output_tokens);
   return {
@@ -2256,11 +2436,14 @@ function mapHarnessActivityEvent(value: WireChatStreamEvent): HarnessActivityEve
     stream: value.stream,
     delta: value.delta,
     message: typeof value.message === "string" ? value.message : undefined,
-    usage: value.usage ? {
-      inputTokens,
-      outputTokens,
-      totalTokens: numberField(value.usage.total_tokens) || inputTokens + outputTokens,
-    } : undefined,
+    usage: value.usage
+      ? {
+          inputTokens,
+          outputTokens,
+          totalTokens:
+            numberField(value.usage.total_tokens) || inputTokens + outputTokens,
+        }
+      : undefined,
     detailedUsage: mapHarnessDetailedUsage(value.detailed_usage),
     artifactIds: value.artifact_ids ?? [],
     payload: value.payload ?? {},
@@ -2268,7 +2451,9 @@ function mapHarnessActivityEvent(value: WireChatStreamEvent): HarnessActivityEve
   };
 }
 
-function mapPersistedChatMessage(value: WirePersistedChatMessage): PersistedChatMessage {
+function mapPersistedChatMessage(
+  value: WirePersistedChatMessage,
+): PersistedChatMessage {
   const inputTokens = numberField(value.usage?.input_tokens);
   const outputTokens = numberField(value.usage?.output_tokens);
   return {
@@ -2280,46 +2465,65 @@ function mapPersistedChatMessage(value: WirePersistedChatMessage): PersistedChat
     content: value.content,
     providerId: value.provider_profile_id ?? undefined,
     model: value.model ?? undefined,
-    usage: value.usage ? {
-      inputTokens,
-      outputTokens,
-      totalTokens: typeof value.usage.total_tokens === "number"
-        ? value.usage.total_tokens
-        : inputTokens + outputTokens,
-    } : undefined,
+    usage: value.usage
+      ? {
+          inputTokens,
+          outputTokens,
+          totalTokens:
+            typeof value.usage.total_tokens === "number"
+              ? value.usage.total_tokens
+              : inputTokens + outputTokens,
+        }
+      : undefined,
     finishReason: value.finish_reason ?? undefined,
     providerRequestId: value.provider_request_id ?? undefined,
     citations: (value.citations ?? []).map(mapChatCitation),
     contextAttachments: Array.isArray(value.metadata?.context_attachments)
       ? value.metadata.context_attachments.flatMap((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-        const row = item as JsonObject;
-        if (typeof row.source_kind !== "string" || typeof row.source_label !== "string" || typeof row.text !== "string" || typeof row.sha256 !== "string") return [];
-        return [{
-          sourceKind: row.source_kind,
-          sourceId: typeof row.source_id === "string" ? row.source_id : undefined,
-          sourceLabel: row.source_label,
-          text: row.text,
-          sha256: row.sha256,
-          truncated: row.truncated === true,
-        }];
-      })
+          if (!item || typeof item !== "object" || Array.isArray(item))
+            return [];
+          const row = item as JsonObject;
+          if (
+            typeof row.source_kind !== "string" ||
+            typeof row.source_label !== "string" ||
+            typeof row.text !== "string" ||
+            typeof row.sha256 !== "string"
+          )
+            return [];
+          return [
+            {
+              sourceKind: row.source_kind,
+              sourceId:
+                typeof row.source_id === "string" ? row.source_id : undefined,
+              sourceLabel: row.source_label,
+              text: row.text,
+              sha256: row.sha256,
+              truncated: row.truncated === true,
+            },
+          ];
+        })
       : [],
-    harnessTurnId: typeof value.metadata?.harness_turn_id === "string"
-      ? value.metadata.harness_turn_id
-      : undefined,
+    harnessTurnId:
+      typeof value.metadata?.harness_turn_id === "string"
+        ? value.metadata.harness_turn_id
+        : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
 }
 
 function wireItems<T>(value: T[] | { items?: T[]; entries?: T[] }): T[] {
-  return Array.isArray(value) ? value : value.items ?? value.entries ?? [];
+  return Array.isArray(value) ? value : (value.items ?? value.entries ?? []);
 }
 
-function mapToolCatalogEntry(value: WireToolPackCatalogEntry): ToolPackCatalogEntry {
+function mapToolCatalogEntry(
+  value: WireToolPackCatalogEntry,
+): ToolPackCatalogEntry {
   return {
-    id: value.id ?? value.catalog_id ?? `${value.publisher}/${value.name}@${value.version}`,
+    id:
+      value.id ??
+      value.catalog_id ??
+      `${value.publisher}/${value.name}@${value.version}`,
     publisher: value.publisher,
     name: value.name,
     version: value.version,
@@ -2340,9 +2544,16 @@ function mapToolCatalogEntry(value: WireToolPackCatalogEntry): ToolPackCatalogEn
   };
 }
 
-function mapToolPackInstallation(value: WireToolPackInstallation): ToolPackInstallation {
-  const trustState = value.trust_state
-    ?? (value.trust === "local_unsigned" ? "developer" : value.trust ? "trusted" : "untrusted");
+function mapToolPackInstallation(
+  value: WireToolPackInstallation,
+): ToolPackInstallation {
+  const trustState =
+    value.trust_state ??
+    (value.trust === "local_unsigned"
+      ? "developer"
+      : value.trust
+        ? "trusted"
+        : "untrusted");
   return {
     id: value.id,
     catalogId: value.catalog_id ?? undefined,
@@ -2368,10 +2579,12 @@ function mapToolSummary(value: WireToolSummary): ToolSummary {
   return {
     name: value.name,
     packId: value.pack_id,
-    packManifestDigest: value.pack_manifest_digest ?? value.manifest_digest ?? "",
+    packManifestDigest:
+      value.pack_manifest_digest ?? value.manifest_digest ?? "",
     description: value.description ?? "",
     riskClass: value.risk_class ?? "passive",
-    requiresNetwork: value.requires_network === true || value.network_access === true,
+    requiresNetwork:
+      value.requires_network === true || value.network_access === true,
     requiresApproval: value.requires_approval === true,
     available: value.available === true,
     unavailableReason: value.unavailable_reason ?? undefined,
@@ -2388,13 +2601,15 @@ function mapRunnerProfile(value: WireRunnerProfile): RunnerProfile {
     socket: value.socket ?? undefined,
     platform: value.platform ?? "unknown",
     isolationMode: value.isolation_mode ?? value.isolation ?? "unverified",
-    state: value.state ?? (value.healthy
-      ? "ready"
-      : value.enabled === false
-        ? "unavailable"
-        : value.last_health_at || value.last_checked_at
-          ? "degraded"
-          : "unchecked"),
+    state:
+      value.state ??
+      (value.healthy
+        ? "ready"
+        : value.enabled === false
+          ? "unavailable"
+          : value.last_health_at || value.last_checked_at
+            ? "degraded"
+            : "unchecked"),
     lastCheckedAt: value.last_checked_at ?? value.last_health_at ?? undefined,
     detail: value.detail ?? value.last_health_detail ?? undefined,
     egressHelperImage: value.egress_helper_image ?? undefined,
@@ -2428,7 +2643,53 @@ function mapEngagementScope(value: WireEngagementScope): EngagementScopePolicy {
   };
 }
 
-function mapToolAssignment(value: WireEngagementToolAssignment): EngagementToolAssignment {
+function mapScopeImport(value: WireScopeImport): ScopeImport {
+  return {
+    id: value.id,
+    engagementId: value.engagement_id,
+    artifactId: value.artifact_id,
+    filename: value.filename,
+    sourceType: value.source_type,
+    sourceSha256: value.source_sha256,
+    baseScopeRevision: numberField(value.base_scope_revision),
+    status: value.status,
+    candidates: (value.candidates ?? []).map((candidate) => ({
+      id: candidate.id,
+      targetType: candidate.target_type,
+      classification: candidate.classification,
+      rawValue: candidate.raw_value,
+      normalizedValue: candidate.normalized_value ?? undefined,
+      sourceLocation: candidate.source_location ?? "document",
+      sourceExcerpt: candidate.source_excerpt ?? "",
+      warnings: candidate.warnings ?? [],
+    })),
+    warnings: value.warnings ?? [],
+    provenance: value.provenance
+      ? {
+          providerProfileId: value.provenance.provider_profile_id,
+          model: value.provenance.model,
+          promptVersion: value.provenance.prompt_version,
+          sourceSha256: value.provenance.source_sha256,
+          generatedAt: value.provenance.generated_at,
+          providerRequestIds: value.provenance.provider_request_ids ?? [],
+        }
+      : undefined,
+    usage: {
+      inputTokens: numberField(value.usage?.input_tokens),
+      outputTokens: numberField(value.usage?.output_tokens),
+      totalTokens: numberField(value.usage?.total_tokens),
+    },
+    errorDetail: value.error_detail ?? undefined,
+    appliedCandidateIds: value.applied_candidate_ids ?? [],
+    appliedScopePolicyId: value.applied_scope_policy_id ?? undefined,
+    appliedScopeRevision: value.applied_scope_revision ?? undefined,
+    revision: numberField(value.revision),
+  };
+}
+
+function mapToolAssignment(
+  value: WireEngagementToolAssignment,
+): EngagementToolAssignment {
   return {
     id: value.id,
     engagementId: value.engagement_id,
@@ -2448,7 +2709,12 @@ async function responseError(response: Response): Promise<ApiError> {
     try {
       details = JSON.parse(text);
     } catch (caughtError) {
-      void logCaughtDiagnostic("interface.client.caught_failure_01", "A handled interface operation failed.", caughtError, "client");
+      void logCaughtDiagnostic(
+        "interface.client.caught_failure_01",
+        "A handled interface operation failed.",
+        caughtError,
+        "client",
+      );
       // Preserve a non-JSON Core/proxy response verbatim.
     }
   }
@@ -2493,15 +2759,20 @@ function mapSetupStatus(value: WireSetupStatus): SetupStatus {
       })),
       imagePreparation: {
         phase: value.terminal.image_preparation?.phase ?? "not_started",
-        operationId: value.terminal.image_preparation?.operation_id ?? undefined,
+        operationId:
+          value.terminal.image_preparation?.operation_id ?? undefined,
         projectId: value.terminal.image_preparation?.project_id ?? undefined,
-        progressPercent: value.terminal.image_preparation?.progress_percent ?? undefined,
-        progressIndeterminate: value.terminal.image_preparation?.progress_indeterminate ?? false,
+        progressPercent:
+          value.terminal.image_preparation?.progress_percent ?? undefined,
+        progressIndeterminate:
+          value.terminal.image_preparation?.progress_indeterminate ?? false,
         canCancel: value.terminal.image_preparation?.can_cancel ?? false,
         canRetry: value.terminal.image_preparation?.can_retry ?? false,
-        imageDigest: value.terminal.image_preparation?.image_digest ?? undefined,
+        imageDigest:
+          value.terminal.image_preparation?.image_digest ?? undefined,
         startedAt: value.terminal.image_preparation?.started_at ?? undefined,
-        completedAt: value.terminal.image_preparation?.completed_at ?? undefined,
+        completedAt:
+          value.terminal.image_preparation?.completed_at ?? undefined,
         detail: value.terminal.image_preparation?.detail ?? undefined,
       },
       detail: value.terminal.detail ?? undefined,
@@ -2514,7 +2785,9 @@ function mapSetupStatus(value: WireSetupStatus): SetupStatus {
   };
 }
 
-function mapSetupControlResponse(value: WireSetupControlResponse): SetupControlResponse {
+function mapSetupControlResponse(
+  value: WireSetupControlResponse,
+): SetupControlResponse {
   return {
     operation: value.operation,
     accepted: value.accepted,
@@ -2536,7 +2809,9 @@ export class ApiClient {
   }
 
   getToken(): string | undefined {
-    return typeof this.tokenSource === "function" ? this.tokenSource() : this.tokenSource;
+    return typeof this.tokenSource === "function"
+      ? this.tokenSource()
+      : this.tokenSource;
   }
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -2555,11 +2830,14 @@ export class ApiClient {
 
     let response: Response;
     try {
-      response = await this.fetchImpl(`${this.baseUrl}/${path.replace(/^\//, "")}`, {
-        ...init,
-        headers,
-        credentials: "same-origin",
-      });
+      response = await this.fetchImpl(
+        `${this.baseUrl}/${path.replace(/^\//, "")}`,
+        {
+          ...init,
+          headers,
+          credentials: "same-origin",
+        },
+      );
     } catch (error) {
       void logDiagnostic({
         level: "error",
@@ -2584,13 +2862,18 @@ export class ApiClient {
         outcome: response.status >= 500 ? "failure" : "denied",
         stage: "response",
         retryable: error.retryable,
-        safeFailureCause: response.status >= 500
-          ? "Nebula Core reported an operation failure."
-          : "Nebula Core rejected the request safely.",
+        safeFailureCause:
+          response.status >= 500
+            ? "Nebula Core reported an operation failure."
+            : "Nebula Core rejected the request safely.",
         exception: error,
         requestId: error.requestId,
         errorId: error.errorId,
-        metadata: { method: init.method ?? "GET", http_status: response.status, code: error.code },
+        metadata: {
+          method: init.method ?? "GET",
+          http_status: response.status,
+          code: error.code,
+        },
       });
       throw error;
     }
@@ -2609,7 +2892,10 @@ export class ApiClient {
         stage: "response-parse",
         retryable: true,
         exception: error,
-        metadata: { method: init.method ?? "GET", http_status: response.status },
+        metadata: {
+          method: init.method ?? "GET",
+          http_status: response.status,
+        },
       });
       throw error;
     }
@@ -2630,8 +2916,13 @@ export class ApiClient {
     });
   }
 
-  diagnosticsFiles(signal?: AbortSignal): Promise<{ files: DiagnosticFile[]; health: DiagnosticStatus }> {
-    return this.request<{ files: DiagnosticFile[]; health: DiagnosticStatus }>("diagnostics/files", { signal });
+  diagnosticsFiles(
+    signal?: AbortSignal,
+  ): Promise<{ files: DiagnosticFile[]; health: DiagnosticStatus }> {
+    return this.request<{ files: DiagnosticFile[]; health: DiagnosticStatus }>(
+      "diagnostics/files",
+      { signal },
+    );
   }
 
   diagnosticErrors(
@@ -2643,8 +2934,10 @@ export class ApiClient {
     const parameters = new URLSearchParams({ limit: String(limit) });
     if (feature) parameters.set("feature", feature);
     if (after) parameters.set("after", after);
-    return this.request<{ errors: DiagnosticRecord[] }>(`diagnostics/errors?${parameters}` , { signal })
-      .then((result) => result.errors);
+    return this.request<{ errors: DiagnosticRecord[] }>(
+      `diagnostics/errors?${parameters}`,
+      { signal },
+    ).then((result) => result.errors);
   }
 
   resolveDiagnosticIncidents(
@@ -2658,7 +2951,10 @@ export class ApiClient {
     });
   }
 
-  diagnosticIncident(errorId: string, signal?: AbortSignal): Promise<DiagnosticIncident> {
+  diagnosticIncident(
+    errorId: string,
+    signal?: AbortSignal,
+  ): Promise<DiagnosticIncident> {
     return this.request<DiagnosticIncident>(
       `diagnostics/incidents/${encodeURIComponent(errorId)}`,
       { signal },
@@ -2690,7 +2986,11 @@ export class ApiClient {
       `diagnostics/incidents/${encodeURIComponent(errorId)}/sensitive-detail`,
       {
         method: "POST",
-        body: JSON.stringify({ confirmed: true, action, operator_id: "local-operator" }),
+        body: JSON.stringify({
+          confirmed: true,
+          action,
+          operator_id: "local-operator",
+        }),
         signal,
       },
     );
@@ -2703,17 +3003,24 @@ export class ApiClient {
       "X-Nebula-Operation-ID": newOperationId(),
     });
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const response = await this.fetchImpl(`${this.baseUrl}/diagnostics/export`, {
-      method: "POST",
-      headers,
-      credentials: "same-origin",
-      signal,
-    });
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/diagnostics/export`,
+      {
+        method: "POST",
+        headers,
+        credentials: "same-origin",
+        signal,
+      },
+    );
     if (!response.ok) throw await responseError(response);
     return response.blob();
   }
 
-  private async listAll<T>(resource: string, signal?: AbortSignal, engagementId?: string): Promise<T[]> {
+  private async listAll<T>(
+    resource: string,
+    signal?: AbortSignal,
+    engagementId?: string,
+  ): Promise<T[]> {
     const items: T[] = [];
     let offset = 0;
     while (true) {
@@ -2738,7 +3045,9 @@ export class ApiClient {
     >("health", { signal }).then((health) => ({
       status: health.status === "degraded" ? "degraded" : "ok",
       version: health.version ?? health.api_version ?? "unknown",
-      mode: health.mode ?? (health.dialect?.startsWith("postgres") ? "team" : "local"),
+      mode:
+        health.mode ??
+        (health.dialect?.startsWith("postgres") ? "team" : "local"),
       runner: health.runner ?? "unavailable",
       containerTerminal: health.container_terminal ?? "unavailable",
       diagnosticsDegraded: health.diagnostics?.degraded === true,
@@ -2746,15 +3055,22 @@ export class ApiClient {
   }
 
   setupStatus(signal?: AbortSignal): Promise<SetupStatus> {
-    return this.request<WireSetupStatus>("setup/status", { signal }).then(mapSetupStatus);
+    return this.request<WireSetupStatus>("setup/status", { signal }).then(
+      mapSetupStatus,
+    );
   }
 
   refreshSetupRuntime(signal?: AbortSignal): Promise<SetupStatus> {
-    return this.request<WireSetupStatus>("setup/runtime/refresh", { method: "POST", signal })
-      .then(mapSetupStatus);
+    return this.request<WireSetupStatus>("setup/runtime/refresh", {
+      method: "POST",
+      signal,
+    }).then(mapSetupStatus);
   }
 
-  selectSetupRuntime(candidateId: string, signal?: AbortSignal): Promise<SetupControlResponse> {
+  selectSetupRuntime(
+    candidateId: string,
+    signal?: AbortSignal,
+  ): Promise<SetupControlResponse> {
     return this.request<WireSetupControlResponse>("setup/runtime/select", {
       method: "POST",
       body: JSON.stringify({ candidate_id: candidateId }),
@@ -2762,15 +3078,24 @@ export class ApiClient {
     }).then(mapSetupControlResponse);
   }
 
-  prepareSetupImage(projectId?: string, signal?: AbortSignal): Promise<SetupControlResponse> {
+  prepareSetupImage(
+    projectId?: string,
+    signal?: AbortSignal,
+  ): Promise<SetupControlResponse> {
     return this.setupImageOperation("prepare", projectId, signal);
   }
 
-  retrySetupImage(projectId?: string, signal?: AbortSignal): Promise<SetupControlResponse> {
+  retrySetupImage(
+    projectId?: string,
+    signal?: AbortSignal,
+  ): Promise<SetupControlResponse> {
     return this.setupImageOperation("retry", projectId, signal);
   }
 
-  cancelSetupImage(operationId: string, signal?: AbortSignal): Promise<SetupControlResponse> {
+  cancelSetupImage(
+    operationId: string,
+    signal?: AbortSignal,
+  ): Promise<SetupControlResponse> {
     return this.request<WireSetupControlResponse>("setup/image/cancel", {
       method: "POST",
       body: JSON.stringify({ operation_id: operationId }),
@@ -2794,23 +3119,36 @@ export class ApiClient {
     secret: string,
     persistence: "vault" | "session" = "vault",
   ): Promise<CredentialStatus> {
-    return this.request<{ reference: string; persistence: CredentialStatus["persistence"]; available: boolean }>("credentials", {
+    return this.request<{
+      reference: string;
+      persistence: CredentialStatus["persistence"];
+      available: boolean;
+    }>("credentials", {
       method: "POST",
       body: JSON.stringify({ secret, persistence }),
     });
   }
 
-  credentialStatus(reference: string, signal?: AbortSignal): Promise<CredentialStatus> {
-    return this.request<CredentialStatus>(`credentials/${encodeURIComponent(reference)}/status`, { signal });
+  credentialStatus(
+    reference: string,
+    signal?: AbortSignal,
+  ): Promise<CredentialStatus> {
+    return this.request<CredentialStatus>(
+      `credentials/${encodeURIComponent(reference)}/status`,
+      { signal },
+    );
   }
 
   async deleteCredential(reference: string): Promise<void> {
-    await this.request<void>(`credentials/${encodeURIComponent(reference)}`, { method: "DELETE" });
+    await this.request<void>(`credentials/${encodeURIComponent(reference)}`, {
+      method: "DELETE",
+    });
   }
 
   listEngagements(signal?: AbortSignal): Promise<Page<EngagementSummary>> {
-    return this.listAll<WireEngagement>("engagements", signal)
-      .then((items) => page(items.map(mapEngagement)));
+    return this.listAll<WireEngagement>("engagements", signal).then((items) =>
+      page(items.map(mapEngagement)),
+    );
   }
 
   createEngagement(body: EngagementCreateRequest): Promise<EngagementSummary> {
@@ -2828,51 +3166,85 @@ export class ApiClient {
   }
 
   listOperatorProfiles(signal?: AbortSignal): Promise<OperatorProfile[]> {
-    return this.request<WireOperatorProfile[]>("operator-profiles", { signal })
-      .then((items) => items.map(mapOperatorProfile));
+    return this.request<WireOperatorProfile[]>("operator-profiles", {
+      signal,
+    }).then((items) => items.map(mapOperatorProfile));
   }
 
   getActiveOperatorProfile(signal?: AbortSignal): Promise<OperatorProfile> {
-    return this.request<WireOperatorProfile>("operator-profiles/active", { signal })
-      .then(mapOperatorProfile);
-  }
-
-  createOperatorProfile(body: OperatorProfileCreateRequest): Promise<OperatorProfile> {
-    return this.request<WireOperatorProfile>("operator-profiles", {
-      method: "POST",
-      body: JSON.stringify({ display_name: body.displayName, email: body.email || null, role: body.role || null, metadata: body.metadata ?? {} }),
+    return this.request<WireOperatorProfile>("operator-profiles/active", {
+      signal,
     }).then(mapOperatorProfile);
   }
 
-  updateOperatorProfile(id: string, body: OperatorProfileUpdateRequest): Promise<OperatorProfile> {
-    return this.request<WireOperatorProfile>(`operator-profiles/${encodeURIComponent(id)}`, {
-      method: "PATCH",
+  createOperatorProfile(
+    body: OperatorProfileCreateRequest,
+  ): Promise<OperatorProfile> {
+    return this.request<WireOperatorProfile>("operator-profiles", {
+      method: "POST",
       body: JSON.stringify({
-        ...(body.displayName === undefined ? {} : { display_name: body.displayName }),
-        ...(body.email === undefined ? {} : { email: body.email || null }),
-        ...(body.role === undefined ? {} : { role: body.role || null }),
-        ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
-        expected_revision: body.expectedRevision,
+        display_name: body.displayName,
+        email: body.email || null,
+        role: body.role || null,
+        metadata: body.metadata ?? {},
       }),
     }).then(mapOperatorProfile);
   }
 
-  activateOperatorProfile(id: string, expectedRevision?: number): Promise<OperatorProfile> {
-    return this.request<WireOperatorProfile>(`operator-profiles/${encodeURIComponent(id)}/activate`, {
-      method: "POST",
-      body: JSON.stringify({ expected_revision: expectedRevision }),
-    }).then(mapOperatorProfile);
+  updateOperatorProfile(
+    id: string,
+    body: OperatorProfileUpdateRequest,
+  ): Promise<OperatorProfile> {
+    return this.request<WireOperatorProfile>(
+      `operator-profiles/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          ...(body.displayName === undefined
+            ? {}
+            : { display_name: body.displayName }),
+          ...(body.email === undefined ? {} : { email: body.email || null }),
+          ...(body.role === undefined ? {} : { role: body.role || null }),
+          ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
+          expected_revision: body.expectedRevision,
+        }),
+      },
+    ).then(mapOperatorProfile);
   }
 
-  async deleteOperatorProfile(id: string, expectedRevision?: number): Promise<void> {
+  activateOperatorProfile(
+    id: string,
+    expectedRevision?: number,
+  ): Promise<OperatorProfile> {
+    return this.request<WireOperatorProfile>(
+      `operator-profiles/${encodeURIComponent(id)}/activate`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expected_revision: expectedRevision }),
+      },
+    ).then(mapOperatorProfile);
+  }
+
+  async deleteOperatorProfile(
+    id: string,
+    expectedRevision?: number,
+  ): Promise<void> {
     const headers = new Headers();
-    if (expectedRevision !== undefined) headers.set("If-Match", String(expectedRevision));
-    await this.request<void>(`operator-profiles/${encodeURIComponent(id)}`, { method: "DELETE", headers });
+    if (expectedRevision !== undefined)
+      headers.set("If-Match", String(expectedRevision));
+    await this.request<void>(`operator-profiles/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers,
+    });
   }
 
-  listRuns(engagementId: string, signal?: AbortSignal): Promise<Page<AgentRunSummary>> {
-    return this.listAll<WireAgentRun>("runs", signal, engagementId)
-      .then((items) => page(items.map(mapRun)));
+  listRuns(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Page<AgentRunSummary>> {
+    return this.listAll<WireAgentRun>("runs", signal, engagementId).then(
+      (items) => page(items.map(mapRun)),
+    );
   }
 
   createMission(body: MissionCreateRequest): Promise<AgentRunSummary> {
@@ -2908,14 +3280,24 @@ export class ApiClient {
   }
 
   discussRun(id: string): Promise<ChatSessionSummary> {
-    return this.request<WireChatSession>(`runs/${encodeURIComponent(id)}/discuss`, {
-      method: "POST",
-    }).then(mapChatSession);
+    return this.request<WireChatSession>(
+      `runs/${encodeURIComponent(id)}/discuss`,
+      {
+        method: "POST",
+      },
+    ).then(mapChatSession);
   }
 
   continueChatAsMission(
     sessionId: string,
-    body: { objective?: string; maxDurationSeconds?: number; maxTokens?: number; maxCostUsd?: number; maxToolCalls?: number; allowCloudToolResults?: boolean } = {},
+    body: {
+      objective?: string;
+      maxDurationSeconds?: number;
+      maxTokens?: number;
+      maxCostUsd?: number;
+      maxToolCalls?: number;
+      allowCloudToolResults?: boolean;
+    } = {},
   ): Promise<AgentRunSummary> {
     return this.request<WireAgentRun>(
       `chat/sessions/${encodeURIComponent(sessionId)}/continue-as-mission`,
@@ -2934,8 +3316,9 @@ export class ApiClient {
   }
 
   listHarnesses(signal?: AbortSignal): Promise<HarnessProfile[]> {
-    return this.listAll<WireHarnessProfile>("harnesses", signal)
-      .then((items) => items.map(mapHarnessProfile));
+    return this.listAll<WireHarnessProfile>("harnesses", signal).then((items) =>
+      items.map(mapHarnessProfile),
+    );
   }
 
   createHarness(body: Record<string, unknown>): Promise<HarnessProfile> {
@@ -2945,17 +3328,30 @@ export class ApiClient {
     }).then(mapHarnessProfile);
   }
 
-  updateHarness(id: string, changes: Record<string, unknown>, expectedRevision: number): Promise<HarnessProfile> {
-    return this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ changes, expected_revision: expectedRevision }),
-    }).then(mapHarnessProfile);
+  updateHarness(
+    id: string,
+    changes: Record<string, unknown>,
+    expectedRevision: number,
+  ): Promise<HarnessProfile> {
+    return this.request<WireHarnessProfile>(
+      `harnesses/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ changes, expected_revision: expectedRevision }),
+      },
+    ).then(mapHarnessProfile);
   }
 
   checkHarness(id: string): Promise<HarnessProfile> {
-    return this.request<Record<string, unknown>>(`harnesses/${encodeURIComponent(id)}/health`, {
-      method: "POST",
-    }).then(() => this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`))
+    return this.request<Record<string, unknown>>(
+      `harnesses/${encodeURIComponent(id)}/health`,
+      {
+        method: "POST",
+      },
+    )
+      .then(() =>
+        this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`),
+      )
       .then(mapHarnessProfile);
   }
 
@@ -2966,17 +3362,32 @@ export class ApiClient {
     });
   }
 
-  listHarnessSessions(engagementId?: string, signal?: AbortSignal): Promise<HarnessSessionSummary[]> {
-    return this.listAll<WireHarnessSession>("harness-sessions", signal, engagementId)
-      .then((items) => items.map(mapHarnessSession));
+  listHarnessSessions(
+    engagementId?: string,
+    signal?: AbortSignal,
+  ): Promise<HarnessSessionSummary[]> {
+    return this.listAll<WireHarnessSession>(
+      "harness-sessions",
+      signal,
+      engagementId,
+    ).then((items) => items.map(mapHarnessSession));
   }
 
-  getHarnessSessionActivity(id: string, signal?: AbortSignal): Promise<HarnessSessionActivity> {
-    return this.request<WireHarnessSessionActivity>(`harness-sessions/${encodeURIComponent(id)}/activity`, { signal })
-      .then(mapHarnessSessionActivity);
+  getHarnessSessionActivity(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<HarnessSessionActivity> {
+    return this.request<WireHarnessSessionActivity>(
+      `harness-sessions/${encodeURIComponent(id)}/activity`,
+      { signal },
+    ).then(mapHarnessSessionActivity);
   }
 
-  getHarnessTurnEvents(id: string, after = 0, signal?: AbortSignal): Promise<HarnessActivityEventPage> {
+  getHarnessTurnEvents(
+    id: string,
+    after = 0,
+    signal?: AbortSignal,
+  ): Promise<HarnessActivityEventPage> {
     return this.request<WireHarnessActivityEventPage>(
       `harness-turns/${encodeURIComponent(id)}/events?after=${after}&limit=10000`,
       { signal },
@@ -2987,17 +3398,22 @@ export class ApiClient {
   }
 
   getHarnessTurn(id: string, signal?: AbortSignal): Promise<HarnessTurnDetail> {
-    return this.request<WireHarnessTurn>(`harness-turns/${encodeURIComponent(id)}`, { signal })
-      .then((value) => ({
-        id: value.id,
-        status: value.status,
-        origin: value.origin,
-        harnessSessionId: value.harness_session_id,
-        chatSessionId: value.chat_session_id ?? undefined,
-        runId: value.run_id ?? undefined,
-        error: value.error ?? undefined,
-        retryOfTurnId: typeof value.metadata?.retry_of_turn_id === "string" ? value.metadata.retry_of_turn_id : undefined,
-      }));
+    return this.request<WireHarnessTurn>(
+      `harness-turns/${encodeURIComponent(id)}`,
+      { signal },
+    ).then((value) => ({
+      id: value.id,
+      status: value.status,
+      origin: value.origin,
+      harnessSessionId: value.harness_session_id,
+      chatSessionId: value.chat_session_id ?? undefined,
+      runId: value.run_id ?? undefined,
+      error: value.error ?? undefined,
+      retryOfTurnId:
+        typeof value.metadata?.retry_of_turn_id === "string"
+          ? value.metadata.retry_of_turn_id
+          : undefined,
+    }));
   }
 
   followHarnessTurnEvents(
@@ -3029,15 +3445,29 @@ export class ApiClient {
           onComplete?.();
         }
       } catch (error) {
-        void logCaughtDiagnostic("interface.client.harness_activity_frame", "A harness activity frame could not be decoded.", error, "client");
-        onError?.(error instanceof Error ? error : new Error("Malformed harness activity frame"));
+        void logCaughtDiagnostic(
+          "interface.client.harness_activity_frame",
+          "A harness activity frame could not be decoded.",
+          error,
+          "client",
+        );
+        onError?.(
+          error instanceof Error
+            ? error
+            : new Error("Malformed harness activity frame"),
+        );
       }
     });
-    socket.addEventListener("error", () => onError?.(new Error("Harness activity connection failed")));
+    socket.addEventListener("error", () =>
+      onError?.(new Error("Harness activity connection failed")),
+    );
     return () => socket.close(1000, "viewer detached");
   }
 
-  listHarnessInteractions(id: string, signal?: AbortSignal): Promise<HarnessInteraction[]> {
+  listHarnessInteractions(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<HarnessInteraction[]> {
     return this.request<WireHarnessInteraction[]>(
       `harness-turns/${encodeURIComponent(id)}/interactions`,
       { signal },
@@ -3082,7 +3512,10 @@ export class ApiClient {
     ).then(() => undefined);
   }
 
-  rewindHarnessCheckpoint(sessionId: string, checkpointId: string): Promise<void> {
+  rewindHarnessCheckpoint(
+    sessionId: string,
+    checkpointId: string,
+  ): Promise<void> {
     return this.request(
       `harness-sessions/${encodeURIComponent(sessionId)}/checkpoints/rewind`,
       { method: "POST", body: JSON.stringify({ checkpoint_id: checkpointId }) },
@@ -3090,14 +3523,18 @@ export class ApiClient {
   }
 
   closeHarnessSession(id: string): Promise<HarnessSessionSummary> {
-    return this.request<WireHarnessSession>(`harness-sessions/${encodeURIComponent(id)}/close`, {
-      method: "POST",
-    }).then(mapHarnessSession);
+    return this.request<WireHarnessSession>(
+      `harness-sessions/${encodeURIComponent(id)}/close`,
+      {
+        method: "POST",
+      },
+    ).then(mapHarnessSession);
   }
 
   listMcpServers(signal?: AbortSignal): Promise<McpServerProfile[]> {
-    return this.listAll<WireMcpServerProfile>("mcp-servers", signal)
-      .then((items) => items.map(mapMcpServer));
+    return this.listAll<WireMcpServerProfile>("mcp-servers", signal).then(
+      (items) => items.map(mapMcpServer),
+    );
   }
 
   createMcpServer(body: Record<string, unknown>): Promise<McpServerProfile> {
@@ -3107,18 +3544,33 @@ export class ApiClient {
     }).then(mapMcpServer);
   }
 
-  updateMcpServer(id: string, changes: Record<string, unknown>, expectedRevision: number): Promise<McpServerProfile> {
-    return this.request<WireMcpServerProfile>(`mcp-servers/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ changes, expected_revision: expectedRevision }),
-    }).then(mapMcpServer);
+  updateMcpServer(
+    id: string,
+    changes: Record<string, unknown>,
+    expectedRevision: number,
+  ): Promise<McpServerProfile> {
+    return this.request<WireMcpServerProfile>(
+      `mcp-servers/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ changes, expected_revision: expectedRevision }),
+      },
+    ).then(mapMcpServer);
   }
 
   probeMcpServer(id: string, engagementId?: string): Promise<McpServerProfile> {
-    return this.request<Record<string, unknown>>(`mcp-servers/${encodeURIComponent(id)}/probe`, {
-      method: "POST",
-      body: JSON.stringify({ engagement_id: engagementId }),
-    }).then(() => this.request<WireMcpServerProfile>(`mcp-servers/${encodeURIComponent(id)}`))
+    return this.request<Record<string, unknown>>(
+      `mcp-servers/${encodeURIComponent(id)}/probe`,
+      {
+        method: "POST",
+        body: JSON.stringify({ engagement_id: engagementId }),
+      },
+    )
+      .then(() =>
+        this.request<WireMcpServerProfile>(
+          `mcp-servers/${encodeURIComponent(id)}`,
+        ),
+      )
       .then(mapMcpServer);
   }
 
@@ -3130,37 +3582,70 @@ export class ApiClient {
   }
 
   listToolCatalog(signal?: AbortSignal): Promise<ToolPackCatalogEntry[]> {
-    return this.request<WireToolPackCatalogEntry[] | { items?: WireToolPackCatalogEntry[]; entries?: WireToolPackCatalogEntry[] }>("tool-catalog", { signal })
-      .then((value) => wireItems(value).map(mapToolCatalogEntry));
+    return this.request<
+      | WireToolPackCatalogEntry[]
+      | {
+          items?: WireToolPackCatalogEntry[];
+          entries?: WireToolPackCatalogEntry[];
+        }
+    >("tool-catalog", { signal }).then((value) =>
+      wireItems(value).map(mapToolCatalogEntry),
+    );
   }
 
   listToolPacks(signal?: AbortSignal): Promise<ToolPackInstallation[]> {
-    return this.request<WireToolPackInstallation[] | { items?: WireToolPackInstallation[] }>("tool-packs", { signal })
-      .then((value) => wireItems(value)
+    return this.request<
+      WireToolPackInstallation[] | { items?: WireToolPackInstallation[] }
+    >("tool-packs", { signal }).then((value) =>
+      wireItems(value)
         .map(mapToolPackInstallation)
-        .filter((installation) => installation.status !== "disabled"));
+        .filter((installation) => installation.status !== "disabled"),
+    );
   }
 
   listTools(signal?: AbortSignal): Promise<ToolSummary[]> {
-    return this.request<WireToolSummary[] | { items?: WireToolSummary[] }>("tools", { signal })
-      .then((value) => wireItems(value).map(mapToolSummary));
+    return this.request<WireToolSummary[] | { items?: WireToolSummary[] }>(
+      "tools",
+      { signal },
+    ).then((value) => wireItems(value).map(mapToolSummary));
   }
 
-  installToolPack(catalogId: string, runtimeProfileId: string, version?: string): Promise<ToolPackInstallation> {
+  installToolPack(
+    catalogId: string,
+    runtimeProfileId: string,
+    version?: string,
+  ): Promise<ToolPackInstallation> {
     return this.request<WireToolPackInstallation>("tool-packs/install", {
       method: "POST",
-      body: JSON.stringify({ catalog_id: catalogId, version, runtime_profile_id: runtimeProfileId }),
+      body: JSON.stringify({
+        catalog_id: catalogId,
+        version,
+        runtime_profile_id: runtimeProfileId,
+      }),
     }).then(mapToolPackInstallation);
   }
 
-  installToolCollection(collectionId: string, runtimeProfileId: string): Promise<ToolPackInstallation[]> {
-    return this.request<WireToolPackInstallation[]>("tool-collections/install", {
-      method: "POST",
-      body: JSON.stringify({ collection_id: collectionId, runtime_profile_id: runtimeProfileId }),
-    }).then((items) => items.map(mapToolPackInstallation));
+  installToolCollection(
+    collectionId: string,
+    runtimeProfileId: string,
+  ): Promise<ToolPackInstallation[]> {
+    return this.request<WireToolPackInstallation[]>(
+      "tool-collections/install",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          collection_id: collectionId,
+          runtime_profile_id: runtimeProfileId,
+        }),
+      },
+    ).then((items) => items.map(mapToolPackInstallation));
   }
 
-  installLocalToolPack(bundleBase64: string, runtimeProfileId: string, developerModeConfirmed = false): Promise<ToolPackInstallation> {
+  installLocalToolPack(
+    bundleBase64: string,
+    runtimeProfileId: string,
+    developerModeConfirmed = false,
+  ): Promise<ToolPackInstallation> {
     return this.request<WireToolPackInstallation>("tool-packs/install-local", {
       method: "POST",
       body: JSON.stringify({
@@ -3171,7 +3656,9 @@ export class ApiClient {
     }).then(mapToolPackInstallation);
   }
 
-  generateCustomTool(definition: CustomToolDefinition): Promise<CustomToolBundle> {
+  generateCustomTool(
+    definition: CustomToolDefinition,
+  ): Promise<CustomToolBundle> {
     return this.request<{
       filename: string;
       bundle_base64: string;
@@ -3218,38 +3705,61 @@ export class ApiClient {
   }
 
   listToolCallArtifacts(toolCallId: string): Promise<ToolArtifactReference[]> {
-    return this.request<Array<{
-      id: string;
-      sha256: string;
-      size: number;
-      filename?: string | null;
-      media_type: string;
-      metadata?: JsonObject;
-    }>>(`tool-calls/${encodeURIComponent(toolCallId)}/artifacts`).then((artifacts) =>
-      artifacts.map((artifact) => {
-        const metadata = artifact.metadata ?? {};
-        return {
-          artifactId: artifact.id,
-          kind: String(metadata.kind ?? "generated_file") as ToolArtifactReference["kind"],
-          filename: artifact.filename ?? undefined,
-          mediaType: artifact.media_type,
-          byteCount: artifact.size,
-          observedByteCount: typeof metadata.observed_byte_count === "number" ? metadata.observed_byte_count : artifact.size,
-          sha256: artifact.sha256,
-          searchable: metadata.searchable === true,
-          truncated: metadata.truncated === true,
-        };
-      }),
+    return this.request<
+      Array<{
+        id: string;
+        sha256: string;
+        size: number;
+        filename?: string | null;
+        media_type: string;
+        metadata?: JsonObject;
+      }>
+    >(`tool-calls/${encodeURIComponent(toolCallId)}/artifacts`).then(
+      (artifacts) =>
+        artifacts.map((artifact) => {
+          const metadata = artifact.metadata ?? {};
+          return {
+            artifactId: artifact.id,
+            kind: String(
+              metadata.kind ?? "generated_file",
+            ) as ToolArtifactReference["kind"],
+            filename: artifact.filename ?? undefined,
+            mediaType: artifact.media_type,
+            byteCount: artifact.size,
+            observedByteCount:
+              typeof metadata.observed_byte_count === "number"
+                ? metadata.observed_byte_count
+                : artifact.size,
+            sha256: artifact.sha256,
+            searchable: metadata.searchable === true,
+            truncated: metadata.truncated === true,
+          };
+        }),
     );
   }
 
   searchToolOutput(
     toolCallId: string,
     query: string,
-    options: { mode?: "literal" | "regex"; caseSensitive?: boolean; contextLines?: number; matchLimit?: number; cursor?: string } = {},
+    options: {
+      mode?: "literal" | "regex";
+      caseSensitive?: boolean;
+      contextLines?: number;
+      matchLimit?: number;
+      cursor?: string;
+    } = {},
   ): Promise<ToolOutputSearchResult> {
     return this.request<{
-      matches: Array<{ artifact_id: string; filename?: string | null; line: number; context: Array<{ line: number; text: string; line_truncated?: boolean }> }>;
+      matches: Array<{
+        artifact_id: string;
+        filename?: string | null;
+        line: number;
+        context: Array<{
+          line: number;
+          text: string;
+          line_truncated?: boolean;
+        }>;
+      }>;
       skipped?: Array<{ artifact_id: string; reason: string }>;
       truncated: boolean;
       continuation_cursor?: string | null;
@@ -3268,15 +3778,26 @@ export class ApiClient {
         artifactId: match.artifact_id,
         filename: match.filename ?? undefined,
         line: match.line,
-        context: match.context.map((line) => ({ line: line.line, text: line.text, lineTruncated: line.line_truncated })),
+        context: match.context.map((line) => ({
+          line: line.line,
+          text: line.text,
+          lineTruncated: line.line_truncated,
+        })),
       })),
-      skipped: (value.skipped ?? []).map((item) => ({ artifactId: item.artifact_id, reason: item.reason })),
+      skipped: (value.skipped ?? []).map((item) => ({
+        artifactId: item.artifact_id,
+        reason: item.reason,
+      })),
       truncated: value.truncated,
       continuationCursor: value.continuation_cursor ?? undefined,
     }));
   }
 
-  readToolOutput(artifactId: string, startingLine = 1, lineCount = 100): Promise<ToolOutputReadResult> {
+  readToolOutput(
+    artifactId: string,
+    startingLine = 1,
+    lineCount = 100,
+  ): Promise<ToolOutputReadResult> {
     return this.request<{
       artifact_id: string;
       filename?: string | null;
@@ -3286,18 +3807,27 @@ export class ApiClient {
       continuation?: { starting_line?: number } | null;
     }>(`artifacts/${encodeURIComponent(artifactId)}/output/read`, {
       method: "POST",
-      body: JSON.stringify({ starting_line: startingLine, line_count: lineCount }),
+      body: JSON.stringify({
+        starting_line: startingLine,
+        line_count: lineCount,
+      }),
     }).then((value) => ({
       artifactId: value.artifact_id,
       filename: value.filename ?? undefined,
       searchable: value.searchable ?? false,
-      lines: (value.lines ?? []).map((line) => ({ line: line.line, text: line.text, lineTruncated: line.line_truncated })),
+      lines: (value.lines ?? []).map((line) => ({
+        line: line.line,
+        text: line.text,
+        lineTruncated: line.line_truncated,
+      })),
       truncated: value.truncated ?? false,
       continuationStartingLine: value.continuation?.starting_line,
     }));
   }
 
-  async downloadToolArtifact(artifactId: string): Promise<{ blob: Blob; filename?: string }> {
+  async downloadToolArtifact(
+    artifactId: string,
+  ): Promise<{ blob: Blob; filename?: string }> {
     const headers = new Headers({
       Accept: "application/octet-stream",
       "X-Nebula-Sensitive-Data-Acknowledged": "true",
@@ -3305,10 +3835,13 @@ export class ApiClient {
     });
     const token = this.getToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const response = await this.fetchImpl(`${this.baseUrl}/artifacts/${encodeURIComponent(artifactId)}/content`, {
-      headers,
-      credentials: "same-origin",
-    });
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/artifacts/${encodeURIComponent(artifactId)}/content`,
+      {
+        headers,
+        credentials: "same-origin",
+      },
+    );
     if (!response.ok) throw await responseError(response);
     const disposition = response.headers.get("Content-Disposition") ?? "";
     const filename = /filename="?([^";]+)"?/i.exec(disposition)?.[1];
@@ -3316,89 +3849,198 @@ export class ApiClient {
   }
 
   verifyToolPack(id: string): Promise<ToolPackInstallation> {
-    return this.request<WireToolPackInstallation>(`tool-packs/${encodeURIComponent(id)}/verify`, { method: "POST" })
-      .then(mapToolPackInstallation);
+    return this.request<WireToolPackInstallation>(
+      `tool-packs/${encodeURIComponent(id)}/verify`,
+      { method: "POST" },
+    ).then(mapToolPackInstallation);
   }
 
   updateToolPack(id: string): Promise<ToolPackInstallation> {
-    return this.request<WireToolPackInstallation>(`tool-packs/${encodeURIComponent(id)}/update`, { method: "POST" })
-      .then(mapToolPackInstallation);
+    return this.request<WireToolPackInstallation>(
+      `tool-packs/${encodeURIComponent(id)}/update`,
+      { method: "POST" },
+    ).then(mapToolPackInstallation);
   }
 
   async removeToolPack(id: string): Promise<void> {
-    await this.request<void>(`tool-packs/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await this.request<void>(`tool-packs/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
   listRunnerProfiles(signal?: AbortSignal): Promise<RunnerProfile[]> {
-    return this.request<WireRunnerProfile[] | { items?: WireRunnerProfile[] }>("runner-profiles", { signal })
-      .then((value) => wireItems(value).map(mapRunnerProfile));
+    return this.request<WireRunnerProfile[] | { items?: WireRunnerProfile[] }>(
+      "runner-profiles",
+      { signal },
+    ).then((value) => wireItems(value).map(mapRunnerProfile));
   }
 
-  updateRunnerProfile(id: string, body: RunnerProfileUpdateRequest): Promise<RunnerProfile> {
-    return this.request<WireRunnerProfile>(`runner-profiles/${encodeURIComponent(id)}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        name: body.name,
-        runtime: body.runtimeType,
-        executable: body.executable,
-        context: body.context || null,
-        socket: body.socket || null,
-        platform: body.platform,
-        isolation: body.isolationMode,
-        ...(body.egressHelperImage ? { egress_helper_image: body.egressHelperImage } : {}),
-        ...(body.seccompProfile ? { seccomp_profile: body.seccompProfile } : {}),
-        expected_revision: body.expectedRevision,
-      }),
-    }).then(mapRunnerProfile);
+  updateRunnerProfile(
+    id: string,
+    body: RunnerProfileUpdateRequest,
+  ): Promise<RunnerProfile> {
+    return this.request<WireRunnerProfile>(
+      `runner-profiles/${encodeURIComponent(id)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          name: body.name,
+          runtime: body.runtimeType,
+          executable: body.executable,
+          context: body.context || null,
+          socket: body.socket || null,
+          platform: body.platform,
+          isolation: body.isolationMode,
+          ...(body.egressHelperImage
+            ? { egress_helper_image: body.egressHelperImage }
+            : {}),
+          ...(body.seccompProfile
+            ? { seccomp_profile: body.seccompProfile }
+            : {}),
+          expected_revision: body.expectedRevision,
+        }),
+      },
+    ).then(mapRunnerProfile);
   }
 
-  getEngagementScope(engagementId: string, signal?: AbortSignal): Promise<EngagementScopePolicy> {
-    return this.request<WireEngagementScope>(`engagements/${encodeURIComponent(engagementId)}/scope`, { signal })
-      .then(mapEngagementScope);
+  getEngagementScope(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<EngagementScopePolicy> {
+    return this.request<WireEngagementScope>(
+      `engagements/${encodeURIComponent(engagementId)}/scope`,
+      { signal },
+    ).then(mapEngagementScope);
   }
 
-  updateEngagementScope(engagementId: string, body: EngagementScopeUpdateRequest): Promise<EngagementScopePolicy> {
-    return this.request<WireEngagementScope>(`engagements/${encodeURIComponent(engagementId)}/scope`, {
-      method: "PUT",
-      body: JSON.stringify({
-        allowed_cidrs: body.allowedCidrs,
-        allowed_domains: body.allowedDomains,
-        allowed_urls: body.allowedUrls,
-        allowed_ports: body.allowedPorts,
-        not_before: body.notBefore || null,
-        not_after: body.notAfter || null,
-        prohibited_actions: body.prohibitedActions,
-        local_only: body.localOnly,
-        max_concurrency: body.maxConcurrency,
-        grants: body.grants.map((grant) => ({
-          risk_classes: grant.riskClasses,
-          tool_names: grant.toolNames,
-          targets: grant.targets,
-          granted_at: grant.grantedAt,
-          expires_at: grant.expiresAt,
-          granted_by: grant.grantedBy,
-        })),
-        expected_revision: body.expectedRevision || undefined,
-      }),
-    }).then(mapEngagementScope);
+  createScopeImport(
+    body: ScopeImportCreateRequest,
+    signal?: AbortSignal,
+  ): Promise<ScopeImport> {
+    return this.request<WireScopeImport>(
+      `engagements/${encodeURIComponent(body.engagementId)}/scope-imports`,
+      {
+        method: "POST",
+        signal,
+        body: JSON.stringify({
+          engagement_id: body.engagementId,
+          provider_id: body.providerId,
+          model: body.model,
+          filename: body.filename,
+          media_type: body.mediaType || null,
+          content_base64: body.contentBase64,
+          cloud_confirmed: body.cloudConfirmed,
+        }),
+      },
+    ).then(mapScopeImport);
   }
 
-  listEngagementToolAssignments(engagementId: string, signal?: AbortSignal): Promise<EngagementToolAssignment[]> {
-    return this.request<WireEngagementToolAssignment[] | { items?: WireEngagementToolAssignment[] }>(`engagements/${encodeURIComponent(engagementId)}/tool-assignment`, { signal })
-      .then((value) => wireItems(value).map(mapToolAssignment));
+  listScopeImports(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ScopeImport[]> {
+    return this.request<WireScopeImport[]>(
+      `engagements/${encodeURIComponent(engagementId)}/scope-imports`,
+      { signal },
+    ).then((items) => items.map(mapScopeImport));
   }
 
-  updateEngagementToolAssignment(engagementId: string, body: EngagementToolAssignmentUpdateRequest, signal?: AbortSignal): Promise<EngagementToolAssignment> {
-    return this.request<WireEngagementToolAssignment>(`engagements/${encodeURIComponent(engagementId)}/tool-assignment`, {
-      method: "PUT",
+  applyScopeImport(
+    engagementId: string,
+    scopeImportId: string,
+    candidateIds: string[],
+    expectedScopeRevision: number,
+  ): Promise<ScopeImportApplyResult> {
+    return this.request<{
+      scope: WireEngagementScope;
+      scope_import: WireScopeImport;
+    }>(
+      `engagements/${encodeURIComponent(engagementId)}/scope-imports/${encodeURIComponent(scopeImportId)}/apply`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          candidate_ids: candidateIds,
+          expected_scope_revision: expectedScopeRevision,
+        }),
+      },
+    ).then((value) => ({
+      scope: mapEngagementScope(value.scope),
+      scopeImport: mapScopeImport(value.scope_import),
+    }));
+  }
+
+  discardScopeImport(
+    engagementId: string,
+    scopeImportId: string,
+  ): Promise<ScopeImport> {
+    return this.request<WireScopeImport>(
+      `engagements/${encodeURIComponent(engagementId)}/scope-imports/${encodeURIComponent(scopeImportId)}/discard`,
+      { method: "POST" },
+    ).then(mapScopeImport);
+  }
+
+  updateEngagementScope(
+    engagementId: string,
+    body: EngagementScopeUpdateRequest,
+  ): Promise<EngagementScopePolicy> {
+    return this.request<WireEngagementScope>(
+      `engagements/${encodeURIComponent(engagementId)}/scope`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          allowed_cidrs: body.allowedCidrs,
+          allowed_domains: body.allowedDomains,
+          allowed_urls: body.allowedUrls,
+          allowed_ports: body.allowedPorts,
+          not_before: body.notBefore || null,
+          not_after: body.notAfter || null,
+          prohibited_actions: body.prohibitedActions,
+          local_only: body.localOnly,
+          max_concurrency: body.maxConcurrency,
+          grants: body.grants.map((grant) => ({
+            risk_classes: grant.riskClasses,
+            tool_names: grant.toolNames,
+            targets: grant.targets,
+            granted_at: grant.grantedAt,
+            expires_at: grant.expiresAt,
+            granted_by: grant.grantedBy,
+          })),
+          expected_revision: body.expectedRevision || undefined,
+        }),
+      },
+    ).then(mapEngagementScope);
+  }
+
+  listEngagementToolAssignments(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<EngagementToolAssignment[]> {
+    return this.request<
+      | WireEngagementToolAssignment[]
+      | { items?: WireEngagementToolAssignment[] }
+    >(`engagements/${encodeURIComponent(engagementId)}/tool-assignment`, {
       signal,
-      body: JSON.stringify({
-        manifest_digest: body.manifestDigest,
-        tool_names: body.toolNames,
-        enabled: body.enabled,
-        expected_revision: body.expectedRevision || undefined,
-      }),
-    }).then(mapToolAssignment);
+    }).then((value) => wireItems(value).map(mapToolAssignment));
+  }
+
+  updateEngagementToolAssignment(
+    engagementId: string,
+    body: EngagementToolAssignmentUpdateRequest,
+    signal?: AbortSignal,
+  ): Promise<EngagementToolAssignment> {
+    return this.request<WireEngagementToolAssignment>(
+      `engagements/${encodeURIComponent(engagementId)}/tool-assignment`,
+      {
+        method: "PUT",
+        signal,
+        body: JSON.stringify({
+          manifest_digest: body.manifestDigest,
+          tool_names: body.toolNames,
+          enabled: body.enabled,
+          expected_revision: body.expectedRevision || undefined,
+        }),
+      },
+    ).then(mapToolAssignment);
   }
 
   stopRun(id: string, body: RunStopRequest = {}): Promise<AgentRunSummary> {
@@ -3408,33 +4050,51 @@ export class ApiClient {
     }).then(mapRun);
   }
 
-  listApprovals(engagementId: string, signal?: AbortSignal): Promise<Page<ApprovalSummary>> {
-    return this.listAll<WireApproval>("approvals", signal, engagementId)
-      .then((items) => page(items.map(mapApproval).filter((item) => item.status === "pending")));
+  listApprovals(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Page<ApprovalSummary>> {
+    return this.listAll<WireApproval>("approvals", signal, engagementId).then(
+      (items) =>
+        page(
+          items.map(mapApproval).filter((item) => item.status === "pending"),
+        ),
+    );
   }
 
-  decideApproval(id: string, body: ApprovalDecisionRequest): Promise<ApprovalSummary> {
-    return this.request<WireApproval>(`approvals/${encodeURIComponent(id)}/decision`, {
-      method: "POST",
-      body: JSON.stringify({
-        decision: body.decision,
-        reason: body.reason,
-        edited_arguments: body.editedArguments,
-      }),
-    }).then(mapApproval);
+  decideApproval(
+    id: string,
+    body: ApprovalDecisionRequest,
+  ): Promise<ApprovalSummary> {
+    return this.request<WireApproval>(
+      `approvals/${encodeURIComponent(id)}/decision`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          decision: body.decision,
+          reason: body.reason,
+          edited_arguments: body.editedArguments,
+        }),
+      },
+    ).then(mapApproval);
   }
 
-  listAssets(engagementId: string, signal?: AbortSignal): Promise<Page<AssetSummary>> {
-    return this.listAll<WireAsset>("assets", signal, engagementId)
-      .then((items) => page(items.map(mapAsset)));
+  listAssets(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Page<AssetSummary>> {
+    return this.listAll<WireAsset>("assets", signal, engagementId).then(
+      (items) => page(items.map(mapAsset)),
+    );
   }
 
   createAsset(body: AssetCreateRequest): Promise<AssetSummary> {
-    const exposed = body.exposure === "external"
-      ? true
-      : body.exposure === "internal"
-        ? false
-        : null;
+    const exposed =
+      body.exposure === "external"
+        ? true
+        : body.exposure === "internal"
+          ? false
+          : null;
     return this.request<WireAsset>("assets", {
       method: "POST",
       body: JSON.stringify({
@@ -3451,9 +4111,13 @@ export class ApiClient {
     }).then(mapAsset);
   }
 
-  listFindings(engagementId: string, signal?: AbortSignal): Promise<Page<FindingSummary>> {
-    return this.listAll<WireFinding>("findings", signal, engagementId)
-      .then((items) => page(items.map(mapFinding)));
+  listFindings(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Page<FindingSummary>> {
+    return this.listAll<WireFinding>("findings", signal, engagementId).then(
+      (items) => page(items.map(mapFinding)),
+    );
   }
 
   createFinding(body: FindingCreateRequest): Promise<FindingSummary> {
@@ -3474,34 +4138,62 @@ export class ApiClient {
     }).then(mapFinding);
   }
 
-  updateFinding(id: string, body: FindingUpdateRequest): Promise<FindingSummary> {
+  updateFinding(
+    id: string,
+    body: FindingUpdateRequest,
+  ): Promise<FindingSummary> {
     return this.request<WireFinding>(`findings/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify({
         expected_revision: body.expectedRevision,
         changes: {
           ...(body.title === undefined ? {} : { title: body.title.trim() }),
-          ...(body.description === undefined ? {} : { description: body.description.trim() }),
+          ...(body.description === undefined
+            ? {}
+            : { description: body.description.trim() }),
           ...(body.severity === undefined ? {} : { severity: body.severity }),
-          ...(body.severityRationale === undefined ? {} : { severity_rationale: body.severityRationale.trim() }),
-          ...(body.assetIds === undefined ? {} : { asset_ids: [...new Set(body.assetIds)] }),
-          ...(body.cveIds === undefined ? {} : { cve_ids: normalizedIdentifiers(body.cveIds) }),
-          ...(body.cweIds === undefined ? {} : { cwe_ids: normalizedIdentifiers(body.cweIds) }),
-          ...(body.status === undefined ? {} : { status: body.status.replaceAll("_", "-") }),
-          ...(body.evidenceIds === undefined ? {} : { evidence_ids: [...new Set(body.evidenceIds)] }),
-          ...(body.verifierId === undefined ? {} : { verifier_id: body.verifierId }),
-          ...(body.verifiedAt === undefined ? {} : { verified_at: body.verifiedAt }),
+          ...(body.severityRationale === undefined
+            ? {}
+            : { severity_rationale: body.severityRationale.trim() }),
+          ...(body.assetIds === undefined
+            ? {}
+            : { asset_ids: [...new Set(body.assetIds)] }),
+          ...(body.cveIds === undefined
+            ? {}
+            : { cve_ids: normalizedIdentifiers(body.cveIds) }),
+          ...(body.cweIds === undefined
+            ? {}
+            : { cwe_ids: normalizedIdentifiers(body.cweIds) }),
+          ...(body.status === undefined
+            ? {}
+            : { status: body.status.replaceAll("_", "-") }),
+          ...(body.evidenceIds === undefined
+            ? {}
+            : { evidence_ids: [...new Set(body.evidenceIds)] }),
+          ...(body.verifierId === undefined
+            ? {}
+            : { verifier_id: body.verifierId }),
+          ...(body.verifiedAt === undefined
+            ? {}
+            : { verified_at: body.verifiedAt }),
         },
       }),
     }).then(mapFinding);
   }
 
-  listEvidence(engagementId: string, signal?: AbortSignal): Promise<Page<EvidenceSummary>> {
-    return this.listAll<WireEvidence>("evidence", signal, engagementId)
-      .then((items) => page(items.map(mapEvidence)));
+  listEvidence(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Page<EvidenceSummary>> {
+    return this.listAll<WireEvidence>("evidence", signal, engagementId).then(
+      (items) => page(items.map(mapEvidence)),
+    );
   }
 
-  uploadEvidence(body: EvidenceUploadRequest, signal?: AbortSignal): Promise<EvidenceSummary> {
+  uploadEvidence(
+    body: EvidenceUploadRequest,
+    signal?: AbortSignal,
+  ): Promise<EvidenceSummary> {
     return this.request<WireEvidence>("evidence/upload", {
       method: "POST",
       signal,
@@ -3526,9 +4218,13 @@ export class ApiClient {
     }).then(mapEvidence);
   }
 
-  listReports(engagementId: string, signal?: AbortSignal): Promise<Page<ReportSummary>> {
-    return this.listAll<WireReport>("reports", signal, engagementId)
-      .then((items) => page(items.map(mapReport)));
+  listReports(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Page<ReportSummary>> {
+    return this.listAll<WireReport>("reports", signal, engagementId).then(
+      (items) => page(items.map(mapReport)),
+    );
   }
 
   createReport(body: ReportCreateRequest): Promise<ReportSummary> {
@@ -3541,7 +4237,9 @@ export class ApiClient {
         executive_summary: body.executiveSummary ?? "",
         finding_ids: body.findingIds ?? [],
         observation_ids: body.observationIds ?? [],
-        note_transforms: (body.noteTransforms ?? []).map(reportNoteTransformBody),
+        note_transforms: (body.noteTransforms ?? []).map(
+          reportNoteTransformBody,
+        ),
         artifact_ids: [],
         metadata: {},
       }),
@@ -3556,13 +4254,29 @@ export class ApiClient {
         changes: {
           ...(body.title === undefined ? {} : { title: body.title.trim() }),
           ...(body.status === undefined ? {} : { status: body.status }),
-          ...(body.executiveSummary === undefined ? {} : { executive_summary: body.executiveSummary }),
-          ...(body.findingIds === undefined ? {} : { finding_ids: body.findingIds }),
-          ...(body.observationIds === undefined ? {} : { observation_ids: body.observationIds }),
-          ...(body.noteTransforms === undefined ? {} : { note_transforms: body.noteTransforms.map(reportNoteTransformBody) }),
+          ...(body.executiveSummary === undefined
+            ? {}
+            : { executive_summary: body.executiveSummary }),
+          ...(body.findingIds === undefined
+            ? {}
+            : { finding_ids: body.findingIds }),
+          ...(body.observationIds === undefined
+            ? {}
+            : { observation_ids: body.observationIds }),
+          ...(body.noteTransforms === undefined
+            ? {}
+            : {
+                note_transforms: body.noteTransforms.map(
+                  reportNoteTransformBody,
+                ),
+              }),
           ...(body.executiveSummaryProvenance === undefined
             ? {}
-            : { executive_summary_provenance: body.executiveSummaryProvenance ? writingProvenanceBody(body.executiveSummaryProvenance) : null }),
+            : {
+                executive_summary_provenance: body.executiveSummaryProvenance
+                  ? writingProvenanceBody(body.executiveSummaryProvenance)
+                  : null,
+              }),
         },
       }),
     }).then(mapReport);
@@ -3574,22 +4288,33 @@ export class ApiClient {
     operatorId: string,
     attestation?: string,
   ): Promise<ReportSummary> {
-    return this.request<WireReport>(`reports/${encodeURIComponent(id)}/sign-off`, {
-      method: "POST",
-      body: JSON.stringify({
-        expected_revision: expectedRevision,
-        operator_id: operatorId,
-        ...(attestation ? { attestation } : {}),
-      }),
-    }).then(mapReport);
+    return this.request<WireReport>(
+      `reports/${encodeURIComponent(id)}/sign-off`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_revision: expectedRevision,
+          operator_id: operatorId,
+          ...(attestation ? { attestation } : {}),
+        }),
+      },
+    ).then(mapReport);
   }
 
-  listObservations(engagementId: string, signal?: AbortSignal): Promise<Page<ObservationSummary>> {
-    return this.listAll<WireObservation>("observations", signal, engagementId)
-      .then((items) => page(items.map(mapObservation)));
+  listObservations(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Page<ObservationSummary>> {
+    return this.listAll<WireObservation>(
+      "observations",
+      signal,
+      engagementId,
+    ).then((items) => page(items.map(mapObservation)));
   }
 
-  createObservation(body: ObservationCreateRequest): Promise<ObservationSummary> {
+  createObservation(
+    body: ObservationCreateRequest,
+  ): Promise<ObservationSummary> {
     return this.request<WireObservation>("observations", {
       method: "POST",
       body: JSON.stringify({
@@ -3607,19 +4332,31 @@ export class ApiClient {
     }).then(mapObservation);
   }
 
-  updateObservation(id: string, body: ObservationUpdateRequest): Promise<ObservationSummary> {
+  updateObservation(
+    id: string,
+    body: ObservationUpdateRequest,
+  ): Promise<ObservationSummary> {
     const changes: Record<string, unknown> = {};
     if (body.title !== undefined) changes.title = body.title.trim();
     if (body.body !== undefined) changes.body = body.body;
-    if (body.assetIds !== undefined) changes.asset_ids = [...new Set(body.assetIds)];
-    if (body.serviceIds !== undefined) changes.service_ids = [...new Set(body.serviceIds)];
-    if (body.evidenceIds !== undefined) changes.evidence_ids = [...new Set(body.evidenceIds)];
+    if (body.assetIds !== undefined)
+      changes.asset_ids = [...new Set(body.assetIds)];
+    if (body.serviceIds !== undefined)
+      changes.service_ids = [...new Set(body.serviceIds)];
+    if (body.evidenceIds !== undefined)
+      changes.evidence_ids = [...new Set(body.evidenceIds)];
     if (body.confidence !== undefined) changes.confidence = body.confidence;
     if (body.metadata !== undefined) changes.metadata = body.metadata;
-    return this.request<WireObservation>(`observations/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ changes, expected_revision: body.expectedRevision }),
-    }).then(mapObservation);
+    return this.request<WireObservation>(
+      `observations/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          changes,
+          expected_revision: body.expectedRevision,
+        }),
+      },
+    ).then(mapObservation);
   }
 
   async deleteObservation(id: string, expectedRevision: number): Promise<void> {
@@ -3629,7 +4366,10 @@ export class ApiClient {
     });
   }
 
-  transformWriting(body: WritingTransformRequest, signal?: AbortSignal): Promise<WritingTransformResponse> {
+  transformWriting(
+    body: WritingTransformRequest,
+    signal?: AbortSignal,
+  ): Promise<WritingTransformResponse> {
     return this.request<WireWritingTransformResponse>("writing/transform", {
       method: "POST",
       signal,
@@ -3654,15 +4394,20 @@ export class ApiClient {
   }
 
   renderReport(id: string, reportRevision: number): Promise<ReportRender> {
-    return this.request<WireReportRender>(`reports/${encodeURIComponent(id)}/renders`, {
-      method: "POST",
-      body: JSON.stringify({ report_revision: reportRevision }),
-    }).then(mapReportRender);
+    return this.request<WireReportRender>(
+      `reports/${encodeURIComponent(id)}/renders`,
+      {
+        method: "POST",
+        body: JSON.stringify({ report_revision: reportRevision }),
+      },
+    ).then(mapReportRender);
   }
 
   getReportRender(id: string, signal?: AbortSignal): Promise<ReportRender> {
-    return this.request<WireReportRender>(`report-renders/${encodeURIComponent(id)}`, { signal })
-      .then(mapReportRender);
+    return this.request<WireReportRender>(
+      `report-renders/${encodeURIComponent(id)}`,
+      { signal },
+    ).then(mapReportRender);
   }
 
   async downloadReportPdf(id: string, signal?: AbortSignal): Promise<Blob> {
@@ -3677,7 +4422,10 @@ export class ApiClient {
     return response.blob();
   }
 
-  async exportEngagementBundle(engagementId: string, signal?: AbortSignal): Promise<Blob> {
+  async exportEngagementBundle(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
     const headers = new Headers({
       Accept: "application/zip",
       "X-Nebula-Sensitive-Data-Acknowledged": "true",
@@ -3695,23 +4443,32 @@ export class ApiClient {
   listProviders(signal?: AbortSignal): Promise<Page<ProviderHealth>> {
     // Provider profiles are global in the current single-organization Core.
     // Applying engagement_id would correctly return no rows.
-    return this.listAll<WireProvider>("providers", signal)
-      .then((items) => page(items.map(mapProvider)));
+    return this.listAll<WireProvider>("providers", signal).then((items) =>
+      page(items.map(mapProvider)),
+    );
   }
 
   listProviderCatalog(signal?: AbortSignal): Promise<ProviderCatalogEntry[]> {
-    return this.request<WireProviderCatalogEntry[]>("provider-catalog", { signal })
-      .then((items) => items.map(mapProviderCatalog));
+    return this.request<WireProviderCatalogEntry[]>("provider-catalog", {
+      signal,
+    }).then((items) => items.map(mapProviderCatalog));
   }
 
-  discoverLocalProviders(signal?: AbortSignal): Promise<LocalProviderDetection[]> {
-    return this.request<WireLocalProviderDetection[]>("providers/discover-local", { signal })
-      .then((items) => items.map(mapLocalProviderDetection));
+  discoverLocalProviders(
+    signal?: AbortSignal,
+  ): Promise<LocalProviderDetection[]> {
+    return this.request<WireLocalProviderDetection[]>(
+      "providers/discover-local",
+      { signal },
+    ).then((items) => items.map(mapLocalProviderDetection));
   }
 
   createProvider(body: ProviderCreateRequest): Promise<ProviderHealth> {
     const defaultModel = configuredDefaultModel(body.defaultModel);
-    const modelAllowlist = configuredModelAllowlist(body.modelAllowlist, defaultModel);
+    const modelAllowlist = configuredModelAllowlist(
+      body.modelAllowlist,
+      defaultModel,
+    );
     const credentialEnv = body.credentialEnv?.trim().replace(/^env:/, "");
     return this.request<WireProvider>("providers", {
       method: "POST",
@@ -3721,7 +4478,8 @@ export class ApiClient {
         endpoint: body.endpoint?.trim() || null,
         enabled: true,
         is_local: body.local,
-        secret_ref: body.credentialRef ?? (credentialEnv ? `env:${credentialEnv}` : null),
+        secret_ref:
+          body.credentialRef ?? (credentialEnv ? `env:${credentialEnv}` : null),
         model_allowlist: modelAllowlist,
         capabilities: { streaming: true },
         privacy: {
@@ -3730,28 +4488,39 @@ export class ApiClient {
         },
         metadata: {
           ...(defaultModel ? { default_model: defaultModel } : {}),
-          ...(body.options && Object.keys(body.options).length ? { options: body.options } : {}),
+          ...(body.options && Object.keys(body.options).length
+            ? { options: body.options }
+            : {}),
         },
       }),
     }).then(mapProvider);
   }
 
-  updateProvider(id: string, body: ProviderUpdateRequest): Promise<ProviderHealth> {
+  updateProvider(
+    id: string,
+    body: ProviderUpdateRequest,
+  ): Promise<ProviderHealth> {
     const defaultModel = configuredDefaultModel(body.defaultModel);
-    const modelAllowlist = configuredModelAllowlist(body.modelAllowlist, defaultModel);
+    const modelAllowlist = configuredModelAllowlist(
+      body.modelAllowlist,
+      defaultModel,
+    );
     const credentialEnv = body.credentialEnv?.trim().replace(/^env:/, "");
     const metadata = { ...(body.metadata ?? {}) };
     delete metadata.default_model;
     delete metadata.options;
     if (defaultModel) metadata.default_model = defaultModel;
-    if (body.options && Object.keys(body.options).length) metadata.options = body.options;
+    if (body.options && Object.keys(body.options).length)
+      metadata.options = body.options;
     return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify({
         changes: {
           name: body.name.trim(),
           endpoint: body.endpoint?.trim() || null,
-          secret_ref: body.credentialRef ?? (credentialEnv ? `env:${credentialEnv}` : null),
+          secret_ref:
+            body.credentialRef ??
+            (credentialEnv ? `env:${credentialEnv}` : null),
           model_allowlist: modelAllowlist,
           privacy: {
             local_only: body.local,
@@ -3766,10 +4535,17 @@ export class ApiClient {
     }).then(mapProvider);
   }
 
-  setProviderEnabled(id: string, enabled: boolean, expectedRevision: number): Promise<ProviderHealth> {
+  setProviderEnabled(
+    id: string,
+    enabled: boolean,
+    expectedRevision: number,
+  ): Promise<ProviderHealth> {
     return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`, {
       method: "PATCH",
-      body: JSON.stringify({ changes: { enabled }, expected_revision: expectedRevision }),
+      body: JSON.stringify({
+        changes: { enabled },
+        expected_revision: expectedRevision,
+      }),
     }).then(mapProvider);
   }
 
@@ -3780,7 +4556,10 @@ export class ApiClient {
     });
   }
 
-  refreshProviderHealth(id: string, signal?: AbortSignal): Promise<ProviderRuntimeHealth> {
+  refreshProviderHealth(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ProviderRuntimeHealth> {
     return this.request<WireProviderRuntimeHealth>(
       `providers/${encodeURIComponent(id)}/health`,
       { method: "POST", signal },
@@ -3801,15 +4580,26 @@ export class ApiClient {
         body: JSON.stringify({ model, expected_revision: expectedRevision }),
       },
     );
-    return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`).then(mapProvider);
+    return this.request<WireProvider>(
+      `providers/${encodeURIComponent(id)}`,
+    ).then(mapProvider);
   }
 
-  listKnowledgeSources(engagementId: string, signal?: AbortSignal): Promise<Page<KnowledgeSource>> {
-    return this.listAll<WireKnowledgeSource>("knowledge", signal, engagementId)
-      .then((items) => page(items.map(mapKnowledgeSource)));
+  listKnowledgeSources(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Page<KnowledgeSource>> {
+    return this.listAll<WireKnowledgeSource>(
+      "knowledge",
+      signal,
+      engagementId,
+    ).then((items) => page(items.map(mapKnowledgeSource)));
   }
 
-  ingestKnowledgeSource(body: KnowledgeIngestRequest, signal?: AbortSignal): Promise<KnowledgeSource> {
+  ingestKnowledgeSource(
+    body: KnowledgeIngestRequest,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeSource> {
     return this.request<WireKnowledgeSource>("knowledge/ingest", {
       method: "POST",
       signal,
@@ -3822,11 +4612,17 @@ export class ApiClient {
     }).then(mapKnowledgeSource);
   }
 
-  reindexKnowledgeSource(id: string, signal?: AbortSignal): Promise<KnowledgeSource> {
-    return this.request<WireKnowledgeSource>(`knowledge/${encodeURIComponent(id)}/reindex`, {
-      method: "POST",
-      signal,
-    }).then(mapKnowledgeSource);
+  reindexKnowledgeSource(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeSource> {
+    return this.request<WireKnowledgeSource>(
+      `knowledge/${encodeURIComponent(id)}/reindex`,
+      {
+        method: "POST",
+        signal,
+      },
+    ).then(mapKnowledgeSource);
   }
 
   async deleteKnowledgeSource(id: string, signal?: AbortSignal): Promise<void> {
@@ -3923,24 +4719,26 @@ export class ApiClient {
       max_records?: number | null;
       oldest_recorded_at?: string | null;
       newest_recorded_at?: string | null;
-    }>(`engagements/${encodeURIComponent(engagementId)}/terminal/commands/status`, { signal })
-      .then((value) => ({
-        engagementId: value.engagement_id,
-        enabled: value.enabled,
-        captureMode: value.capture_mode,
-        recordCount: value.record_count,
-        recordedOutputCount: value.recorded_output_count,
-        metadataOnlyCount: value.metadata_only_count,
-        classificationFailureCount: value.classification_failure_count,
-        degradedCount: value.degraded_count,
-        truncatedCount: value.truncated_count,
-        auditGapCount: value.audit_gap_count,
-        capturedOutputBytes: value.captured_output_bytes,
-        retentionDays: value.retention_days ?? undefined,
-        maxRecords: value.max_records ?? undefined,
-        oldestRecordedAt: value.oldest_recorded_at ?? undefined,
-        newestRecordedAt: value.newest_recorded_at ?? undefined,
-      }));
+    }>(
+      `engagements/${encodeURIComponent(engagementId)}/terminal/commands/status`,
+      { signal },
+    ).then((value) => ({
+      engagementId: value.engagement_id,
+      enabled: value.enabled,
+      captureMode: value.capture_mode,
+      recordCount: value.record_count,
+      recordedOutputCount: value.recorded_output_count,
+      metadataOnlyCount: value.metadata_only_count,
+      classificationFailureCount: value.classification_failure_count,
+      degradedCount: value.degraded_count,
+      truncatedCount: value.truncated_count,
+      auditGapCount: value.audit_gap_count,
+      capturedOutputBytes: value.captured_output_bytes,
+      retentionDays: value.retention_days ?? undefined,
+      maxRecords: value.max_records ?? undefined,
+      oldestRecordedAt: value.oldest_recorded_at ?? undefined,
+      newestRecordedAt: value.newest_recorded_at ?? undefined,
+    }));
   }
 
   listTerminalCommands(
@@ -3950,7 +4748,10 @@ export class ApiClient {
     limit = 100,
     signal?: AbortSignal,
   ): Promise<TerminalCommandPage> {
-    const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+    const params = new URLSearchParams({
+      offset: String(offset),
+      limit: String(limit),
+    });
     if (search) params.set("search", search);
     return this.request<{
       records: Array<{
@@ -3984,40 +4785,42 @@ export class ApiClient {
       offset: number;
       limit: number;
       next_offset?: number | null;
-    }>(`engagements/${encodeURIComponent(engagementId)}/terminal/commands?${params}`, { signal })
-      .then((value) => ({
-        records: value.records.map((record) => ({
-          id: record.id,
-          engagementId: record.engagement_id,
-          sessionId: record.session_id,
-          operatorId: record.operator_id ?? undefined,
-          shellSequence: record.shell_sequence ?? undefined,
-          command: record.command,
-          commandSha256: record.command_sha256 ?? undefined,
-          cwd: record.cwd,
-          status: record.status,
-          exitCode: record.exit_code ?? undefined,
-          startedAt: record.started_at ?? undefined,
-          completedAt: record.completed_at ?? undefined,
-          occurredAt: record.occurred_at,
-          rawOutputAvailable: record.raw_output_available,
-          redactedOutputAvailable: record.redacted_output_available,
-          observedOutputBytes: record.observed_output_bytes,
-          capturedOutputBytes: record.captured_output_bytes,
-          outputSha256: record.output_sha256 ?? undefined,
-          outputTruncated: record.output_truncated,
-          outputPreview: record.output_preview,
-          captureError: record.capture_error ?? undefined,
-          captureDecision: record.capture_decision,
-          matchedTools: record.matched_tools,
-          recordingPolicyRevision: record.recording_policy_revision ?? undefined,
-          runtimeImageDigest: record.runtime_image_digest ?? undefined,
-        })),
-        total: value.total,
-        offset: value.offset,
-        limit: value.limit,
-        nextOffset: value.next_offset ?? undefined,
-      }));
+    }>(
+      `engagements/${encodeURIComponent(engagementId)}/terminal/commands?${params}`,
+      { signal },
+    ).then((value) => ({
+      records: value.records.map((record) => ({
+        id: record.id,
+        engagementId: record.engagement_id,
+        sessionId: record.session_id,
+        operatorId: record.operator_id ?? undefined,
+        shellSequence: record.shell_sequence ?? undefined,
+        command: record.command,
+        commandSha256: record.command_sha256 ?? undefined,
+        cwd: record.cwd,
+        status: record.status,
+        exitCode: record.exit_code ?? undefined,
+        startedAt: record.started_at ?? undefined,
+        completedAt: record.completed_at ?? undefined,
+        occurredAt: record.occurred_at,
+        rawOutputAvailable: record.raw_output_available,
+        redactedOutputAvailable: record.redacted_output_available,
+        observedOutputBytes: record.observed_output_bytes,
+        capturedOutputBytes: record.captured_output_bytes,
+        outputSha256: record.output_sha256 ?? undefined,
+        outputTruncated: record.output_truncated,
+        outputPreview: record.output_preview,
+        captureError: record.capture_error ?? undefined,
+        captureDecision: record.capture_decision,
+        matchedTools: record.matched_tools,
+        recordingPolicyRevision: record.recording_policy_revision ?? undefined,
+        runtimeImageDigest: record.runtime_image_digest ?? undefined,
+      })),
+      total: value.total,
+      offset: value.offset,
+      limit: value.limit,
+      nextOffset: value.next_offset ?? undefined,
+    }));
   }
 
   setTerminalCommandHistoryEnabled(
@@ -4040,10 +4843,13 @@ export class ApiClient {
       max_records?: number | null;
       oldest_recorded_at?: string | null;
       newest_recorded_at?: string | null;
-    }>(`engagements/${encodeURIComponent(engagementId)}/terminal/commands/status`, {
-      method: "PUT",
-      body: JSON.stringify({ enabled }),
-    }).then((value) => ({
+    }>(
+      `engagements/${encodeURIComponent(engagementId)}/terminal/commands/status`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      },
+    ).then((value) => ({
       engagementId: value.engagement_id,
       enabled: value.enabled,
       captureMode: value.capture_mode,
@@ -4063,10 +4869,12 @@ export class ApiClient {
   }
 
   async clearTerminalCommands(engagementId: string): Promise<number> {
-    const result = await this.request<{ engagement_id: string; cleared: number }>(
-      `engagements/${encodeURIComponent(engagementId)}/terminal/commands`,
-      { method: "DELETE" },
-    );
+    const result = await this.request<{
+      engagement_id: string;
+      cleared: number;
+    }>(`engagements/${encodeURIComponent(engagementId)}/terminal/commands`, {
+      method: "DELETE",
+    });
     return result.cleared;
   }
 
@@ -4076,7 +4884,9 @@ export class ApiClient {
     raw = false,
     signal?: AbortSignal,
   ): Promise<Blob> {
-    const headers = new Headers({ Accept: raw ? "application/octet-stream" : "text/plain" });
+    const headers = new Headers({
+      Accept: raw ? "application/octet-stream" : "text/plain",
+    });
     if (raw) headers.set("X-Nebula-Sensitive-Data-Acknowledged", "true");
     const token = this.getToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -4091,10 +4901,18 @@ export class ApiClient {
       chunks.push(await response.arrayBuffer());
       const total = Number(response.headers.get("X-Nebula-Output-Total"));
       const next = Number(response.headers.get("X-Nebula-Output-Next"));
-      if (!Number.isFinite(total) || !Number.isFinite(next) || next >= total || next <= offset) break;
+      if (
+        !Number.isFinite(total) ||
+        !Number.isFinite(next) ||
+        next >= total ||
+        next <= offset
+      )
+        break;
       offset = next;
     }
-    return new Blob(chunks, { type: raw ? "application/octet-stream" : "text/plain;charset=utf-8" });
+    return new Blob(chunks, {
+      type: raw ? "application/octet-stream" : "text/plain;charset=utf-8",
+    });
   }
 
   preflightContainerTerminal(
@@ -4113,7 +4931,10 @@ export class ApiClient {
 
   startContainerTerminal(
     body: ContainerTerminalRequest,
-    preview: Pick<ContainerTerminalPreflight, "previewToken" | "previewFingerprint">,
+    preview: Pick<
+      ContainerTerminalPreflight,
+      "previewToken" | "previewFingerprint"
+    >,
     clientIdempotencyKey: string,
     signal?: AbortSignal,
   ): Promise<ContainerTerminalSession> {
@@ -4141,8 +4962,12 @@ export class ApiClient {
       { method: "POST", signal },
     ).then((value) => ({
       active: value.active,
-      session: value.session ? mapContainerTerminalSession(value.session) : undefined,
-      runtime: value.runtime ? mapContainerTerminalRuntime(value.runtime) : undefined,
+      session: value.session
+        ? mapContainerTerminalSession(value.session)
+        : undefined,
+      runtime: value.runtime
+        ? mapContainerTerminalRuntime(value.runtime)
+        : undefined,
     }));
   }
 
@@ -4161,7 +4986,9 @@ export class ApiClient {
     }));
   }
 
-  containerTerminalCapacity(signal?: AbortSignal): Promise<ContainerTerminalCapacity> {
+  containerTerminalCapacity(
+    signal?: AbortSignal,
+  ): Promise<ContainerTerminalCapacity> {
     return this.request<WireContainerTerminalCapacity>(
       "container-terminal/capacity",
       { signal },
@@ -4172,14 +4999,20 @@ export class ApiClient {
     }));
   }
 
-  closeContainerTerminal(sessionId: string, signal?: AbortSignal): Promise<void> {
+  closeContainerTerminal(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     return this.request<void>(
       `container-terminals/${encodeURIComponent(sessionId)}`,
       { method: "DELETE", signal },
     );
   }
 
-  executionCapabilities(engagementId: string, signal?: AbortSignal): Promise<ExecutionCapabilities> {
+  executionCapabilities(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ExecutionCapabilities> {
     return this.request<WireExecutionCapabilities>(
       `engagements/${encodeURIComponent(engagementId)}/execution-capabilities`,
       { signal },
@@ -4198,7 +5031,10 @@ export class ApiClient {
     }));
   }
 
-  preflightExecution(body: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionPreflight> {
+  preflightExecution(
+    body: ExecutionRequest,
+    signal?: AbortSignal,
+  ): Promise<ExecutionPreflight> {
     return this.request<WireExecutionPreflight>("executions/preflight", {
       method: "POST",
       signal,
@@ -4226,7 +5062,16 @@ export class ApiClient {
 
   listExecutions(
     engagementId: string,
-    options: { offset?: number; limit?: number; status?: string; language?: string; operatorId?: string; dateFrom?: string; dateTo?: string; query?: string } = {},
+    options: {
+      offset?: number;
+      limit?: number;
+      status?: string;
+      language?: string;
+      operatorId?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      query?: string;
+    } = {},
     signal?: AbortSignal,
   ): Promise<Page<OperatorExecution>> {
     const parameters = new URLSearchParams({
@@ -4246,15 +5091,23 @@ export class ApiClient {
   }
 
   getExecution(id: string, signal?: AbortSignal): Promise<OperatorExecution> {
-    return this.request<WireOperatorExecution>(`executions/${encodeURIComponent(id)}`, { signal })
-      .then(mapOperatorExecution);
+    return this.request<WireOperatorExecution>(
+      `executions/${encodeURIComponent(id)}`,
+      { signal },
+    ).then(mapOperatorExecution);
   }
 
-  cancelExecution(id: string, signal?: AbortSignal): Promise<OperatorExecution> {
-    return this.request<WireOperatorExecution>(`executions/${encodeURIComponent(id)}/cancel`, {
-      method: "POST",
-      signal,
-    }).then(mapOperatorExecution);
+  cancelExecution(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<OperatorExecution> {
+    return this.request<WireOperatorExecution>(
+      `executions/${encodeURIComponent(id)}/cancel`,
+      {
+        method: "POST",
+        signal,
+      },
+    ).then(mapOperatorExecution);
   }
 
   generateExecutionDraft(
@@ -4267,14 +5120,20 @@ export class ApiClient {
       `executions/${encodeURIComponent(executionId)}/draft-notes`,
       {
         method: "POST",
-        body: JSON.stringify({ provider_id: providerId, model, cloud_confirmed: cloudConfirmed }),
+        body: JSON.stringify({
+          provider_id: providerId,
+          model,
+          cloud_confirmed: cloudConfirmed,
+        }),
       },
     ).then(mapGeneratedDraft);
   }
 
   getGeneratedDraft(id: string, signal?: AbortSignal): Promise<GeneratedDraft> {
-    return this.request<WireGeneratedDraft>(`generated-drafts/${encodeURIComponent(id)}`, { signal })
-      .then(mapGeneratedDraft);
+    return this.request<WireGeneratedDraft>(
+      `generated-drafts/${encodeURIComponent(id)}`,
+      { signal },
+    ).then(mapGeneratedDraft);
   }
 
   editGeneratedDraft(
@@ -4282,10 +5141,16 @@ export class ApiClient {
     content: GeneratedDraftContent,
     expectedRevision: number,
   ): Promise<GeneratedDraft> {
-    return this.request<WireGeneratedDraft>(`generated-drafts/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ content: wireDraftContent(content), expected_revision: expectedRevision }),
-    }).then(mapGeneratedDraft);
+    return this.request<WireGeneratedDraft>(
+      `generated-drafts/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          content: wireDraftContent(content),
+          expected_revision: expectedRevision,
+        }),
+      },
+    ).then(mapGeneratedDraft);
   }
 
   transitionGeneratedDraft(
@@ -4295,7 +5160,10 @@ export class ApiClient {
   ): Promise<GeneratedDraft> {
     return this.request<WireGeneratedDraft>(
       `generated-drafts/${encodeURIComponent(id)}/${transition}`,
-      { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ expected_revision: expectedRevision }),
+      },
     ).then(mapGeneratedDraft);
   }
 
@@ -4309,7 +5177,11 @@ export class ApiClient {
       `executions/${encodeURIComponent(executionId)}/chat-attachments`,
       {
         method: "POST",
-        body: JSON.stringify({ provider_id: providerId, model, cloud_confirmed: cloudConfirmed }),
+        body: JSON.stringify({
+          provider_id: providerId,
+          model,
+          cloud_confirmed: cloudConfirmed,
+        }),
       },
     ).then((value) => ({
       sessionId: value.session.id,
@@ -4335,7 +5207,9 @@ export class ApiClient {
     return {
       text: await response.text(),
       totalBytes: Number(response.headers.get("x-nebula-output-total") ?? 0),
-      nextOffset: Number(response.headers.get("x-nebula-output-next") ?? offset),
+      nextOffset: Number(
+        response.headers.get("x-nebula-output-next") ?? offset,
+      ),
     };
   }
 
@@ -4345,7 +5219,11 @@ export class ApiClient {
     offset = 0,
     signal?: AbortSignal,
   ): Promise<WorkspaceListing> {
-    const parameters = new URLSearchParams({ path, offset: String(offset), limit: "100" });
+    const parameters = new URLSearchParams({
+      path,
+      offset: String(offset),
+      limit: "100",
+    });
     return this.request<WireWorkspaceListing>(
       `engagements/${encodeURIComponent(engagementId)}/workspace?${parameters}`,
       { signal },
@@ -4378,10 +5256,16 @@ export class ApiClient {
     ).then(mapEvidence);
   }
 
-  resetWorkspace(engagementId: string, engagementName: string): Promise<WorkspaceResetResult> {
+  resetWorkspace(
+    engagementId: string,
+    engagementName: string,
+  ): Promise<WorkspaceResetResult> {
     return this.request<{ engagement_id: string; removed_entries: number }>(
       `engagements/${encodeURIComponent(engagementId)}/workspace/reset`,
-      { method: "POST", body: JSON.stringify({ engagement_name: engagementName }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ engagement_name: engagementName }),
+      },
     ).then((value) => ({
       engagementId: value.engagement_id,
       removedEntries: value.removed_entries,
@@ -4400,13 +5284,22 @@ export class ApiClient {
     const token = this.getToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
     if (expectedSha256) headers.set("If-Match", expectedSha256);
-    const parameters = new URLSearchParams({ path, overwrite: String(overwrite) });
+    const parameters = new URLSearchParams({
+      path,
+      overwrite: String(overwrite),
+    });
     const response = await this.fetchImpl(
       `${this.baseUrl}/engagements/${encodeURIComponent(engagementId)}/workspace/file?${parameters}`,
-      { method: "PUT", headers, body: file, signal, credentials: "same-origin" },
+      {
+        method: "PUT",
+        headers,
+        body: file,
+        signal,
+        credentials: "same-origin",
+      },
     );
     if (!response.ok) throw await responseError(response);
-    const value = await response.json() as {
+    const value = (await response.json()) as {
       engagement_id: string;
       path: string;
       size: number;
@@ -4438,7 +5331,10 @@ export class ApiClient {
     return response.blob();
   }
 
-  completeChat(body: ChatCompletionRequest, signal?: AbortSignal): Promise<ChatCompletionResponse> {
+  completeChat(
+    body: ChatCompletionRequest,
+    signal?: AbortSignal,
+  ): Promise<ChatCompletionResponse> {
     return this.request<WireChatCompletion>("chat/completions", {
       method: "POST",
       signal,
@@ -4446,19 +5342,31 @@ export class ApiClient {
     }).then(mapChatCompletion);
   }
 
-  listChatSessions(engagementId: string, signal?: AbortSignal): Promise<Page<ChatSessionSummary>> {
-    return this.listAll<WireChatSession>("chat-sessions", signal, engagementId)
-      .then((items) => page(items.map(mapChatSession)));
+  listChatSessions(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<Page<ChatSessionSummary>> {
+    return this.listAll<WireChatSession>(
+      "chat-sessions",
+      signal,
+      engagementId,
+    ).then((items) => page(items.map(mapChatSession)));
   }
 
-  renameChatSession(sessionId: string, body: ChatSessionRenameRequest): Promise<ChatSessionSummary> {
-    return this.request<WireChatSession>(`chat-sessions/${encodeURIComponent(sessionId)}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        title: body.title.trim(),
-        expected_revision: body.expectedRevision,
-      }),
-    }).then(mapChatSession);
+  renameChatSession(
+    sessionId: string,
+    body: ChatSessionRenameRequest,
+  ): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(
+      `chat-sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          title: body.title.trim(),
+          expected_revision: body.expectedRevision,
+        }),
+      },
+    ).then(mapChatSession);
   }
 
   async deleteChatSession(sessionId: string): Promise<void> {
@@ -4467,14 +5375,20 @@ export class ApiClient {
     });
   }
 
-  listChatMessages(sessionId: string, signal?: AbortSignal): Promise<PersistedChatMessage[]> {
+  listChatMessages(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<PersistedChatMessage[]> {
     return this.request<WirePersistedChatMessage[]>(
       `chat/sessions/${encodeURIComponent(sessionId)}/messages`,
       { signal },
     ).then((items) => items.map(mapPersistedChatMessage));
   }
 
-  getChatContext(sessionId: string, signal?: AbortSignal): Promise<ContextStatus> {
+  getChatContext(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<ContextStatus> {
     return this.request<WireContextStatus>(
       `chat/sessions/${encodeURIComponent(sessionId)}/context`,
       { signal },
@@ -4503,13 +5417,17 @@ export class ApiClient {
     const response = await this.fetchImpl(
       resumeTurnId
         ? `${this.baseUrl}/chat/turns/${encodeURIComponent(resumeTurnId)}/resume`
-        : `${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers,
-      signal,
-      credentials: "same-origin",
-      body: resumeTurnId ? undefined : JSON.stringify(chatRequestBody(body, true)),
-    });
+        : `${this.baseUrl}/chat/completions`,
+      {
+        method: "POST",
+        headers,
+        signal,
+        credentials: "same-origin",
+        body: resumeTurnId
+          ? undefined
+          : JSON.stringify(chatRequestBody(body, true)),
+      },
+    );
     if (!response.ok) throw await responseError(response);
     if (!response.body) {
       throw new ApiError("The chat response stream was empty.", 502);
@@ -4532,11 +5450,24 @@ export class ApiClient {
       try {
         wire = JSON.parse(data) as WireChatStreamEvent;
       } catch (caughtError) {
-        void logCaughtDiagnostic("interface.client.caught_failure_02", "A handled interface operation failed.", caughtError, "client");
-        throw new ApiError("Nebula Core returned a malformed chat stream frame.", 502, undefined, data);
+        void logCaughtDiagnostic(
+          "interface.client.caught_failure_02",
+          "A handled interface operation failed.",
+          caughtError,
+          "client",
+        );
+        throw new ApiError(
+          "Nebula Core returned a malformed chat stream frame.",
+          502,
+          undefined,
+          data,
+        );
       }
       if (wire.type === "error") {
-        const event: ChatStreamEvent = { type: "error", detail: wire.detail || "Chat completion failed." };
+        const event: ChatStreamEvent = {
+          type: "error",
+          detail: wire.detail || "Chat completion failed.",
+        };
         onEvent(event);
         throw new ApiError(event.detail, 502, undefined, wire);
       }
@@ -4583,7 +5514,7 @@ export class ApiClient {
         const capability = wire.capability ?? wire.tool_name;
         if (!turnId || !wire.tool_call_id || !capability) return;
         const payloadArtifacts = Array.isArray(wire.payload?.artifacts)
-          ? wire.payload.artifacts as WireChatStreamEvent["artifacts"]
+          ? (wire.payload.artifacts as WireChatStreamEvent["artifacts"])
           : [];
         const artifacts = wire.artifacts ?? payloadArtifacts ?? [];
         onEvent({
@@ -4591,11 +5522,29 @@ export class ApiClient {
           turnId,
           toolCallId: wire.tool_call_id,
           capability,
-          status: wire.status ?? (typeof wire.payload?.status === "string" ? wire.payload.status : "complete"),
-          summary: wire.summary ?? (typeof wire.payload?.summary === "string" ? wire.payload.summary : "Capability completed"),
+          status:
+            wire.status ??
+            (typeof wire.payload?.status === "string"
+              ? wire.payload.status
+              : "complete"),
+          summary:
+            wire.summary ??
+            (typeof wire.payload?.summary === "string"
+              ? wire.payload.summary
+              : "Capability completed"),
           evidenceIds: wire.evidence_ids ?? [],
-          resultArtifactId: wire.result_artifact_id ?? (typeof wire.payload?.result_artifact_id === "string" ? wire.payload.result_artifact_id : undefined),
-          receipt: wire.receipt ?? (wire.payload?.receipt && typeof wire.payload.receipt === "object" && !Array.isArray(wire.payload.receipt) ? wire.payload.receipt as Record<string, unknown> : undefined),
+          resultArtifactId:
+            wire.result_artifact_id ??
+            (typeof wire.payload?.result_artifact_id === "string"
+              ? wire.payload.result_artifact_id
+              : undefined),
+          receipt:
+            wire.receipt ??
+            (wire.payload?.receipt &&
+            typeof wire.payload.receipt === "object" &&
+            !Array.isArray(wire.payload.receipt)
+              ? (wire.payload.receipt as Record<string, unknown>)
+              : undefined),
           artifacts: artifacts.map((artifact) => ({
             artifactId: artifact.artifact_id,
             kind: artifact.kind,
@@ -4619,28 +5568,63 @@ export class ApiClient {
           type: "approval_required",
           turnId,
           toolCallId: wire.tool_call_id,
-          approval: wire.approval ?? { id: wire.approval_id, exact_request: wire.payload ?? {} },
+          approval: wire.approval ?? {
+            id: wire.approval_id,
+            exact_request: wire.payload ?? {},
+          },
         });
         return;
       }
       if (wire.type === "status") {
         onEvent({
           type: "status",
-          phase: typeof wire.payload?.phase === "string" ? wire.payload.phase : "working",
-          detail: typeof wire.payload?.detail === "string" ? wire.payload.detail : "Harness is working.",
+          phase:
+            typeof wire.payload?.phase === "string"
+              ? wire.payload.phase
+              : "working",
+          detail:
+            typeof wire.payload?.detail === "string"
+              ? wire.payload.detail
+              : "Harness is working.",
           harnessSessionId: wire.harness_session_id ?? body.harnessSessionId,
           harnessTurnId: wire.harness_turn_id ?? undefined,
-          previousSessionId: typeof wire.payload?.previous_session_id === "string" ? wire.payload.previous_session_id : undefined,
+          previousSessionId:
+            typeof wire.payload?.previous_session_id === "string"
+              ? wire.payload.previous_session_id
+              : undefined,
         });
         return;
       }
-      if (["turn_status", "item_upsert", "output_delta", "approval", "interaction", "checkpoint", "notice"].includes(wire.type)) {
+      if (
+        [
+          "turn_status",
+          "item_upsert",
+          "output_delta",
+          "approval",
+          "interaction",
+          "checkpoint",
+          "notice",
+        ].includes(wire.type)
+      ) {
         onEvent(mapHarnessActivityEvent(wire) as ChatStreamEvent);
         return;
       }
-      if (["item_started", "item_completed", "usage", "interrupted", "completed"].includes(wire.type)) {
+      if (
+        [
+          "item_started",
+          "item_completed",
+          "usage",
+          "interrupted",
+          "completed",
+        ].includes(wire.type)
+      ) {
         onEvent({
-          type: wire.type as "item_started" | "item_completed" | "usage" | "interrupted" | "completed",
+          type: wire.type as
+            | "item_started"
+            | "item_completed"
+            | "usage"
+            | "interrupted"
+            | "completed",
           harnessSessionId: wire.harness_session_id ?? body.harnessSessionId,
           harnessTurnId: wire.harness_turn_id ?? undefined,
           payload: wire.payload,
@@ -4648,8 +5632,18 @@ export class ApiClient {
         return;
       }
       if (wire.type === "done") {
-        if (!wire.model || !wire.message || typeof wire.message === "string" || (!wire.provider_id && !wire.harness_profile_id)) {
-          throw new ApiError("Nebula Core returned an incomplete chat completion.", 502, undefined, wire);
+        if (
+          !wire.model ||
+          !wire.message ||
+          typeof wire.message === "string" ||
+          (!wire.provider_id && !wire.harness_profile_id)
+        ) {
+          throw new ApiError(
+            "Nebula Core returned an incomplete chat completion.",
+            502,
+            undefined,
+            wire,
+          );
         }
         completed = mapChatCompletion(wire as unknown as WireChatCompletion);
         onEvent({ type: "done", ...completed });
@@ -4671,7 +5665,10 @@ export class ApiClient {
     }
     if (buffer.trim()) processBlock(buffer);
     if (!completed && !pausedForApproval) {
-      throw new ApiError("The chat response ended before a completion was received.", 502);
+      throw new ApiError(
+        "The chat response ended before a completion was received.",
+        502,
+      );
     }
     return completed;
   }
@@ -4685,16 +5682,22 @@ export class ApiClient {
     return this.streamChat(fallback, onEvent, signal, turnId);
   }
 
-  getPendingChatTurn(sessionId: string, signal?: AbortSignal): Promise<ChatTurn | undefined> {
+  getPendingChatTurn(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<ChatTurn | undefined> {
     return this.request<WireChatTurn | null>(
       `chat/sessions/${encodeURIComponent(sessionId)}/pending-turn`,
       { signal },
-    ).then((value) => value ? mapChatTurn(value) : undefined);
+    ).then((value) => (value ? mapChatTurn(value) : undefined));
   }
 
   cancelChatTurn(turnId: string): Promise<ChatTurn> {
-    return this.request<WireChatTurn>(`chat/turns/${encodeURIComponent(turnId)}/cancel`, {
-      method: "POST",
-    }).then(mapChatTurn);
+    return this.request<WireChatTurn>(
+      `chat/turns/${encodeURIComponent(turnId)}/cancel`,
+      {
+        method: "POST",
+      },
+    ).then(mapChatTurn);
   }
 }

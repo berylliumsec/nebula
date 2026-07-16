@@ -11,6 +11,7 @@ from .diagnostics import record_caught_exception
 
 import hashlib
 import json
+import posixpath
 import re
 import zipfile
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ class InvalidDocumentError(KnowledgeIngestionError):
 class ExtractedSection:
     text: str
     page: int | None = None
+    location: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,10 @@ _EXTENSION_FORMATS: dict[str, tuple[str, str]] = {
         "docx",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ),
+    ".xlsx": (
+        "xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ),
 }
 
 _MEDIA_FORMATS: dict[str, tuple[str, str]] = {
@@ -98,6 +104,10 @@ _MEDIA_FORMATS: dict[str, tuple[str, str]] = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": (
         "docx",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ),
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": (
+        "xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ),
 }
 
@@ -149,6 +159,8 @@ def extract_document(
         sections = _extract_pdf(data)
     elif source_type == "docx":
         sections = _extract_docx(data)
+    elif source_type == "xlsx":
+        sections = _extract_xlsx(data)
     else:
         text = _decode_text(data)
         if source_type == "json":
@@ -204,6 +216,8 @@ def build_chunks(
             }
             if section.page is not None:
                 chunk["page"] = section.page
+            if section.location is not None:
+                chunk["location"] = section.location
             chunks.append(chunk)
     if not chunks:
         raise InvalidDocumentError("the document contains no indexable text")
@@ -434,6 +448,116 @@ def _extract_html(text: str) -> str:
         )
         raise InvalidDocumentError("invalid HTML document") from exc
     return "".join(parser.parts)
+
+
+def _safe_archive_xml(
+    archive: zipfile.ZipFile, name: str, *, required: bool = True
+) -> bytes | None:
+    try:
+        info = archive.getinfo(name)
+    except KeyError:
+        if required:
+            raise InvalidDocumentError(f"spreadsheet is missing {name}")
+        return None
+    if info.file_size > MAX_EXTRACTED_CHARACTERS * 4:
+        raise DocumentTooLargeError(f"spreadsheet part {name} exceeds the extraction limit")
+    payload = archive.read(info)
+    if re.search(rb"<!\s*(?:DOCTYPE|ENTITY)\b", payload, flags=re.IGNORECASE):
+        raise InvalidDocumentError("spreadsheet XML declarations are not supported")
+    return payload
+
+
+def _extract_xlsx(data: bytes) -> tuple[ExtractedSection, ...]:
+    """Read cell text and formulas from XLSX XML without executing workbook content."""
+
+    spreadsheet_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    office_rel_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    package_rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+    try:
+        with zipfile.ZipFile(BytesIO(data)) as archive:
+            workbook_xml = _safe_archive_xml(archive, "xl/workbook.xml")
+            relationships_xml = _safe_archive_xml(
+                archive, "xl/_rels/workbook.xml.rels"
+            )
+            shared_xml = _safe_archive_xml(
+                archive, "xl/sharedStrings.xml", required=False
+            )
+            assert workbook_xml is not None and relationships_xml is not None
+            workbook = ElementTree.fromstring(workbook_xml)
+            relationships = ElementTree.fromstring(relationships_xml)
+            targets = {
+                relation.attrib.get("Id", ""): relation.attrib.get("Target", "")
+                for relation in relationships.findall(f"{{{package_rel_ns}}}Relationship")
+                if relation.attrib.get("TargetMode") != "External"
+            }
+            shared: list[str] = []
+            if shared_xml is not None:
+                shared_root = ElementTree.fromstring(shared_xml)
+                for item in shared_root.findall(f"{{{spreadsheet_ns}}}si"):
+                    shared.append(
+                        "".join(
+                            node.text or ""
+                            for node in item.iter(f"{{{spreadsheet_ns}}}t")
+                        )
+                    )
+
+            sections: list[ExtractedSection] = []
+            sheets = workbook.find(f"{{{spreadsheet_ns}}}sheets")
+            if sheets is None:
+                raise InvalidDocumentError("spreadsheet contains no worksheets")
+            for sheet in sheets:
+                title = sheet.attrib.get("name", "Sheet")
+                state = sheet.attrib.get("state", "visible")
+                relation_id = sheet.attrib.get(f"{{{office_rel_ns}}}id", "")
+                target = targets.get(relation_id, "")
+                if not target:
+                    continue
+                part = posixpath.normpath(target.lstrip("/"))
+                if not part.startswith("xl/"):
+                    part = posixpath.normpath(f"xl/{part}")
+                if not part.startswith("xl/worksheets/"):
+                    raise InvalidDocumentError("spreadsheet worksheet path is invalid")
+                sheet_xml = _safe_archive_xml(archive, part)
+                assert sheet_xml is not None
+                root = ElementTree.fromstring(sheet_xml)
+                for row in root.iter(f"{{{spreadsheet_ns}}}row"):
+                    values: list[str] = []
+                    for cell in row.findall(f"{{{spreadsheet_ns}}}c"):
+                        formula = cell.find(f"{{{spreadsheet_ns}}}f")
+                        if formula is not None and formula.text:
+                            value = f"={formula.text}"
+                        elif cell.attrib.get("t") == "inlineStr":
+                            value = "".join(
+                                node.text or ""
+                                for node in cell.iter(f"{{{spreadsheet_ns}}}t")
+                            )
+                        else:
+                            value_node = cell.find(f"{{{spreadsheet_ns}}}v")
+                            value = value_node.text or "" if value_node is not None else ""
+                            if cell.attrib.get("t") == "s" and value:
+                                try:
+                                    value = shared[int(value)]
+                                except (ValueError, IndexError) as exc:
+                                    raise InvalidDocumentError(
+                                        "spreadsheet contains an invalid shared string reference"
+                                    ) from exc
+                        if value.strip():
+                            reference = cell.attrib.get("r", "")
+                            values.append(f"{reference}: {value}" if reference else value)
+                    if values:
+                        row_number = row.attrib.get("r", "?")
+                        visibility = "" if state == "visible" else f" ({state})"
+                        sections.append(
+                            ExtractedSection(
+                                text=" | ".join(values),
+                                location=f"{title}{visibility}, row {row_number}",
+                            )
+                        )
+    except (zipfile.BadZipFile, RuntimeError, ElementTree.ParseError) as exc:
+        raise InvalidDocumentError("invalid or encrypted XLSX document") from exc
+    if not sections:
+        raise InvalidDocumentError("spreadsheet contains no extractable cells")
+    return tuple(sections)
 
 
 def _extract_docx(data: bytes) -> tuple[ExtractedSection, ...]:

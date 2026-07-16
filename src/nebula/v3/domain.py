@@ -37,6 +37,26 @@ class EngagementStatus(StringEnum):
     ARCHIVED = "archived"
 
 
+class ScopeImportStatus(StringEnum):
+    GENERATING = "generating"
+    READY = "ready"
+    APPLIED = "applied"
+    DISCARDED = "discarded"
+    FAILED = "failed"
+
+
+class ScopeImportClassification(StringEnum):
+    ALLOWED = "allowed"
+    EXCLUDED = "excluded"
+    AMBIGUOUS = "ambiguous"
+
+
+class ScopeImportTargetType(StringEnum):
+    CIDR = "cidr"
+    DOMAIN = "domain"
+    URL = "url"
+
+
 class RiskClass(StringEnum):
     LOCAL_READ = "local_read"
     PASSIVE = "passive"
@@ -1512,6 +1532,49 @@ class ChatTokenUsage(NebulaModel):
     total_tokens: int = Field(default=0, ge=0)
 
 
+class ScopeImportCandidate(NebulaModel):
+    id: str = Field(min_length=1, max_length=64)
+    target_type: ScopeImportTargetType
+    classification: ScopeImportClassification
+    raw_value: str = Field(min_length=1, max_length=2048)
+    normalized_value: str | None = Field(default=None, max_length=2048)
+    source_location: str = Field(default="document", max_length=500)
+    source_excerpt: str = Field(default="", max_length=1000)
+    warnings: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ScopeImportProvenance(NebulaModel):
+    provider_profile_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
+    prompt_version: str = Field(min_length=1, max_length=100)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    generated_at: datetime = Field(default_factory=utc_now)
+    provider_request_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ScopeImport(Entity):
+    entity_kind: ClassVar[str] = "scope_imports"
+    engagement_id: str
+    artifact_id: str
+    filename: str = Field(min_length=1, max_length=255)
+    source_type: str = Field(min_length=1, max_length=100)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    base_scope_revision: int = Field(default=0, ge=0)
+    status: ScopeImportStatus = ScopeImportStatus.GENERATING
+    candidates: list[ScopeImportCandidate] = Field(default_factory=list, max_length=2000)
+    warnings: list[str] = Field(default_factory=list, max_length=2000)
+    provenance: ScopeImportProvenance | None = None
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    error_detail: str | None = Field(default=None, max_length=4000)
+    applied_candidate_ids: list[str] = Field(default_factory=list, max_length=2000)
+    applied_scope_policy_id: str | None = Field(default=None, max_length=200)
+    applied_scope_revision: int | None = Field(default=None, ge=1)
+    applied_at: datetime | None = None
+    applied_by: str | None = Field(default=None, max_length=200)
+    discarded_at: datetime | None = None
+    discarded_by: str | None = Field(default=None, max_length=200)
+
+
 class HarnessDetailedUsage(NebulaModel):
     """Provider-neutral usage and timing exposed by local harnesses."""
 
@@ -2160,6 +2223,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     HarnessSession,
     SourceSnapshot,
     KnowledgeSource,
+    ScopeImport,
     ChatSession,
     ChatTurn,
     ChatMessage,
