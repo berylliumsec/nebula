@@ -7,7 +7,9 @@ import {
   FolderOpen,
   Globe2,
   LoaderCircle,
+  Maximize2,
   MessageSquare,
+  Minimize2,
   NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
@@ -195,6 +197,7 @@ export function SessionsPage() {
     setSearchParams(params, { replace: true });
   };
   const [mobileListOpen, setMobileListOpen] = useState(false);
+  const [fullScreen, setFullScreen] = useState(false);
   const [conversationPanelExpanded, setConversationPanelExpanded] = useState(
     () => localStorage.getItem("nebula.conversations.expanded") === "true",
   );
@@ -291,6 +294,17 @@ export function SessionsPage() {
     : toolRuntimeReason ?? (assignedToolCount === 0 ? "No Toolbox capabilities are assigned to this project." : undefined);
   const canUseTools = toolboxAvailable;
   const toolboxUnavailableReason = toolboxReason;
+
+  useEffect(() => {
+    if (!fullScreen) return;
+    const exitFullScreen = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setFullScreen(false);
+    };
+    window.addEventListener("keydown", exitFullScreen);
+    return () => window.removeEventListener("keydown", exitFullScreen);
+  }, [fullScreen]);
 
   useEffect(() => {
     if (runtimeKind !== "provider" || coreState !== "online" || view !== "chat" || !selectedProvider || !model.trim() || modelVerification) return;
@@ -1665,7 +1679,7 @@ export function SessionsPage() {
   ), [executionCapabilities]);
 
   return (
-    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}`}>
+    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${fullScreen ? " full-screen" : ""}`}>
       <PageHeader
         title="Workbench"
         description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
@@ -1684,7 +1698,19 @@ export function SessionsPage() {
           <button type="button" role="tab" aria-label="Activity history" aria-selected={view === "activity"} onClick={() => setView("activity")}><FileClock size={16} /> Activity</button>
         </div>
         {view === "chat" && <button className="session-mobile-list" type="button" aria-pressed={mobileListOpen} onClick={() => setMobileListOpen((value) => !value)}><MessageSquare size={15} /> {mobileListOpen ? "Current chat" : "Conversations"}</button>}
-        <div className="session-scope"><ShieldCheck size={15} /> Human controlled · {engagement?.name ?? "no project"}</div>
+        <div className="session-toolbar-actions">
+          <div className="session-scope"><ShieldCheck size={15} /> Human controlled · {engagement?.name ?? "no project"}</div>
+          <button
+            className="icon-button subtle workbench-full-screen-toggle"
+            type="button"
+            aria-label={fullScreen ? "Exit full screen workbench" : "Enter full screen workbench"}
+            aria-pressed={fullScreen}
+            title={fullScreen ? "Exit full screen (Esc)" : "Open full screen workbench"}
+            onClick={() => setFullScreen((value) => !value)}
+          >
+            {fullScreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+          </button>
+        </div>
       </div>
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelExpanded ? " conversation-panel-expanded" : ""}`}>

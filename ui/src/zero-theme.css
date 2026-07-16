@@ -398,6 +398,16 @@
   animation: zero-materialize 340ms cubic-bezier(.2, .76, .2, 1);
 }
 :root[data-theme="zero"] .page { position: relative; z-index: auto; }
+:root[data-theme="zero"] .sessions-page.full-screen {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  padding: 12px;
+  border-radius: 0;
+  background:
+    radial-gradient(circle at 50% 0, rgb(51 83 124 / 16%), transparent 42%),
+    #050608;
+}
 :root[data-theme="zero"] .page-header { margin-bottom: 24px; padding-bottom: 0; border: 0; }
 :root[data-theme="zero"] .page-header::after { display: none; }
 :root[data-theme="zero"] .page-header h1 { font-weight: 540; letter-spacing: -.035em; text-shadow: 0 6px 28px rgb(95 156 236 / 10%); }

@@ -61,6 +61,21 @@ describe("Nebula workspace", () => {
     expect(localStorage.getItem("nebula.workbench.view")).toBe("code");
   });
 
+  it("opens the Workbench full screen and exits with Escape", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    const workbench = document.querySelector(".sessions-page");
+    const toggle = await screen.findByRole("button", { name: "Enter full screen workbench" });
+
+    await user.click(toggle);
+    expect(workbench).toHaveClass("full-screen");
+    expect(screen.getByRole("button", { name: "Exit full screen workbench" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.keyboard("{Escape}");
+    expect(workbench).not.toHaveClass("full-screen");
+    expect(screen.getByRole("button", { name: "Enter full screen workbench" })).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("uses Zero as the first-run theme while preserving explicit preferences", async () => {
     const firstRender = renderApp();
     expect(document.documentElement).toHaveAttribute("data-theme", "zero");

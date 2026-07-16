@@ -469,9 +469,27 @@ kbd { font-size: 11px; }
 .session-scope { font-size: 11px; }
 .session-mobile-list { display: none; }
 .session-layout { min-height: 620px; border-color: var(--border-soft); border-radius: 0 0 13px 13px; }
-.sessions-page.chat-active { display: flex; height: 100%; min-height: 0; flex-direction: column; overflow: hidden; }
-.sessions-page.chat-active > .page-header, .sessions-page.chat-active > .session-toolbar { flex: 0 0 auto; }
-.sessions-page.chat-active > .session-layout.chat { height: auto; min-height: 0; flex: 1 1 auto; }
+.sessions-page { width: 100%; max-width: none; padding: 22px 24px 28px; }
+.sessions-page.chat-active, .sessions-page.full-screen { display: flex; height: 100%; min-height: 0; flex-direction: column; overflow: hidden; }
+.sessions-page.chat-active > .page-header, .sessions-page.chat-active > .session-toolbar,
+.sessions-page.full-screen > .page-header, .sessions-page.full-screen > .session-toolbar { flex: 0 0 auto; }
+.sessions-page.chat-active > .session-layout, .sessions-page.full-screen > .session-layout { height: auto; min-height: 0; flex: 1 1 auto; }
+.sessions-page.full-screen {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  max-width: none;
+  height: 100dvh;
+  padding: 12px;
+  background: var(--canvas);
+}
+.sessions-page.full-screen > .page-header { display: none; }
+.sessions-page.full-screen > .session-toolbar { border-radius: 13px 13px 0 0; }
+.sessions-page.full-screen > .session-layout { border-radius: 0 0 13px 13px; }
+.sessions-page.full-screen > .session-layout:not(.chat) { overflow: auto; }
+.session-toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.workbench-full-screen-toggle { color: var(--muted-strong); }
+.workbench-full-screen-toggle:hover { color: var(--text-strong); }
 .session-layout.chat { grid-template-columns: 220px minmax(420px, 1fr) 280px; grid-template-rows: minmax(0, 1fr); }
 .session-layout.chat.conversation-panel-expanded { grid-template-columns: 340px minmax(420px, 1fr) 280px; }
 .session-layout.chat .session-workspace, .session-layout.chat .chat-panel { min-height: 0; }
@@ -1336,6 +1354,8 @@ kbd { font-size: 11px; }
   .session-tabs button { min-width: 0; min-height: 44px; justify-content: center; gap: 4px; padding-inline: 4px; line-height: 1.15; text-align: center; }
   .session-tabs button > svg { flex: 0 0 auto; }
   .session-scope { display: none; }
+  .session-toolbar-actions { width: 100%; justify-content: flex-end; }
+  .sessions-page, .sessions-page.full-screen { padding: 10px; }
   .session-mobile-list { display: inline-flex; width: 100%; min-height: 44px; align-items: center; justify-content: center; gap: 6px; margin-left: 0; padding: 0 9px; border: 0; border-radius: 8px; color: var(--muted-strong); background: var(--surface-hover); }
   .session-layout.chat { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .session-layout.chat .session-list { display: none; min-height: 0; border-right: 0; }

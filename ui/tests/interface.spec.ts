@@ -541,6 +541,35 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   expect(composerBounds.workspaceScrollHeight).toBeLessThanOrEqual(composerBounds.clientHeight + 1);
 });
 
+test("the workbench expands to the full viewport and restores in place", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await openWorkspace(page, "/?view=chat", "Workbench");
+
+  await page.getByRole("button", { name: "Enter full screen workbench" }).click();
+  const workbench = page.locator(".sessions-page.full-screen");
+  await expect(workbench).toBeVisible();
+  const geometry = await workbench.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      position: getComputedStyle(element).position,
+      top: rect.top,
+      left: rect.left,
+      right: window.innerWidth - rect.right,
+      bottom: window.innerHeight - rect.bottom,
+    };
+  });
+  expect(geometry.position).toBe("fixed");
+  expect(Math.abs(geometry.top)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.left)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.right)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.bottom)).toBeLessThanOrEqual(1);
+  await expect(page.getByRole("heading", { name: "Workbench" })).toBeHidden();
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Enter full screen workbench" })).toBeVisible();
+  await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
+});
+
 test("the populated finding editor stays contained and accessible", async ({ page }) => {
   const finding = {
     ...entity,
