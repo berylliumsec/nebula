@@ -774,6 +774,16 @@ class AutomationRuntimeManager:
             ),
             sorted(profiles, key=lambda item: (item.created_at, item.id))[0],
         )
+        if not prepared:
+            return AutomationRuntimeInfo(
+                configured=True,
+                ready=False,
+                image=self.runtime_image or None,
+                digest=self.runtime_digest or None,
+                runner_profile_id=profile.id,
+                detail="the existing Kali headless runtime has not been prepared",
+                inventory=list(self._inventory),
+            )
         runner = self._runner(profile)
         healthy, detail = await runner.available()
         return AutomationRuntimeInfo(

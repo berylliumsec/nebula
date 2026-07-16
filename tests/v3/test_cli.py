@@ -7,7 +7,15 @@ from typer.testing import CliRunner
 
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.cli import _is_loopback, app
-from nebula.v3.domain import AgentRun, Artifact, Engagement, ProviderProfile
+from nebula.v3.domain import (
+    AgentRun,
+    Artifact,
+    Engagement,
+    ProviderProfile,
+    RunnerIsolation,
+    RunnerProfile,
+    RunnerRuntime,
+)
 from nebula.v3.providers import (
     ModelCapabilities,
     OpenAICompatibleProvider,
@@ -106,6 +114,38 @@ def test_doctor_reports_analysis_only_without_host_fallback(tmp_path, monkeypatc
         "detail": "rootless runner is not configured",
         "host_fallback": False,
         "mode": "analysis-only",
+    }
+
+
+def test_doctor_reports_unprepared_kali_runtime_without_crashing(tmp_path):
+    data_dir = tmp_path / "doctor-unprepared-runtime"
+    store = NebulaStore(data_dir / "nebula.db")
+    store.create(
+        RunnerProfile(
+            id="local",
+            name="Local Docker",
+            runtime=RunnerRuntime.DOCKER,
+            executable="/usr/bin/docker",
+            platform="linux/amd64",
+            isolation=RunnerIsolation.ROOTLESS,
+            healthy=True,
+        )
+    )
+
+    result = CliRunner().invoke(
+        app, ["doctor", "--json", "--data-dir", str(data_dir)]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    runtime = json.loads(result.stdout)["automation_runtime"]
+    assert runtime == {
+        "configured": True,
+        "ready": False,
+        "image": None,
+        "digest": None,
+        "runner_profile_id": "local",
+        "detail": "the existing Kali headless runtime has not been prepared",
+        "inventory": [],
     }
 
 

@@ -1154,7 +1154,7 @@ def create_app(
         try:
             if automation_runtime is not None:
                 await start_component(
-                    "automation",
+                    "runtime",
                     "runtime",
                     automation_runtime.startup,
                     automation_runtime.shutdown,
@@ -1261,7 +1261,7 @@ def create_app(
         "administration": "storage",
         "approvals": "missions",
         "artifacts": "evidence",
-        "automation": "automation",
+        "automation": "runtime",
         "chat": "chat",
         "chat-messages": "chat",
         "chat-sessions": "chat",
@@ -1342,7 +1342,7 @@ def create_app(
         if isinstance(
             exc, (AutomationPolicyDenied, AutomationRuntimeUnavailable)
         ):
-            return "automation"
+            return "runtime"
         if isinstance(exc, ContainerTerminalError):
             return "terminal"
         if isinstance(exc, (ExecutionServiceError, ExecutionAIError)):

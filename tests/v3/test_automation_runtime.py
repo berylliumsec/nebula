@@ -39,6 +39,7 @@ from nebula.v3.domain import (
     RiskClass,
     utc_now,
 )
+from nebula.v3.diagnostics import DiagnosticManager
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_results import (
     ToolOutputAccessError,
@@ -611,6 +612,71 @@ def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
             for path in paths
             for marker in ("tool-packs", "tool-catalog", "tool-assignment")
         )
+
+
+def test_api_runtime_lifecycle_uses_registered_diagnostics_feature(tmp_path):
+    manager, store, artifacts, _engagement, _sessions = runtime(tmp_path)
+    diagnostics = DiagnosticManager(
+        tmp_path / "diagnostics", level_override="debug", watch_settings=False
+    )
+    app = create_app(
+        store,
+        artifact_store=artifacts,
+        auth_token="runtime-test-token",
+        automation_runtime=manager,
+        diagnostic_manager=diagnostics,
+    )
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/automation/runtime",
+                headers={"Authorization": "Bearer runtime-test-token"},
+            )
+            assert response.status_code == 200
+    finally:
+        diagnostics.close()
+
+    runtime_events = (diagnostics.log_dir / "runtime.log").read_text(encoding="utf-8")
+    assert "runtime.runtime.started" in runtime_events
+    assert "runtime.runtime.stopped" in runtime_events
+
+
+def test_runtime_info_is_not_ready_before_kali_image_preparation(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    store.create(
+        RunnerProfile(
+            id="runner",
+            name="Docker",
+            runtime=RunnerRuntime.DOCKER,
+            executable="/usr/bin/docker",
+            platform="linux/amd64",
+            isolation=RunnerIsolation.ROOTLESS,
+            healthy=True,
+        )
+    )
+
+    async def resolve_runtime(_engagement_id: str):
+        raise AssertionError("runtime_info must not prepare the image")
+
+    manager = AutomationRuntimeManager(
+        store=store,
+        artifact_store=artifacts,
+        data_root=tmp_path,
+        workspace_resolver=lambda _engagement_id: tmp_path / "workspace",
+        runtime_resolver=resolve_runtime,
+        cached_runtime_provider=lambda: None,
+    )
+
+    info = asyncio.run(manager.runtime_info())
+
+    assert info.configured is True
+    assert info.ready is False
+    assert info.image is None
+    assert info.digest is None
+    assert info.runner_profile_id == "runner"
+    assert info.detail == "the existing Kali headless runtime has not been prepared"
 
 
 def test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded(tmp_path):
