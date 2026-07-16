@@ -75,10 +75,11 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
   }, [api, directory, engagementId]);
 
   useEffect(() => {
+    if (!active) return;
     const controller = new AbortController();
     void load(0, controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [active, load]);
 
   useEffect(() => {
     setDirectory("");
