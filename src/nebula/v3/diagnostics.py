@@ -68,7 +68,7 @@ FEATURE_FILES: dict[str, str] = {
     "knowledge": "knowledge.log",
     "harnesses": "harnesses.log",
     "missions": "missions.log",
-    "toolbox": "toolbox.log",
+    "runtime": "runtime.log",
     "sandbox": "sandbox.log",
     "executions": "executions.log",
     "findings": "findings.log",

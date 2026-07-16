@@ -44,7 +44,7 @@ from .sandbox import (
     RunnerProfile as SandboxRunnerProfile,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
-from .tool_platform import ToolPlatform, ToolPlatformError
+from .runtime_platform import RuntimePlatform, RuntimePlatformError
 
 SCRATCH_PROJECT_ID = "scratch-project"
 SCRATCH_PROJECT_NAME = "Scratch Project"
@@ -355,7 +355,7 @@ class SetupService:
     def __init__(
         self,
         store: NebulaStore,
-        tool_platform: ToolPlatform | None,
+        tool_platform: RuntimePlatform | None,
         *,
         event_retention: int = DEFAULT_SETUP_EVENT_RETENTION,
     ) -> None:
@@ -795,7 +795,7 @@ class SetupService:
         project_id = self._preparation_project_id(requested_project_id)
         try:
             profile = self.tool_platform.resolve_human_terminal_profile(project_id)
-        except (NotFoundError, ToolPlatformError) as exc:
+        except (NotFoundError, RuntimePlatformError) as exc:
             record_caught_exception(
                 "setup",
                 "setup.setup.caught_failure_007",

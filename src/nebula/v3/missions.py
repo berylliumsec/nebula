@@ -22,7 +22,6 @@ from .domain import (
     Approval,
     ApprovalStatus,
     Engagement,
-    EngagementToolAssignment,
     McpApprovalMode,
     ProviderProfile,
     RunBudget,
@@ -30,8 +29,6 @@ from .domain import (
     ScopePolicy,
     Task,
     TaskStatus,
-    ToolPackInstallation,
-    ToolPackInstallationStatus,
     ToolCall,
     ToolCallStatus,
     utc_now,
@@ -260,8 +257,6 @@ class MissionService:
             raise MissionConfigurationError(
                 f"provider profile {clean_provider_id!r} is disabled"
             )
-        pack_digests: list[str] = []
-        interface_catalog_digests: list[str] = []
         if selected_action_tools:
             if not profile.tools_verified_for(clean_model):
                 raise MissionConfigurationError(
@@ -282,44 +277,6 @@ class MissionService:
                 raise MissionConfigurationError(
                     "mission concurrency exceeds the engagement scope policy"
                 )
-            assignments = [
-                assignment
-                for assignment in self.store.list_entities(
-                    EngagementToolAssignment, limit=1_000
-                )
-                if assignment.engagement_id == engagement.id and assignment.enabled
-            ]
-            allowed = {
-                name: assignment.manifest_digest
-                for assignment in assignments
-                for name in assignment.allowed_tool_names
-            }
-            missing = sorted(set(selected_tools) - allowed.keys())
-            if missing:
-                raise MissionConfigurationError(
-                    f"mission tools are not assigned to the engagement: {missing}"
-                )
-            pack_digests = sorted({allowed[name] for name in selected_tools})
-            installations = self.store.list_entities(ToolPackInstallation, limit=1_000)
-            ready = {
-                item.manifest_digest
-                for item in installations
-                if item.status == ToolPackInstallationStatus.READY
-            }
-            unavailable = sorted(set(pack_digests) - ready)
-            if unavailable:
-                raise MissionConfigurationError(
-                    f"mission tool packs are not verified and ready: {unavailable}"
-                )
-            interface_catalog_digests = sorted(
-                {
-                    item.interface_catalog_digest
-                    for item in installations
-                    if item.manifest_digest in pack_digests
-                    and item.status == ToolPackInstallationStatus.READY
-                    and item.interface_catalog_digest is not None
-                }
-            )
         try:
             validate_engagement_provider_privacy(self.store, engagement, provider)
         except ProviderPrivacyViolation as exc:
@@ -349,8 +306,6 @@ class MissionService:
             supervisor_provider_id=profile.id,
             supervisor_model=clean_model,
             budget=budget,
-            tool_pack_digests=pack_digests,
-            tool_interface_catalog_digests=interface_catalog_digests,
             runtime_snapshot={
                 "mcp_server_ids": [item.id for item in mcp_profiles],
                 "mcp_snapshot": [item.model_dump(mode="json") for item in mcp_profiles],
@@ -361,7 +316,7 @@ class MissionService:
                 **(
                     {
                         "tool_names": selected_action_tools,
-                        "oci_tool_names": selected_tools,
+                        "command_tool_names": selected_tools,
                         "mcp_tool_names": selected_mcp_tools,
                     }
                     if selected_action_tools
@@ -376,7 +331,7 @@ class MissionService:
                 )
             try:
                 # Build the locked registry before persistence so arbitrary
-                # assignment names and unavailable runners fail as explicit
+                # capability names and unavailable runners fail as explicit
                 # configuration errors rather than queued background work.
                 self.tool_components_factory(run, provider)
             except MissionServiceError as caught_error:
@@ -421,10 +376,8 @@ class MissionService:
                     **(
                         {
                             "tool_names": selected_action_tools,
-                            "oci_tool_names": selected_tools,
+                            "command_tool_names": selected_tools,
                             "mcp_server_ids": [item.id for item in mcp_profiles],
-                            "tool_pack_digests": pack_digests,
-                            "tool_interface_catalog_digests": interface_catalog_digests,
                         }
                         if selected_action_tools
                         else {}

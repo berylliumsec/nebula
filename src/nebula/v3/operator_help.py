@@ -56,7 +56,7 @@ _PRODUCT_MARKERS = {
     "scope",
     "sidecar",
     "terminal",
-    "toolbox",
+    "runtime",
     "workspace",
 }
 _FAILURE_MARKERS = {

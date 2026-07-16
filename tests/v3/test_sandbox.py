@@ -1,7 +1,6 @@
 import asyncio
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -12,7 +11,6 @@ from nebula.v3.sandbox import (
     ContainerImagePreparer,
     ContainerRuntimeType,
     ContainerSandboxRunner,
-    ContainerToolPackRuntimeAdapter,
     EgressRule,
     RunnerIsolationMode,
     RunnerPlatform,
@@ -40,6 +38,15 @@ def _security_tool_manifest():
                 "packages": ["hashcat", "nmap"],
                 "tools": ["hashcat", "nmap"],
                 "provenance": {"hashcat": ["hashcat"], "nmap": ["nmap"]},
+                "runtime_binaries": [
+                    {"name": "bash", "path": "/usr/bin/bash", "version": "5"},
+                    {"name": "curl", "path": "/usr/bin/curl", "version": "8"},
+                    {"name": "git", "path": "/usr/bin/git", "version": "2"},
+                    {"name": "hashcat", "path": "/usr/bin/hashcat", "version": "6"},
+                    {"name": "nmap", "path": "/usr/bin/nmap", "version": "7"},
+                    {"name": "python3", "path": "/usr/bin/python3", "version": "3"},
+                    {"name": "rg", "path": "/usr/bin/rg", "version": "14"},
+                ],
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -719,35 +726,6 @@ def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
     assert calls[1][0][-3:] == ["stop", "--time=0", "nebula-call-egress"]
 
 
-def test_toolpack_runtime_adapter_inspects_exact_digest_platform_and_user(
-    monkeypatch,
-):
-    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
-    adapter = ContainerToolPackRuntimeAdapter(runner=runner, platform="linux/amd64")
-    image = "example.invalid/tool@sha256:" + "c" * 64
-
-    async def require_runner():
-        return None
-
-    async def runtime_command(*arguments, timeout_seconds):
-        assert arguments[:3] == ("image", "inspect", image)
-        assert timeout_seconds == 30
-        return (
-            '{"RepoDigests":["example.invalid/tool@sha256:'
-            + "c" * 64
-            + '"],"Os":"linux","Architecture":"amd64",'
-            '"Config":{"User":"10001:10001"}}',
-            "",
-            0,
-        )
-
-    monkeypatch.setattr(adapter, "_require_runner", require_runner)
-    monkeypatch.setattr(adapter, "_runtime_command", runtime_command)
-    info = asyncio.run(adapter.inspect(image))
-    assert info.image == image
-    assert info.digest == "sha256:" + "c" * 64
-    assert info.platform == "linux/amd64"
-    assert info.user == "10001:10001"
 
 
 def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkeypatch):
@@ -782,7 +760,7 @@ def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkey
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v3"}}}',
+            + '"org.nebula.human-terminal.recipe":"v4"}}}',
             "",
             0,
         )
@@ -791,7 +769,7 @@ def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkey
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
     image = asyncio.run(preparer.prepare())
 
-    assert [call[0][0] for call in calls] == ["image", "image", "run"]
+    assert [call[0][0] for call in calls] == ["image", "image", "run", "run"]
     assert all("pull" not in call[0] and "build" not in call[0] for call in calls)
     assert image.base_resolved_reference == (
         "docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64
@@ -799,7 +777,14 @@ def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkey
     assert image.base_digest == "sha256:" + "e" * 64
     assert image.resolved_reference == "sha256:" + "d" * 64
     assert image.digest == "sha256:" + "d" * 64
-    assert image.installed_packages == ("kali-linux-headless", "iputils-ping")
+    assert image.installed_packages == (
+        "kali-linux-headless",
+        "iputils-ping",
+        "python3",
+        "ripgrep",
+        "git",
+        "curl",
+    )
     assert image.security_tools == ("hashcat", "nmap")
     assert image.security_tool_provenance == (
         ("hashcat", ("hashcat",)),
@@ -905,7 +890,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v3"}}}',
+            + '"org.nebula.human-terminal.recipe":"v4"}}}',
             "",
             0,
         )
@@ -922,6 +907,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
         "build",
         "image",
         "run",
+        "run",
     ]
     assert image.refreshed is True
     assert image.base_digest == "sha256:" + "e" * 64
@@ -930,9 +916,10 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
     assert build[0][1] == "--platform=linux/amd64"
     assert build[0][2] == "--pull=false"
     assert build[0][3] == "--quiet"
-    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v3-")
+    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v4-")
     assert "FROM docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64 in dockerfiles[0]
     assert "apt-get install -y kali-linux-headless iputils-ping" in dockerfiles[0]
+    assert "COPY egress_helper.py /usr/local/bin/nebula-egress" in dockerfiles[0]
     assert "setcap -r /usr/lib/nmap/nmap" in dockerfiles[0]
     assert 'test -z "$(getcap /usr/lib/nmap/nmap)"' in dockerfiles[0]
     assert "ENV NMAP_UNPRIVILEGED=1" in dockerfiles[0]
@@ -988,7 +975,7 @@ def test_human_terminal_cold_pull_failure_can_be_retried(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v3"}}}',
+            + '"org.nebula.human-terminal.recipe":"v4"}}}',
             "",
             0,
         )
@@ -1081,31 +1068,3 @@ def test_human_terminal_image_rejects_unproven_repository(monkeypatch):
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
     with pytest.raises(SandboxUnavailable, match="official repository"):
         asyncio.run(preparer.prepare())
-
-
-def test_toolpack_runtime_adapter_smoke_test_is_offline_hardened_argv(
-    monkeypatch,
-):
-    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
-    adapter = ContainerToolPackRuntimeAdapter(runner=runner, platform="linux/amd64")
-    image = "example.invalid/tool@sha256:" + "d" * 64
-    observed = []
-
-    async def run(request):
-        observed.append(request)
-        return SimpleNamespace(exit_code=0, stdout='{"ok":true}', stderr="")
-
-    monkeypatch.setattr(runner, "run", run)
-    result = asyncio.run(
-        adapter.smoke_test(
-            image=image,
-            command=["/usr/local/bin/tool", "--self-test"],
-            timeout_seconds=15,
-        )
-    )
-    assert result.exit_code == 0
-    request = observed[0]
-    assert request.network == SandboxNetwork.NONE
-    assert request.execution_kind == SandboxExecutionKind.LOCAL_TOOL
-    assert request.workspace_access == SandboxWorkspaceAccess.NONE
-    assert request.command == ["/usr/local/bin/tool", "--self-test"]

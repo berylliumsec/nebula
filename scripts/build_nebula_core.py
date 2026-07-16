@@ -117,11 +117,6 @@ def main() -> None:
     license_file = root / "LICENSE.md"
     if not license_file.is_file():
         raise RuntimeError("LICENSE.md is required for a distributable Core")
-    tool_pack_trust = (
-        root / "src" / "nebula" / "v3" / "tool_pack_assets" / "trust"
-    )
-    if not (tool_pack_trust / "berylliumsec.json").is_file():
-        raise RuntimeError("the embedded tool-pack trust root is required")
     report_assets = root / "src" / "nebula" / "v3" / "report_assets"
     required_fonts = (
         "NotoSans-Regular.ttf",
@@ -143,6 +138,9 @@ def main() -> None:
     kali_tool_inventory = root / "src" / "nebula" / "v3" / "kali_tool_inventory.py"
     if not kali_tool_inventory.is_file():
         raise RuntimeError("the Kali security-tool inventory helper is required")
+    egress_helper = root / "src" / "nebula" / "v3" / "egress_helper.py"
+    if not egress_helper.is_file():
+        raise RuntimeError("the Kali policy egress helper is required")
 
     target = target_triple()
     metadata_root = root / "build" / "nebula-core-metadata"
@@ -183,8 +181,6 @@ def main() -> None:
         "--add-data",
         f"{notices}:licenses",
         "--add-data",
-        f"{tool_pack_trust}:nebula/v3/tool_pack_assets/trust",
-        "--add-data",
         f"{report_assets}:nebula/v3/report_assets",
         "--add-data",
         f"{operator_help}:nebula/v3",
@@ -192,6 +188,8 @@ def main() -> None:
         f"{diagnostic_guidance}:nebula/v3",
         "--add-data",
         f"{kali_tool_inventory}:nebula/v3",
+        "--add-data",
+        f"{egress_helper}:nebula/v3",
     ]
     # Release environments omit the legacy dependency group. These exclusions
     # are a second defense for developer/QA builds created in a full checkout;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Play, RefreshCw, X } from "lucide-react";
+import { Play, RefreshCw, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type {
   ExecutionCapabilities,
@@ -135,12 +135,12 @@ export function ExecutionReviewDialog({
         {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         {preview?.allowed && preview.runtime && preview.network && (
           <section className="execution-preview-facts" aria-label="Validated execution preview">
-            {!preview.runtime.trusted && <p className="execution-warning"><AlertTriangle size={15} /> Developer Toolbox is unsigned; its exact digest is pinned for this run.</p>}
+
             <dl>
               <div><dt>Interpreter</dt><dd><code>{[preview.runtime.interpreter, ...preview.runtime.arguments].join(" ")}</code></dd></div>
               <div><dt>Container</dt><dd>Fresh and disposable · stdin closed</dd></div>
               <div><dt>Image</dt><dd><code>{preview.runtime.image}</code></dd></div>
-              <div><dt>Manifest</dt><dd><code>{preview.runtime.manifestDigest}</code></dd></div>
+              <div><dt>Runtime digest</dt><dd><code>{preview.runtime.runtimeDigest}</code></dd></div>
               <div><dt>Runner</dt><dd>{preview.runtime.runnerRuntime} · {preview.runtime.runnerIsolation} · {preview.runtime.runnerProfileId} r{preview.runtime.runnerProfileRevision}<br /><code>{preview.runtime.runnerExecutable}</code> · {preview.runtime.runnerPlatform}{preview.runtime.runnerContext ? ` · context ${preview.runtime.runnerContext}` : ""}{preview.runtime.runnerSocket ? ` · ${preview.runtime.runnerSocket}` : ""}</dd></div>
               <div><dt>Workspace</dt><dd><code>{preview.workspace}</code> · engagement-persistent</dd></div>
               <div><dt>Limits</dt><dd>{preview.limits.cpuCount} CPU · {preview.limits.memoryMb} MiB · {preview.limits.pids} PIDs · {preview.limits.timeoutSeconds}s · {preview.limits.outputBytesPerStream.toLocaleString()} bytes/stream</dd></div>

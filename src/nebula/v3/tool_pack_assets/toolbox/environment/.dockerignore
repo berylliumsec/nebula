@@ -1,9 +1,0 @@
-**
-!Containerfile
-!tool-versions.env
-!interfaces/
-!interfaces/*.yaml
-!tool-catalog.schema.json
-!build-tool-catalog.py
-!nebula-toolbox.py
-!nebula-egress.py

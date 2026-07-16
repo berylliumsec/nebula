@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from functools import wraps
-from types import SimpleNamespace
 
 import pytest
 
@@ -20,9 +19,6 @@ from nebula.v3.domain import (
     RunnerProfile,
     RunnerRuntime,
     ScopePolicy,
-    ToolPackInstallation,
-    ToolPackInstallationStatus,
-    ToolPackTrust,
     utc_now,
 )
 from nebula.v3.executions import (
@@ -33,9 +29,11 @@ from nebula.v3.executions import (
 )
 from nebula.v3.sandbox import SandboxNetwork, SandboxResult
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tool_platform import OperatorRuntimeResolution
-from nebula.v3.tool_platform import ToolPlatformError
-from nebula.v3.toolpacks import ToolPackOperatorRuntime
+from nebula.v3.runtime_platform import (
+    OperatorRuntimeCommand,
+    OperatorRuntimeResolution,
+    RuntimePlatformError,
+)
 
 
 def async_test(function):
@@ -97,21 +95,7 @@ class StubExecutionPlatform:
             enabled=True,
             healthy=True,
         )
-        self.installation = ToolPackInstallation(
-            id="pack-1",
-            publisher="berylliumsec",
-            name="toolbox",
-            version="1",
-            manifest_digest="a" * 64,
-            source="test",
-            trust=ToolPackTrust.CURATED,
-            runtime_profile_id=self.profile.id,
-            image_locks={"linux/amd64": "example.invalid/toolbox@sha256:" + "b" * 64},
-            status=ToolPackInstallationStatus.READY,
-            manifest_path="/tmp/manifest.json",
-            installed_at=utc_now(),
-            verified_at=utc_now(),
-        )
+        self.image = "sha256:" + "b" * 64
 
     def workspace_for(self, engagement_id: str):
         del engagement_id
@@ -124,24 +108,18 @@ class StubExecutionPlatform:
         canonical = {"python3": "python", "py": "python", "shell": "bash"}.get(
             language, language
         )
-        runtime = ToolPackOperatorRuntime(
-            language=canonical,
-            aliases=[canonical],
-            image="toolbox",
-            adapter="/opt/nebula/bin/nebula-toolbox",
+        runtime = OperatorRuntimeCommand(
             interpreter=("/usr/bin/python3" if canonical == "python" else "/bin/bash"),
             arguments=(["-I", "-B"] if canonical == "python" else ["--noprofile"]),
         )
         return OperatorRuntimeResolution(
             canonical_language=canonical,
             runtime=runtime,
-            installation=self.installation,
-            manifest=SimpleNamespace(),  # type: ignore[arg-type]
             profile=self.profile,
-            image=self.installation.image_locks["linux/amd64"],
+            image=self.image,
+            runtime_digest=self.image,
             runner=self.runner,  # type: ignore[arg-type]
             workspace=self.workspace,
-            trusted=True,
         )
 
 
@@ -199,7 +177,7 @@ def test_run_capability_is_hidden_until_offline_and_scoped_paths_are_ready(tmp_p
 
     def offline_only(engagement_id: str, language: str, *, network: bool):
         if network:
-            raise ToolPlatformError("egress helper unavailable")
+            raise RuntimePlatformError("egress helper unavailable")
         return original(engagement_id, language, network=network)
 
     service.tool_platform.resolve_operator_runtime = offline_only  # type: ignore[method-assign]
@@ -292,12 +270,7 @@ async def test_reviewed_execution_is_exact_isolated_redacted_and_idempotent(tmp_
     assert source_bytes == request.source.encode("utf-8")
     assert container_name == "nebula-exec-" + execution.id.replace("-", "")
     assert sandbox_request.network == SandboxNetwork.NONE
-    assert sandbox_request.command == [
-        "/opt/nebula/bin/nebula-toolbox",
-        "code",
-        "--language",
-        "python",
-    ]
+    assert sandbox_request.command == ["/usr/bin/python3", "-I", "-B"]
     assert sandbox_request.limits.timeout_seconds == 300
     assert sandbox_request.limits.output_bytes == 2_000_000
 

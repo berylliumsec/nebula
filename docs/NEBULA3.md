@@ -64,7 +64,7 @@ poetry run nebula-core ui
 `nebula-core ui` is the recommended source-checkout launch path. It chooses an
 available loopback port, starts Core, serves the built workspace, and transfers
 the generated bearer token through the URL fragment. Running Vite alone starts
-only the frontend and leaves durable and Toolbox controls offline.
+only the frontend and leaves durable and command-runtime controls offline.
 
 `poetry run nebula3` remains a compatibility alias. Native-install users launch
 the desktop with `nebula`; `nebula-core` is reserved for diagnostics,
@@ -207,11 +207,11 @@ cloud-knowledge transfer confirmation. Product-help citations use stable
 `nebula-help:<article>` source IDs and a content-derived chunk ID.
 
 The corpus covers startup and diagnostics, runner and workstation setup, Terminal,
-Toolbox, policy/approval states, providers, reviewed execution, workspace limits,
+automation runtime, policy/approval states, providers, reviewed execution, workspace limits,
 context compaction, migration/import/export, and the current release boundary. If no
 article matches an observed Nebula failure, the assistant is instructed to report
 the exact error and say that no verified recovery procedure is available instead of
-inventing a step. Toolbox final synthesis also searches the observed failed result,
+inventing a step. Command final synthesis also searches the observed failed result,
 so recovery guidance can match an error that was not known when the turn began.
 
 Treat the bundled Markdown as release material: update implementation references and
@@ -349,67 +349,13 @@ with traversal and symlink protection. Promotion copies and verifies exact
 bytes into immutable artifacts, while reset never follows symlinks and never
 removes promoted evidence.
 
-## Tool safety model
+## Automation safety model
 
-Operator setup, installation locations, CLI/API examples, extension authoring,
-and release status are documented in the [Toolbox guide](TOOLBOX.md).
+Agent automation exposes only `run_command` and `process_io` backed by one prepared Kali container per agent session. Programs are ordinary binaries on `PATH`; there is no catalog, installation, publishing, assignment, or per-program adapter layer. The runtime is non-root, read-only-root, resource-limited, mounted only to the Project workspace, and never falls back to the host. See [Automation runtime](AUTOMATION-RUNTIME.md).
 
-All Nebula-assigned action tools used by native chat, missions, Codex, and
-Claude share the same artifact-first runtime. OCI stdout/stderr, generated
-files, optional parsed values, and MCP content blocks are stored as immutable
-content-addressed artifacts. Models receive only a compact
-`nebula.tool-result/v2` receipt and can inspect relevant evidence through
-bounded, redacted `tool_output.search` and `tool_output.read` excerpts.
-Harnesses also receive bounded `workspace.search` and `workspace.read`.
-Execution and artifact-retrieval calls use independent durable budgets.
+The complete Project network boundary is installed at session creation but starts disabled. A `project_scope` request activates CIDR, domain, wildcard-domain, and TCP-port policy according to the Project approval setting. The policy DNS resolver blocks alternate DNS, direct bypasses, unauthorized private destinations, and rebinding responses. URL-path-only entries fail closed for arbitrary shell access.
 
-Harness profiles may opt into a fail-closed set of vendor-native capabilities.
-The supported set includes isolated scratch-workspace access, an isolated
-shell, web research, installed skills, and subagents; Codex profiles may also
-enable browser, computer-use, and image-generation surfaces, while Claude
-profiles may enable web fetch. The exact policy is frozen when a session starts.
-Local native actions require Nebula approval and become durable `ToolCall`
-records. They never receive the engagement workspace or replace scoped Toolbox
-execution against engagement targets. Claude uses an explicit built-in-tool
-list plus a `PreToolUse` gate; Codex receives per-thread feature, sandbox,
-approval, web, and environment policy.
-
-Selected MCP profiles are available to native and harness chat and missions.
-Their tool schemas, policy, and identity are frozen into durable session/run
-state. Codex and Claude connect only to Nebula's session-scoped STDIO MCP
-gateway; upstream servers are never passed directly to a vendor harness. Core
-retains credentials and approval, scope, privacy, idempotency, and evidence
-enforcement, captures every upstream result, namespaces duplicate tool names,
-and revokes gateway access when the session closes. Managed Codex configuration
-is per thread and does not alter global Codex settings. Vendor-native web or
-interactive results remain vendor results rather than Nebula evidence until an
-operator explicitly promotes relevant material.
-
-Executable tools are disabled unless all of these are present:
-
-1. A typed `ToolSpec` with closed JSON schemas and trusted target/path mappings.
-2. An engagement-owned workspace and in-scope, broker-resolved target.
-3. A current mission budget reservation.
-4. Any approval required for invasive risk classes.
-5. An approved rootless Docker/Podman worker and preconfigured egress boundary.
-6. A digest-pinned tool image already present locally (`--pull=never`).
-7. An immutable evidence recorder.
-
-Missing isolation results in analysis-only mode. There is no host execution
-fallback.
-
-Opening **Automate task** performs the first-use Toolbox setup in the
-background. Nebula accepts only the signed `berylliumsec/nebula-toolbox`
-catalog collection, installs it through the verified ready local runner, and
-assigns its normalized capabilities to the current Project. An unavailable
-catalog, runtime, or verified image leaves the task analysis-only; Nebula never
-substitutes an unsigned environment or a host command.
-
-The Toolbox source retains release digest placeholders intentionally. The
-protected `nebula-toolbox-v*` publisher resolves them from actual registry
-outputs, creates SBOM/provenance evidence and OCI signatures, and publishes an
-Ed25519-signed catalog. Nebula embeds only the Beryllium public trust key; never
-substitute example digests or commit the private release key.
+Command stdout and stderr are immutable artifacts. Models receive compact redacted receipts and bounded retrieval capabilities. Selected MCP profiles remain separate and are frozen into durable session or run state. Human Terminal and reviewed code execution keep their distinct human-confirmed boundaries.
 
 ## Operator-workflow release verification
 
@@ -419,7 +365,7 @@ rootless Podman execution with workspace persistence, macOS Docker Desktop and
 Podman Machine command/profile boundaries, the frozen-Core package audit, the
 UI accessibility/visual suite, and the full v3 backend suite.
 
-Before a release, manually smoke-test the signed digest-pinned Toolbox and the
+Before a release, manually smoke-test the prepared Kali agent runtime and the
 official Kali terminal on Docker Desktop or a rootless Podman Machine. Confirm
 Kali pull/digest resolution, root and writable ephemeral state, outbound bridge
 connectivity, no added capabilities or published ports, terminal

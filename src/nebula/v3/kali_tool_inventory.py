@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -34,6 +35,14 @@ else:
 MANIFEST_SCHEMA = "nebula.kali-security-tools/v1"
 TOOL_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+@-]{0,127}\Z")
 PATH_DIRECTORIES = frozenset({"/bin", "/sbin", "/usr/bin", "/usr/sbin"})
+REQUIRED_AUTOMATION_BINARIES = ("bash", "curl", "git", "python3", "rg")
+_VERSION_ARGUMENTS = {
+    "bash": ("--version",),
+    "curl": ("--version",),
+    "git": ("--version",),
+    "python3": ("--version",),
+    "rg": ("--version",),
+}
 
 # These are the non-security dependency groups in Kali's kali-linux-headless
 # control stanza.  Keeping the boundary explicit prevents ubiquitous shell,
@@ -136,6 +145,24 @@ def parse_status(document: str) -> dict[str, str]:
     return packages
 
 
+def package_versions(document: str) -> dict[str, str]:
+    """Return installed package versions from the dpkg status document."""
+
+    versions: dict[str, str] = {}
+    for paragraph in re.split(r"\n\s*\n", document):
+        name = re.search(r"^Package:\s*(\S+)\s*$", paragraph, re.MULTILINE)
+        version = re.search(r"^Version:\s*(\S+)\s*$", paragraph, re.MULTILINE)
+        status = re.search(r"^Status:\s*(.+)\s*$", paragraph, re.MULTILINE)
+        if (
+            name is not None
+            and version is not None
+            and status is not None
+            and status.group(1) == "install ok installed"
+        ):
+            versions[name.group(1)] = version.group(1)
+    return versions
+
+
 def dependency_candidates(value: str) -> tuple[tuple[str, ...], ...]:
     """Parse the package-name portion of a Debian Depends field."""
 
@@ -206,9 +233,9 @@ def executable_tools(
                 executable = path.is_file() and os.access(path, os.X_OK)
             except OSError as caught_error:
                 record_caught_exception(
-                    "toolbox",
-                    "toolbox.kali_tool_inventory.caught_failure_001",
-                    "A handled toolbox operation raised an exception.",
+                    "runtime",
+                    "runtime.kali_tool_inventory.caught_failure_001",
+                    "A handled runtime operation raised an exception.",
                     caught_error,
                     stage="kali_tool_inventory",
                 )
@@ -232,6 +259,63 @@ def build_manifest(
     )
     if not tools:
         raise ValueError("Kali security-tool inventory is empty")
+    versions = package_versions(status_document)
+    binaries: list[dict[str, object]] = []
+    for tool in tools:
+        owners = provenance[tool]
+        candidates = sorted(
+            path
+            for package in owners
+            for path in paths_for_package(package)
+            if Path(path).name == tool and str(Path(path).parent) in PATH_DIRECTORIES
+        )
+        if not candidates:
+            raise ValueError(f"Kali security-tool path is missing for {tool}")
+        binaries.append(
+            {
+                "name": tool,
+                "path": candidates[0],
+                "packages": list(owners),
+                "versions": {
+                    package: versions[package]
+                    for package in owners
+                    if package in versions
+                },
+            }
+        )
+    runtime_binaries: dict[str, dict[str, str]] = {}
+    for item in binaries:
+        name = str(item["name"])
+        version_map = item["versions"]
+        owner_packages = item["packages"]
+        if not isinstance(version_map, dict) or not isinstance(owner_packages, list):
+            raise ValueError(f"Kali security-tool provenance is invalid for {name}")
+        version = ", ".join(
+            f"{package}={package_version}"
+            for package, package_version in sorted(version_map.items())
+        ) or ",".join(str(package) for package in owner_packages)
+        runtime_binaries[name] = {
+            "name": name,
+            "path": str(item["path"]),
+            "version": version,
+        }
+    for name in REQUIRED_AUTOMATION_BINARIES:
+        path = shutil.which(name)
+        if path is None or not Path(path).is_absolute():
+            raise ValueError(f"required automation binary is missing: {name}")
+        result = subprocess.run(
+            [path, *_VERSION_ARGUMENTS[name]],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        version = (
+            result.stdout.splitlines()[0].strip() if result.stdout else "installed"
+        )
+        runtime_binaries[name] = {"name": name, "path": path, "version": version}
     return {
         "schema": MANIFEST_SCHEMA,
         "packages": list(packages),
@@ -239,6 +323,10 @@ def build_manifest(
         "provenance": {
             name: list(package_names) for name, package_names in provenance.items()
         },
+        "binaries": binaries,
+        "runtime_binaries": [
+            runtime_binaries[name] for name in sorted(runtime_binaries)
+        ],
     }
 
 

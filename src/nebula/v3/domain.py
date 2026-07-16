@@ -241,22 +241,6 @@ class ProviderVerificationStatus(StringEnum):
     FAILED = "failed"
 
 
-class ToolPackInstallationStatus(StringEnum):
-    PENDING = "pending"
-    PULLING = "pulling"
-    VERIFYING = "verifying"
-    READY = "ready"
-    FAILED = "failed"
-    DISABLED = "disabled"
-
-
-class ToolPackTrust(StringEnum):
-    CURATED = "curated"
-    TRUSTED_PUBLISHER = "trusted_publisher"
-    LOCAL_TRUSTED = "local_trusted"
-    LOCAL_UNSIGNED = "local_unsigned"
-
-
 class RunnerRuntime(StringEnum):
     PODMAN = "podman"
     DOCKER = "docker"
@@ -289,6 +273,40 @@ class OperatorExecutionStatus(StringEnum):
 class ExecutionNetworkMode(StringEnum):
     NONE = "none"
     SCOPED = "scoped"
+
+
+class AutomationApprovalPolicy(StringEnum):
+    """When a project command requires an operator decision."""
+
+    ALWAYS = "always"
+    ON_BOUNDARY = "on_boundary"
+    NEVER = "never"
+
+
+class AutomationNetworkMode(StringEnum):
+    """Network boundary requested by the general command primitive."""
+
+    NONE = "none"
+    PROJECT_SCOPE = "project_scope"
+
+
+class AutomationSessionStatus(StringEnum):
+    STARTING = "starting"
+    READY = "ready"
+    CLOSING = "closing"
+    CLOSED = "closed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class CommandExecutionStatus(StringEnum):
+    WAITING_APPROVAL = "waiting_approval"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
 
 
 class ExecutionOriginKind(StringEnum):
@@ -506,35 +524,85 @@ class Engagement(Entity):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ToolPackInstallation(Entity):
-    """One immutable pack version installed for the current OS user."""
+class AutomationProjectPolicy(Entity):
+    """Project-wide policy for the fixed automation command runtime."""
 
-    entity_kind: ClassVar[str] = "tool_pack_installations"
-    publisher: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
-    name: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$")
-    version: str = Field(min_length=1, max_length=100)
-    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    source: str = Field(min_length=1, max_length=2048)
-    trust: ToolPackTrust
-    publisher_key_id: str | None = Field(default=None, max_length=200)
-    runtime_profile_id: str
-    image_locks: dict[str, str] = Field(default_factory=dict)
-    interface_catalog_digest: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
+    entity_kind: ClassVar[str] = "automation_policies"
+    engagement_id: str
+    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
+    network_enabled: bool = True
+    runner_profile_id: str | None = Field(default=None, max_length=200)
+    max_timeout_ms: int = Field(default=300_000, ge=1_000, le=86_400_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutomationSession(Entity):
+    """One isolated OCI environment owned by an agent session."""
+
+    entity_kind: ClassVar[str] = "automation_sessions"
+    engagement_id: str
+    owner_kind: str = Field(pattern=r"^(chat|mission|harness|api)$")
+    owner_id: str = Field(min_length=1, max_length=200)
+    runtime_image: str = Field(min_length=1, max_length=1_000)
+    runtime_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    runner_profile_id: str = Field(min_length=1, max_length=200)
+    runner_profile_revision: int = Field(ge=1)
+    policy_id: str = Field(min_length=1, max_length=200)
+    policy_revision: int = Field(ge=1)
+    scope_policy_id: str | None = Field(default=None, max_length=200)
+    scope_policy_revision: int | None = Field(default=None, ge=1)
+    status: AutomationSessionStatus = AutomationSessionStatus.STARTING
+    network_granted: bool = False
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    failure_detail: str | None = Field(default=None, max_length=4_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def scope_snapshot_is_complete(self) -> "AutomationSession":
+        if (self.scope_policy_id is None) != (self.scope_policy_revision is None):
+            raise ValueError("automation scope id and revision must be stored together")
+        return self
+
+
+class WorkspaceChange(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    change: str = Field(pattern=r"^(added|modified|deleted)$")
+    size: int | None = Field(default=None, ge=0)
+
+
+class CommandExecution(Entity):
+    """Durable receipt for one Bash process in an automation session."""
+
+    entity_kind: ClassVar[str] = "command_executions"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    process_id: str = Field(min_length=1, max_length=200)
+    command: str = Field(min_length=1, max_length=200_000)
+    command_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cwd: str = Field(default=".", min_length=1, max_length=4_096)
+    network: AutomationNetworkMode = AutomationNetworkMode.NONE
+    background: bool = False
+    status: CommandExecutionStatus = CommandExecutionStatus.RUNNING
+    runtime_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    policy_revision: int = Field(ge=1)
+    scope_policy_revision: int | None = Field(default=None, ge=1)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    exit_code: int | None = None
+    stdout_artifact_id: str | None = Field(default=None, max_length=200)
+    stderr_artifact_id: str | None = Field(default=None, max_length=200)
+    redacted_stdout_artifact_id: str | None = Field(default=None, max_length=200)
+    redacted_stderr_artifact_id: str | None = Field(default=None, max_length=200)
+    observed_stdout_bytes: int = Field(default=0, ge=0)
+    observed_stderr_bytes: int = Field(default=0, ge=0)
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    workspace_changes: list[WorkspaceChange] = Field(
+        default_factory=list, max_length=1_000
     )
-    interface_catalog_path: str | None = None
-    status: ToolPackInstallationStatus = ToolPackInstallationStatus.PENDING
-    manifest_path: str
-    installed_at: datetime | None = None
-    verified_at: datetime | None = None
-    failure_detail: str | None = Field(default=None, max_length=4000)
-
-    @field_validator("installed_at", "verified_at")
-    @classmethod
-    def pack_times_must_be_aware(cls, value: datetime | None) -> datetime | None:
-        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
-            raise ValueError("tool-pack timestamps must include a timezone")
-        return value.astimezone(timezone.utc) if value is not None else None
+    error: str | None = Field(default=None, max_length=4_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunnerProfile(Entity):
@@ -548,7 +616,6 @@ class RunnerProfile(Entity):
     socket: str | None = Field(default=None, max_length=2048)
     platform: str = Field(pattern=r"^linux/(amd64|arm64)$")
     isolation: RunnerIsolation
-    egress_helper_image: str | None = None
     seccomp_profile: str | None = None
     enabled: bool = True
     healthy: bool = False
@@ -560,23 +627,6 @@ class RunnerProfile(Entity):
     def runner_executable_is_absolute(cls, value: str) -> str:
         if not value.startswith("/") or "\x00" in value:
             raise ValueError("runner executable must be an absolute path")
-        return value
-
-    @field_validator("egress_helper_image")
-    @classmethod
-    def helper_image_is_digest_pinned(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        pattern = (
-            r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?"
-            r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+"
-            r"@sha256:[0-9a-f]{64}"
-        )
-        if not re.fullmatch(pattern, value):
-            raise ValueError("egress helper image must be digest-pinned")
-        repository = value.rsplit("@", 1)[0].rsplit("/", 1)[-1]
-        if ":" in repository:
-            raise ValueError("egress helper image cannot include a mutable tag")
         return value
 
     @field_validator("seccomp_profile")
@@ -612,25 +662,6 @@ class RunnerProfile(Entity):
         if executable_name != self.runtime.value:
             raise ValueError("runner runtime must match its executable")
         return self
-
-
-class EngagementToolAssignment(Entity):
-    """Exact installed pack and tool allowlist granted to one engagement."""
-
-    entity_kind: ClassVar[str] = "engagement_tool_assignments"
-    engagement_id: str
-    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    allowed_tool_names: list[str] = Field(default_factory=list)
-    enabled: bool = True
-    assigned_by: str = Field(min_length=1, max_length=200)
-
-    @field_validator("allowed_tool_names")
-    @classmethod
-    def normalize_assigned_tools(cls, values: list[str]) -> list[str]:
-        pattern = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
-        if any(not pattern.fullmatch(value) for value in values):
-            raise ValueError("assigned tool names must be canonical tool identifiers")
-        return sorted(set(values))
 
 
 class Asset(Entity):
@@ -863,16 +894,7 @@ class AgentRun(Entity):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     last_event_sequence: int = Field(default=0, ge=0)
-    tool_pack_digests: list[str] = Field(default_factory=list)
-    tool_interface_catalog_digests: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("tool_pack_digests", "tool_interface_catalog_digests")
-    @classmethod
-    def valid_pack_digests(cls, values: list[str]) -> list[str]:
-        if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in values):
-            raise ValueError("tool-pack digests must be lowercase SHA-256 values")
-        return list(dict.fromkeys(values))
 
     @model_validator(mode="after")
     def runtime_binding_is_coherent(self) -> "AgentRun":
@@ -1806,8 +1828,6 @@ class ChatTurn(Entity):
     approval_id: str | None = None
     scope_policy_id: str | None = None
     scope_revision: int | None = Field(default=None, ge=1)
-    tool_pack_digests: list[str] = Field(default_factory=list)
-    tool_interface_catalog_digests: list[str] = Field(default_factory=list)
     request_snapshot: dict[str, Any] = Field(default_factory=dict)
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
     final_message_id: str | None = None
@@ -1937,8 +1957,7 @@ class ExecutionRuntimeSnapshot(NebulaModel):
     language: str = Field(pattern=r"^(bash|sh|python)$")
     interpreter: str = Field(min_length=1, max_length=500)
     arguments: list[str] = Field(default_factory=list, max_length=32)
-    tool_pack_installation_id: str = Field(min_length=1, max_length=200)
-    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     image: str = Field(min_length=1, max_length=1000)
     runner_profile_id: str = Field(min_length=1, max_length=200)
     runner_profile_revision: int = Field(ge=1)
@@ -1948,7 +1967,6 @@ class ExecutionRuntimeSnapshot(NebulaModel):
     runner_platform: str = Field(pattern=r"^linux/(amd64|arm64)$")
     runner_context: str | None = Field(default=None, max_length=500)
     runner_socket: str | None = Field(default=None, max_length=2048)
-    trusted: bool
 
 
 class ExecutionNetworkSnapshot(NebulaModel):
@@ -1984,12 +2002,6 @@ class ExecutionNetworkSnapshot(NebulaModel):
         ):
             raise ValueError("offline execution cannot contain network scope")
         return self
-
-
-class WorkspaceChange(NebulaModel):
-    path: str = Field(min_length=1, max_length=4096)
-    change: str = Field(pattern=r"^(added|modified|deleted)$")
-    size: int | None = Field(default=None, ge=0)
 
 
 class OperatorExecution(Entity):
@@ -2197,9 +2209,10 @@ class OperationEvent(NebulaModel):
 ENTITY_MODELS: tuple[type[Entity], ...] = (
     Engagement,
     ScopePolicy,
-    ToolPackInstallation,
+    AutomationProjectPolicy,
+    AutomationSession,
+    CommandExecution,
     RunnerProfile,
-    EngagementToolAssignment,
     Asset,
     Service,
     Identity,

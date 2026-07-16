@@ -9,7 +9,7 @@ capabilities already have implementation and tests and must not be rebuilt.
 
 A user with a supported Docker or Podman installation can open the native
 Nebula application and receive a focused terminal without configuring a model,
-runner profile, Project, or Toolbox. Safety, evidence, policy, approval, and
+runner profile, Project, or command catalog. Safety, evidence, policy, approval, and
 provenance internals remain enforced and are progressively disclosed.
 
 The release is blocked until all of these gates pass:
@@ -93,8 +93,8 @@ and deliver each as a separate, tested project:
 - Never search ambient `PATH`, accept a remote runtime for the human terminal,
   install privileged software, expose a runtime socket, or fall back to a host
   shell.
-- Terminal remains usable without a provider or Toolbox. Automation prepares
-  only official signed tool images and remains policy/approval controlled.
+- Terminal remains usable without a provider or agent session. Automation prepares
+  only the existing prepared Kali image and remains policy/approval controlled.
 - Original evidence is immutable. Screenshots and image edits retain parent
   lineage, source context, verified hashes, and a bounded versioned recipe.
 - Secrets are write-only and referenced as `vault:`, `env:`, or `session:`;

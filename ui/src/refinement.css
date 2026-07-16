@@ -902,7 +902,7 @@ kbd { font-size: 11px; }
 .note-editor-body { display: grid; }.note-editor-body > label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }.note-editor-body textarea { width: 100%; min-height: 510px; resize: vertical; padding: 12px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--text); background: var(--canvas); font: 12px/1.55 var(--mono); }
 .note-editor > details { margin-top: 10px; padding: 9px 11px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--muted); font-size: 11px; }.note-editor > details summary { cursor: pointer; }.note-editor > details label { display: inline-flex; align-items: center; gap: 5px; margin: 9px 12px 0 0; }
 
-.data-panel, .tool-progress, .provider-card, .artifact-card, .tool-pack-card {
+.data-panel, .tool-progress, .provider-card, .artifact-card, .runtime-resource-card {
   border-color: var(--border-soft);
   border-radius: var(--radius);
   box-shadow: none;
@@ -1159,8 +1159,8 @@ kbd { font-size: 11px; }
 .section-heading p { font-size: 12px; }
 .provider-grid { grid-template-columns: repeat(2, minmax(280px, 1fr)); gap: 14px; }
 .provider-card { padding: 16px; }
-.provider-heading h3, .tool-pack-card strong { font-size: 13px; }
-.provider-heading p, .provider-message, .provider-card footer, .pack-facts, .tool-pack-card p { font-size: 11px; }
+.provider-heading h3, .runtime-resource-card strong { font-size: 13px; }
+.provider-heading p, .provider-message, .provider-card footer, .runtime-resource-card p { font-size: 11px; }
 .health-label, .capability-chip, .pack-status, .signed-badge { font-size: 11px; }
 .theme-options strong { font-size: 12px; }
 .theme-options small,

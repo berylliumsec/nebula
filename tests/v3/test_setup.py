@@ -30,18 +30,17 @@ from nebula.v3.setup import (
     bootstrap_scratch_project,
 )
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tool_platform import ToolPlatform, ToolPlatformError
+from nebula.v3.runtime_platform import RuntimePlatform, RuntimePlatformError
 
 TOKEN = "test-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
-def _platform(tmp_path: Path, store: NebulaStore) -> ToolPlatform:
-    return ToolPlatform(
+def _platform(tmp_path: Path, store: NebulaStore) -> RuntimePlatform:
+    return RuntimePlatform(
         store=store,
         artifact_store=ArtifactStore(tmp_path / "artifacts"),
         data_root=tmp_path / "core",
-        tool_pack_root=tmp_path / "packs",
         execution_enabled=True,
     )
 
@@ -458,7 +457,7 @@ def test_image_preparation_reports_phases_can_cancel_and_retry(tmp_path, monkeyp
         assert project_id == project.id
         calls += 1
         if calls == 1:
-            raise ToolPlatformError("image registry is unavailable")
+            raise RuntimePlatformError("image registry is unavailable")
         if calls == 2:
             second_started.set()
             await second_release.wait()

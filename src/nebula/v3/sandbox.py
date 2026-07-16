@@ -76,18 +76,20 @@ class EgressProtocol(str, Enum):
 
 
 class EgressRule(BaseModel):
-    """One broker-approved destination; hostnames are deliberately excluded."""
+    """One broker-approved IP network; hostnames are deliberately excluded."""
 
     model_config = ConfigDict(extra="forbid")
 
     address: str
-    ports: list[int] = Field(min_length=1)
+    ports: list[int] = Field(default_factory=list)
+    all_ports: bool = False
     protocol: EgressProtocol = EgressProtocol.TCP
 
     @field_validator("address")
     @classmethod
     def valid_address(cls, value: str) -> str:
-        return str(ipaddress.ip_address(value))
+        network = ipaddress.ip_network(value, strict=False)
+        return str(network.network_address) if network.prefixlen == network.max_prefixlen else str(network)
 
     @field_validator("ports")
     @classmethod
@@ -95,6 +97,12 @@ class EgressRule(BaseModel):
         if any(isinstance(port, bool) or port < 1 or port > 65_535 for port in value):
             raise ValueError("egress ports must be integers between 1 and 65535")
         return sorted(set(value))
+
+    @model_validator(mode="after")
+    def has_port_boundary(self) -> "EgressRule":
+        if self.all_ports == bool(self.ports):
+            raise ValueError("egress rules require explicit ports or all_ports=true")
+        return self
 
 
 class ContainerRuntimeType(str, Enum):
@@ -242,6 +250,10 @@ class SandboxRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     image: str
+    # Set only by the harness after the existing Kali preparation flow has
+    # verified and frozen a local image ID. It is excluded from serialization
+    # so external request bodies cannot opt themselves into this trust path.
+    trusted_local_image: bool = Field(default=False, exclude=True)
     command: list[str] = Field(min_length=1)
     workspace: Path
     workspace_access: SandboxWorkspaceAccess = SandboxWorkspaceAccess.NONE
@@ -256,6 +268,13 @@ class SandboxRequest(BaseModel):
     container_user: SandboxContainerUser = SandboxContainerUser.NON_ROOT
     root_filesystem: SandboxRootFilesystem = SandboxRootFilesystem.READ_ONLY
     egress_rules: list[EgressRule] = Field(default_factory=list)
+    egress_domains: list[str] = Field(default_factory=list, max_length=2_000)
+    egress_ports: list[int] = Field(default_factory=list, max_length=1_000)
+    resolv_conf: Path | None = Field(default=None, exclude=True)
+    # Session runtimes can install their complete project policy before an
+    # operator grants networking. The helper owns the physical kill switch;
+    # the worker cannot enable it itself.
+    start_egress_disabled: bool = False
     # Kept for wire compatibility with the earlier prototype. A named bridge
     # is never sufficient authorization for run(); certified egress uses a
     # fresh helper namespace and egress_rules instead.
@@ -278,6 +297,25 @@ class SandboxRequest(BaseModel):
             for host, address in values.items()
         }
 
+    @field_validator("egress_domains")
+    @classmethod
+    def valid_egress_domains(cls, values: list[str]) -> list[str]:
+        pattern = re.compile(
+            r"^(?:\*\.)?(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        )
+        normalized = [value.rstrip(".").lower() for value in values]
+        if any(pattern.fullmatch(value) is None for value in normalized):
+            raise ValueError("egress domains must be normalized DNS names")
+        return sorted(set(normalized))
+
+    @field_validator("egress_ports")
+    @classmethod
+    def valid_egress_ports(cls, values: list[int]) -> list[int]:
+        if any(isinstance(value, bool) or not 1 <= value <= 65_535 for value in values):
+            raise ValueError("egress ports must be integers between 1 and 65535")
+        return sorted(set(values))
+
     @model_validator(mode="after")
     def scoped_network_has_boundary(self) -> "SandboxRequest":
         if self.execution_kind is None:
@@ -289,7 +327,7 @@ class SandboxRequest(BaseModel):
         if self.execution_kind == SandboxExecutionKind.NETWORK_TOOL:
             if self.network != SandboxNetwork.SCOPED:
                 raise ValueError("network tools require scoped network execution")
-            if not self.network_name and not self.egress_rules:
+            if not self.network_name and not self.egress_rules and not self.egress_domains:
                 raise ValueError(
                     "scoped network execution requires a legacy network_name "
                     "or certified egress rules"
@@ -324,23 +362,42 @@ class SandboxRequest(BaseModel):
         if self.network == SandboxNetwork.NONE:
             if self.egress_rules:
                 raise ValueError("offline execution cannot declare egress rules")
+            if self.egress_domains:
+                raise ValueError("offline execution cannot declare egress domains")
+            if self.egress_ports:
+                raise ValueError("offline execution cannot declare egress ports")
             if self.pinned_hosts:
                 raise ValueError("offline execution cannot declare pinned hosts")
+            if self.start_egress_disabled:
+                raise ValueError("offline execution cannot configure an egress switch")
         if self.network == SandboxNetwork.UNRESTRICTED and any(
-            (self.network_name, self.egress_rules, self.pinned_hosts)
+            (
+                self.network_name,
+                self.egress_rules,
+                self.egress_domains,
+                self.egress_ports,
+                self.pinned_hosts,
+            )
         ):
             raise ValueError(
                 "unrestricted human-terminal networking cannot declare scoped egress"
             )
         if self.egress_rules:
-            allowed_addresses = {rule.address for rule in self.egress_rules}
             if any(
-                address not in allowed_addresses
+                not any(
+                    ipaddress.ip_address(address)
+                    in ipaddress.ip_network(rule.address, strict=False)
+                    for rule in self.egress_rules
+                )
                 for address in self.pinned_hosts.values()
             ):
                 raise ValueError(
                     "pinned host addresses must be present in egress rules"
                 )
+        if self.egress_domains and self.resolv_conf is None:
+            raise ValueError("domain-scoped egress requires a policy resolver")
+        if self.egress_ports and not self.egress_domains:
+            raise ValueError("domain egress ports require at least one egress domain")
         return self
 
 
@@ -366,6 +423,15 @@ class EgressLease(ABC):
     """A short-lived, policy-configured network namespace."""
 
     network_mode: str
+
+    @property
+    @abstractmethod
+    def enabled(self) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def enable(self) -> None:
+        raise NotImplementedError
 
     @abstractmethod
     async def close(self) -> None:
@@ -414,6 +480,36 @@ class _ContainerEgressLease(EgressLease):
     runtime_environment: dict[str, str]
     process: asyncio.subprocess.Process
     drain_task: asyncio.Task[None]
+    _enabled: bool = True
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    async def enable(self) -> None:
+        if self._enabled:
+            return
+        process = await asyncio.create_subprocess_exec(
+            *self.runtime_argv,
+            "exec",
+            self.helper_name,
+            "/usr/local/bin/nebula-egress",
+            "enable",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self.runtime_environment,
+        )
+        stdout, stderr = await _communicate_limited(
+            process, timeout_seconds=10, output_bytes=16_384
+        )
+        if process.returncode != 0 or stdout.rstrip(b"\r\n") != b"ENABLED":
+            detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
+            raise SandboxUnavailable(
+                "egress helper did not enable the session boundary: "
+                + (detail or str(process.returncode))[:1_000]
+            )
+        self._enabled = True
 
     async def close(self) -> None:
         try:
@@ -475,7 +571,9 @@ class ContainerEgressController(EgressController):
     """
 
     certified = True
-    _digest_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+    _digest_pattern = re.compile(
+        r"(?:^[^\s@]+@sha256:[0-9a-f]{64}$|^sha256:[0-9a-f]{64}$)"
+    )
 
     def __init__(
         self,
@@ -505,9 +603,9 @@ class ContainerEgressController(EgressController):
     ) -> EgressLease:
         if request.execution_kind != SandboxExecutionKind.NETWORK_TOOL:
             raise SandboxError("egress leases are only valid for network tools")
-        if not request.egress_rules:
+        if not request.egress_rules and not request.egress_domains:
             raise SandboxUnavailable(
-                "network execution requires at least one broker-approved egress rule"
+                "network execution requires broker-approved egress rules or domains"
             )
         helper_name = f"{container_name}-egress"
         argv = [
@@ -537,14 +635,33 @@ class ContainerEgressController(EgressController):
         for host, address in sorted(request.pinned_hosts.items()):
             argv.append(f"--add-host={host}:{_bracket_ip(address)}")
         argv.extend([self.helper_image, "serve"])
+        if request.start_egress_disabled:
+            argv.append("--disabled")
         for rule in request.egress_rules:
-            for port in rule.ports:
-                argv.extend(
-                    [
-                        "--allow",
-                        f"{rule.protocol.value}://{_bracket_ip(rule.address)}:{port}",
-                    ]
-                )
+            ports: list[int | str] = [*rule.ports] if rule.ports else ["1:65535"]
+            for port in ports:
+                network = ipaddress.ip_network(rule.address, strict=False)
+                if (
+                    network.prefixlen == network.max_prefixlen
+                    and isinstance(port, int)
+                ):
+                    argv.extend(
+                        [
+                            "--allow",
+                            f"{rule.protocol.value}://{_bracket_ip(rule.address)}:{port}",
+                        ]
+                    )
+                else:
+                    argv.extend(
+                        [
+                            "--allow-cidr",
+                            f"{rule.address},{port}",
+                        ]
+                    )
+        for domain in request.egress_domains:
+            argv.extend(["--domain", domain])
+        for port in request.egress_ports:
+            argv.extend(["--domain-port", str(port)])
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
@@ -599,6 +716,7 @@ class ContainerEgressController(EgressController):
             runtime_environment=runtime_environment,
             process=process,
             drain_task=drain_task,
+            _enabled=not request.start_egress_disabled,
         )
 
 
@@ -1209,14 +1327,23 @@ class ContainerSandboxRunner(SandboxRunner):
                 for root in self.workspace_roots
             ):
                 raise SandboxError("tool output directory is outside workspace roots")
+        if request.resolv_conf is not None:
+            resolver = request.resolv_conf.expanduser().resolve(strict=True)
+            if not resolver.is_file() or request.resolv_conf.is_symlink():
+                raise SandboxError("policy resolver configuration must be a regular file")
+            if any(character in str(resolver) for character in {",", "\n", "\r"}):
+                raise SandboxError("policy resolver path cannot be encoded safely")
         repository_digest = re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", request.image)
         local_image_id = re.fullmatch(r"sha256:[0-9a-f]{64}", request.image)
         if (
             not self.allow_unpinned_images
             and repository_digest is None
             and not (
-                request.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL
-                and local_image_id is not None
+                local_image_id is not None
+                and (
+                    request.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL
+                    or request.trusted_local_image
+                )
             )
         ):
             raise SandboxError("sandbox images must be pinned by sha256 digest")
@@ -1298,6 +1425,11 @@ class ContainerSandboxRunner(SandboxRunner):
                 strict=True
             )
             argv.append(f"--mount=type=bind,src={output_directory},dst=/nebula-output")
+        if request.resolv_conf is not None:
+            resolver = request.resolv_conf.expanduser().resolve(strict=True)
+            argv.append(
+                f"--mount=type=bind,src={resolver},dst=/etc/resolv.conf,readonly=true"
+            )
         if request.network == SandboxNetwork.NONE:
             argv.append("--network=none")
         elif request.network == SandboxNetwork.UNRESTRICTED:
@@ -1355,9 +1487,9 @@ class ContainerSandboxRunner(SandboxRunner):
 
         lease: EgressLease | None = None
         if request.network == SandboxNetwork.SCOPED:
-            if not request.egress_rules:
+            if not request.egress_rules and not request.egress_domains:
                 raise SandboxUnavailable(
-                    "network terminal execution requires explicit broker-approved egress rules"
+                    "network terminal execution requires an explicit broker-approved boundary"
                 )
             if not self.egress_controller.certified:
                 raise SandboxUnavailable(
@@ -1496,9 +1628,9 @@ class ContainerSandboxRunner(SandboxRunner):
             raise SandboxError("container name is outside the Nebula namespace")
         lease: EgressLease | None = None
         if request.network == SandboxNetwork.SCOPED:
-            if not request.egress_rules:
+            if not request.egress_rules and not request.egress_domains:
                 raise SandboxUnavailable(
-                    "network tool execution requires explicit broker-approved egress rules"
+                    "network tool execution requires an explicit broker-approved boundary"
                 )
             if not self.egress_controller.certified:
                 raise SandboxUnavailable(
@@ -1702,6 +1834,7 @@ class PreparedContainerImage:
     security_tool_packages: tuple[str, ...] = ()
     security_tool_provenance: tuple[tuple[str, tuple[str, ...]], ...] = ()
     security_tool_manifest_sha256: str | None = None
+    binary_inventory: tuple[tuple[str, str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1718,14 +1851,22 @@ class _VerifiedDerivedImage:
     security_tool_packages: tuple[str, ...]
     security_tool_provenance: tuple[tuple[str, tuple[str, ...]], ...]
     security_tool_manifest_sha256: str
+    binary_inventory: tuple[tuple[str, str, str], ...]
 
 
 class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
     _derived_repository = "localhost/nebula-kali-headless"
-    _recipe_version = "v3"
-    _installed_packages = ("kali-linux-headless", "iputils-ping")
+    _recipe_version = "v4"
+    _installed_packages = (
+        "kali-linux-headless",
+        "iputils-ping",
+        "python3",
+        "ripgrep",
+        "git",
+        "curl",
+    )
     _security_tool_manifest_path = "/usr/local/share/nebula/security-tools.json"
     _base_label = "org.nebula.human-terminal.base"
     _profile_label = "org.nebula.human-terminal.profile"
@@ -1978,10 +2119,26 @@ class ContainerImagePreparer:
                 "runtime did not prove the human-workstation image build recipe"
             )
         user = _mapping_get(config, "User", "user")
+        _, helper_stderr, helper_return_code = await self._runtime_command(
+            "run",
+            "--rm",
+            "--network=none",
+            "--entrypoint=/bin/test",
+            image_id,
+            "-x",
+            "/usr/local/bin/nebula-egress",
+            timeout_seconds=30,
+        )
+        if helper_return_code != 0:
+            raise SandboxUnavailable(
+                "prepared Kali image is missing the verified egress helper: "
+                + (helper_stderr.strip() or str(helper_return_code))[:1_000]
+            )
         (
             tools,
             packages,
             provenance,
+            binary_inventory,
             manifest_sha256,
         ) = await self._security_tool_manifest(image_id)
         return _VerifiedDerivedImage(
@@ -1991,6 +2148,7 @@ class ContainerImagePreparer:
             security_tool_packages=packages,
             security_tool_provenance=provenance,
             security_tool_manifest_sha256=manifest_sha256,
+            binary_inventory=binary_inventory,
         )
 
     async def _security_tool_manifest(
@@ -1999,6 +2157,7 @@ class ContainerImagePreparer:
         tuple[str, ...],
         tuple[str, ...],
         tuple[tuple[str, tuple[str, ...]], ...],
+        tuple[tuple[str, str, str], ...],
         str,
     ]:
         stdout, stderr, return_code = await self._runtime_command(
@@ -2085,10 +2244,88 @@ class ContainerImagePreparer:
                 "prepared human-workstation security-tool provenance is incomplete"
             )
         normalized_provenance = tuple((tool, tuple(provenance[tool])) for tool in tools)
+        binaries = payload.get("binaries")
+        security_inventory: list[tuple[str, str, str]] = []
+        if binaries is None:
+            security_inventory = [
+                (tool, tool, ",".join(provenance[tool])) for tool in tools
+            ]
+        elif not isinstance(binaries, list) or len(binaries) != len(tools):
+            raise SandboxUnavailable(
+                "prepared human-workstation binary inventory is malformed"
+            )
+        else:
+            for index, item in enumerate(binaries):
+                if not isinstance(item, dict):
+                    raise SandboxUnavailable(
+                        "prepared human-workstation binary inventory is malformed"
+                    )
+                name = item.get("name")
+                path = item.get("path")
+                versions = item.get("versions")
+                if (
+                    name != tools[index]
+                    or not isinstance(path, str)
+                    or not Path(path).is_absolute()
+                    or ".." in Path(path).parts
+                    or not isinstance(versions, dict)
+                    or any(
+                        not isinstance(package, str) or not isinstance(version, str)
+                        for package, version in versions.items()
+                    )
+                ):
+                    raise SandboxUnavailable(
+                        "prepared human-workstation binary inventory is invalid"
+                    )
+                version = ", ".join(
+                    f"{package}={versions[package]}" for package in sorted(versions)
+                ) or ",".join(provenance[name])
+                security_inventory.append((name, path, version))
+        runtime_binaries = payload.get("runtime_binaries")
+        if (
+            not isinstance(runtime_binaries, list)
+            or not runtime_binaries
+            or len(runtime_binaries) > 10_000
+        ):
+            raise SandboxUnavailable(
+                "prepared Kali runtime binary inventory is malformed"
+            )
+        normalized_inventory: list[tuple[str, str, str]] = []
+        for item in runtime_binaries:
+            if not isinstance(item, dict):
+                raise SandboxUnavailable(
+                    "prepared Kali runtime binary inventory is malformed"
+                )
+            name = item.get("name")
+            path = item.get("path")
+            runtime_version = item.get("version")
+            if (
+                not isinstance(name, str)
+                or TOOL_NAME_PATTERN.fullmatch(name) is None
+                or not isinstance(path, str)
+                or not Path(path).is_absolute()
+                or ".." in Path(path).parts
+                or not isinstance(runtime_version, str)
+                or not runtime_version
+                or len(runtime_version) > 1_000
+            ):
+                raise SandboxUnavailable(
+                    "prepared Kali runtime binary inventory is invalid"
+                )
+            normalized_inventory.append((name, path, runtime_version))
+        if [item[0] for item in normalized_inventory] != sorted(
+            {item[0] for item in normalized_inventory}
+        ) or not {"bash", "curl", "git", "python3", "rg"}.issubset(
+            {item[0] for item in normalized_inventory}
+        ):
+            raise SandboxUnavailable(
+                "prepared Kali runtime binary inventory is incomplete"
+            )
         return (
             tuple(tools),
             tuple(packages),
             normalized_provenance,
+            tuple(normalized_inventory),
             hashlib.sha256(raw).hexdigest(),
         )
 
@@ -2206,6 +2443,7 @@ class ContainerImagePreparer:
             security_tool_packages=derived.security_tool_packages,
             security_tool_provenance=derived.security_tool_provenance,
             security_tool_manifest_sha256=derived.security_tool_manifest_sha256,
+            binary_inventory=derived.binary_inventory,
         )
 
     def _derived_tag(self, digest: str) -> str:
@@ -2222,11 +2460,13 @@ class ContainerImagePreparer:
         dockerfile = f"""FROM {base_resolved_reference}
 ARG DEBIAN_FRONTEND=noninteractive
 COPY kali_tool_inventory.py /usr/local/lib/nebula-kali-tool-inventory.py
+COPY egress_helper.py /usr/local/bin/nebula-egress
 RUN apt-get update \\
  && apt-get install -y {" ".join(self._installed_packages)} \\
  && if getcap /usr/lib/nmap/nmap | grep -q .; then setcap -r /usr/lib/nmap/nmap; fi \\
  && test -z "$(getcap /usr/lib/nmap/nmap)" \\
  && python3 /usr/local/lib/nebula-kali-tool-inventory.py --output {self._security_tool_manifest_path} \\
+ && chmod 0500 /usr/local/bin/nebula-egress \\
  && rm -f /usr/local/lib/nebula-kali-tool-inventory.py \\
  && printf '%s\\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-nebula-terminal \\
  && apt-get clean \\
@@ -2242,6 +2482,9 @@ CMD ["/bin/bash"]
             (context / "Dockerfile").write_text(dockerfile, encoding="utf-8")
             (context / "kali_tool_inventory.py").write_bytes(
                 Path(__file__).with_name("kali_tool_inventory.py").read_bytes()
+            )
+            (context / "egress_helper.py").write_bytes(
+                Path(__file__).with_name("egress_helper.py").read_bytes()
             )
             return await self._runtime_command(
                 "build",
@@ -2294,189 +2537,6 @@ def _normalized_repository(value: str) -> str:
     if repository.startswith("docker.io/library/") and value.startswith("library/"):
         return repository
     return repository
-
-
-class ContainerToolPackRuntimeAdapter:
-    """Installation-only OCI operations backed by a validated runner profile.
-
-    Mission execution still uses ``--pull=never``. This adapter is handed only
-    to the explicit tool-pack installer, which is the sole component allowed to
-    pull images. Smoke tests consume a command already rendered from the signed
-    manifest's typed bindings; the adapter never guesses how inputs map to argv.
-    """
-
-    def __init__(
-        self,
-        *,
-        runner: ContainerSandboxRunner,
-        platform: Literal["linux/amd64", "linux/arm64"],
-        pull_timeout_seconds: int = 900,
-    ) -> None:
-        if platform not in {"linux/amd64", "linux/arm64"}:
-            raise ValueError(
-                "tool-pack runtime platform must be linux/amd64 or linux/arm64"
-            )
-        if pull_timeout_seconds < 1 or pull_timeout_seconds > 3600:
-            raise ValueError("pull timeout must be between 1 and 3600 seconds")
-        if runner.profile is None:
-            raise ValueError(
-                "tool-pack runtime adapter requires an explicit runner profile"
-            )
-        self.runner = runner
-        self.platform = platform
-        self.pull_timeout_seconds = pull_timeout_seconds
-
-    async def pull(self, image: str) -> None:
-        self._validate_image(image)
-        await self._require_runner()
-        stdout, stderr, return_code = await self._runtime_command(
-            "pull",
-            f"--platform={self.platform}",
-            image,
-            timeout_seconds=self.pull_timeout_seconds,
-        )
-        if return_code != 0:
-            detail = stderr.strip() or stdout.strip()
-            raise SandboxError(f"tool image pull failed: {detail or return_code}")
-
-    async def inspect(self, image: str) -> Any:
-        # Imported lazily to avoid sandbox -> toolpacks -> tools -> sandbox.
-        from .toolpacks import RuntimeImageInfo
-
-        expected_digest = self._validate_image(image)
-        await self._require_runner()
-        stdout, stderr, return_code = await self._runtime_command(
-            "image",
-            "inspect",
-            image,
-            "--format",
-            "{{json .}}",
-            timeout_seconds=30,
-        )
-        if return_code != 0:
-            raise SandboxError(
-                f"tool image inspection failed: {stderr.strip() or return_code}"
-            )
-        try:
-            document = _first_document(json.loads(stdout))
-        except json.JSONDecodeError as exc:
-            record_caught_exception(
-                "sandbox",
-                "sandbox.sandbox.caught_failure_034",
-                "A handled sandbox operation raised an exception.",
-                exc,
-                stage="sandbox",
-            )
-            raise SandboxError("tool image inspection returned invalid JSON") from exc
-        observed_digests: set[str] = set()
-        digest = _mapping_get(document, "Digest", "digest")
-        if isinstance(digest, str):
-            observed_digests.add(digest)
-        repo_digests = _mapping_get(document, "RepoDigests", "repoDigests")
-        if isinstance(repo_digests, list):
-            observed_digests.update(
-                value.rsplit("@", 1)[1]
-                for value in repo_digests
-                if isinstance(value, str) and "@sha256:" in value
-            )
-        if expected_digest not in observed_digests:
-            raise SandboxError("runtime did not prove the requested image digest")
-        os_name = str(_mapping_get(document, "Os", "OS", "os")).lower()
-        architecture = str(
-            _mapping_get(document, "Architecture", "architecture", "Arch")
-        ).lower()
-        observed_platform = f"{os_name}/{architecture}"
-        if observed_platform != self.platform:
-            raise SandboxError(
-                f"tool image platform mismatch: expected {self.platform}, "
-                f"observed {observed_platform}"
-            )
-        config = _mapping_get(document, "Config", "config")
-        user = _mapping_get(config, "User", "user")
-        if not isinstance(user, str):
-            raise SandboxError("tool image did not declare a container user")
-        return RuntimeImageInfo(
-            image=image,
-            digest=expected_digest,
-            platform=self.platform,
-            user=user,
-        )
-
-    async def smoke_test(
-        self,
-        *,
-        image: str,
-        command: list[str],
-        timeout_seconds: int,
-    ) -> Any:
-        from .toolpacks import RuntimeSmokeResult
-
-        self._validate_image(image)
-        if (
-            not command
-            or not Path(command[0]).is_absolute()
-            or any(not isinstance(value, str) or "\x00" in value for value in command)
-        ):
-            raise SandboxError("smoke-test command must be safe absolute argv")
-        result = await self.runner.run(
-            SandboxRequest(
-                image=image,
-                command=command,
-                workspace=Path("/"),
-                workspace_access=SandboxWorkspaceAccess.NONE,
-                network=SandboxNetwork.NONE,
-                execution_kind=SandboxExecutionKind.LOCAL_TOOL,
-                limits=SandboxLimits(timeout_seconds=timeout_seconds),
-            )
-        )
-        return RuntimeSmokeResult(
-            exit_code=result.exit_code if result.exit_code is not None else 124,
-            stdout=result.stdout,
-            stderr=result.stderr,
-        )
-
-    async def _require_runner(self) -> None:
-        available, detail = await self.runner.available()
-        if not available:
-            raise SandboxUnavailable(detail)
-
-    async def _runtime_command(
-        self,
-        *arguments: str,
-        timeout_seconds: int,
-    ) -> tuple[str, str, int]:
-        process = await asyncio.create_subprocess_exec(
-            *self.runner._runtime_argv(),
-            *arguments,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_runtime_environment(),
-        )
-        try:
-            stdout, stderr = await _communicate_limited(
-                process, timeout_seconds=timeout_seconds, output_bytes=5_000_000
-            )
-        except asyncio.TimeoutError as exc:
-            record_caught_exception(
-                "sandbox",
-                "sandbox.sandbox.caught_failure_035",
-                "A handled sandbox operation raised an exception.",
-                exc,
-                stage="sandbox",
-            )
-            raise SandboxUnavailable("container runtime operation timed out") from exc
-        return (
-            stdout.decode("utf-8", errors="replace"),
-            stderr.decode("utf-8", errors="replace"),
-            int(process.returncode or 0),
-        )
-
-    @staticmethod
-    def _validate_image(image: str) -> str:
-        if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image):
-            raise SandboxError("tool images must be pinned by sha256 digest")
-        return image.rsplit("@", 1)[1]
 
 
 async def _read_limited(stream: asyncio.StreamReader, limit: int) -> tuple[bytes, bool]:
@@ -2641,7 +2701,6 @@ __all__ = [
     "ContainerImagePreparer",
     "ContainerRuntimeType",
     "ContainerSandboxRunner",
-    "ContainerToolPackRuntimeAdapter",
     "EgressController",
     "EgressLease",
     "EgressProtocol",

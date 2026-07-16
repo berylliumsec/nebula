@@ -250,12 +250,14 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
             harness_profile_id=profile.id,
             model="gpt-test",
             metadata={
-                "oci_tool_snapshot": {
+                "command_runtime_snapshot": {
+                    "schema": "nebula.harness-command-runtime/v1",
+                    "runtime_digest": "sha256:" + "a" * 64,
                     "specs": {
-                        "environment.run_network": {
-                            "description": "Run a scoped network command",
-                            "risk_class": "active_scan",
-                            "network_access": True,
+                        "run_command": {
+                            "description": "Run Bash in the pinned Kali runtime",
+                            "risk_class": "workspace_write",
+                            "network_access": False,
                         }
                     }
                 }
@@ -306,7 +308,7 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         instructions = rpc.calls[1][1]["developerInstructions"]
         assert "unrestricted vendor workspace agent" in instructions
         assert "BEGIN TRUSTED VENDOR-NATIVE CAPABILITIES (JSON)\n[]" in instructions
-        assert '"name":"environment.run_network"' in instructions
+        assert '"name":"run_command"' in instructions
         _validate("CommandExecutionRequestApprovalResponse.json", rpc.responses[0][1])
 
     asyncio.run(scenario())

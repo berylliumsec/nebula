@@ -20,7 +20,7 @@ def test_bundled_operator_help_is_complete_auditable_and_documented():
         "runner-setup",
         "workstation-image",
         "human-terminal",
-        "toolbox-availability",
+        "automation-runtime",
         "scope-approval",
         "provider-model",
         "reviewed-execution",

@@ -28,7 +28,7 @@ nebula-core migrate
 For a source checkout, see [the Nebula 3 guide](docs/NEBULA3.md). Existing
 Nebula 2 data can be imported without changing its source; see
 [Migrating from Nebula 2](docs/MIGRATING-2-TO-3.md). The
-[Toolbox guide](docs/TOOLBOX.md) documents the isolated automation boundary.
+[automation runtime guide](docs/AUTOMATION-RUNTIME.md) documents the isolated command boundary.
 The [local diagnostics guide](docs/NEBULA3_DIAGNOSTICS.md) documents structured
 feature logs, privacy controls, error references, and support bundles.
 

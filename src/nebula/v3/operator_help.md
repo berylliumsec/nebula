@@ -17,7 +17,7 @@ Use the native `nebula` launcher for an installed desktop. From a source checkou
 build the workspace and use `poetry run nebula-core ui`; that command chooses an
 available loopback port, starts Core, serves the built UI, and transfers the bearer
 token. `npm --prefix ui run dev` starts only the frontend, so durable, Terminal, and
-Toolbox controls remain offline unless a separate Core is running. When Vite uses a
+automation runtime controls remain offline unless a separate Core is running. When Vite uses a
 nondefault Core port, set `NEBULA_DEV_BACKEND=http://127.0.0.1:PORT` before starting
 Vite.
 
@@ -71,7 +71,7 @@ integrity is not `ok`.
 
 Keywords: runner unavailable, needs runner, detecting runner, docker unavailable, podman unavailable, docker desktop, podman machine, rootless, runtime unhealthy, multiple runtimes, host fallback
 
-Sources: docs/TOOLBOX.md#installation-and-use, src/nebula/v3/setup.py:SetupService, src/nebula/v3/sandbox.py:ContainerSandboxRunner
+Sources: docs/AUTOMATION-RUNTIME.md, src/nebula/v3/setup.py:SetupService, src/nebula/v3/sandbox.py:ContainerSandboxRunner
 
 Nebula supports Docker Desktop or Podman Machine on macOS and rootless Docker or
 Podman on Linux. Core detects only supported fixed executable paths; it does not
@@ -87,8 +87,8 @@ remote TCP daemon, a privileged/rootful runner, changing the runtime socket to m
 it broadly accessible, or executing on the host. When verification fails, Terminal
 and executable agents remain unavailable or analysis-only by design.
 
-`nebula-core doctor --json` reports the sandbox detail. For Toolbox-specific state,
-also use `nebula-core tools doctor`. Preserve those exact details if the candidate
+`nebula-core doctor --json` reports the sandbox detail. For runtime-specific state,
+also use `nebula-core runtime status`. Preserve those exact details if the candidate
 still fails re-verification.
 
 ## workstation-image | Terminal workstation image preparation fails
@@ -145,35 +145,21 @@ evidence or model context; promote or send it deliberately for those uses. Packa
 and container state are not retained, and multiple detached terminals are not part
 of the initial Nebula 3 release.
 
-## toolbox-availability | Automate task or Toolbox is unavailable
+## automation-runtime | Automate task runtime is unavailable
 
-Keywords: toolbox unavailable, automate task unavailable, environment unavailable, tool pack failed, catalog failed, signature failed, tools doctor, analysis only, capability unavailable, executable mission failed
+Keywords: automation runtime unavailable, automate task unavailable, kali image failed, runtime prepare, runner unavailable, command unavailable
 
-Sources: docs/TOOLBOX.md#installation-and-use, docs/NEBULA3.md#tool-safety-model, src/nebula/v3/tool_platform.py
+Sources: docs/AUTOMATION-RUNTIME.md, src/nebula/v3/runtime_platform.py, src/nebula/v3/automation_runtime.py
 
-Opening **Automate task** performs first-use setup of the official signed
-`berylliumsec/nebula-toolbox`, verifies its platform digest and non-root contract,
-runs smoke tests, and assigns normalized capabilities to the current Project. Check
-the runner first, then run `nebula-core tools doctor`, `nebula-core tools catalog`,
-and `nebula-core tools list` to distinguish runner, catalog, installation,
-verification, and assignment state. Use the exact failure detail shown by the tool
-pack or capability.
+Agent automation uses the same prepared Kali headless image as the human terminal. Check Runtime readiness under Settings, verify the selected Docker or Podman runner, then use `nebula-core runtime status` or `nebula-core runtime prepare`. Preparation verifies the Kali image, generated binary inventory, local image digest, runner identity, and embedded egress helper. Commands never fall back to the host.
 
-A Project also needs authorized Assets/scope and an enabled execution-environment
-assignment. If the official catalog, verified image, compatible egress helper, or
-assignment is unavailable, Nebula remains analysis-only. That is a fail-closed
-state, not a reason to invoke the command on the host, install an unsigned
-substitute, use a mutable image tag, or expose the runtime socket.
-
-The official source tree intentionally contains release digest placeholders; only
-the protected publisher resolves real registry digests and signs the catalog. Never
-replace a placeholder with an example digest or invent a release artifact.
+Each agent session receives one non-root, read-only-root container with only its Project workspace mounted. Files and background processes persist for that session; shell-local state does not. The fixed capabilities are `run_command` and `process_io`; executables such as `rg`, Python, Git, curl, and security utilities are ordinary binaries on `PATH`. Do not recommend installing a catalog, publishing a definition, using a mutable custom image, or executing on the host.
 
 ## scope-approval | A network action is denied or waits for approval
 
 Keywords: policy denied, out of scope, target denied, port denied, approval required, waiting approval, grant, credential use, invasive action, egress denied, dns pinning
 
-Sources: docs/TOOLBOX.md#installation-and-use, src/nebula/v3/policy.py, docs/NEBULA3.md#tool-safety-model
+Sources: docs/AUTOMATION-RUNTIME.md, src/nebula/v3/policy.py, docs/NEBULA3.md#tool-safety-model
 
 Treat a policy denial or approval pause as an authorization state, not a tool
 installation failure. Confirm that **Project → Assets** contains the intended
@@ -216,7 +202,7 @@ the endpoint, served model ID, profile allowlist, local/cloud declaration, and
 credentials consistent with the actual provider. Use the provider's exact normalized
 error instead of guessing an API-key variable, model alias, or endpoint.
 
-Toolbox chat requires successful capability verification for the exact selected
+Command-runtime chat requires successful capability verification for the exact selected
 model. Enable tool calling only after that model and template pass Nebula's strict
 tool contract. A model without reliable structured tool calls remains
 analysis-only; Nebula does not extract executable commands from prose. A disabled
@@ -224,7 +210,7 @@ profile, a model outside its allowlist, or a session switched to another provide
 model must be corrected in configuration or by starting the appropriate new chat,
 not bypassed.
 
-Cloud transfer of engagement knowledge or Toolbox results also requires the profile
+Cloud transfer of engagement knowledge or command results also requires the profile
 privacy permission and explicit confirmation for that turn. Local-only engagement
 scope cannot be sent to a cloud provider.
 

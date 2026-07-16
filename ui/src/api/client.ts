@@ -84,13 +84,6 @@ import type {
   RunnerProfileUpdateRequest,
   SetupControlResponse,
   SetupStatus,
-  EngagementToolAssignment,
-  EngagementToolAssignmentUpdateRequest,
-  CustomToolBundle,
-  CustomToolDefinition,
-  ToolPackCatalogEntry,
-  ToolPackInstallation,
-  ToolSummary,
   ToolArtifactReference,
   ToolOutputReadResult,
   ToolOutputSearchResult,
@@ -790,8 +783,7 @@ interface WireExecutionRuntime extends JsonObject {
   language: "bash" | "sh" | "python";
   interpreter: string;
   arguments?: string[];
-  tool_pack_installation_id: string;
-  manifest_digest: string;
+  runtime_digest: string;
   image: string;
   runner_profile_id: string;
   runner_profile_revision: number;
@@ -801,7 +793,6 @@ interface WireExecutionRuntime extends JsonObject {
   runner_platform: string;
   runner_context?: string | null;
   runner_socket?: string | null;
-  trusted: boolean;
 }
 
 interface WireExecutionNetwork extends JsonObject {
@@ -1005,63 +996,6 @@ interface WireWorkspacePreview extends JsonObject {
   preview_sha256: string;
 }
 
-interface WireToolPackCatalogEntry extends JsonObject {
-  id?: string;
-  catalog_id?: string;
-  publisher: string;
-  name: string;
-  version: string;
-  description?: string;
-  manifest_digest: string;
-  minimum_nebula_version?: string | null;
-  licenses?: string[];
-  platforms?: string[];
-  tool_names?: string[];
-  permissions?: string[];
-  signed?: boolean;
-  collection_id?: string | null;
-  collection_name?: string | null;
-  collection_order?: number;
-  interface_catalog_digest?: string | null;
-  interface_catalog_protocol?: string | null;
-  interface_tool_count?: number | null;
-}
-
-interface WireToolPackInstallation extends JsonObject {
-  id: string;
-  catalog_id?: string | null;
-  publisher: string;
-  name: string;
-  version: string;
-  interface_catalog_digest?: string | null;
-  manifest_digest: string;
-  source?: string;
-  trust?: "curated" | "trusted_publisher" | "local_trusted" | "local_unsigned";
-  trust_state?: ToolPackInstallation["trustState"];
-  runtime_profile_id?: string | null;
-  image_locks?: Record<string, string>;
-  status: ToolPackInstallation["status"];
-  tool_names?: string[];
-  permissions?: string[];
-  installed_at?: string | null;
-  verified_at?: string | null;
-  failure_detail?: string | null;
-}
-
-interface WireToolSummary extends JsonObject {
-  name: string;
-  pack_id: string;
-  pack_manifest_digest?: string;
-  manifest_digest?: string;
-  description?: string;
-  risk_class?: ToolSummary["riskClass"];
-  requires_network?: boolean;
-  network_access?: boolean;
-  requires_approval?: boolean;
-  available?: boolean;
-  unavailable_reason?: string | null;
-}
-
 interface WireRunnerProfile extends JsonObject {
   id: string;
   name: string;
@@ -1080,7 +1014,6 @@ interface WireRunnerProfile extends JsonObject {
   last_health_at?: string | null;
   detail?: string | null;
   last_health_detail?: string | null;
-  egress_helper_image?: string | null;
   seccomp_profile?: string | null;
   revision?: number;
 }
@@ -1144,19 +1077,6 @@ interface WireScopeImport extends WireEntity {
   applied_candidate_ids?: string[];
   applied_scope_policy_id?: string | null;
   applied_scope_revision?: number | null;
-}
-
-interface WireEngagementToolAssignment extends JsonObject {
-  id?: string;
-  engagement_id: string;
-  manifest_digest?: string | null;
-  tool_names?: string[];
-  allowed_tool_names?: string[];
-  enabled?: boolean;
-  revision?: number;
-  updated_by?: string | null;
-  assigned_by?: string | null;
-  updated_at?: string | null;
 }
 
 export interface ApiClientOptions {
@@ -1367,7 +1287,7 @@ function mapApproval(value: WireApproval): ApprovalSummary {
         : {},
     command,
     image: stringField(request.image),
-    manifestDigest: stringField(request.manifest_digest),
+    runtimeDigest: stringField(request.runtime_digest),
     credentialClass: value.credential_class ?? undefined,
     expiresAt: value.expires_at ?? undefined,
     createdAt: value.requested_at ?? value.created_at,
@@ -1946,8 +1866,7 @@ function mapExecutionRuntime(value: WireExecutionRuntime) {
     language: value.language,
     interpreter: value.interpreter,
     arguments: value.arguments ?? [],
-    toolPackInstallationId: value.tool_pack_installation_id,
-    manifestDigest: value.manifest_digest,
+    runtimeDigest: value.runtime_digest,
     image: value.image,
     runnerProfileId: value.runner_profile_id,
     runnerProfileRevision: value.runner_profile_revision,
@@ -1957,7 +1876,6 @@ function mapExecutionRuntime(value: WireExecutionRuntime) {
     runnerPlatform: value.runner_platform,
     runnerContext: value.runner_context ?? undefined,
     runnerSocket: value.runner_socket ?? undefined,
-    trusted: value.trusted,
   };
 }
 
@@ -2516,81 +2434,6 @@ function wireItems<T>(value: T[] | { items?: T[]; entries?: T[] }): T[] {
   return Array.isArray(value) ? value : (value.items ?? value.entries ?? []);
 }
 
-function mapToolCatalogEntry(
-  value: WireToolPackCatalogEntry,
-): ToolPackCatalogEntry {
-  return {
-    id:
-      value.id ??
-      value.catalog_id ??
-      `${value.publisher}/${value.name}@${value.version}`,
-    publisher: value.publisher,
-    name: value.name,
-    version: value.version,
-    description: value.description ?? "",
-    manifestDigest: value.manifest_digest,
-    minimumNebulaVersion: value.minimum_nebula_version ?? undefined,
-    licenses: value.licenses ?? [],
-    platforms: value.platforms ?? [],
-    toolNames: value.tool_names ?? [],
-    permissions: value.permissions ?? [],
-    signed: value.signed !== false,
-    collectionId: value.collection_id ?? undefined,
-    collectionName: value.collection_name ?? undefined,
-    collectionOrder: numberField(value.collection_order),
-    interfaceCatalogDigest: value.interface_catalog_digest ?? undefined,
-    interfaceCatalogProtocol: value.interface_catalog_protocol ?? undefined,
-    interfaceToolCount: value.interface_tool_count ?? undefined,
-  };
-}
-
-function mapToolPackInstallation(
-  value: WireToolPackInstallation,
-): ToolPackInstallation {
-  const trustState =
-    value.trust_state ??
-    (value.trust === "local_unsigned"
-      ? "developer"
-      : value.trust
-        ? "trusted"
-        : "untrusted");
-  return {
-    id: value.id,
-    catalogId: value.catalog_id ?? undefined,
-    publisher: value.publisher,
-    name: value.name,
-    version: value.version,
-    manifestDigest: value.manifest_digest,
-    source: value.source ?? "local",
-    trustState,
-    runtimeProfileId: value.runtime_profile_id ?? undefined,
-    imageLocks: value.image_locks ?? {},
-    interfaceCatalogDigest: value.interface_catalog_digest ?? undefined,
-    status: value.status,
-    toolNames: value.tool_names ?? [],
-    permissions: value.permissions ?? [],
-    installedAt: value.installed_at ?? undefined,
-    verifiedAt: value.verified_at ?? undefined,
-    failureDetail: value.failure_detail ?? undefined,
-  };
-}
-
-function mapToolSummary(value: WireToolSummary): ToolSummary {
-  return {
-    name: value.name,
-    packId: value.pack_id,
-    packManifestDigest:
-      value.pack_manifest_digest ?? value.manifest_digest ?? "",
-    description: value.description ?? "",
-    riskClass: value.risk_class ?? "passive",
-    requiresNetwork:
-      value.requires_network === true || value.network_access === true,
-    requiresApproval: value.requires_approval === true,
-    available: value.available === true,
-    unavailableReason: value.unavailable_reason ?? undefined,
-  };
-}
-
 function mapRunnerProfile(value: WireRunnerProfile): RunnerProfile {
   return {
     id: value.id,
@@ -2612,7 +2455,6 @@ function mapRunnerProfile(value: WireRunnerProfile): RunnerProfile {
             : "unchecked"),
     lastCheckedAt: value.last_checked_at ?? value.last_health_at ?? undefined,
     detail: value.detail ?? value.last_health_detail ?? undefined,
-    egressHelperImage: value.egress_helper_image ?? undefined,
     seccompProfile: value.seccomp_profile ?? undefined,
     revision: numberField(value.revision),
   };
@@ -2684,21 +2526,6 @@ function mapScopeImport(value: WireScopeImport): ScopeImport {
     appliedScopePolicyId: value.applied_scope_policy_id ?? undefined,
     appliedScopeRevision: value.applied_scope_revision ?? undefined,
     revision: numberField(value.revision),
-  };
-}
-
-function mapToolAssignment(
-  value: WireEngagementToolAssignment,
-): EngagementToolAssignment {
-  return {
-    id: value.id,
-    engagementId: value.engagement_id,
-    manifestDigest: value.manifest_digest ?? undefined,
-    toolNames: value.tool_names ?? value.allowed_tool_names ?? [],
-    enabled: value.enabled === true,
-    revision: numberField(value.revision),
-    updatedBy: value.updated_by ?? value.assigned_by ?? undefined,
-    updatedAt: value.updated_at ?? undefined,
   };
 }
 
@@ -3263,7 +3090,6 @@ export class ApiClient {
         max_tokens: body.maxTokens,
         max_cost_usd: body.maxCostUsd,
         max_retries: body.maxRetries,
-        tool_names: body.toolNames ?? [],
         max_tool_calls: body.maxToolCalls ?? 0,
         max_artifact_queries: body.maxArtifactQueries ?? 200,
         max_concurrency: body.maxConcurrency ?? 1,
@@ -3531,6 +3357,57 @@ export class ApiClient {
     ).then(mapHarnessSession);
   }
 
+  getAutomationRuntime(signal?: AbortSignal): Promise<import("./types").AutomationRuntimeInfo> {
+    return this.request<Record<string, unknown>>("automation/runtime", { signal }).then((value) => ({
+      configured: value.configured === true,
+      ready: value.ready === true,
+      image: typeof value.image === "string" ? value.image : undefined,
+      digest: typeof value.digest === "string" ? value.digest : undefined,
+      runnerProfileId: typeof value.runner_profile_id === "string" ? value.runner_profile_id : undefined,
+      detail: typeof value.detail === "string" ? value.detail : "Runtime status unavailable",
+      inventory: Array.isArray(value.inventory) ? value.inventory.flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const entry = item as Record<string, unknown>;
+        return typeof entry.name === "string" && typeof entry.version === "string" && typeof entry.path === "string"
+          ? [{ name: entry.name, version: entry.version, path: entry.path }]
+          : [];
+      }) : [],
+    }));
+  }
+
+  prepareAutomationRuntime(): Promise<import("./types").AutomationRuntimeInfo> {
+    return this.request<Record<string, unknown>>("automation/runtime/prepare", { method: "POST" })
+      .then(() => this.getAutomationRuntime());
+  }
+
+  getAutomationPolicy(engagementId: string): Promise<import("./types").AutomationProjectPolicy> {
+    return this.request<Record<string, unknown>>(`engagements/${encodeURIComponent(engagementId)}/automation-policy`).then((value) => ({
+      id: String(value.id),
+      engagementId: String(value.engagement_id),
+      approvalPolicy: value.approval_policy as "always" | "on_boundary" | "never",
+      networkEnabled: value.network_enabled === true,
+      runnerProfileId: typeof value.runner_profile_id === "string" ? value.runner_profile_id : undefined,
+      maxTimeoutMs: Number(value.max_timeout_ms ?? 300000),
+      revision: Number(value.revision ?? 1),
+    }));
+  }
+
+  updateAutomationPolicy(
+    engagementId: string,
+    request: { approvalPolicy: "always" | "on_boundary" | "never"; networkEnabled: boolean; runnerProfileId?: string; maxTimeoutMs: number; expectedRevision: number },
+  ): Promise<import("./types").AutomationProjectPolicy> {
+    return this.request<Record<string, unknown>>(`engagements/${encodeURIComponent(engagementId)}/automation-policy`, {
+      method: "PUT",
+      body: JSON.stringify({
+        approval_policy: request.approvalPolicy,
+        network_enabled: request.networkEnabled,
+        runner_profile_id: request.runnerProfileId ?? null,
+        max_timeout_ms: request.maxTimeoutMs,
+        expected_revision: request.expectedRevision,
+      }),
+    }).then(() => this.getAutomationPolicy(engagementId));
+  }
+
   listMcpServers(signal?: AbortSignal): Promise<McpServerProfile[]> {
     return this.listAll<WireMcpServerProfile>("mcp-servers", signal).then(
       (items) => items.map(mapMcpServer),
@@ -3579,129 +3456,6 @@ export class ApiClient {
       method: "DELETE",
       headers: { "If-Match": String(expectedRevision) },
     });
-  }
-
-  listToolCatalog(signal?: AbortSignal): Promise<ToolPackCatalogEntry[]> {
-    return this.request<
-      | WireToolPackCatalogEntry[]
-      | {
-          items?: WireToolPackCatalogEntry[];
-          entries?: WireToolPackCatalogEntry[];
-        }
-    >("tool-catalog", { signal }).then((value) =>
-      wireItems(value).map(mapToolCatalogEntry),
-    );
-  }
-
-  listToolPacks(signal?: AbortSignal): Promise<ToolPackInstallation[]> {
-    return this.request<
-      WireToolPackInstallation[] | { items?: WireToolPackInstallation[] }
-    >("tool-packs", { signal }).then((value) =>
-      wireItems(value)
-        .map(mapToolPackInstallation)
-        .filter((installation) => installation.status !== "disabled"),
-    );
-  }
-
-  listTools(signal?: AbortSignal): Promise<ToolSummary[]> {
-    return this.request<WireToolSummary[] | { items?: WireToolSummary[] }>(
-      "tools",
-      { signal },
-    ).then((value) => wireItems(value).map(mapToolSummary));
-  }
-
-  installToolPack(
-    catalogId: string,
-    runtimeProfileId: string,
-    version?: string,
-  ): Promise<ToolPackInstallation> {
-    return this.request<WireToolPackInstallation>("tool-packs/install", {
-      method: "POST",
-      body: JSON.stringify({
-        catalog_id: catalogId,
-        version,
-        runtime_profile_id: runtimeProfileId,
-      }),
-    }).then(mapToolPackInstallation);
-  }
-
-  installToolCollection(
-    collectionId: string,
-    runtimeProfileId: string,
-  ): Promise<ToolPackInstallation[]> {
-    return this.request<WireToolPackInstallation[]>(
-      "tool-collections/install",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          collection_id: collectionId,
-          runtime_profile_id: runtimeProfileId,
-        }),
-      },
-    ).then((items) => items.map(mapToolPackInstallation));
-  }
-
-  installLocalToolPack(
-    bundleBase64: string,
-    runtimeProfileId: string,
-    developerModeConfirmed = false,
-  ): Promise<ToolPackInstallation> {
-    return this.request<WireToolPackInstallation>("tool-packs/install-local", {
-      method: "POST",
-      body: JSON.stringify({
-        bundle_base64: bundleBase64,
-        runtime_profile_id: runtimeProfileId,
-        developer_mode_confirmed: developerModeConfirmed,
-      }),
-    }).then(mapToolPackInstallation);
-  }
-
-  generateCustomTool(
-    definition: CustomToolDefinition,
-  ): Promise<CustomToolBundle> {
-    return this.request<{
-      filename: string;
-      bundle_base64: string;
-      manifest_digest: string;
-      permission_preview: Record<string, unknown>;
-    }>("tool-packs/generate", {
-      method: "POST",
-      body: JSON.stringify({
-        pack_name: definition.packName,
-        publisher: definition.publisher ?? "local",
-        tool_name: definition.toolName,
-        description: definition.description,
-        image: definition.image,
-        platform: definition.platform ?? "linux/amd64",
-        executable: definition.executable,
-        fixed_arguments: definition.fixedArguments ?? [],
-        arguments: (definition.arguments ?? []).map((argument) => ({
-          name: argument.name,
-          value_type: argument.valueType,
-          description: argument.description ?? "",
-          required: argument.required ?? true,
-          flag: argument.flag ?? null,
-          positional: argument.positional ?? false,
-          smoke_value: argument.smokeValue ?? null,
-        })),
-        risk_class: definition.riskClass ?? "local_read",
-        network_access: definition.networkAccess ?? false,
-        target_argument: definition.targetArgument ?? null,
-        port_argument: definition.portArgument ?? null,
-        filesystem_access: definition.filesystemAccess ?? "none",
-        requires_approval: definition.requiresApproval ?? false,
-        timeout_seconds: definition.timeoutSeconds ?? 300,
-        output_flag: definition.outputFlag ?? null,
-        output_filename: definition.outputFilename ?? "result",
-        capture_paths: definition.capturePaths ?? [],
-        expected_exit_code: definition.expectedExitCode ?? 0,
-      }),
-    }).then((value) => ({
-      filename: value.filename,
-      bundleBase64: value.bundle_base64,
-      manifestDigest: value.manifest_digest,
-      permissionPreview: value.permission_preview,
-    }));
   }
 
   listToolCallArtifacts(toolCallId: string): Promise<ToolArtifactReference[]> {
@@ -3848,26 +3602,6 @@ export class ApiClient {
     return { blob: await response.blob(), filename };
   }
 
-  verifyToolPack(id: string): Promise<ToolPackInstallation> {
-    return this.request<WireToolPackInstallation>(
-      `tool-packs/${encodeURIComponent(id)}/verify`,
-      { method: "POST" },
-    ).then(mapToolPackInstallation);
-  }
-
-  updateToolPack(id: string): Promise<ToolPackInstallation> {
-    return this.request<WireToolPackInstallation>(
-      `tool-packs/${encodeURIComponent(id)}/update`,
-      { method: "POST" },
-    ).then(mapToolPackInstallation);
-  }
-
-  async removeToolPack(id: string): Promise<void> {
-    await this.request<void>(`tool-packs/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    });
-  }
-
   listRunnerProfiles(signal?: AbortSignal): Promise<RunnerProfile[]> {
     return this.request<WireRunnerProfile[] | { items?: WireRunnerProfile[] }>(
       "runner-profiles",
@@ -3891,9 +3625,6 @@ export class ApiClient {
           socket: body.socket || null,
           platform: body.platform,
           isolation: body.isolationMode,
-          ...(body.egressHelperImage
-            ? { egress_helper_image: body.egressHelperImage }
-            : {}),
           ...(body.seccompProfile
             ? { seccomp_profile: body.seccompProfile }
             : {}),
@@ -4009,38 +3740,6 @@ export class ApiClient {
         }),
       },
     ).then(mapEngagementScope);
-  }
-
-  listEngagementToolAssignments(
-    engagementId: string,
-    signal?: AbortSignal,
-  ): Promise<EngagementToolAssignment[]> {
-    return this.request<
-      | WireEngagementToolAssignment[]
-      | { items?: WireEngagementToolAssignment[] }
-    >(`engagements/${encodeURIComponent(engagementId)}/tool-assignment`, {
-      signal,
-    }).then((value) => wireItems(value).map(mapToolAssignment));
-  }
-
-  updateEngagementToolAssignment(
-    engagementId: string,
-    body: EngagementToolAssignmentUpdateRequest,
-    signal?: AbortSignal,
-  ): Promise<EngagementToolAssignment> {
-    return this.request<WireEngagementToolAssignment>(
-      `engagements/${encodeURIComponent(engagementId)}/tool-assignment`,
-      {
-        method: "PUT",
-        signal,
-        body: JSON.stringify({
-          manifest_digest: body.manifestDigest,
-          tool_names: body.toolNames,
-          enabled: body.enabled,
-          expected_revision: body.expectedRevision || undefined,
-        }),
-      },
-    ).then(mapToolAssignment);
   }
 
   stopRun(id: string, body: RunStopRequest = {}): Promise<AgentRunSummary> {

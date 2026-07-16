@@ -268,11 +268,11 @@ export const diagnosticRemediationCatalog = {
       "destination": "/?view=missions",
       "help_article": "provider-model"
     },
-    "toolbox": {
-      "label": "Toolbox",
-      "operation": "Toolbox operation",
+    "runtime": {
+      "label": "Automation runtime",
+      "operation": "Runtime operation",
       "destination": "/settings#advanced-settings",
-      "help_article": "toolbox-availability"
+      "help_article": "automation-runtime"
     },
     "sandbox": {
       "label": "Execution sandbox",

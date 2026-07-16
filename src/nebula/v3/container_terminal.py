@@ -59,11 +59,11 @@ from .terminal_history import (
     TerminalCommandHistory,
     TerminalCommandParseResult,
 )
-from .tool_platform import (
+from .runtime_platform import (
     DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE,
     HumanTerminalRuntimeResolution,
-    ToolPlatform,
-    ToolPlatformError,
+    RuntimePlatform,
+    RuntimePlatformError,
 )
 
 PREVIEW_TTL_SECONDS = 300
@@ -368,7 +368,7 @@ class ContainerTerminalService:
         self,
         *,
         store: NebulaStore,
-        tool_platform: ToolPlatform | None,
+        tool_platform: RuntimePlatform | None,
         execution_service: ExecutionService | None = None,
         command_history: TerminalCommandHistory | None = None,
         operator_id: Callable[[], str] | None = None,
@@ -522,7 +522,7 @@ class ContainerTerminalService:
             try:
                 self.tool_platform.resolve_human_terminal_profile(engagement_id)
                 ready = True
-            except ToolPlatformError as exc:
+            except RuntimePlatformError as exc:
                 record_caught_exception(
                     "terminal",
                     "terminal.container_terminal.caught_failure_001",
@@ -557,7 +557,7 @@ class ContainerTerminalService:
                 error_code=exc.code,
                 detail=exc.detail,
             )
-        except ToolPlatformError as exc:
+        except RuntimePlatformError as exc:
             record_caught_exception(
                 "terminal",
                 "terminal.container_terminal.caught_failure_003",
@@ -1254,7 +1254,7 @@ class ContainerTerminalService:
                 columns=session.request.columns,
                 rows=session.request.rows,
             )
-        except (SandboxError, ToolPlatformError) as exc:
+        except (SandboxError, RuntimePlatformError) as exc:
             record_caught_exception(
                 "terminal",
                 "terminal.container_terminal.caught_failure_007",
@@ -1767,7 +1767,7 @@ class ContainerTerminalService:
             raise ContainerTerminalError("workspace_limit", str(exc)) from exc
         try:
             self.tool_platform.resolve_human_terminal_profile(request.engagement_id)
-        except ToolPlatformError as exc:
+        except RuntimePlatformError as exc:
             record_caught_exception(
                 "terminal",
                 "terminal.container_terminal.caught_failure_023",
@@ -1782,7 +1782,7 @@ class ContainerTerminalService:
             resolution = await self.tool_platform.resolve_human_terminal_runtime(
                 request.engagement_id
             )
-        except ToolPlatformError as exc:
+        except RuntimePlatformError as exc:
             record_caught_exception(
                 "terminal",
                 "terminal.container_terminal.caught_failure_024",

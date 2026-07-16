@@ -2,9 +2,8 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { createPortal } from "react-dom";
 import { Play, ShieldCheck, Square, Trash2, Wrench, X } from "lucide-react";
 import { providerModelVerification } from "../api/providerCapabilities";
-import type { HarnessProfile, HarnessSessionSummary, McpServerProfile, ToolSummary } from "../api/types";
+import type { HarnessProfile, HarnessSessionSummary, McpServerProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
-import { notifyToolPacksChanged, useToolPackRevision } from "../state/toolPackChanges";
 import { useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
@@ -33,8 +32,8 @@ export function NewMissionButton({ className = "button primary", children }: New
   const [maxTokens, setMaxTokens] = useState(20_000);
   const [maxCost, setMaxCost] = useState(10);
   const [maxRetries, setMaxRetries] = useState(1);
-  const [assignedTools, setAssignedTools] = useState<ToolSummary[]>([]);
-  const [toolConfigurationAvailable, setToolConfigurationAvailable] = useState(false);
+  const [runtimeReady, setRuntimeReady] = useState(false);
+  const [runtimeConfigured, setRuntimeConfigured] = useState(false);
   const [maxToolCalls, setMaxToolCalls] = useState(0);
   const [maxConcurrency, setMaxConcurrency] = useState(1);
   const [saving, setSaving] = useState(false);
@@ -42,9 +41,7 @@ export function NewMissionButton({ className = "button primary", children }: New
   const [toolPreparation, setToolPreparation] = useState<"idle" | "preparing" | "ready" | "unavailable">("idle");
   const [toolPreparationDetail, setToolPreparationDetail] = useState<string>();
   const [toolVerificationBusy, setToolVerificationBusy] = useState(false);
-  const toolPreparationRef = useRef<Promise<void> | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
-  const toolPackRevision = useToolPackRevision();
   const selectedHarness = harnesses.find((item) => item.id === harnessId);
   const attachedHarnessSession = harnessSessions.find((item) => item.id === harnessSessionId);
   const modelOptions = [...new Set([
@@ -90,56 +87,52 @@ export function NewMissionButton({ className = "button primary", children }: New
 
   useEffect(() => {
     let active = true;
-    setMaxToolCalls(0);
-    setMaxConcurrency(1);
-    if (!api || coreState !== "online" || !engagement) {
-      setAssignedTools([]);
-      setToolConfigurationAvailable(false);
+    if (!api || coreState !== "online") {
+      setRuntimeReady(false);
+      setRuntimeConfigured(false);
       return () => { active = false; };
     }
-    void Promise.all([api.listEngagementToolAssignments(engagement.id), api.listTools(), api.listToolPacks()])
-      .then(([assignments, tools, packs]) => {
+    setToolPreparation("preparing");
+    void api.getAutomationRuntime()
+      .then((runtime) => {
         if (!active) return;
-        const readyDigests = new Set(packs
-          .filter((pack) => pack.status === "ready")
-          .map((pack) => pack.manifestDigest));
-        setToolConfigurationAvailable(true);
-        setAssignedTools(tools.filter((tool) => assignments.some((assignment) => assignment.enabled
-          && assignment.manifestDigest !== undefined
-          && readyDigests.has(assignment.manifestDigest)
-          && assignment.manifestDigest === tool.packManifestDigest
-          && assignment.toolNames.includes(tool.name))));
+        setRuntimeReady(runtime.ready);
+        setRuntimeConfigured(runtime.configured);
+        setToolPreparation(runtime.ready ? "ready" : "unavailable");
+        setToolPreparationDetail(runtime.ready ? undefined : runtime.detail);
       })
       .catch((caughtError) => {
         void logCaughtDiagnostic("interface.mission_controls.caught_failure_02", "A handled interface operation failed.", caughtError, "mission_controls");
         if (!active) return;
-        setAssignedTools([]);
-        setToolConfigurationAvailable(false);
+        setRuntimeReady(false);
+        setRuntimeConfigured(false);
+        setToolPreparation("unavailable");
+        setToolPreparationDetail(caughtError instanceof Error ? caughtError.message : "Command runtime is unavailable.");
       });
     return () => { active = false; };
-  }, [api, coreState, engagement?.id, toolPackRevision]);
+  }, [api, coreState]);
 
   const verification = providerModelVerification(provider, model);
   const providerSupportsTools = verification?.status === "verified";
-  const automaticTools = useMemo(() => providerSupportsTools
-    ? assignedTools.filter((tool) => tool.available).map((tool) => tool.name)
-    : [], [assignedTools, providerSupportsTools]);
+  const automaticTools = useMemo(() => providerSupportsTools && runtimeReady
+    ? ["run_command", "process_io"]
+    : [], [providerSupportsTools, runtimeReady]);
   const toolSelectionMessage = toolVerificationBusy
     ? `Checking tool support for ${model.trim()}…`
     : toolPreparation === "preparing"
-    ? toolPreparationDetail ?? "Preparing the official signed Toolbox for this project…"
-    : !toolConfigurationAvailable
+    ? toolPreparationDetail ?? "Checking the command runtime…"
+    : !runtimeConfigured
     ? coreState !== "online"
-      ? "Nebula Core is offline; reconnect Core before configuring Toolbox capabilities."
-      : "Toolbox configuration APIs are unavailable in this Core."
+      ? "Nebula Core is offline; reconnect Core before using command execution."
+      : "The pinned automation runtime is not configured."
     : !providerSupportsTools
       ? verification?.status === "failed"
         ? `Tool verification failed for ${model}: ${verification.failureDetail ?? "the provider did not return a valid structured call"}. Reverify it in Settings.`
         : model
           ? `Tool calling has not been verified for ${model}. Verify it in Settings.`
           : "Select a model and verify tool calling in Settings."
-      : assignedTools.length === 0
-        ? "No ready Toolbox capabilities are assigned to this engagement."
+      : !runtimeReady
+        ? toolPreparationDetail ?? "Prepare the pinned automation runtime in Settings."
         : undefined;
 
   useEffect(() => {
@@ -155,100 +148,6 @@ export function NewMissionButton({ className = "button primary", children }: New
     return () => { active = false; };
   }, [coreState, model, open, previewMode, provider, reverifyProvider, verification]);
 
-  const ensureOfficialToolbox = () => {
-    if (!api || coreState !== "online" || !engagement || toolPreparationRef.current) return;
-    const operation = (async () => {
-      setToolPreparation("preparing");
-      setToolPreparationDetail("Checking the official Toolbox…");
-      try {
-        const [assignments, installedTools, installedPacks] = await Promise.all([
-          api.listEngagementToolAssignments(engagement.id),
-          api.listTools(),
-          api.listToolPacks(),
-        ]);
-        const readyDigests = new Set(installedPacks
-          .filter((pack) => pack.status === "ready"
-            && pack.trustState === "trusted"
-            && pack.publisher === "berylliumsec"
-            && pack.name === "nebula-toolbox")
-          .map((pack) => pack.manifestDigest));
-        const currentTools = installedTools.filter((tool) => assignments.some((assignment) => assignment.enabled
-          && assignment.manifestDigest !== undefined
-          && readyDigests.has(assignment.manifestDigest)
-          && assignment.manifestDigest === tool.packManifestDigest
-          && assignment.toolNames.includes(tool.name)));
-        if (currentTools.length) {
-          setAssignedTools(currentTools);
-          setToolConfigurationAvailable(true);
-          setToolPreparation("ready");
-          setToolPreparationDetail(undefined);
-          return;
-        }
-
-        const [catalog, runners] = await Promise.all([
-          api.listToolCatalog(),
-          api.listRunnerProfiles(),
-        ]);
-        const officialEntries = catalog.filter((entry) => entry.signed
-          && entry.publisher === "berylliumsec"
-          && (entry.collectionId === "nebula-toolbox" || entry.name === "nebula-toolbox"));
-        const runner = runners.find((candidate) => candidate.state === "ready");
-        if (!officialEntries.length || !runner) {
-          throw new Error(!runner
-            ? "A verified local runtime is required before Toolbox can be prepared."
-            : "The signed Nebula Toolbox is not published in the configured catalog yet.");
-        }
-
-        setToolPreparationDetail("Downloading and verifying the official Toolbox…");
-        const officialDigests = new Set(officialEntries.map((entry) => entry.manifestDigest));
-        let readyOfficialPacks = installedPacks.filter((pack) => pack.status === "ready"
-          && pack.trustState === "trusted"
-          && officialDigests.has(pack.manifestDigest));
-        if (readyOfficialPacks.length < officialEntries.length) {
-          const collectionId = officialEntries.find((entry) => entry.collectionId)?.collectionId;
-          const installed = collectionId
-            ? await api.installToolCollection(collectionId, runner.id)
-            : [await api.installToolPack(officialEntries[0].id, runner.id, officialEntries[0].version)];
-          readyOfficialPacks = installed.filter((pack) => pack.status === "ready"
-            && pack.trustState === "trusted"
-            && officialDigests.has(pack.manifestDigest));
-        }
-        if (!readyOfficialPacks.length) {
-          throw new Error("The official Toolbox did not reach a verified ready state.");
-        }
-
-        setToolPreparationDetail("Assigning verified capabilities to this project…");
-        const latestTools = await api.listTools();
-        const savedAssignments = await Promise.all(readyOfficialPacks.map((pack) => api.updateEngagementToolAssignment(
-          engagement.id,
-          {
-            manifestDigest: pack.manifestDigest,
-            toolNames: latestTools
-              .filter((tool) => tool.available && tool.packManifestDigest === pack.manifestDigest)
-              .map((tool) => tool.name),
-            enabled: true,
-          },
-        )));
-        const preparedTools = latestTools.filter((tool) => savedAssignments.some((assignment) => assignment.enabled
-          && assignment.manifestDigest === tool.packManifestDigest
-          && assignment.toolNames.includes(tool.name)));
-        setAssignedTools(preparedTools);
-        setToolConfigurationAvailable(true);
-        setToolPreparation("ready");
-        setToolPreparationDetail(undefined);
-        notifyToolPacksChanged();
-      } catch (preparationError) {
-        void logCaughtDiagnostic("interface.mission_controls.caught_failure_04", "A handled interface operation failed.", preparationError, "mission_controls");
-        setToolPreparation("unavailable");
-        setToolPreparationDetail(preparationError instanceof Error ? preparationError.message : "Could not prepare the official Toolbox.");
-      }
-    })();
-    toolPreparationRef.current = operation;
-    void operation.finally(() => {
-      toolPreparationRef.current = undefined;
-    });
-  };
-
   const selectProvider = (id: string) => {
     const next = availableProviders.find((item) => item.id === id);
     setProviderId(id);
@@ -260,7 +159,6 @@ export function NewMissionButton({ className = "button primary", children }: New
     setMaxToolCalls(runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length ? 50 : 0);
     setMaxConcurrency(automaticTools.length ? 2 : 1);
     setOpen(true);
-    ensureOfficialToolbox();
   };
 
   useEffect(() => {
@@ -363,7 +261,7 @@ export function NewMissionButton({ className = "button primary", children }: New
         maxToolCalls,
         maxConcurrency: 1,
         allowCloudToolResults,
-      } : { engagementId: engagement.id, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, toolNames: automaticTools, maxToolCalls: automaticTools.length || selectedMcpIds.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
+      } : { engagementId: engagement.id, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, maxToolCalls: automaticTools.length || selectedMcpIds.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
       setOpen(false);
       setObjective("");
       setMaxToolCalls(0);
@@ -399,16 +297,16 @@ export function NewMissionButton({ className = "button primary", children }: New
               <label>Retries<input type="number" min={0} max={2} value={maxRetries} onChange={(event) => setMaxRetries(Number(event.target.value))} /></label>
             </div>
             <section className="mission-tool-selection">
-              <header><div><Wrench size={15} /><span><strong>Toolbox automatic</strong><small>Verified assigned capabilities are enabled automatically.</small></span></div><span>{automaticTools.length ? `${automaticTools.length} enabled` : "Analysis only"}</span></header>
-              {toolConfigurationAvailable && providerSupportsTools && automaticTools.length
-                ? <fieldset className="resource-checklist automatic-tool-list"><legend>Automatically enabled capabilities</legend>{assignedTools.filter((tool) => tool.available).map((tool) => <div key={tool.name}><ShieldCheck size={15} /><span><strong>{tool.name}</strong><small>{tool.riskClass.replaceAll("_", " ")}{tool.requiresApproval ? " · approval required" : ""}</small></span></div>)}</fieldset>
+              <header><div><Wrench size={15} /><span><strong>Command runtime</strong><small>Bash and process I/O are fixed capabilities in every prepared agent session.</small></span></div><span>{automaticTools.length ? "Ready" : "Analysis only"}</span></header>
+              {runtimeReady && providerSupportsTools && automaticTools.length
+                ? <fieldset className="resource-checklist automatic-tool-list"><legend>Automatically enabled capabilities</legend>{automaticTools.map((name) => <div key={name}><ShieldCheck size={15} /><span><strong>{name}</strong><small>{name === "run_command" ? "session-scoped Bash · project networking optional" : "poll, stdin, and termination"}</small></span></div>)}</fieldset>
                 : <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>{toolPreparation === "unavailable" ? toolPreparationDetail : toolSelectionMessage}</p></div>}
               {(automaticTools.length > 0 || selectedMcpIds.length > 0 || runtimeKind === "harness") && <div className="resource-form-grid"><label>Maximum execution calls<input type="number" min={1} max={100} value={maxToolCalls} onChange={(event) => setMaxToolCalls(Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
             </section>
-            <p className="provider-dialog-note">{automaticTools.length || selectedMcpIds.length ? "Selected OCI and MCP capabilities share Core scope, separate execution/retrieval budgets, artifact capture, and high-risk approvals. Models receive receipts rather than raw action output." : "This task is analysis-only and receives no execution capabilities."}</p>
+            <p className="provider-dialog-note">{automaticTools.length || selectedMcpIds.length ? "The command runtime and MCP capabilities share Core scope, separate execution/retrieval budgets, artifact capture, and configured approvals. Models receive receipts rather than raw action output." : "This task is analysis-only and receives no execution capabilities."}</p>
           </details>
           {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
-          <footer><button className="button secondary" type="button" onClick={() => setOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || toolPreparation === "preparing" || toolVerificationBusy}>{toolPreparation === "preparing" ? "Preparing Toolbox…" : toolVerificationBusy ? "Checking model…" : saving ? "Starting…" : "Automate task"}</button></footer>
+          <footer><button className="button secondary" type="button" onClick={() => setOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || toolPreparation === "preparing" || toolVerificationBusy}>{toolPreparation === "preparing" ? "Checking runtime…" : toolVerificationBusy ? "Checking model…" : saving ? "Starting…" : "Automate task"}</button></footer>
         </form>
       </div>,
       document.body,

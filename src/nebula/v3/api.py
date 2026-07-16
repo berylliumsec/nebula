@@ -18,7 +18,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Literal, Mapping
 from urllib.parse import quote
-from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import (
     Depends,
@@ -46,6 +45,16 @@ from starlette.types import Scope
 
 from . import chat as chat_runtime
 from .artifacts import ArtifactStore, ArtifactStoreError
+from .automation_runtime import (
+    AutomationPolicyDenied,
+    AutomationRuntimeManager,
+    AutomationRuntimeUnavailable,
+    CommandApprovalRequired,
+    CommandResult,
+    ProcessIORequest,
+    RunCommandRequest,
+)
+from .automation_tools import AutomationToolPlatform, PROCESS_IO_NAME, RUN_COMMAND_NAME
 from .api_validation import ApiEntityValidator
 from .chat import (
     ChatCompletionRequest,
@@ -117,6 +126,10 @@ from .domain import (
     Approval,
     ApprovalStatus,
     Artifact,
+    AutomationApprovalPolicy,
+    AutomationProjectPolicy,
+    AutomationSession,
+    CommandExecution,
     ChatBackend,
     ChatMessage,
     ChatRole,
@@ -127,7 +140,6 @@ from .domain import (
     ContextOwnerType,
     ContextSnapshotStatus,
     Engagement,
-    EngagementToolAssignment,
     Entity,
     Evidence,
     GeneratedDraft,
@@ -159,8 +171,6 @@ from .domain import (
     ScopeImport,
     ScopePolicy,
     ToolCall,
-    ToolPackInstallation,
-    ToolPackInstallationStatus,
     ToolCallOrigin,
     utc_now,
 )
@@ -271,14 +281,7 @@ from .terminal_history import (
     TerminalRecordingToolsConflict,
     TerminalRecordingToolsUpdate,
 )
-from .tool_platform import ToolPlatform, ToolPlatformError
-from .toolpack_sdk import (
-    CustomToolDefinition,
-    generate_custom_tool_project,
-    pack_tool_pack,
-    custom_tool_manifest,
-)
-from .toolpacks import manifest_digest
+from .runtime_platform import RuntimePlatform, RuntimePlatformError
 from .tool_results import (
     ToolOutputAccessError,
     ToolOutputQueryError,
@@ -299,9 +302,11 @@ READ_ONLY_RESOURCES = {
     "agent_attempts",
     "approvals",
     "artifacts",
+    "automation_sessions",
     "chat_messages",
     "chat_sessions",
     "chat_turns",
+    "command_executions",
     "chat_turns",
     "evidence",
     "knowledge",
@@ -317,6 +322,7 @@ READ_ONLY_RESOURCES = {
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
+    "automation_policies",
     "chat_turns",
     "context_snapshots",
     "operator_profiles",
@@ -325,8 +331,6 @@ CUSTOM_RESOURCES = {
 
 API_PREFIX = "/api/v1"
 PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS = 30
-TOOL_PACK_EVENT_POLL_SECONDS = 0.25
-TOOL_PACK_EVENT_HEARTBEAT_TICKS = 20
 
 
 def _websocket_protocol_secret(
@@ -446,6 +450,18 @@ class ApprovalDecisionRequest(NebulaModel):
     edited_arguments: dict[str, Any] | None = None
 
 
+class AutomationPolicyUpdateRequest(NebulaModel):
+    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
+    network_enabled: bool = True
+    runner_profile_id: str | None = Field(default=None, max_length=200)
+    max_timeout_ms: int = Field(default=300_000, ge=1_000, le=86_400_000)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class AutomationCommandRequest(RunCommandRequest):
+    approval_id: str | None = Field(default=None, max_length=200)
+
+
 class ToolOutputSearchRequest(NebulaModel):
     query: str = Field(min_length=1, max_length=512)
     mode: str = Field(default="literal", pattern=r"^(literal|regex)$")
@@ -485,7 +501,6 @@ class MissionStartRequest(NebulaModel):
     max_tokens: int = Field(default=32_000, ge=1, le=MAX_API_MISSION_TOKENS)
     max_cost_usd: float | None = Field(default=None, ge=0, le=MAX_API_MISSION_COST_USD)
     max_retries: int = Field(default=1, ge=0, le=MAX_API_MISSION_RETRIES)
-    tool_names: list[str] = Field(default_factory=list, max_length=64)
     max_tool_calls: int = Field(default=0, ge=0, le=100)
     max_artifact_queries: int = Field(default=200, ge=0, le=1000)
     max_concurrency: int = Field(default=1, ge=1, le=2)
@@ -545,13 +560,6 @@ class ScopePolicyUpdateRequest(NebulaModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
-class EngagementToolAssignmentRequest(NebulaModel):
-    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    tool_names: list[str] = Field(default_factory=list, max_length=64)
-    enabled: bool = True
-    expected_revision: int | None = Field(default=None, ge=1)
-
-
 class RunnerProfileRequest(NebulaModel):
     name: str = Field(min_length=1, max_length=200)
     runtime: RunnerRuntime
@@ -561,35 +569,8 @@ class RunnerProfileRequest(NebulaModel):
     platform: str = Field(pattern=r"^linux/(amd64|arm64)$")
     isolation: RunnerIsolation
     enabled: bool = True
-    egress_helper_image: str | None = None
     seccomp_profile: str | None = None
     expected_revision: int | None = Field(default=None, ge=1)
-
-
-class ToolPackInstallRequest(NebulaModel):
-    catalog_id: str = Field(min_length=1, max_length=500)
-    version: str | None = Field(default=None, max_length=100)
-    runtime_profile_id: str = Field(min_length=1, max_length=200)
-
-
-class ToolCollectionInstallRequest(NebulaModel):
-    collection_id: str = Field(
-        min_length=1, max_length=128, pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$"
-    )
-    runtime_profile_id: str = Field(min_length=1, max_length=200)
-
-
-class LocalToolPackInstallRequest(NebulaModel):
-    bundle_base64: str = Field(min_length=1, max_length=24_000_000)
-    runtime_profile_id: str = Field(min_length=1, max_length=200)
-    developer_mode_confirmed: bool = False
-
-
-class CustomToolBundleResponse(NebulaModel):
-    filename: str
-    bundle_base64: str
-    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    permission_preview: dict[str, Any]
 
 
 class MissionStopRequest(NebulaModel):
@@ -746,7 +727,8 @@ def create_app(
     mission_service: MissionService | None = None,
     harness_runtime_service: HarnessRuntimeService | None = None,
     mission_checkpoint_path: str | Path | None = None,
-    tool_platform: ToolPlatform | None = None,
+    tool_platform: RuntimePlatform | None = None,
+    automation_runtime: AutomationRuntimeManager | None = None,
     enable_executable_missions: bool | None = None,
     execution_service: ExecutionService | None = None,
     execution_data_root: str | Path | None = None,
@@ -895,11 +877,35 @@ def create_app(
     credentials = credential_store or CredentialStore()
 
     def harness_workspace(engagement_id: str) -> Path:
+        if automation_runtime is not None:
+            return automation_runtime.workspace_resolver(engagement_id)
         if tool_platform is None:
             raise HarnessUnavailableError(
                 "harness execution requires an engagement workspace"
             )
         return tool_platform.workspace_for(engagement_id)
+
+    if automation_runtime is None:
+        if artifact_store is not None and tool_platform is not None:
+            automation_runtime = AutomationRuntimeManager(
+                store=store,
+                artifact_store=artifact_store,
+                data_root=execution_data_root or artifact_store.root.parent,
+                workspace_resolver=tool_platform.workspace_for,
+                runtime_resolver=tool_platform.resolve_human_terminal_runtime,
+                cached_runtime_provider=tool_platform.last_automation_runtime_metadata,
+            )
+    automation_tool_platform = (
+        AutomationToolPlatform(
+            manager=automation_runtime,
+            store=store,
+            artifact_store=artifact_store,
+            workspace_resolver=automation_runtime.workspace_resolver,
+            mcp_platform=tool_platform,
+        )
+        if automation_runtime is not None and artifact_store is not None
+        else None
+    )
 
     harness_runtime = harness_runtime_service or HarnessRuntimeService(
         store,
@@ -907,11 +913,14 @@ def create_app(
         workspace_resolver=harness_workspace,
         artifact_store=artifact_store,
         tool_platform=tool_platform,
+        automation_tool_platform=automation_tool_platform,
     )
     if harness_runtime.store is not store:
         raise ValueError("harness_runtime_service must use the API store")
     if tool_platform is not None:
         harness_runtime.bind_tool_platform(tool_platform)
+    if automation_tool_platform is not None:
+        harness_runtime.bind_automation_tool_platform(automation_tool_platform)
     mcp_probes = McpProbeService(
         store,
         credential_store=credentials,
@@ -949,7 +958,9 @@ def create_app(
         checkpoint_path=mission_checkpoint_path,
         provider_factory=provider_factory,
         tool_components_factory=(
-            tool_platform.mission_components if tool_platform is not None else None
+            automation_tool_platform.mission_components
+            if automation_tool_platform is not None
+            else None
         ),
     )
     if missions.store is not store:
@@ -961,6 +972,7 @@ def create_app(
         return ChatService(
             store,
             tool_platform=tool_platform,
+            automation_tool_platform=automation_tool_platform,
             provider_factory=chat_provider_factory,
             operator_id=active_operator_id,
         )
@@ -1140,6 +1152,13 @@ def create_app(
             return failures
 
         try:
+            if automation_runtime is not None:
+                await start_component(
+                    "automation",
+                    "runtime",
+                    automation_runtime.startup,
+                    automation_runtime.shutdown,
+                )
             await start_component("setup", "coordinator", setup.start, setup.shutdown)
             if container_terminals is not None:
                 await start_component(
@@ -1205,6 +1224,7 @@ def create_app(
     app.state.operator_profile_service = operators
     app.state.credential_store = credentials
     app.state.tool_platform = tool_platform
+    app.state.automation_runtime = automation_runtime
     app.state.execution_service = executions
     app.state.container_terminal_service = container_terminals
     app.state.workspace_service = workspaces
@@ -1241,6 +1261,7 @@ def create_app(
         "administration": "storage",
         "approvals": "missions",
         "artifacts": "evidence",
+        "automation": "automation",
         "chat": "chat",
         "chat-messages": "chat",
         "chat-sessions": "chat",
@@ -1249,7 +1270,6 @@ def create_app(
         "context-snapshots": "knowledge",
         "credentials": "providers",
         "diagnostics": "diagnostics",
-        "engagement-tool-assignments": "toolbox",
         "engagements": "projects",
         "evidence": "evidence",
         "execution-ai": "executions",
@@ -1280,8 +1300,6 @@ def create_app(
         "tasks": "missions",
         "agent-attempts": "missions",
         "tool-calls": "missions",
-        "tool-pack-installations": "toolbox",
-        "tool-packs": "toolbox",
         "workspace": "workspace",
         **{
             tag: "projects"
@@ -1319,8 +1337,12 @@ def create_app(
             return "missions"
         if isinstance(exc, (HarnessError, McpProbeError)):
             return "harnesses"
-        if isinstance(exc, ToolPlatformError):
-            return "toolbox"
+        if isinstance(exc, RuntimePlatformError):
+            return "sandbox"
+        if isinstance(
+            exc, (AutomationPolicyDenied, AutomationRuntimeUnavailable)
+        ):
+            return "automation"
         if isinstance(exc, ContainerTerminalError):
             return "terminal"
         if isinstance(exc, (ExecutionServiceError, ExecutionAIError)):
@@ -1360,8 +1382,6 @@ def create_app(
             return "human-terminal"
         if feature == "setup":
             return "runner-setup"
-        if feature == "toolbox":
-            return "toolbox-availability"
         if feature == "harnesses":
             return "provider-model"
         if code.startswith("api."):
@@ -1726,11 +1746,25 @@ def create_app(
             request, exc, status_code=502, detail=str(exc), retryable=True
         )
 
-    @app.exception_handler(ToolPlatformError)
-    async def tool_platform_error_handler(
-        request: Request, exc: ToolPlatformError
+    @app.exception_handler(RuntimePlatformError)
+    async def runtime_platform_error_handler(
+        request: Request, exc: RuntimePlatformError
     ) -> JSONResponse:
         return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
+
+    @app.exception_handler(AutomationRuntimeUnavailable)
+    async def automation_runtime_unavailable_handler(
+        request: Request, exc: AutomationRuntimeUnavailable
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request, exc, status_code=503, detail=str(exc), retryable=True
+        )
+
+    @app.exception_handler(AutomationPolicyDenied)
+    async def automation_policy_denied_handler(
+        request: Request, exc: AutomationPolicyDenied
+    ) -> JSONResponse:
+        return diagnostic_error_response(request, exc, status_code=403, detail=str(exc))
 
     @app.exception_handler(ExecutionServiceError)
     async def execution_error_handler(
@@ -4192,9 +4226,15 @@ def create_app(
         approval = store.get(Approval, approval_id)
         if approval.status != ApprovalStatus.PENDING:
             raise ConflictError("approval has already been resolved")
+        automation_approval = approval.exact_request.get("tool_name") == "run_command"
+        if automation_approval and request.edited_arguments is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="command approvals apply to exact shell text and cannot be edited",
+            )
         approval_run = (
             store.get(AgentRun, approval.run_id)
-            if approval.origin == ToolCallOrigin.MISSION
+            if approval.origin == ToolCallOrigin.MISSION and not automation_approval
             else None
         )
         harness_turn: HarnessTurn | None = None
@@ -4209,25 +4249,34 @@ def create_app(
                 detail="harness approvals apply to the exact request; argument editing is disabled",
             )
         if approval.expires_at is not None and approval.expires_at <= utc_now():
-            expired, _ = store.update_with_event(
-                Approval,
-                approval.id,
-                {
-                    "status": ApprovalStatus.EXPIRED,
-                    "decided_by": "system",
-                    "decided_at": utc_now(),
-                    "decision_note": "approval expired before an operator decision",
-                },
-                expected_revision=approval.revision,
-                run_id=approval.run_id,
-                event_type="approval.expired",
-                event_payload={
-                    "approval_id": approval.id,
-                    "status": ApprovalStatus.EXPIRED.value,
-                },
-                actor_id="system",
-                idempotency_key=f"approval:{approval.id}:expired",
-            )
+            expiry_changes = {
+                "status": ApprovalStatus.EXPIRED,
+                "decided_by": "system",
+                "decided_at": utc_now(),
+                "decision_note": "approval expired before an operator decision",
+            }
+            if automation_approval:
+                store.update(
+                    Approval,
+                    approval.id,
+                    expiry_changes,
+                    expected_revision=approval.revision,
+                )
+            else:
+                store.update_with_event(
+                    Approval,
+                    approval.id,
+                    expiry_changes,
+                    expected_revision=approval.revision,
+                    run_id=approval.run_id,
+                    event_type="approval.expired",
+                    event_payload={
+                        "approval_id": approval.id,
+                        "status": ApprovalStatus.EXPIRED.value,
+                    },
+                    actor_id="system",
+                    idempotency_key=f"approval:{approval.id}:expired",
+                )
             raise HTTPException(status_code=410, detail="approval has expired")
         status_by_decision = {
             "approve": (
@@ -4253,21 +4302,31 @@ def create_app(
             # that describes the pre-edit arguments.
             exact.pop("argv", None)
             changes["exact_request"] = exact
-        updated, _ = store.update_with_event(
-            Approval,
-            approval.id,
-            changes,
-            expected_revision=approval.revision,
-            run_id=approval.run_id,
-            event_type="approval.resolved",
-            event_payload={
-                "approval_id": approval.id,
-                "status": changes["status"].value,
-                "decided_by": operator_id,
-            },
-            actor_id=operator_id,
-            idempotency_key=f"approval:{approval.id}:resolved",
-        )
+        if automation_approval:
+            updated = store.update(
+                Approval,
+                approval.id,
+                changes,
+                expected_revision=approval.revision,
+            )
+        else:
+            updated, _ = store.update_with_event(
+                Approval,
+                approval.id,
+                changes,
+                expected_revision=approval.revision,
+                run_id=approval.run_id,
+                event_type="approval.resolved",
+                event_payload={
+                    "approval_id": approval.id,
+                    "status": changes["status"].value,
+                    "decided_by": operator_id,
+                },
+                actor_id=operator_id,
+                idempotency_key=f"approval:{approval.id}:resolved",
+            )
+        if automation_approval:
+            return updated
         if harness_turn is not None:
             await harness_runtime.resolve_approval(updated)
             if request.decision == "stop":
@@ -4694,474 +4753,157 @@ def create_app(
         return scope
 
     @app.get(
-        f"{API_PREFIX}/engagements/{{engagement_id}}/tool-assignment",
-        response_model=list[EngagementToolAssignment],
-        tags=["tool-packs"],
+        f"{API_PREFIX}/automation/runtime",
+        tags=["automation"],
         dependencies=[Depends(require_auth)],
     )
-    async def engagement_tool_assignments(
+    async def automation_runtime_status() -> Any:
+        if automation_runtime is None:
+            return {
+                "configured": False,
+                "ready": False,
+                "detail": "automation runtime is not configured",
+                "inventory": [],
+            }
+        return await automation_runtime.runtime_info()
+
+    @app.post(
+        f"{API_PREFIX}/automation/runtime/prepare",
+        tags=["automation"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def prepare_automation_runtime() -> Any:
+        if automation_runtime is None:
+            raise HTTPException(
+                status_code=501, detail="automation runtime is not configured"
+            )
+        return await automation_runtime.prepare()
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/automation-policy",
+        response_model=AutomationProjectPolicy,
+        tags=["automation"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_automation_policy(
         engagement_id: str,
-    ) -> list[EngagementToolAssignment]:
-        store.get(Engagement, engagement_id)
-        return [
-            assignment
-            for assignment in store.list_entities(EngagementToolAssignment, limit=1_000)
-            if assignment.engagement_id == engagement_id
-        ]
+    ) -> AutomationProjectPolicy:
+        if automation_runtime is None:
+            raise HTTPException(
+                status_code=501, detail="automation runtime is not configured"
+            )
+        return automation_runtime.project_policy(engagement_id)
 
     @app.put(
-        f"{API_PREFIX}/engagements/{{engagement_id}}/tool-assignment",
-        response_model=EngagementToolAssignment,
-        tags=["tool-packs"],
+        f"{API_PREFIX}/engagements/{{engagement_id}}/automation-policy",
+        response_model=AutomationProjectPolicy,
+        tags=["automation"],
         dependencies=[Depends(require_auth)],
     )
-    async def put_engagement_tool_assignment(
-        engagement_id: str, request: EngagementToolAssignmentRequest
-    ) -> EngagementToolAssignment:
-        store.get(Engagement, engagement_id)
-        installations = [
-            item
-            for item in store.list_entities(ToolPackInstallation, limit=1_000)
-            if item.manifest_digest == request.manifest_digest
-            and item.status == ToolPackInstallationStatus.READY
-        ]
-        if not installations:
-            raise ConflictError(
-                "tool assignment requires a verified ready pack installation"
-            )
-        assigned_tool_names = request.tool_names
-        if tool_platform is not None:
-            assigned_tool_names = tool_platform.normalize_assignment(
-                request.manifest_digest, request.tool_names
-            )
-        operator_id = active_operator_id()
-        existing = next(
-            (
-                assignment
-                for assignment in store.list_entities(
-                    EngagementToolAssignment, limit=1_000
-                )
-                if assignment.engagement_id == engagement_id
-                and assignment.manifest_digest == request.manifest_digest
-            ),
-            None,
-        )
-        changes = {
-            "allowed_tool_names": assigned_tool_names,
-            "enabled": request.enabled,
-            "assigned_by": operator_id,
-        }
-        if existing is not None:
-            return store.update(
-                EngagementToolAssignment,
-                existing.id,
-                changes,
-                expected_revision=request.expected_revision or existing.revision,
-            )
-        assignment_id = str(
-            uuid5(
-                NAMESPACE_URL,
-                f"nebula:tool-assignment:{engagement_id}:{request.manifest_digest}",
-            )
-        )
-        return store.create(
-            EngagementToolAssignment(
-                id=assignment_id,
-                engagement_id=engagement_id,
-                manifest_digest=request.manifest_digest,
-                allowed_tool_names=assigned_tool_names,
-                enabled=request.enabled,
-                assigned_by=operator_id,
-            )
-        )
-
-    @app.get(
-        f"{API_PREFIX}/tool-catalog",
-        tags=["tool-packs"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def tool_catalog() -> list[dict[str, Any]]:
-        if tool_platform is None:
+    async def put_automation_policy(
+        engagement_id: str, request: AutomationPolicyUpdateRequest
+    ) -> AutomationProjectPolicy:
+        if automation_runtime is None:
             raise HTTPException(
-                status_code=501, detail="tool-pack platform is not configured"
+                status_code=501, detail="automation runtime is not configured"
             )
-        return await tool_platform.catalog()
-
-    @app.get(
-        f"{API_PREFIX}/tool-packs",
-        response_model=list[ToolPackInstallation],
-        tags=["tool-packs"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def tool_pack_installations() -> list[ToolPackInstallation]:
-        return store.list_entities(ToolPackInstallation, limit=1_000)
-
-    @app.get(
-        f"{API_PREFIX}/tools",
-        tags=["tool-packs"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def installed_tools() -> list[dict[str, Any]]:
-        if tool_platform is None:
-            return []
-        return tool_platform.list_tools()
-
-    @app.post(
-        f"{API_PREFIX}/tool-packs/install",
-        response_model=ToolPackInstallation,
-        status_code=201,
-        tags=["tool-packs"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def install_catalog_tool_pack(
-        request: ToolPackInstallRequest,
-    ) -> ToolPackInstallation:
-        if tool_platform is None:
-            raise HTTPException(
-                status_code=501, detail="tool-pack platform is not configured"
-            )
-        return await tool_platform.install_catalog(
-            request.catalog_id,
-            runtime_profile_id=request.runtime_profile_id,
-            version=request.version,
+        return automation_runtime.update_project_policy(
+            engagement_id,
+            approval_policy=request.approval_policy,
+            network_enabled=request.network_enabled,
+            runner_profile_id=request.runner_profile_id,
+            max_timeout_ms=request.max_timeout_ms,
+            expected_revision=request.expected_revision,
         )
 
     @app.post(
-        f"{API_PREFIX}/tool-collections/install",
-        response_model=list[ToolPackInstallation],
-        status_code=201,
-        tags=["tool-packs"],
+        f"{API_PREFIX}/engagements/{{engagement_id}}/automation-sessions/"
+        "{owner_kind}/{owner_id}/commands",
+        tags=["automation"],
         dependencies=[Depends(require_auth)],
     )
-    async def install_catalog_tool_collection(
-        request: ToolCollectionInstallRequest,
-    ) -> list[ToolPackInstallation]:
-        if tool_platform is None:
+    async def run_automation_command(
+        engagement_id: str,
+        owner_kind: Literal["chat", "mission", "harness", "api"],
+        owner_id: str,
+        request: AutomationCommandRequest,
+    ) -> Any:
+        if automation_runtime is None:
             raise HTTPException(
-                status_code=501, detail="tool-pack platform is not configured"
+                status_code=501, detail="automation runtime is not configured"
             )
-        return await tool_platform.install_collection(
-            request.collection_id,
-            runtime_profile_id=request.runtime_profile_id,
-        )
-
-    @app.post(
-        f"{API_PREFIX}/tool-packs/generate",
-        response_model=CustomToolBundleResponse,
-        status_code=201,
-        tags=["tool-packs"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def generate_custom_tool_pack(
-        request: CustomToolDefinition,
-    ) -> CustomToolBundleResponse:
-        """Generate, validate, and archive a parser-free unsigned local pack."""
-
-        def generate() -> tuple[bytes, str]:
-            with tempfile.TemporaryDirectory(prefix="nebula-custom-tool-") as root:
-                source = Path(root) / "source"
-                destination = Path(root) / f"{request.pack_name}.nebula-toolpack"
-                generate_custom_tool_project(source, request)
-                pack_tool_pack(source, destination)
-                return destination.read_bytes(), manifest_digest(
-                    custom_tool_manifest(request)
-                )
-
-        bundle, digest = await asyncio.to_thread(generate)
-        return CustomToolBundleResponse(
-            filename=f"{request.pack_name}.nebula-toolpack",
-            bundle_base64=base64.b64encode(bundle).decode("ascii"),
-            manifest_digest=digest,
-            permission_preview=request.permission_preview(),
-        )
-
-    @app.post(
-        f"{API_PREFIX}/tool-packs/install-local",
-        response_model=ToolPackInstallation,
-        status_code=201,
-        tags=["tool-packs"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def install_local_tool_pack(
-        request: LocalToolPackInstallRequest,
-    ) -> ToolPackInstallation:
-        if tool_platform is None:
-            raise HTTPException(
-                status_code=501, detail="tool-pack platform is not configured"
-            )
-        try:
-            bundle = base64.b64decode(request.bundle_base64, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            record_caught_exception(
-                "api",
-                "api.api.caught_failure_032",
-                "A handled api operation raised an exception.",
-                exc,
-                stage="api",
-            )
-            raise HTTPException(
-                status_code=422, detail="tool-pack bundle is not valid base64"
-            ) from exc
-        return await tool_platform.install_local(
-            bundle,
-            runtime_profile_id=request.runtime_profile_id,
-            confirm_permissions=request.developer_mode_confirmed,
-            assigned_by=active_operator_id(),
-        )
-
-    @app.post(
-        f"{API_PREFIX}/tool-packs/{{installation_id}}/verify",
-        response_model=ToolPackInstallation,
-        tags=["tool-packs"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def verify_tool_pack(installation_id: str) -> ToolPackInstallation:
-        if tool_platform is None:
-            raise HTTPException(
-                status_code=501, detail="tool-pack platform is not configured"
-            )
-        return await tool_platform.verify(installation_id)
-
-    @app.post(
-        f"{API_PREFIX}/tool-packs/{{installation_id}}/update",
-        response_model=ToolPackInstallation,
-        tags=["tool-packs"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def update_tool_pack(installation_id: str) -> ToolPackInstallation:
-        if tool_platform is None:
-            raise HTTPException(
-                status_code=501, detail="tool-pack platform is not configured"
-            )
-        return await tool_platform.update(installation_id)
-
-    @app.delete(
-        f"{API_PREFIX}/tool-packs/{{installation_id}}",
-        status_code=204,
-        tags=["tool-packs"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def disable_tool_pack(installation_id: str) -> Response:
-        if tool_platform is None:
-            raise HTTPException(
-                status_code=501, detail="tool-pack platform is not configured"
-            )
-        tool_platform.disable(installation_id)
-        return Response(status_code=204)
-
-    @app.websocket(f"{API_PREFIX}/tool-packs/events/ws")
-    async def tool_pack_event_socket(
-        websocket: WebSocket,
-        after_sequence: int = Query(default=0, ge=0),
-    ) -> None:
-        request_id = new_request_id()
-        supplied: str | None = None
-        authorization = websocket.headers.get("authorization", "")
-        if authorization.lower().startswith("bearer "):
-            supplied = authorization[7:]
-        offered_protocols = [
-            value.strip()
-            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
-            if value.strip()
-        ]
-        subprotocol_token: str | None = None
-        for protocol in offered_protocols:
-            if not protocol.startswith("nebula.auth."):
-                continue
-            encoded = protocol.removeprefix("nebula.auth.")
-            try:
-                padding = "=" * (-len(encoded) % 4)
-                subprotocol_token = base64.urlsafe_b64decode(encoded + padding).decode(
-                    "utf-8"
-                )
-            except (ValueError, UnicodeDecodeError) as caught_error:
-                record_caught_exception(
-                    "toolbox",
-                    "toolbox.stream.authentication_rejected",
-                    "A Toolbox stream authentication value was malformed.",
-                    caught_error,
-                    stage="stream-negotiation",
-                )
-                subprotocol_token = None
-            break
-        if (
-            supplied
-            and subprotocol_token
-            and not hmac.compare_digest(supplied, subprotocol_token)
-        ):
-            emit_diagnostic(
-                "warning",
-                "toolbox",
-                "toolbox.stream.authentication_denied",
-                "Toolbox event stream authentication was denied.",
-                outcome="denied",
-                stage="stream-negotiation",
-                request_id=request_id,
-                metadata={"reason_code": "conflicting-authentication"},
-            )
-            await websocket.close(code=4401, reason="conflicting authentication tokens")
-            return
-        supplied = subprotocol_token or supplied
-        if not allow_unauthenticated and (
-            not supplied or not hmac.compare_digest(supplied, token)
-        ):
-            emit_diagnostic(
-                "warning",
-                "toolbox",
-                "toolbox.stream.authentication_denied",
-                "Toolbox event stream authentication was denied.",
-                outcome="denied",
-                stage="stream-negotiation",
-                request_id=request_id,
-                metadata={"reason_code": "authentication-required"},
-            )
-            await websocket.close(code=4401, reason="valid bearer token required")
-            return
-        if tool_platform is None:
-            emit_diagnostic(
-                "error",
-                "toolbox",
-                "toolbox.stream.unavailable",
-                "The Toolbox event stream is unavailable.",
-                outcome="failure",
-                stage="stream-negotiation",
-                retryable=True,
-                request_id=request_id,
-            )
-            await websocket.close(
-                code=4501, reason="tool-pack platform is not configured"
-            )
-            return
-        event_protocol = (
-            "nebula.tool-packs.v1"
-            if "nebula.tool-packs.v1" in offered_protocols
+        approval = (
+            store.get(Approval, request.approval_id)
+            if request.approval_id is not None
             else None
         )
-        await websocket.accept(subprotocol=event_protocol)
-        started_at = time.monotonic()
-        event_count = 0
-        gap_count = 0
-        cursor = after_sequence
-        emit_diagnostic(
-            "info",
-            "toolbox",
-            "toolbox.stream.connected",
-            "A Toolbox event stream connected.",
-            outcome="started",
-            stage="stream",
-            request_id=request_id,
-            metadata={"sequence_start": after_sequence},
+        command = RunCommandRequest.model_validate(
+            request.model_dump(exclude={"approval_id"})
         )
         try:
-            replay = tool_platform.events.replay(cursor)
-            for event in replay.events:
-                event_count += 1
-                await websocket.send_json(
-                    {"kind": "event", "event": event.model_dump(mode="json")}
-                )
-                cursor = event.sequence
-            await websocket.send_json(
-                {
-                    "kind": "replay_complete",
-                    "after_sequence": cursor,
-                    "oldest_sequence": replay.oldest_sequence,
-                    "latest_sequence": replay.latest_sequence,
-                    "truncated": replay.truncated,
-                }
+            return await automation_runtime.run_command(
+                engagement_id=engagement_id,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                request=command,
+                approval=approval,
+                requested_by=active_operator_id(),
             )
+        except CommandApprovalRequired as exc:
+            return JSONResponse(
+                status_code=409,
+                content=jsonable_encoder(
+                    {
+                        "detail": "command execution requires approval",
+                        "approval": exc.approval,
+                    }
+                ),
+            )
+        except AutomationPolicyDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-            idle_ticks = 0
-            while True:
-                await asyncio.sleep(TOOL_PACK_EVENT_POLL_SECONDS)
-                replay = tool_platform.events.replay(cursor)
-                if replay.events:
-                    idle_ticks = 0
-                    if replay.truncated:
-                        gap_count += 1
-                        emit_diagnostic(
-                            "warning",
-                            "toolbox",
-                            "toolbox.stream.sequence_gap",
-                            "A Toolbox stream replay gap was detected.",
-                            outcome="degraded",
-                            stage="replay",
-                            request_id=request_id,
-                            retryable=False,
-                            metadata={
-                                "sequence_start": cursor,
-                                "sequence_end": replay.oldest_sequence,
-                            },
-                        )
-                        await websocket.send_json(
-                            {
-                                "kind": "replay_gap",
-                                "after_sequence": cursor,
-                                "oldest_sequence": replay.oldest_sequence,
-                                "latest_sequence": replay.latest_sequence,
-                            }
-                        )
-                    for event in replay.events:
-                        event_count += 1
-                        await websocket.send_json(
-                            {
-                                "kind": "event",
-                                "event": event.model_dump(mode="json"),
-                            }
-                        )
-                        cursor = event.sequence
-                else:
-                    idle_ticks += 1
-                    if idle_ticks >= TOOL_PACK_EVENT_HEARTBEAT_TICKS:
-                        await websocket.send_json(
-                            {
-                                "kind": "heartbeat",
-                                "after_sequence": cursor,
-                                "oldest_sequence": replay.oldest_sequence,
-                                "latest_sequence": replay.latest_sequence,
-                            }
-                        )
-                        idle_ticks = 0
-        except WebSocketDisconnect as caught_error:
-            record_caught_exception(
-                "toolbox",
-                "toolbox.stream.disconnected",
-                "A Toolbox event stream disconnected.",
-                caught_error,
-                stage="stream",
+    @app.post(
+        f"{API_PREFIX}/automation-processes/{{process_id}}/io",
+        response_model=CommandResult,
+        tags=["automation"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def automation_process_io(
+        process_id: str, request: ProcessIORequest
+    ) -> CommandResult:
+        if automation_runtime is None:
+            raise HTTPException(
+                status_code=501, detail="automation runtime is not configured"
             )
-            return
-        except Exception as exc:
-            frame = stream_error_frame(
-                feature="toolbox",
-                code="toolbox_stream_failed",
-                detail="Toolbox event stream failed",
-                exception=exc,
-                retryable=True,
-                request_id=request_id,
+        return await automation_runtime.process_io(process_id, request)
+
+    @app.get(
+        f"{API_PREFIX}/automation-sessions/{{session_id}}/processes",
+        response_model=list[CommandExecution],
+        tags=["automation"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def automation_session_processes(
+        session_id: str,
+    ) -> list[CommandExecution]:
+        if automation_runtime is None:
+            raise HTTPException(
+                status_code=501, detail="automation runtime is not configured"
             )
-            frame["kind"] = "error"
-            try:
-                await websocket.send_json(frame)
-            except (RuntimeError, WebSocketDisconnect):
-                # diagnostic-expected: the stream failure is already recorded.
-                pass
-        finally:
-            emit_diagnostic(
-                "info",
-                "toolbox",
-                "toolbox.stream.disconnected",
-                "A Toolbox event stream ended.",
-                outcome="stopped",
-                stage="stream",
-                duration_ms=(time.monotonic() - started_at) * 1000,
-                request_id=request_id,
-                metadata={
-                    "count": event_count,
-                    "warning_count": gap_count,
-                    "sequence_start": after_sequence,
-                    "sequence_end": cursor,
-                },
+        return automation_runtime.list_processes(session_id)
+
+    @app.delete(
+        f"{API_PREFIX}/automation-sessions/{{session_id}}",
+        response_model=AutomationSession,
+        tags=["automation"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def close_automation_session(session_id: str) -> AutomationSession:
+        if automation_runtime is None:
+            raise HTTPException(
+                status_code=501, detail="automation runtime is not configured"
             )
+        return await automation_runtime.close_session(session_id)
 
     @app.get(
         f"{API_PREFIX}/runner-profiles",
@@ -5212,23 +4954,28 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def start_mission(request: MissionStartRequest) -> AgentRun:
+        command_tools = (
+            [RUN_COMMAND_NAME, PROCESS_IO_NAME]
+            if request.backend == RunBackend.NATIVE
+            and request.max_tool_calls > 0
+            and automation_tool_platform is not None
+            else []
+        )
         if (
             request.backend == RunBackend.NATIVE
-            and request.tool_names
-            and not executable_missions_enabled
+            and request.max_tool_calls > 0
+            and automation_tool_platform is None
+            and not request.mcp_server_ids
         ):
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "executable missions remain release-gated until the complete "
-                    "runner-isolation acceptance flow passes"
-                ),
+                detail="automation command runtime is unavailable",
             )
         operator_id = active_operator_id()
         budget = RunBudget(
             max_concurrency=request.max_concurrency,
             max_delegation_depth=(
-                1 if request.tool_names or request.mcp_server_ids else 0
+                1 if command_tools or request.mcp_server_ids else 0
             ),
             max_duration_seconds=request.max_duration_seconds,
             max_tokens=request.max_tokens,
@@ -5256,7 +5003,7 @@ def create_app(
             provider_id=request.provider_id or "",
             model=request.model or "",
             budget=budget,
-            tool_names=request.tool_names,
+            tool_names=command_tools,
             mcp_server_ids=request.mcp_server_ids,
             allow_cloud_tool_results=request.allow_cloud_tool_results,
             actor_id=operator_id,
@@ -6689,16 +6436,6 @@ def create_app(
             model,
             read_only=resource in READ_ONLY_RESOURCES,
             append_only=resource in APPEND_ONLY_RESOURCES,
-            after_create=(
-                (
-                    lambda entity: tool_platform.enable_default_local_packs(
-                        entity.id,
-                        assigned_by=active_operator_id(),
-                    )
-                )
-                if model is Engagement and tool_platform is not None
-                else None
-            ),
         )
     _assert_unique_api_operations(app)
 

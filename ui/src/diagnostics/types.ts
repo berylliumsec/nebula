@@ -15,7 +15,7 @@ export const diagnosticFeatures = [
   "knowledge",
   "harnesses",
   "missions",
-  "toolbox",
+  "runtime",
   "sandbox",
   "executions",
   "findings",

@@ -50,9 +50,9 @@ from nebula.v3.terminal_history import (
     TerminalCommandHistory,
     TerminalRecordingPolicy,
 )
-from nebula.v3.tool_platform import (
+from nebula.v3.runtime_platform import (
     HumanTerminalRuntimeResolution,
-    ToolPlatformError,
+    RuntimePlatformError,
 )
 from nebula.v3.workspace import WorkspaceService
 
@@ -241,7 +241,7 @@ class StubTerminalPlatform:
     ) -> HumanTerminalRuntimeResolution:
         del engagement_id
         if self.fail_image:
-            raise ToolPlatformError("registry unavailable and no cached Kali image")
+            raise RuntimePlatformError("registry unavailable and no cached Kali image")
         return HumanTerminalRuntimeResolution(
             profile=self.profile,
             runner=self.runner,  # type: ignore[arg-type]
@@ -602,7 +602,7 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
 
 
 @async_test
-async def test_unrestricted_kali_terminal_needs_no_toolbox_or_scope_policy(tmp_path):
+async def test_unrestricted_kali_terminal_needs_no_runtime_or_scope_policy(tmp_path):
     store = NebulaStore(tmp_path / "default-terminal.db")
     engagement = store.create(Engagement(name="Default Terminal Lab"))
     runner = RecordingTerminalRunner()

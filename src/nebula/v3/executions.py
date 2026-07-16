@@ -62,7 +62,11 @@ from .sandbox import (
     SandboxWorkspaceAccess,
 )
 from .storage import NebulaStore, NotFoundError
-from .tool_platform import OperatorRuntimeResolution, ToolPlatform, ToolPlatformError
+from .runtime_platform import (
+    OperatorRuntimeResolution,
+    RuntimePlatform,
+    RuntimePlatformError,
+)
 
 MAX_SOURCE_BYTES = 200_000
 OUTPUT_CHUNK_BYTES = 32_768
@@ -193,7 +197,7 @@ class ExecutionService:
         *,
         store: NebulaStore,
         artifact_store: ArtifactStore,
-        tool_platform: ToolPlatform | None,
+        tool_platform: RuntimePlatform | None,
         data_root: str | Path,
         operator_id: Callable[[], str] | None = None,
         max_concurrency: int = 2,
@@ -338,7 +342,7 @@ class ExecutionService:
                 try:
                     self._resolve(engagement_id, language, network=network)
                     results[network] = None
-                except (ToolPlatformError, ExecutionServiceError) as exc:
+                except (RuntimePlatformError, ExecutionServiceError) as exc:
                     record_caught_exception(
                         "executions",
                         "executions.executions.caught_failure_002",
@@ -418,7 +422,7 @@ class ExecutionService:
                 error_code=exc.code,
                 detail=exc.detail,
             )
-        except ToolPlatformError as exc:
+        except RuntimePlatformError as exc:
             record_caught_exception(
                 "executions",
                 "executions.executions.caught_failure_004",
@@ -736,7 +740,7 @@ class ExecutionService:
     ) -> OperatorRuntimeResolution:
         if self.tool_platform is None:
             raise ExecutionServiceError(
-                "runner_unavailable", "Toolbox execution is not configured"
+                "runner_unavailable", "Kali runtime execution is not configured"
             )
         return self.tool_platform.resolve_operator_runtime(
             engagement_id, language, network=network
@@ -863,7 +867,7 @@ class ExecutionService:
             decision = PolicyEngine().evaluate(
                 policy,
                 PolicyRequest(
-                    tool_name="environment.shell_local",
+                    tool_name="reviewed_code.execute",
                     risk_class=RiskClass.WORKSPACE_WRITE,
                     action="operator_code",
                 ),
@@ -875,7 +879,7 @@ class ExecutionService:
             decision = PolicyEngine().evaluate(
                 policy,
                 PolicyRequest(
-                    tool_name="environment.shell_network",
+                    tool_name="reviewed_code.execute_networked",
                     risk_class=RiskClass.ACTIVE_SCAN,
                     target=request.target,
                     ports=request.ports,
@@ -909,8 +913,7 @@ class ExecutionService:
             language=resolution.canonical_language,
             interpreter=resolution.runtime.interpreter,
             arguments=resolution.runtime.arguments,
-            tool_pack_installation_id=resolution.installation.id,
-            manifest_digest=resolution.installation.manifest_digest,
+            runtime_digest=resolution.runtime_digest,
             image=resolution.image,
             runner_profile_id=profile.id,
             runner_profile_revision=profile.revision,
@@ -920,7 +923,6 @@ class ExecutionService:
             runner_platform=profile.platform,
             runner_context=profile.context,
             runner_socket=profile.socket,
-            trusted=resolution.trusted,
         )
 
     async def _execute(self, execution_id: str) -> None:
@@ -1069,11 +1071,10 @@ class ExecutionService:
                 pinned_hosts[host] = execution.network.resolved_addresses[0]
         sandbox_request = SandboxRequest(
             image=resolution.image,
+            trusted_local_image=True,
             command=[
-                resolution.runtime.adapter,
-                "code",
-                "--language",
-                execution.language,
+                resolution.runtime.interpreter,
+                *resolution.runtime.arguments,
             ],
             workspace=resolution.workspace,
             workspace_access=SandboxWorkspaceAccess.WRITE,
@@ -1467,7 +1468,7 @@ class ExecutionService:
     def _assert_workspace_limits(self, engagement_id: str) -> None:
         if self.tool_platform is None:
             raise ExecutionServiceError(
-                "runner_unavailable", "Toolbox execution is not configured"
+                "runner_unavailable", "Kali runtime execution is not configured"
             )
         try:
             _assert_workspace_limits(self.tool_platform.workspace_for(engagement_id))
@@ -1748,7 +1749,7 @@ def _artifact_descriptor(artifact: Artifact) -> dict[str, Any]:
 def _execution_failure_code(error: Exception) -> str:
     if isinstance(error, ExecutionServiceError):
         return error.code
-    if isinstance(error, (SandboxUnavailable, ToolPlatformError)):
+    if isinstance(error, (SandboxUnavailable, RuntimePlatformError)):
         return "runtime_unavailable"
     return "runner_unavailable"
 

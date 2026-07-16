@@ -72,7 +72,7 @@ One file is maintained for each domain:
 | `knowledge.log` | Parsing, ingestion, indexing, retrieval, citations and compaction |
 | `harnesses.log` | Codex/Claude processes, protocols, sessions, MCP and cleanup |
 | `missions.log` | Missions, tasks, attempts, budgets, approvals, retries and terminalization |
-| `toolbox.log` | Catalog trust, installation, verification, parsers, smoke tests and authoring |
+| `runtime.log` | Kali preparation, inventory, sessions, commands, processes and policy grants |
 | `sandbox.log` | Runners, images, containers, DNS/egress policy, limits and cleanup |
 | `executions.log` | Reviewed preflight, execution stream summaries, results and generated drafts |
 | `findings.log` | Finding lifecycle, validation, evidence, transitions and report assignment |

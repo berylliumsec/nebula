@@ -33,7 +33,7 @@ from .executions import (
     ExecutionServiceError,
 )
 from .storage import NebulaStore
-from .tool_platform import ToolPlatform
+from .runtime_platform import RuntimePlatform
 
 MAX_PREVIEW_BYTES = 256 * 1024
 _BUSY_STATUSES = {
@@ -126,7 +126,7 @@ class WorkspaceService:
         *,
         store: NebulaStore,
         artifact_store: ArtifactStore,
-        tool_platform: ToolPlatform,
+        tool_platform: RuntimePlatform,
         operator_id: Callable[[], str] | None = None,
     ) -> None:
         self.store = store

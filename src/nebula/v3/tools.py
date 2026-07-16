@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 import socket
-import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterator
 from enum import Enum
@@ -40,24 +39,13 @@ from .domain import (
     utc_now,
 )
 from .policy import PolicyDecision, PolicyEffect, PolicyEngine, PolicyRequest
-from .sandbox import (
-    EgressRule,
-    SandboxExecutionKind,
-    SandboxLimits,
-    SandboxNetwork,
-    SandboxRequest,
-    SandboxRunner,
-    SandboxWorkspaceAccess,
-)
+from .sandbox import SandboxRunner
 from .storage import ConflictError, NebulaStore, NotFoundError
-from .redaction import redacted_display
 from .tool_results import (
-    MAX_CAPTURE_BYTES,
     MAX_GENERATED_BYTES,
     MAX_GENERATED_FILES,
     MAX_MODEL_ARTIFACT_REFS,
     ParserState,
-    StreamCapture,
     ToolParserReceipt,
     ToolResultStatus,
     ToolTimingReceipt,
@@ -106,29 +94,8 @@ class IdempotencyBehavior(str, Enum):
     NON_IDEMPOTENT = "non_idempotent"
 
 
-class ToolArgumentBinding(BaseModel):
-    """Declaratively map one typed input property to deterministic argv."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    argument: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
-    kind: Literal["value", "repeat", "csv", "json", "boolean_flag", "positional"] = (
-        "value"
-    )
-    flag: str | None = None
-
-    @model_validator(mode="after")
-    def binding_shape_is_safe(self) -> "ToolArgumentBinding":
-        if self.kind == "positional":
-            if self.flag is not None:
-                raise ValueError("positional bindings cannot declare a flag")
-        elif not self.flag or not self.flag.startswith("-") or "\x00" in self.flag:
-            raise ValueError("non-positional bindings require a fixed option flag")
-        return self
-
-
 class ToolSpec(BaseModel):
-    """Security and data contract for one installed tool capability."""
+    """Security and data contract for a fixed or MCP capability."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -144,7 +111,6 @@ class ToolSpec(BaseModel):
     )
     credential_classes: list[str] = Field(default_factory=list)
     timeout_seconds: int = Field(default=300, ge=1, le=86_400)
-    resource_limits: SandboxLimits = Field(default_factory=SandboxLimits)
     parser: str | None = None
     idempotency: IdempotencyBehavior = IdempotencyBehavior.SAFE
     target_argument: str | None = None
@@ -153,14 +119,8 @@ class ToolSpec(BaseModel):
     action: str | None = None
     cloud_transfer: bool = False
     requires_approval: bool = False
-    pack_id: str | None = Field(default=None, max_length=400)
-    manifest_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    image: str | None = None
-    executable: str | None = None
-    fixed_arguments: list[str] = Field(default_factory=list)
-    argument_bindings: list[ToolArgumentBinding] = Field(default_factory=list)
+    source_id: str | None = Field(default=None, max_length=400)
     parser_contract: dict[str, Any] | None = None
-    smoke_test_fixture: dict[str, Any] | None = None
     budget_class: Literal["execution", "artifact_query"] = "execution"
     capture_paths: list[str] = Field(default_factory=list, max_length=32)
 
@@ -171,9 +131,9 @@ class ToolSpec(BaseModel):
             Draft202012Validator.check_schema(value)
         except SchemaError as exc:
             record_caught_exception(
-                "toolbox",
-                "toolbox.tools.caught_failure_001",
-                "A handled toolbox operation raised an exception.",
+                "runtime",
+                "runtime.tools.caught_failure_001",
+                "A handled runtime operation raised an exception.",
                 exc,
                 stage="tools",
             )
@@ -221,147 +181,7 @@ class ToolSpec(BaseModel):
             "required", []
         ):
             raise ValueError("target_argument must be required by the input schema")
-        oci_execution_fields = (self.image, self.executable, self.manifest_digest)
-        if any(value is not None for value in oci_execution_fields):
-            if (
-                any(value is None for value in oci_execution_fields)
-                or self.pack_id is None
-            ):
-                raise ValueError(
-                    "declarative tools require image, executable, pack_id, and "
-                    "manifest_digest"
-                )
-            assert self.image is not None
-            assert self.executable is not None
-            if not _is_digest_pinned_image(self.image):
-                raise ValueError("tool image must be pinned by SHA-256 without a tag")
-            if not self.executable.startswith("/") or "\x00" in self.executable:
-                raise ValueError("tool executable must be an absolute container path")
-            if Path(self.executable).name.lower() in {
-                "sh",
-                "bash",
-                "dash",
-                "zsh",
-                "fish",
-                "cmd",
-                "powershell",
-                "pwsh",
-            }:
-                raise ValueError("shell interpreters cannot be tool executables")
-            if self.input_schema.get("additionalProperties") is not False:
-                raise ValueError(
-                    "executable tool schemas must set additionalProperties=false"
-                )
-            if any("\x00" in value for value in self.fixed_arguments):
-                raise ValueError("fixed arguments cannot contain NUL bytes")
-            bound = [binding.argument for binding in self.argument_bindings]
-            if len(bound) != len(set(bound)):
-                raise ValueError("an input argument may be bound to argv only once")
-            missing = [name for name in bound if name not in properties]
-            if missing:
-                raise ValueError(f"argv bindings are absent from schema: {missing}")
         return self
-
-
-def _is_digest_pinned_image(image: str) -> bool:
-    """Accept repository@sha256:digest and reject a mutable tag before @."""
-
-    match = re.fullmatch(
-        r"(?P<repository>[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?"
-        r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+)@sha256:[0-9a-f]{64}",
-        image,
-    )
-    if match is None:
-        return False
-    return ":" not in match.group("repository").rsplit("/", 1)[-1]
-
-
-def build_declared_command(spec: ToolSpec, arguments: dict[str, Any]) -> list[str]:
-    """Build argv only from a validated declarative spec and typed values."""
-
-    if spec.executable is None:
-        raise InvalidToolArguments("tool has no declarative executable")
-    command = [spec.executable, *spec.fixed_arguments]
-    for binding in spec.argument_bindings:
-        if binding.argument not in arguments:
-            continue
-        value = arguments[binding.argument]
-        if binding.kind == "boolean_flag":
-            if not isinstance(value, bool):
-                raise InvalidToolArguments(
-                    f"{binding.argument} must be a boolean for boolean_flag"
-                )
-            if value:
-                assert binding.flag is not None
-                command.append(binding.flag)
-            continue
-        if binding.kind == "repeat":
-            if not isinstance(value, list):
-                raise InvalidToolArguments(
-                    f"{binding.argument} must be an array for repeat"
-                )
-            assert binding.flag is not None
-            for item in value:
-                command.extend([binding.flag, _argv_scalar(binding.argument, item)])
-            continue
-        if binding.kind == "csv":
-            if not isinstance(value, list):
-                raise InvalidToolArguments(
-                    f"{binding.argument} must be an array for csv"
-                )
-            assert binding.flag is not None
-            command.extend(
-                [
-                    binding.flag,
-                    ",".join(_argv_scalar(binding.argument, item) for item in value),
-                ]
-            )
-            continue
-        if binding.kind == "json":
-            assert binding.flag is not None
-            try:
-                rendered_json = json.dumps(
-                    value,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                    allow_nan=False,
-                )
-            except (TypeError, ValueError) as exc:
-                record_caught_exception(
-                    "toolbox",
-                    "toolbox.tools.caught_failure_002",
-                    "A handled toolbox operation raised an exception.",
-                    exc,
-                    stage="tools",
-                )
-                raise InvalidToolArguments(
-                    f"{binding.argument} must be JSON serializable"
-                ) from exc
-            if "\x00" in rendered_json:
-                raise InvalidToolArguments(f"{binding.argument} contains a NUL byte")
-            command.extend([binding.flag, rendered_json])
-            continue
-        rendered = _argv_scalar(binding.argument, value)
-        if binding.kind == "positional":
-            if rendered.startswith("-"):
-                raise InvalidToolArguments(
-                    f"{binding.argument} cannot be interpreted as an option"
-                )
-            command.append(rendered)
-        else:
-            assert binding.flag is not None
-            command.extend([binding.flag, rendered])
-    return command
-
-
-def _argv_scalar(name: str, value: Any) -> str:
-    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-        raise InvalidToolArguments(f"{name} must be a string or number")
-    rendered = str(value)
-    if "\x00" in rendered:
-        raise InvalidToolArguments(f"{name} contains a NUL byte")
-    return rendered
 
 
 class ToolInvocation(BaseModel):
@@ -383,6 +203,16 @@ class ToolInvocation(BaseModel):
     credential_class: str | None = None
     idempotency_key: str | None = None
     requested_by: str = "agent"
+    runtime_session_kind: Literal["chat", "mission", "harness", "api"] | None = None
+    runtime_session_id: str | None = None
+
+    @model_validator(mode="after")
+    def runtime_session_fields_match(self) -> "ToolInvocation":
+        if (self.runtime_session_kind is None) != (self.runtime_session_id is None):
+            raise ValueError(
+                "runtime_session_kind and runtime_session_id must be supplied together"
+            )
+        return self
 
 
 class ToolExecutionResult(BaseModel):
@@ -539,284 +369,6 @@ async def _unreachable_analysis_handler(arguments: dict[str, Any]) -> dict[str, 
     raise AssertionError("invocation analysis handler was called without context")
 
 
-CommandBuilder = Callable[[dict[str, Any]], list[str]]
-OutputParser = Callable[[str, str, int | None], dict[str, Any]]
-
-
-class SandboxCommandTool(ToolPlugin):
-    """An argv-only command adapter; no shell or host process is available."""
-
-    def __init__(
-        self,
-        spec: ToolSpec,
-        *,
-        output_parser: OutputParser | None = None,
-        image: str | None = None,
-        command_builder: CommandBuilder | None = None,
-        network_name: str | None = None,
-    ) -> None:
-        if spec.input_schema.get("additionalProperties") is not False:
-            raise ValueError(
-                "executable tool schemas must set additionalProperties=false"
-            )
-        self.spec = spec
-        selected_image = image or spec.image
-        if selected_image is None:
-            raise ValueError("command tools require an image")
-        self.image: str = selected_image
-        self.command_builder = command_builder or (
-            lambda arguments: build_declared_command(spec, arguments)
-        )
-        self.output_parser = output_parser
-        self.network_name = network_name
-
-    async def execute(
-        self,
-        invocation: ToolInvocation,
-        runner: SandboxRunner,
-    ) -> ToolExecutionResult:
-        command = self.command_builder(invocation.arguments)
-        if not command or any(not isinstance(value, str) for value in command):
-            raise InvalidToolArguments(
-                "command adapter must return a non-empty argv list"
-            )
-        pins: dict[str, str] = {}
-        if invocation.target and invocation.resolved_ips:
-            parsed = urlsplit(invocation.target)
-            host = (
-                parsed.hostname
-                if parsed.scheme
-                else invocation.target.split("/", 1)[0].rsplit(":", 1)[0].strip("[]")
-            )
-            if host is None:
-                raise InvalidToolArguments("network target URL requires a hostname")
-            host = host.rstrip(".").lower()
-            # The first address is used in /etc/hosts; the egress boundary must
-            # independently allow only the complete policy-approved set.
-            pins[host] = invocation.resolved_ips[0]
-        egress_rules: list[EgressRule] = []
-        if self.spec.network_access:
-            if not invocation.resolved_ips:
-                raise InvalidToolArguments(
-                    "network tools require broker-resolved destination addresses"
-                )
-            ports = _egress_ports(self.spec, invocation.arguments, invocation.target)
-            if not ports:
-                raise InvalidToolArguments(
-                    "network tools require policy-mapped destination ports"
-                )
-            egress_rules = [
-                EgressRule(address=address, ports=ports)
-                for address in invocation.resolved_ips
-            ]
-        workspace = invocation.workspace.expanduser().resolve(strict=True)
-        output_directory = Path(
-            tempfile.mkdtemp(
-                prefix=f".nebula-output-{invocation.id[:12]}-", dir=workspace
-            )
-        )
-        # The engagement workspace is protected by its host-only parent, while
-        # the rootless container runs as an unmapped non-root UID and needs to
-        # create files in this one dedicated bind mount.
-        output_directory.chmod(0o777)
-        stdout_descriptor, stdout_name = tempfile.mkstemp(
-            prefix=f"nebula-{invocation.id[:12]}-stdout-"
-        )
-        stderr_descriptor, stderr_name = tempfile.mkstemp(
-            prefix=f"nebula-{invocation.id[:12]}-stderr-"
-        )
-        stdout_stream = os.fdopen(stdout_descriptor, "w+b")
-        stderr_stream = os.fdopen(stderr_descriptor, "w+b")
-        stdout_capture = StreamCapture(stdout_stream, limit=MAX_CAPTURE_BYTES)
-        stderr_capture = StreamCapture(stderr_stream, limit=MAX_CAPTURE_BYTES)
-        started_at = utc_now()
-
-        async def capture(stream: str, chunk: bytes) -> None:
-            (stdout_capture if stream == "stdout" else stderr_capture).write(chunk)
-
-        command = [value.replace("{output_dir}", "/nebula-output") for value in command]
-        try:
-            result = await runner.run_stream(
-                SandboxRequest(
-                    image=self.image,
-                    command=command,
-                    workspace=invocation.workspace,
-                    workspace_access=SandboxWorkspaceAccess(
-                        self.spec.filesystem_access
-                    ),
-                    network=(
-                        SandboxNetwork.SCOPED
-                        if self.spec.network_access
-                        else SandboxNetwork.NONE
-                    ),
-                    execution_kind=(
-                        SandboxExecutionKind.NETWORK_TOOL
-                        if self.spec.network_access
-                        else SandboxExecutionKind.LOCAL_TOOL
-                    ),
-                    egress_rules=egress_rules,
-                    pinned_hosts=pins,
-                    output_directory=output_directory,
-                    retain_output=self.output_parser is not None,
-                    environment={"NEBULA_OUTPUT_DIR": "/nebula-output"},
-                    limits=self.spec.resource_limits.model_copy(
-                        update={"timeout_seconds": self.spec.timeout_seconds}
-                    ),
-                ),
-                on_chunk=capture,
-            )
-            stdout_capture.flush()
-            stderr_capture.flush()
-        except asyncio.CancelledError:
-            stdout_capture.flush()
-            stderr_capture.flush()
-            completed_at = utc_now()
-            raise ToolExecutionCancelled(
-                ToolExecutionResult(
-                    output={},
-                    exit_code=None,
-                    output_truncated=(
-                        stdout_capture.truncated or stderr_capture.truncated
-                    ),
-                    stdout_artifact_path=Path(stdout_name),
-                    stderr_artifact_path=Path(stderr_name),
-                    output_directory=output_directory,
-                    observed_stdout_bytes=stdout_capture.observed_bytes,
-                    observed_stderr_bytes=stderr_capture.observed_bytes,
-                    stdout_truncated=stdout_capture.truncated,
-                    stderr_truncated=stderr_capture.truncated,
-                    execution={
-                        "command": command,
-                        "image": self.image,
-                        "runtime": "container",
-                        "started_at": started_at.isoformat(),
-                        "completed_at": completed_at.isoformat(),
-                        "duration_seconds": max(
-                            0.0, (completed_at - started_at).total_seconds()
-                        ),
-                        "timed_out": False,
-                        "cancelled": True,
-                    },
-                )
-            )
-        except BaseException:
-            stdout_stream.close()
-            stderr_stream.close()
-            Path(stdout_name).unlink(missing_ok=True)
-            Path(stderr_name).unlink(missing_ok=True)
-            if output_directory.exists():
-                shutil.rmtree(output_directory)
-            raise
-        finally:
-            if not stdout_stream.closed:
-                stdout_stream.close()
-            if not stderr_stream.closed:
-                stderr_stream.close()
-        parser_error: str | None = None
-        output: dict[str, Any] = {}
-        if self.output_parser is not None and result.output_truncated:
-            parser_error = (
-                "parser input exceeded its bounded stdout/stderr buffer; "
-                "raw captured artifacts remain available"
-            )
-        elif self.output_parser is not None:
-            try:
-                output = self.output_parser(
-                    result.stdout, result.stderr, result.exit_code
-                )
-            except Exception as exc:
-                record_caught_exception(
-                    "toolbox",
-                    "toolbox.tools.caught_failure_003",
-                    "A handled toolbox operation raised an exception.",
-                    exc,
-                    stage="tools",
-                )
-                parser_error = _bounded_execution_error(exc)
-        effective_stdout = result.stdout
-        effective_stderr = result.stderr
-        effective_exit_code = result.exit_code
-        effective_timed_out = result.timed_out
-        legacy_envelope = output.get("protocol") == "nebula.toolbox/v1"
-        if legacy_envelope:
-            if isinstance(output.get("stdout"), str):
-                effective_stdout = output["stdout"]
-            if isinstance(output.get("stderr"), str):
-                effective_stderr = output["stderr"]
-            if isinstance(output.get("exit_code"), int):
-                effective_exit_code = output["exit_code"]
-            effective_timed_out = bool(output.get("timed_out", effective_timed_out))
-            Path(stdout_name).unlink(missing_ok=True)
-            Path(stderr_name).unlink(missing_ok=True)
-        return ToolExecutionResult(
-            output=output,
-            stdout=effective_stdout,
-            stderr=effective_stderr,
-            exit_code=effective_exit_code,
-            output_truncated=(stdout_capture.truncated or stderr_capture.truncated),
-            parser_error=parser_error,
-            stdout_artifact_path=None if legacy_envelope else Path(stdout_name),
-            stderr_artifact_path=None if legacy_envelope else Path(stderr_name),
-            output_directory=output_directory,
-            observed_stdout_bytes=(
-                len(effective_stdout.encode("utf-8"))
-                if legacy_envelope
-                else stdout_capture.observed_bytes
-            ),
-            observed_stderr_bytes=(
-                len(effective_stderr.encode("utf-8"))
-                if legacy_envelope
-                else stderr_capture.observed_bytes
-            ),
-            stdout_truncated=stdout_capture.truncated,
-            stderr_truncated=stderr_capture.truncated,
-            execution={
-                "command": result.command,
-                "image": result.image,
-                "runtime": result.runtime,
-                "started_at": result.started_at.isoformat(),
-                "completed_at": result.completed_at.isoformat(),
-                "duration_seconds": result.duration_seconds,
-                "timed_out": effective_timed_out,
-                "legacy_toolbox_envelope": legacy_envelope,
-            },
-        )
-
-
-def _egress_ports(
-    spec: ToolSpec, arguments: dict[str, Any], target: str | None
-) -> list[int]:
-    ports: list[int] = []
-    if spec.port_argument and spec.port_argument in arguments:
-        value = arguments[spec.port_argument]
-        candidates = value if isinstance(value, list) else [value]
-        for candidate in candidates:
-            if isinstance(candidate, bool) or not isinstance(candidate, int):
-                raise InvalidToolArguments("mapped destination ports must be integers")
-            if not 1 <= candidate <= 65535:
-                raise InvalidToolArguments(
-                    "mapped destination ports must be between 1 and 65535"
-                )
-            ports.append(candidate)
-    if not ports and target:
-        parsed = urlsplit(target)
-        if parsed.scheme in {"http", "https"}:
-            try:
-                ports.append(parsed.port or (443 if parsed.scheme == "https" else 80))
-            except ValueError as exc:
-                record_caught_exception(
-                    "toolbox",
-                    "toolbox.tools.caught_failure_004",
-                    "A handled toolbox operation raised an exception.",
-                    exc,
-                    stage="tools",
-                )
-                raise InvalidToolArguments(
-                    "target URL contains an invalid port"
-                ) from exc
-    return sorted(set(ports))
-
-
 class ToolLedger(Protocol):
     async def reserve(
         self,
@@ -920,9 +472,9 @@ class StoreToolLedger:
             return call
         except ConflictError as caught_error:
             record_caught_exception(
-                "toolbox",
-                "toolbox.tools.caught_failure_005",
-                "A handled toolbox operation raised an exception.",
+                "runtime",
+                "runtime.tools.caught_failure_005",
+                "A handled runtime operation raised an exception.",
                 caught_error,
                 stage="tools",
             )
@@ -992,9 +544,9 @@ class StoreToolLedger:
             approval = await asyncio.to_thread(self.store.get, Approval, approval_id)
         except NotFoundError as caught_error:
             record_caught_exception(
-                "toolbox",
-                "toolbox.tools.caught_failure_006",
-                "A handled toolbox operation raised an exception.",
+                "runtime",
+                "runtime.tools.caught_failure_006",
+                "A handled runtime operation raised an exception.",
                 caught_error,
                 stage="tools",
             )
@@ -1002,15 +554,6 @@ class StoreToolLedger:
                 "tool_name": invocation.tool_name,
                 "arguments": invocation.arguments,
             }
-            if spec.executable is not None:
-                exact_request.update(
-                    {
-                        "argv": build_declared_command(spec, invocation.arguments),
-                        "pack_id": spec.pack_id,
-                        "manifest_digest": spec.manifest_digest,
-                        "image": spec.image,
-                    }
-                )
             approval = Approval(
                 id=approval_id,
                 engagement_id=invocation.engagement_id,
@@ -1116,25 +659,8 @@ def _regular_files_beneath(root: Path) -> Iterator[Path]:
 def _compact_tool_summary(
     result: ToolExecutionResult, status: ToolResultStatus
 ) -> str | None:
-    if status == ToolResultStatus.COMPLETED:
-        return None
-    nested_stderr = result.output.get("stderr")
-    # Only promote validation errors emitted by the trusted Toolbox wrapper.
-    # Command stderr remains artifact-first because it can contain target data.
-    if (
-        result.output.get("protocol") != "nebula.toolbox/v1"
-        or result.output.get("operation") != "error"
-        or result.output.get("command") != []
-        or not isinstance(nested_stderr, str)
-    ):
-        return None
-    source = nested_stderr
-    first_line = next(
-        (line.strip() for line in source.splitlines() if line.strip()), ""
-    )
-    if not first_line:
-        return None
-    return redacted_display(first_line)[:1_000]
+    del result, status
+    return None
 
 
 def _compact_tool_observations(result: ToolExecutionResult) -> list[ToolObservation]:
@@ -1211,15 +737,10 @@ class StoreToolEvidenceRecorder:
         *,
         stored_items: list[Any],
     ) -> ToolExecutionResult:
-        toolbox_metadata = result.output.get("metadata")
-        if not isinstance(toolbox_metadata, dict):
-            toolbox_metadata = {}
-        interface_catalog_digest = toolbox_metadata.get("catalog_digest")
-        script_sha256 = toolbox_metadata.get("script_sha256")
-        if not isinstance(interface_catalog_digest, str) or not re.fullmatch(
-            r"[0-9a-f]{64}", interface_catalog_digest
-        ):
-            interface_catalog_digest = None
+        runtime_metadata = result.output.get("metadata")
+        if not isinstance(runtime_metadata, dict):
+            runtime_metadata = {}
+        script_sha256 = runtime_metadata.get("script_sha256")
         if not isinstance(script_sha256, str) or not re.fullmatch(
             r"[0-9a-f]{64}", script_sha256
         ):
@@ -1235,8 +756,7 @@ class StoreToolEvidenceRecorder:
             "task_id": call.task_id,
             "tool": spec.name,
             "tool_version": spec.version,
-            "tool_pack": spec.pack_id,
-            "manifest_digest": spec.manifest_digest,
+            "tool_source": spec.source_id,
         }
         artifact_entities: list[Artifact] = []
         references = []
@@ -1611,8 +1131,6 @@ class StoreToolEvidenceRecorder:
                 "kind": "receipt",
                 "searchable": False,
                 "tool_call_id": call.id,
-                "image": spec.image,
-                "interface_catalog_digest": interface_catalog_digest,
                 "script_sha256": script_sha256,
             },
         )
@@ -1627,16 +1145,14 @@ class StoreToolEvidenceRecorder:
             sha256=receipt_stored.artifact.sha256,
             captured_by=invocation.requested_by,
             source_version=(
-                f"{spec.pack_id}:{spec.name}@{spec.version}"
-                if spec.pack_id
+                f"{spec.source_id}:{spec.name}@{spec.version}"
+                if spec.source_id
                 else f"{spec.name}@{spec.version}"
             ),
             metadata={
                 "target": invocation.target,
                 "image": result.execution.get("image"),
-                "manifest_digest": spec.manifest_digest,
-                "tool_pack": spec.pack_id,
-                "interface_catalog_digest": interface_catalog_digest,
+                "tool_source": spec.source_id,
                 "script_sha256": script_sha256,
                 "exit_code": result.exit_code,
                 "status": status.value,
@@ -1649,9 +1165,9 @@ class StoreToolEvidenceRecorder:
             )
         except Exception as caught_error:
             record_caught_exception(
-                "toolbox",
-                "toolbox.tools.caught_failure_007",
-                "A handled toolbox operation raised an exception.",
+                "runtime",
+                "runtime.tools.caught_failure_007",
+                "A handled runtime operation raised an exception.",
                 caught_error,
                 stage="tools",
             )
@@ -1699,9 +1215,9 @@ class ToolRegistry:
             return self._plugins[name]
         except KeyError as exc:
             record_caught_exception(
-                "toolbox",
-                "toolbox.tools.caught_failure_008",
-                "A handled toolbox operation raised an exception.",
+                "runtime",
+                "runtime.tools.caught_failure_008",
+                "A handled runtime operation raised an exception.",
                 exc,
                 stage="tools",
             )
@@ -2122,9 +1638,9 @@ class ToolBroker:
                     self._validate(plugin.spec.output_schema, result.output, "output")
             except asyncio.CancelledError as caught_error:
                 record_caught_exception(
-                    "toolbox",
-                    "toolbox.tools.caught_failure_009",
-                    "A handled toolbox operation raised an exception.",
+                    "runtime",
+                    "runtime.tools.caught_failure_009",
+                    "A handled runtime operation raised an exception.",
                     caught_error,
                     stage="tools",
                 )
@@ -2164,9 +1680,9 @@ class ToolBroker:
                 raise
             except Exception as exc:
                 record_caught_exception(
-                    "toolbox",
-                    "toolbox.tools.caught_failure_010",
-                    "A handled toolbox operation raised an exception.",
+                    "runtime",
+                    "runtime.tools.caught_failure_010",
+                    "A handled runtime operation raised an exception.",
                     exc,
                     stage="tools",
                 )
@@ -2275,9 +1791,9 @@ class ToolBroker:
                 resolved_ips = [str(ipaddress.ip_address(host))]
             except ValueError as caught_error:
                 record_caught_exception(
-                    "toolbox",
-                    "toolbox.tools.caught_failure_011",
-                    "A handled toolbox operation raised an exception.",
+                    "runtime",
+                    "runtime.tools.caught_failure_011",
+                    "A handled runtime operation raised an exception.",
                     caught_error,
                     stage="tools",
                 )
@@ -2305,9 +1821,9 @@ class ToolBroker:
             Draft202012Validator(schema).validate(value)
         except ValidationError as exc:
             record_caught_exception(
-                "toolbox",
-                "toolbox.tools.caught_failure_012",
-                "A handled toolbox operation raised an exception.",
+                "runtime",
+                "runtime.tools.caught_failure_012",
+                "A handled runtime operation raised an exception.",
                 exc,
                 stage="tools",
             )
@@ -2396,9 +1912,9 @@ async def _resolve_addresses(host: str) -> list[str]:
         return await asyncio.to_thread(resolve)
     except socket.gaierror as exc:
         record_caught_exception(
-            "toolbox",
-            "toolbox.tools.caught_failure_013",
-            "A handled toolbox operation raised an exception.",
+            "runtime",
+            "runtime.tools.caught_failure_013",
+            "A handled runtime operation raised an exception.",
             exc,
             stage="tools",
         )
@@ -2413,7 +1929,6 @@ __all__ = [
     "InvalidToolArguments",
     "PolicyDenied",
     "PreparedToolCall",
-    "SandboxCommandTool",
     "StoreToolLedger",
     "ToolBroker",
     "ToolExecutionResult",

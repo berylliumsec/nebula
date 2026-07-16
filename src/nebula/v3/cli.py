@@ -11,7 +11,6 @@ import json
 import os
 import secrets
 import socket
-import subprocess
 import sys
 import tempfile
 import threading
@@ -28,6 +27,12 @@ from sqlalchemy.engine import make_url
 
 from .api import create_app
 from .artifacts import ArtifactStore
+from .automation_runtime import AutomationRuntimeManager
+from .automation_tools import (
+    AutomationToolPlatform,
+    PROCESS_IO_NAME,
+    RUN_COMMAND_NAME,
+)
 from .database import Database
 from .diagnostics import (
     configure_diagnostics,
@@ -40,9 +45,7 @@ from .domain import (
     Artifact,
     Engagement,
     ProviderProfile,
-    RunnerProfile,
     RunBudget,
-    ToolPackInstallation,
 )
 from .missions import MissionService
 from .mcp_gateway import serve as serve_mcp_gateway
@@ -58,16 +61,7 @@ from .orchestration import (
 from .providers import ProviderRegistry, provider_from_profile
 from .sandbox import ContainerSandboxRunner
 from .storage import NebulaStore
-from .toolpack_sdk import (
-    CustomToolArgument,
-    CustomToolDefinition,
-    generate_custom_tool_project,
-    init_tool_pack,
-    pack_tool_pack,
-    validate_tool_pack_directory,
-)
-from .toolpacks import manifest_digest
-from .tool_platform import ToolPlatform, default_tool_platform
+from .runtime_platform import default_runtime_platform
 from .terminal_history import TerminalCommandRow
 from .version import build_metadata
 
@@ -76,9 +70,9 @@ app = typer.Typer(
     help="Nebula 3 local-first security engagement control plane.",
     no_args_is_help=True,
 )
-tools_app = typer.Typer(
-    name="tools",
-    help="Install, verify, and author isolated Nebula tool packs.",
+runtime_app = typer.Typer(
+    name="runtime",
+    help="Inspect and prepare the pinned automation command runtime.",
     no_args_is_help=True,
 )
 diagnostics_app = typer.Typer(
@@ -86,7 +80,7 @@ diagnostics_app = typer.Typer(
     help="Inspect and configure privacy-preserving local diagnostics.",
     no_args_is_help=True,
 )
-app.add_typer(tools_app, name="tools")
+app.add_typer(runtime_app, name="runtime")
 app.add_typer(diagnostics_app, name="diagnostics")
 
 
@@ -102,21 +96,6 @@ def mcp_gateway(
     exit_code = asyncio.run(serve_mcp_gateway(socket_path, token))
     if exit_code:
         raise typer.Exit(exit_code)
-
-
-@tools_app.callback()
-def tools_options(
-    json_output: Annotated[
-        bool,
-        typer.Option(
-            "--json",
-            help="Emit the stable machine-readable JSON format.",
-        ),
-    ] = False,
-) -> None:
-    """Configure stable output shared by tool operator and author commands."""
-
-    del json_output  # Tool commands are intentionally JSON-only today.
 
 
 def _data_dir(value: Path | None = None) -> Path:
@@ -157,18 +136,46 @@ def _services(
     return root, NebulaStore(database), ArtifactStore(artifact_root)
 
 
-def _tool_services(
-    value: Path | None = None,
-) -> tuple[ToolPlatform, NebulaStore]:
+def _automation_services(value: Path | None = None) -> AutomationRuntimeManager:
     root, store, artifacts = _services(value)
-    return (
-        default_tool_platform(store=store, artifact_store=artifacts, data_root=root),
-        store,
+    platform = default_runtime_platform(
+        store=store, artifact_store=artifacts, data_root=root
+    )
+    return AutomationRuntimeManager(
+        store=store,
+        artifact_store=artifacts,
+        data_root=root,
+        workspace_resolver=platform.workspace_for,
+        runtime_resolver=platform.resolve_human_terminal_runtime,
+        cached_runtime_provider=platform.last_automation_runtime_metadata,
     )
 
 
 def _print(value: Any) -> None:
     typer.echo(json.dumps(value, sort_keys=True, indent=2, default=str))
+
+
+@runtime_app.command("status")
+def runtime_status(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Report runner, digest, readiness, and the generated binary inventory."""
+
+    manager = _automation_services(data_dir)
+    _print(asyncio.run(manager.runtime_info()).model_dump(mode="json"))
+
+
+@runtime_app.command("prepare")
+def runtime_prepare(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Pull the exact pinned image if needed, then verify its inventory."""
+
+    manager = _automation_services(data_dir)
+    result = asyncio.run(manager.prepare())
+    _print(result.model_dump(mode="json"))
+    if not result.ready:
+        raise typer.Exit(code=1)
 
 
 def _is_loopback(host: str) -> bool:
@@ -278,7 +285,7 @@ def serve(
         outcome="started",
         metadata={"mode": "desktop" if handshake_stdout else "headless"},
     )
-    tool_platform = default_tool_platform(
+    tool_platform = default_runtime_platform(
         store=store, artifact_store=artifacts, data_root=root
     )
     api = create_app(
@@ -434,418 +441,6 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-@tools_app.command("init")
-def tools_init(
-    directory: Annotated[Path, typer.Argument()],
-    name: Annotated[str, typer.Option(help="Canonical pack name.")],
-    publisher: Annotated[str, typer.Option()] = "local",
-    image: Annotated[
-        str | None,
-        typer.Option(help="Optional digest-pinned OCI image for a ready custom tool."),
-    ] = None,
-    executable: Annotated[
-        str | None,
-        typer.Option(help="Absolute executable path inside --image."),
-    ] = None,
-    tool_name: Annotated[str | None, typer.Option()] = None,
-) -> None:
-    """Create a conservative declarative tool-pack project."""
-
-    if bool(image) != bool(executable):
-        raise typer.BadParameter("--image and --executable must be supplied together")
-    if image and executable:
-        definition = CustomToolDefinition(
-            pack_name=name,
-            publisher=publisher,
-            tool_name=tool_name or f"{name}.run",
-            description=f"Run {name} in a bounded OCI environment.",
-            image=image,
-            executable=executable,
-        )
-        created = generate_custom_tool_project(directory, definition)
-    else:
-        created = init_tool_pack(directory, name=name, publisher=publisher)
-    _print({"status": "created", "path": str(created)})
-
-
-def _custom_argument(value: str) -> CustomToolArgument:
-    parts = value.split(":", 3)
-    if len(parts) < 3:
-        raise typer.BadParameter(
-            "--argument uses NAME:TYPE:POSITIONAL_OR_FLAG[:SMOKE_JSON]"
-        )
-    name, value_type, binding = parts[:3]
-    smoke: Any = None
-    if len(parts) == 4:
-        try:
-            smoke = json.loads(parts[3])
-        except json.JSONDecodeError as exc:
-            raise typer.BadParameter("argument smoke values must be JSON") from exc
-    return CustomToolArgument.model_validate(
-        {
-            "name": name,
-            "value_type": value_type,
-            "positional": binding == "positional",
-            "flag": None if binding == "positional" else binding,
-            "smoke_value": smoke,
-        }
-    )
-
-
-def _author_value(value: str | None, label: str) -> str:
-    if value:
-        return value
-    if sys.stdin.isatty():
-        return typer.prompt(label)
-    raise typer.BadParameter(
-        f"--{label.lower().replace(' ', '-')} is required in noninteractive mode"
-    )
-
-
-@tools_app.command("add")
-def tools_add(
-    directory: Annotated[Path, typer.Argument()],
-    bundle: Annotated[
-        Path | None,
-        typer.Option(
-            "--bundle",
-            help="Unsigned bundle destination; defaults beside the source directory.",
-        ),
-    ] = None,
-    pack_name: Annotated[str | None, typer.Option()] = None,
-    tool_name: Annotated[str | None, typer.Option()] = None,
-    image: Annotated[str | None, typer.Option()] = None,
-    executable: Annotated[str | None, typer.Option()] = None,
-    description: Annotated[str | None, typer.Option()] = None,
-    publisher: Annotated[str, typer.Option()] = "local",
-    platform: Annotated[str, typer.Option()] = "linux/amd64",
-    argument: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--argument",
-            help="NAME:TYPE:POSITIONAL_OR_FLAG[:SMOKE_JSON]; repeat as needed.",
-        ),
-    ] = None,
-    fixed_argument: Annotated[
-        list[str] | None, typer.Option("--fixed-argument")
-    ] = None,
-    risk_class: Annotated[str, typer.Option()] = "local_read",
-    network: Annotated[bool, typer.Option()] = False,
-    target_argument: Annotated[str | None, typer.Option()] = None,
-    port_argument: Annotated[str | None, typer.Option()] = None,
-    workspace: Annotated[str, typer.Option()] = "none",
-    requires_approval: Annotated[bool, typer.Option()] = False,
-    timeout_seconds: Annotated[int, typer.Option(min=1, max=86_400)] = 300,
-    output_flag: Annotated[str | None, typer.Option()] = None,
-    output_filename: Annotated[str, typer.Option()] = "result",
-    capture_path: Annotated[list[str] | None, typer.Option("--capture-path")] = None,
-    expected_exit_code: Annotated[int, typer.Option(min=0, max=255)] = 0,
-) -> None:
-    """Generate a parser-free custom OCI tool from configuration only."""
-
-    definition = CustomToolDefinition.model_validate(
-        {
-            "pack_name": _author_value(pack_name, "Pack name"),
-            "publisher": publisher,
-            "tool_name": _author_value(tool_name, "Tool name"),
-            "description": _author_value(description, "Description"),
-            "image": _author_value(image, "Image"),
-            "platform": platform,
-            "executable": _author_value(executable, "Executable"),
-            "fixed_arguments": fixed_argument or [],
-            "arguments": [_custom_argument(item) for item in argument or []],
-            "risk_class": risk_class,
-            "network_access": network,
-            "target_argument": target_argument,
-            "port_argument": port_argument,
-            "filesystem_access": workspace,
-            "requires_approval": requires_approval,
-            "timeout_seconds": timeout_seconds,
-            "output_flag": output_flag,
-            "output_filename": output_filename,
-            "capture_paths": capture_path or [],
-            "expected_exit_code": expected_exit_code,
-        }
-    )
-    created = generate_custom_tool_project(directory, definition)
-    manifest = validate_tool_pack_directory(created, allow_digest_placeholders=False)
-    bundle_path = pack_tool_pack(
-        created,
-        bundle or created.parent / f"{definition.pack_name}.nebula-toolpack",
-    )
-    _print(
-        {
-            "status": "created",
-            "path": str(created),
-            "bundle": str(bundle_path),
-            "identity": manifest.identity,
-            "manifest_digest": manifest_digest(manifest),
-            "permission_preview": definition.permission_preview(),
-            "next": [
-                f"nebula3 tools test {created}",
-                f"nebula3 tools install-local {bundle_path} --runner RUNNER_ID --yes",
-            ],
-        }
-    )
-
-
-@tools_app.command("validate")
-def tools_validate(
-    directory: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
-    require_digests: Annotated[
-        bool,
-        typer.Option(help="Reject unresolved development digest placeholders."),
-    ] = False,
-) -> None:
-    """Validate schemas, policy mappings, images, and source-tree safety."""
-
-    manifest = validate_tool_pack_directory(
-        directory, allow_digest_placeholders=not require_digests
-    )
-    _print(
-        {
-            "status": "valid",
-            "identity": manifest.identity,
-            "manifest_digest": manifest_digest(manifest),
-            "tools": [tool.name for tool in manifest.tools],
-        }
-    )
-
-
-@tools_app.command("pack")
-def tools_pack(
-    directory: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
-    destination: Annotated[Path, typer.Argument()],
-) -> None:
-    """Build a deterministic local `.nebula-toolpack` archive."""
-
-    output = pack_tool_pack(directory, destination)
-    _print({"status": "packed", "path": str(output)})
-
-
-@tools_app.command("test")
-def tools_test(
-    directory: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
-) -> None:
-    """Run offline manifest, policy, schema, and parser-fixture checks."""
-
-    manifest = validate_tool_pack_directory(directory, allow_digest_placeholders=True)
-    fixtures = sorted(
-        path.relative_to(directory).as_posix()
-        for path in (directory / "tests" / "parser-fixtures").glob("**/*")
-        if path.is_file()
-    )
-    _print(
-        {
-            "status": "passed",
-            "identity": manifest.identity,
-            "tools": [tool.name for tool in manifest.tools],
-            "parser_fixtures": fixtures,
-            "smoke_tests": sum(len(tool.smoke_tests) for tool in manifest.tools),
-            "note": "OCI smoke tests run only after an immutable installation",
-        }
-    )
-
-
-@tools_app.command("build")
-def tools_build(
-    directory: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
-    runtime: Annotated[Path, typer.Option(exists=True, dir_okay=False)],
-    tag: Annotated[str, typer.Option(help="Temporary local OCI image tag.")],
-    platform: Annotated[str, typer.Option()] = "linux/amd64",
-    containerfile: Annotated[Path, typer.Option()] = Path("Containerfile"),
-) -> None:
-    """Build one author-selected image without executing it or editing manifests."""
-
-    validate_tool_pack_directory(directory, allow_digest_placeholders=True)
-    executable = runtime.expanduser().resolve()
-    if executable.name not in {"docker", "podman"}:
-        raise typer.BadParameter("runtime must be an absolute docker or podman binary")
-    if platform not in {"linux/amd64", "linux/arm64"}:
-        raise typer.BadParameter("platform must be linux/amd64 or linux/arm64")
-    if not tag or any(character.isspace() for character in tag):
-        raise typer.BadParameter("tag must be a non-blank OCI image reference")
-    definition = containerfile
-    if not definition.is_absolute():
-        definition = directory / definition
-    definition = definition.expanduser().resolve(strict=True)
-    if directory.resolve() not in definition.parents:
-        raise typer.BadParameter("Containerfile must remain inside the pack directory")
-    result = subprocess.run(
-        [
-            str(executable),
-            "build",
-            f"--platform={platform}",
-            "--file",
-            str(definition),
-            "--tag",
-            tag,
-            str(directory.resolve()),
-        ],
-        check=False,
-    )
-    if result.returncode:
-        raise typer.Exit(code=result.returncode)
-    _print(
-        {
-            "status": "built",
-            "tag": tag,
-            "platform": platform,
-            "next": "push the image, resolve its digest, then run tools pack",
-        }
-    )
-
-
-@tools_app.command("catalog")
-def tools_catalog(
-    data_dir: Annotated[Path | None, typer.Option()] = None,
-) -> None:
-    """List entries from the verified curated catalog."""
-
-    platform, _ = _tool_services(data_dir)
-    _print({"entries": asyncio.run(platform.catalog())})
-
-
-@tools_app.command("list")
-def tools_list(
-    data_dir: Annotated[Path | None, typer.Option()] = None,
-) -> None:
-    """List installed packs and current tool availability."""
-
-    platform, store = _tool_services(data_dir)
-    installations = store.list_entities(ToolPackInstallation, limit=1_000)
-    _print(
-        {
-            "installations": [item.model_dump(mode="json") for item in installations],
-            "tools": platform.list_tools(),
-        }
-    )
-
-
-@tools_app.command("install")
-def tools_install(
-    catalog_id: Annotated[str, typer.Argument()],
-    runner: Annotated[str, typer.Option("--runner")],
-    version: Annotated[str | None, typer.Option()] = None,
-    data_dir: Annotated[Path | None, typer.Option()] = None,
-    yes: Annotated[
-        bool, typer.Option("--yes", help="Confirm the signed pack permissions.")
-    ] = False,
-) -> None:
-    """Explicitly install one signed catalog pack into a configured runner."""
-
-    if not yes:
-        raise typer.BadParameter("review the catalog permissions and pass --yes")
-    platform, _ = _tool_services(data_dir)
-    installed = asyncio.run(
-        platform.install_catalog(catalog_id, runtime_profile_id=runner, version=version)
-    )
-    _print(installed.model_dump(mode="json"))
-
-
-@tools_app.command("install-local")
-def tools_install_local(
-    bundle: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
-    runner: Annotated[str, typer.Option("--runner")],
-    data_dir: Annotated[Path | None, typer.Option()] = None,
-    yes: Annotated[
-        bool,
-        typer.Option("--yes", help="Trust and load this local pack."),
-    ] = False,
-) -> None:
-    """Load a local pack as trusted and enable it for engagements."""
-
-    if not yes:
-        raise typer.BadParameter("pass --yes to trust and load this local pack")
-    payload = bundle.read_bytes()
-    platform, _ = _tool_services(data_dir)
-    installed = asyncio.run(
-        platform.install_local(
-            payload, runtime_profile_id=runner, confirm_permissions=True
-        )
-    )
-    _print(installed.model_dump(mode="json"))
-
-
-@tools_app.command("install-collection")
-def tools_install_collection(
-    collection_id: Annotated[str, typer.Argument()],
-    runner: Annotated[str, typer.Option("--runner")],
-    data_dir: Annotated[Path | None, typer.Option()] = None,
-    yes: Annotated[
-        bool, typer.Option("--yes", help="Confirm all collection permissions.")
-    ] = False,
-) -> None:
-    """Install the latest signed members of one curated collection."""
-
-    if not yes:
-        raise typer.BadParameter("review all collection permissions and pass --yes")
-    platform, _ = _tool_services(data_dir)
-    installed = asyncio.run(
-        platform.install_collection(collection_id, runtime_profile_id=runner)
-    )
-    _print({"installations": [item.model_dump(mode="json") for item in installed]})
-
-
-@tools_app.command("verify")
-def tools_verify(
-    installation_id: Annotated[str, typer.Argument()],
-    data_dir: Annotated[Path | None, typer.Option()] = None,
-) -> None:
-    """Reinspect exact image digests and rerun offline smoke tests."""
-
-    platform, _ = _tool_services(data_dir)
-    verified = asyncio.run(platform.verify(installation_id))
-    _print(verified.model_dump(mode="json"))
-
-
-@tools_app.command("update")
-def tools_update(
-    installation_id: Annotated[str, typer.Argument()],
-    data_dir: Annotated[Path | None, typer.Option()] = None,
-    yes: Annotated[bool, typer.Option("--yes")] = False,
-) -> None:
-    """Install a newer signed version side by side after explicit confirmation."""
-
-    if not yes:
-        raise typer.BadParameter("tool-pack updates require explicit --yes")
-    platform, _ = _tool_services(data_dir)
-    updated = asyncio.run(platform.update(installation_id))
-    _print(updated.model_dump(mode="json"))
-
-
-@tools_app.command("remove")
-def tools_remove(
-    installation_id: Annotated[str, typer.Argument()],
-    data_dir: Annotated[Path | None, typer.Option()] = None,
-    yes: Annotated[bool, typer.Option("--yes")] = False,
-) -> None:
-    """Disable a pack while preserving historical manifest locks."""
-
-    if not yes:
-        raise typer.BadParameter("tool-pack removal requires explicit --yes")
-    platform, _ = _tool_services(data_dir)
-    disabled = platform.disable(installation_id)
-    _print(disabled.model_dump(mode="json"))
-
-
-@tools_app.command("doctor")
-def tools_doctor(
-    runner: Annotated[str | None, typer.Option("--runner")] = None,
-    data_dir: Annotated[Path | None, typer.Option()] = None,
-) -> None:
-    """Verify configured runners and report fail-closed tool availability."""
-
-    platform, store = _tool_services(data_dir)
-    profiles = store.list_entities(RunnerProfile, limit=1_000)
-    if runner is not None:
-        profiles = [profile for profile in profiles if profile.id == runner]
-    checked = [
-        asyncio.run(platform.verify_runner(profile.id)).model_dump(mode="json")
-        for profile in profiles
-    ]
-    _print({"runners": checked, "tools": platform.list_tools()})
-
 
 @app.command("import-2x")
 def import_2x(
@@ -902,13 +497,6 @@ def run_mission(
     max_artifact_queries: Annotated[int, typer.Option(min=0)] = 200,
     max_concurrency: Annotated[int, typer.Option(min=1, max=2)] = 1,
     max_tokens: Annotated[int, typer.Option(min=1)] = 32_000,
-    tool_names: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--tool",
-            help="Assigned executable tool name; repeat for multiple tools.",
-        ),
-    ] = None,
     provider_id: Annotated[
         str | None,
         typer.Option(
@@ -921,16 +509,10 @@ def run_mission(
         typer.Option(help="Runtime model ID; defaults to the provider profile."),
     ] = None,
 ) -> None:
-    """Run a durable supervised mission with explicit tools and budgets."""
+    """Run a durable mission with the fixed command runtime when budgeted."""
 
-    selected_tools = list(dict.fromkeys(tool_names or ()))
-    if max_tool_calls > 0 and not selected_tools:
-        raise typer.BadParameter(
-            "a positive --max-tool-calls budget requires at least one --tool"
-        )
-    if selected_tools and max_tool_calls == 0:
-        raise typer.BadParameter("--tool requires a positive --max-tool-calls budget")
-    if selected_tools and provider_id is None:
+    executable = max_tool_calls > 0
+    if executable and provider_id is None:
         raise typer.BadParameter("executable missions require --provider")
     root, store, artifacts = _services(data_dir)
     store.get(Engagement, engagement_id)
@@ -986,10 +568,24 @@ def run_mission(
 
     async def execute_tools() -> AgentRun:
         assert selected_provider is not None
-        platform = default_tool_platform(
+        workspace_platform = default_runtime_platform(
             store=store,
             artifact_store=artifacts,
             data_root=root,
+        )
+        manager = AutomationRuntimeManager(
+            store=store,
+            artifact_store=artifacts,
+            data_root=root,
+            workspace_resolver=workspace_platform.workspace_for,
+            runtime_resolver=workspace_platform.resolve_human_terminal_runtime,
+            cached_runtime_provider=workspace_platform.last_automation_runtime_metadata,
+        )
+        platform = AutomationToolPlatform(
+            manager=manager,
+            store=store,
+            artifact_store=artifacts,
+            workspace_resolver=workspace_platform.workspace_for,
         )
         service = MissionService(
             store,
@@ -997,6 +593,7 @@ def run_mission(
             tool_components_factory=platform.mission_components,
             max_active_missions=1,
         )
+        await manager.startup()
         await service.startup()
         try:
             queued = await service.start_mission(
@@ -1013,7 +610,7 @@ def run_mission(
                     max_tokens=max_tokens,
                     per_target_active_operations=1,
                 ),
-                tool_names=selected_tools,
+                tool_names=[RUN_COMMAND_NAME, PROCESS_IO_NAME],
                 actor_id="cli-operator",
             )
             while queued.id in service.active_run_ids:
@@ -1021,8 +618,9 @@ def run_mission(
             return store.get(AgentRun, queued.id)
         finally:
             await service.shutdown()
+            await manager.shutdown()
 
-    if selected_tools:
+    if executable:
         run = asyncio.run(execute_tools())
         _print(
             {
@@ -1031,7 +629,7 @@ def run_mission(
                 "summary": run.metadata.get("final_summary"),
                 "error": run.metadata.get("error"),
                 "waiting_approval": run.metadata.get("waiting_approval", False),
-                "tool_pack_digests": run.tool_pack_digests,
+                "runtime_digest": run.runtime_snapshot.get("automation_runtime_digest"),
             }
         )
         return
@@ -1388,6 +986,20 @@ def doctor(
             terminal_audit_errors.append(f"{row.id}:command_event_mismatch")
     api = create_app(store, artifact_store=artifacts, auth_token="doctor")
     diagnostics_health = _diagnostic_manager(root).status()
+    workspace_platform = default_runtime_platform(
+        store=store, artifact_store=artifacts, data_root=root
+    )
+    runtime_manager = AutomationRuntimeManager(
+        store=store,
+        artifact_store=artifacts,
+        data_root=root,
+        workspace_resolver=workspace_platform.workspace_for,
+        runtime_resolver=workspace_platform.resolve_human_terminal_runtime,
+        cached_runtime_provider=workspace_platform.last_automation_runtime_metadata,
+    )
+    runtime_report: dict[str, Any] = asyncio.run(
+        runtime_manager.runtime_info()
+    ).model_dump(mode="json")
     healthy = (
         artifact_ok
         and not corrupt_artifacts
@@ -1422,6 +1034,7 @@ def doctor(
             "mode": "execution" if sandbox_available else "analysis-only",
             "host_fallback": False,
         },
+        "automation_runtime": runtime_report,
     }
     _print(report)
     if report["status"] != "ok":

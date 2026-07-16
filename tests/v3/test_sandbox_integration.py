@@ -15,7 +15,7 @@ from nebula.v3.sandbox import (
 
 
 RUNTIME = os.getenv("NEBULA_TEST_CONTAINER_RUNTIME")
-IMAGE = os.getenv("NEBULA_TEST_TOOLBOX_IMAGE")
+IMAGE = os.getenv("NEBULA_TEST_RUNTIME_IMAGE")
 pytestmark = pytest.mark.skipif(
     not (RUNTIME and IMAGE),
     reason="a real rootless runtime and operator-runtime image are required",
@@ -41,12 +41,7 @@ def test_real_rootless_runtime_streams_raw_code_and_persists_only_workspace(tmp_
         assert available, detail
         request = SandboxRequest(
             image=IMAGE,
-            command=[
-                "/opt/nebula/bin/nebula-toolbox",
-                "code",
-                "--language",
-                "python",
-            ],
+            command=["/usr/local/bin/python", "-E", "-s", "-u"],
             workspace=workspace,
             workspace_access=SandboxWorkspaceAccess.WRITE,
             network=SandboxNetwork.NONE,
@@ -81,12 +76,7 @@ print('x' * 70000)
 
         followup = request.model_copy(
             update={
-                "command": [
-                    "/opt/nebula/bin/nebula-toolbox",
-                    "code",
-                    "--language",
-                    "bash",
-                ]
+                "command": ["/bin/bash", "--noprofile", "--norc"]
             }
         )
         second = await runner.run_stream(

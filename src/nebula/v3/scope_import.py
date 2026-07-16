@@ -275,9 +275,24 @@ class ScopeImportService:
             if candidate.classification != ScopeImportClassification.ALLOWED or not candidate.normalized_value:
                 raise ScopeImportError("invalid_selection", "only valid allowed candidates may be applied")
             selected.append(candidate)
-        cidrs = [item.normalized_value for item in selected if item.target_type == ScopeImportTargetType.CIDR]
-        domains = [item.normalized_value for item in selected if item.target_type == ScopeImportTargetType.DOMAIN]
-        urls = [item.normalized_value for item in selected if item.target_type == ScopeImportTargetType.URL]
+        cidrs = [
+            item.normalized_value
+            for item in selected
+            if item.target_type == ScopeImportTargetType.CIDR
+            and item.normalized_value is not None
+        ]
+        domains = [
+            item.normalized_value
+            for item in selected
+            if item.target_type == ScopeImportTargetType.DOMAIN
+            and item.normalized_value is not None
+        ]
+        urls = [
+            item.normalized_value
+            for item in selected
+            if item.target_type == ScopeImportTargetType.URL
+            and item.normalized_value is not None
+        ]
         if current_scope:
             candidate_payload = current_scope.model_dump(
                 exclude={"id", "created_at", "updated_at", "revision"}

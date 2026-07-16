@@ -21,25 +21,3 @@ The protected `desktop-release` GitHub environment must define:
 - `NEBULA_UPDATER_PUBLIC_KEY`, embedded into direct builds and backed up with the private key offline.
 
 Tag pushes build signed direct and managed installers on native macOS arm64, macOS x64, and Ubuntu 22.04 x64 runners. A workflow dispatch may validate an existing tag without publishing. Publication always creates a draft GitHub Release; a release manager publishes it only after notarization, installer inspection, SBOM, provenance, and upgrade evidence are reviewed. Publishing triggers channel-specific updater manifest generation.
-
-## Toolbox release inputs
-
-Nebula Toolbox has a separate manual, protected release boundary. See the
-[Toolbox operator and author guide](../docs/TOOLBOX.md) before preparing one.
-
-The **Publish Nebula Toolbox** workflow targets the protected
-`tool-pack-release` environment. `validate-source` remains read-only. `publish`
-requires an immutable `nebula-toolbox-v*` tag and required-reviewer approval. It
-then builds and signs the architecture-specific OCI image, generates SBOMs and
-provenance, signs the catalog with the environment-held Ed25519 key, and
-deploys the verified catalog under the existing Nebula Pages site.
-
-For the first release, an organization owner must make the `nebula-toolbox`
-GHCR package public in GitHub's Package settings. The anonymous-pull gate must
-pass before catalog signing or Pages deployment; rerun failed jobs after the
-one-time visibility change.
-
-Never commit the private key, resolved digests, or generated release evidence
-to the source branch. Back up the release key offline before approving the
-first publication. Key rotation requires an overlapping Nebula release that
-trusts both the retiring and replacement public keys.

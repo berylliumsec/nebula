@@ -49,9 +49,6 @@ jobs:
       - name: Type-check Nebula 3
         if: matrix.python-version == '3.12'
         run: poetry run mypy src/nebula/v3
-      - name: Validate Nebula Toolbox release source
-        if: matrix.python-version == '3.12'
-        run: poetry run python -m scripts.validate_tool_pack_release --json
       - name: Build distributions
         run: poetry build
 
@@ -110,7 +107,7 @@ jobs:
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
-          NEBULA_TEST_TOOLBOX_IMAGE: localhost/nebula-operator-runtime:ci
+          NEBULA_TEST_RUNTIME_IMAGE: localhost/nebula-operator-runtime:ci
         run: >-
           poetry run pytest -q --confcutdir=tests/v3
           tests/v3/test_sandbox_integration.py

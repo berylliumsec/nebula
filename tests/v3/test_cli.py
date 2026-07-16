@@ -3,7 +3,6 @@ import json
 from datetime import datetime, timezone
 
 import httpx
-from click import unstyle
 from typer.testing import CliRunner
 
 from nebula.v3.artifacts import ArtifactStore
@@ -202,86 +201,32 @@ def test_worker_rejects_unimplemented_daemon_mode():
     assert "durable worker mode is release-gated" in result.output
 
 
-def test_cli_run_rejects_tool_budget_without_selected_tools():
+def test_runtime_status_reports_the_prepared_kali_runtime(tmp_path, monkeypatch):
+    class Info:
+        def model_dump(self, *, mode):
+            assert mode == "json"
+            return {
+                "ready": True,
+                "image": "localhost/nebula-kali-headless@sha256:" + "a" * 64,
+                "digest": "sha256:" + "a" * 64,
+                "binary_inventory": [{"name": "rg", "version": "14.1.1"}],
+            }
+
+    class Manager:
+        async def runtime_info(self):
+            return Info()
+
+    monkeypatch.setattr("nebula.v3.cli._automation_services", lambda _: Manager())
     result = CliRunner().invoke(
         app,
-        ["run", "engagement", "objective", "--max-tool-calls", "1"],
-    )
-
-    assert result.exit_code != 0
-    normalized_output = " ".join(unstyle(result.output).split())
-    assert "positive --max-tool-calls budget requires at least one" in normalized_output
-    assert "--tool" in normalized_output
-
-
-def test_cli_tool_missions_are_not_release_gated():
-    result = CliRunner().invoke(
-        app,
-        [
-            "run",
-            "engagement",
-            "objective",
-            "--tool",
-            "nmap.connect_scan",
-            "--max-tool-calls",
-            "1",
-            "--provider",
-            "provider",
-        ],
-    )
-
-    assert result.exit_code != 0
-    assert "release-gated" not in result.output
-    assert result.exception is not None
-    assert "engagements entity not found" in str(result.exception)
-
-
-def test_tools_cli_accepts_stable_json_output_flag(tmp_path):
-    result = CliRunner().invoke(
-        app,
-        ["tools", "--json", "list", "--data-dir", str(tmp_path)],
+        ["runtime", "status", "--data-dir", str(tmp_path)],
     )
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {"installations": [], "tools": []}
-
-
-def test_tools_add_generates_a_parser_free_v2_pack(tmp_path):
-    destination = tmp_path / "custom-tool"
-    result = CliRunner().invoke(
-        app,
-        [
-            "tools",
-            "--json",
-            "add",
-            str(destination),
-            "--pack-name",
-            "custom-tool",
-            "--tool-name",
-            "custom.run",
-            "--description",
-            "Run a configuration-only fixture tool",
-            "--image",
-            "example.invalid/custom@sha256:" + "a" * 64,
-            "--executable",
-            "/usr/bin/custom",
-            "--argument",
-            'name:string:--name:"smoke"',
-            "--capture-path",
-            "reports/result.txt",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    report = json.loads(result.output)
-    assert report["status"] == "created"
-    bundle = tmp_path / "custom-tool.nebula-toolpack"
-    assert report["bundle"] == str(bundle)
-    assert bundle.is_file()
-    manifest = (destination / "nebula-tool-pack.yaml").read_text(encoding="utf-8")
-    assert "tools.nebula.security/v2" in manifest
-    assert "capture_paths:" in manifest
-    assert "parser:" not in manifest
+    payload = json.loads(result.output)
+    assert payload["ready"] is True
+    assert "nebula-kali-headless" in payload["image"]
+    assert payload["binary_inventory"][0]["name"] == "rg"
 
 
 def test_cli_imports_legacy_side_by_side_then_exports_bundle(tmp_path, monkeypatch):

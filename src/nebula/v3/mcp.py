@@ -700,7 +700,7 @@ def build_mcp_tool_plugins(
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=_mcp_tool_risk(snapshot),
                 requires_approval=_mcp_requires_approval(profile, snapshot),
-                pack_id=f"mcp:{profile.id}",
+                source_id=f"mcp:{profile.id}",
             )
 
         async def execute(self, invocation: Any, runner: Any) -> Any:

@@ -6,7 +6,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
 import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
 import { EngagementPolicySettings } from "../components/EngagementPolicySettings";
-import { RunnerSettings, ToolPackSettings } from "../components/ToolingSettings";
+import { AutomationRuntimeSettings, RunnerSettings } from "../components/ToolingSettings";
 import { HarnessSettings } from "../components/HarnessSettings";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -507,7 +507,7 @@ export function SettingsPage() {
         )}
       </section>
       <HarnessSettings />
-      <ToolPackSettings />
+      <AutomationRuntimeSettings />
       <RunnerSettings />
       <EngagementPolicySettings />
       <section className="settings-section" id="operator-settings">

@@ -64,127 +64,30 @@ export interface MissionCreateRequest {
   maxTokens?: number;
   maxCostUsd?: number;
   maxRetries?: number;
-  toolNames?: string[];
   maxToolCalls?: number;
   maxArtifactQueries?: number;
   maxConcurrency?: number;
   allowCloudToolResults?: boolean;
 }
 
-export type ToolPackStatus =
-  | "pending"
-  | "pulling"
-  | "verifying"
-  | "ready"
-  | "failed"
-  | "disabled";
+export interface AutomationRuntimeInfo {
+  configured: boolean;
+  ready: boolean;
+  image?: string;
+  digest?: string;
+  runnerProfileId?: Identifier;
+  detail: string;
+  inventory: Array<{ name: string; version: string; path: string }>;
+}
 
-export interface ToolPackCatalogEntry {
+export interface AutomationProjectPolicy {
   id: Identifier;
-  publisher: string;
-  name: string;
-  version: string;
-  description: string;
-  manifestDigest: string;
-  minimumNebulaVersion?: string;
-  licenses: string[];
-  platforms: string[];
-  toolNames: string[];
-  permissions: string[];
-  signed: boolean;
-  collectionId?: string;
-  collectionName?: string;
-  collectionOrder: number;
-  interfaceCatalogDigest?: string;
-  interfaceCatalogProtocol?: string;
-  interfaceToolCount?: number;
-}
-
-export interface ToolPackInstallation {
-  id: Identifier;
-  catalogId?: Identifier;
-  publisher: string;
-  name: string;
-  version: string;
-  manifestDigest: string;
-  source: string;
-  trustState: "trusted" | "developer" | "untrusted" | "invalid";
-  runtimeProfileId?: Identifier;
-  imageLocks: Record<string, string>;
-  interfaceCatalogDigest?: string;
-  status: ToolPackStatus;
-  toolNames: string[];
-  permissions: string[];
-  installedAt?: string;
-  verifiedAt?: string;
-  failureDetail?: string;
-}
-
-export interface ToolSummary {
-  name: string;
-  packId: Identifier;
-  packManifestDigest: string;
-  description: string;
-  riskClass:
-    | "local_read"
-    | "passive"
-    | "active_scan"
-    | "workspace_write"
-    | "credential_use"
-    | "exploitation"
-    | "persistence"
-    | "destructive"
-    | "scope_change";
-  requiresNetwork: boolean;
-  requiresApproval: boolean;
-  available: boolean;
-  unavailableReason?: string;
-}
-
-export interface CustomToolArgumentDefinition {
-  name: string;
-  valueType:
-    | "string"
-    | "integer"
-    | "number"
-    | "boolean"
-    | "string_list"
-    | "integer_list";
-  description?: string;
-  required?: boolean;
-  flag?: string;
-  positional?: boolean;
-  smokeValue?: unknown;
-}
-
-export interface CustomToolDefinition {
-  packName: string;
-  publisher?: string;
-  toolName: string;
-  description: string;
-  image: string;
-  platform?: "linux/amd64" | "linux/arm64";
-  executable: string;
-  fixedArguments?: string[];
-  arguments?: CustomToolArgumentDefinition[];
-  riskClass?: ToolSummary["riskClass"];
-  networkAccess?: boolean;
-  targetArgument?: string;
-  portArgument?: string;
-  filesystemAccess?: "none" | "read" | "workspace_write";
-  requiresApproval?: boolean;
-  timeoutSeconds?: number;
-  outputFlag?: string;
-  outputFilename?: string;
-  capturePaths?: string[];
-  expectedExitCode?: number;
-}
-
-export interface CustomToolBundle {
-  filename: string;
-  bundleBase64: string;
-  manifestDigest: string;
-  permissionPreview: Record<string, unknown>;
+  engagementId: Identifier;
+  approvalPolicy: "always" | "on_boundary" | "never";
+  networkEnabled: boolean;
+  runnerProfileId?: Identifier;
+  maxTimeoutMs: number;
+  revision: number;
 }
 
 export interface ToolArtifactReference {
@@ -251,7 +154,6 @@ export interface RunnerProfile {
   state: "ready" | "degraded" | "unavailable" | "unchecked";
   lastCheckedAt?: string;
   detail?: string;
-  egressHelperImage?: string;
   seccompProfile?: string;
   revision: number;
 }
@@ -264,7 +166,6 @@ export interface RunnerProfileUpdateRequest {
   socket?: string;
   platform: string;
   isolationMode: Exclude<RunnerIsolation, "unverified">;
-  egressHelperImage?: string;
   seccompProfile?: string;
   expectedRevision?: number;
 }
@@ -354,24 +255,6 @@ export interface ScopeImportApplyResult {
   scopeImport: ScopeImport;
 }
 
-export interface EngagementToolAssignment {
-  id?: Identifier;
-  engagementId: Identifier;
-  manifestDigest?: string;
-  toolNames: string[];
-  enabled: boolean;
-  revision: number;
-  updatedBy?: string;
-  updatedAt?: string;
-}
-
-export interface EngagementToolAssignmentUpdateRequest {
-  manifestDigest: string;
-  toolNames: string[];
-  enabled: boolean;
-  expectedRevision?: number;
-}
-
 export interface RunStopRequest {
   reason?: string;
 }
@@ -393,7 +276,7 @@ export interface ApprovalSummary {
   arguments: Record<string, unknown>;
   command?: string[];
   image?: string;
-  manifestDigest?: string;
+  runtimeDigest?: string;
   credentialClass?: string;
   expiresAt?: string;
   createdAt: string;
@@ -1448,8 +1331,7 @@ export interface ExecutionRuntimeSnapshot {
   language: ExecutionLanguage;
   interpreter: string;
   arguments: string[];
-  toolPackInstallationId: Identifier;
-  manifestDigest: string;
+  runtimeDigest: string;
   image: string;
   runnerProfileId: Identifier;
   runnerProfileRevision: number;
@@ -1459,7 +1341,6 @@ export interface ExecutionRuntimeSnapshot {
   runnerPlatform: string;
   runnerContext?: string;
   runnerSocket?: string;
-  trusted: boolean;
 }
 
 export interface ExecutionNetworkSnapshot {

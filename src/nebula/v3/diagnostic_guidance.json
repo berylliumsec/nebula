@@ -187,7 +187,7 @@
     "knowledge": {"label": "Project sources", "operation": "Knowledge retrieval", "destination": "/project?view=sources", "help_article": "diagnostics"},
     "harnesses": {"label": "Agent harnesses", "operation": "Harness turn", "destination": "/settings#advanced-settings", "help_article": "provider-model"},
     "missions": {"label": "Missions", "operation": "Mission run", "destination": "/?view=missions", "help_article": "provider-model"},
-    "toolbox": {"label": "Toolbox", "operation": "Toolbox operation", "destination": "/settings#advanced-settings", "help_article": "toolbox-availability"},
+    "runtime": {"label": "Automation runtime", "operation": "Runtime operation", "destination": "/settings#advanced-settings", "help_article": "automation-runtime"},
     "sandbox": {"label": "Execution sandbox", "operation": "Sandbox boundary", "destination": "/settings#advanced-settings", "help_article": "runner-setup"},
     "executions": {"label": "Reviewed executions", "operation": "Reviewed execution", "destination": "/?view=activity", "help_article": "human-terminal"},
     "findings": {"label": "Findings", "operation": "Finding operation", "destination": "/findings", "help_article": "diagnostics"},

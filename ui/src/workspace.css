@@ -390,15 +390,15 @@
 .tool-progress-list article time { text-align: right; }
 .tooling-column { min-width: 0; }
 .tooling-column > h3 { margin: 0 0 8px; color: var(--muted-strong); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
-.tool-pack-list { display: grid; gap: 8px; }
-.tool-pack-card { display: grid; gap: 9px; padding: 12px; border: 1px solid var(--border-soft); border-radius: 9px; background: var(--surface); }
-.tool-pack-card > header, .tool-pack-card > footer, .pack-facts { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.tool-pack-card > header > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.tool-pack-card strong { font-size: 11px; }
-.tool-pack-card code, .digest-lock { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.tool-pack-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
-.tool-pack-card > header small, .tool-pack-card > footer, .pack-facts { color: var(--muted); font-size: 11px; }
-.tool-pack-card > footer { padding-top: 8px; border-top: 1px solid var(--border-soft); }
+.runtime-resource-list { display: grid; gap: 8px; }
+.runtime-resource-card { display: grid; gap: 9px; padding: 12px; border: 1px solid var(--border-soft); border-radius: 9px; background: var(--surface); }
+.runtime-resource-card > header, .runtime-resource-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.runtime-resource-card > header > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.runtime-resource-card strong { font-size: 11px; }
+.runtime-resource-card code, .digest-lock { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-resource-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.runtime-resource-card > header small, .runtime-resource-card > footer { color: var(--muted); font-size: 11px; }
+.runtime-resource-card > footer { padding-top: 8px; border-top: 1px solid var(--border-soft); }
 .pack-status, .signed-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 99px; color: var(--muted); background: var(--surface-muted); font-size: 11px; text-transform: capitalize; }
 .pack-status.ready, .signed-badge { color: var(--green); background: var(--green-muted); }
 .pack-status.failed { color: var(--red); background: var(--red-muted); }

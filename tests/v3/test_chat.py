@@ -148,7 +148,7 @@ def test_tool_enabled_chat_requires_exact_model_verification(tmp_path, monkeypat
                     provider_id=profile.id,
                     engagement_id=engagement.id,
                     model="model-a",
-                    messages=[{"role": "user", "content": "Use the toolbox"}],
+                    messages=[{"role": "user", "content": "Use the command runtime"}],
                     tools_enabled=True,
                 )
             )

@@ -215,7 +215,7 @@ export function ActivityCenter({ open, onClose, view, onViewChange }: ActivityCe
             <div><dt>Target</dt><dd>{selectedApproval.target}</dd></div>
             {selectedApproval.credentialClass && <div><dt>Credential</dt><dd>{selectedApproval.credentialClass}</dd></div>}
             {selectedApproval.image && <div><dt>Image</dt><dd><code>{selectedApproval.image}</code></dd></div>}
-            {selectedApproval.manifestDigest && <div><dt>Manifest</dt><dd><code>{selectedApproval.manifestDigest}</code></dd></div>}
+            {selectedApproval.runtimeDigest && <div><dt>Runtime</dt><dd><code>{selectedApproval.runtimeDigest}</code></dd></div>}
           </dl>
           <section>
             <h3>Exact arguments</h3>
