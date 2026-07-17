@@ -453,7 +453,7 @@ test("Diagnostics explains and focuses a requested failure at every breakpoint",
   await expect(page.getByRole("heading", { name: "Current status" })).toBeVisible();
   await expect(page.getByText("Core is responding")).toBeVisible();
   await expect(page.getByText("The configured model provider stopped the stream.")).toBeVisible();
-  await expect(page.getByText("Retry the original action.")).toBeVisible();
+  await expect(page.getByText("Review the technical evidence and correlation identifiers in this incident.")).toBeVisible();
   await expect(page.getByText("Showing requested failure")).toBeVisible();
   await expect(page.locator(".diagnostic-failure-card.targeted")).toBeFocused();
   await expect(page.locator(".diagnostic-technical-details dd", { hasText: "err_preview_123" })).toBeVisible();

@@ -418,6 +418,8 @@
 .runner-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px; }
 .runner-form label:nth-of-type(3), .runner-form label:nth-of-type(5), .runner-form footer { grid-column: 1 / -1; }
 .runner-form footer, .policy-form-body > footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 9px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }
+.policy-form-body > footer > span { min-width: 0; line-height: 1.4; }
+.policy-form-body > footer > .button { flex: 0 0 auto; white-space: nowrap; }
 .runner-status { overflow: hidden; }
 .runner-status article { display: flex; align-items: flex-start; gap: 8px; padding: 11px 13px; border-top: 1px solid var(--border-soft); }
 .runner-status article > div { display: flex; min-width: 0; flex-direction: column; }
@@ -531,6 +533,8 @@
   .chat-context-bar { grid-template-columns: 1fr; }
   .tooling-grid { grid-template-columns: 1fr; }
   .developer-pack > div { grid-template-columns: 1fr; }
+  .policy-form-body > footer { align-items: stretch; flex-direction: column; }
+  .policy-form-body > footer > .button { align-self: flex-end; }
   .tool-progress-list article { grid-template-columns: minmax(120px, 1fr) 60px; }
   .tool-progress-list article .progress-track { grid-column: 1 / -1; grid-row: 2; }
   .tool-progress-list article time { display: none; }

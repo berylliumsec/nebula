@@ -87,8 +87,8 @@ export function PostToolAssistant({ api, engagementId, providers, onRun }: Props
 
   return <>
     <div className="post-tool-toggles" aria-label="Post-tool assistance">
-      <label><input type="checkbox" checked={config.suggestNextSteps} onChange={() => void toggle("suggestNextSteps")} /> Suggest next steps</label>
-      <label><input type="checkbox" checked={config.takeNotes} onChange={() => void toggle("takeNotes")} /> Take notes</label>
+      <label title="Suggest next steps"><input type="checkbox" checked={config.suggestNextSteps} onChange={() => void toggle("suggestNextSteps")} /> Suggest next steps</label>
+      <label title="Take notes"><input type="checkbox" checked={config.takeNotes} onChange={() => void toggle("takeNotes")} /> Take notes</label>
       {busy && <LoaderCircle className="spin" size={13} aria-label="Analyzing tool result" />}
     </div>
     {error && <div className="post-tool-error"><DiagnosticErrorNotice error={error} fallback="Post-tool assistance is unavailable." compact /></div>}

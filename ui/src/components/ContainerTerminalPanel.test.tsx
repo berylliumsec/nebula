@@ -351,6 +351,7 @@ describe("ContainerTerminalPanel", () => {
 
     renderPanel(api);
     await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("tab", { name: /Terminal 1/ }));
     await user.click(screen.getByRole("button", { name: "Close Terminal 1" }));
     expect(screen.getByRole("dialog", { name: "Stop Terminal 1?" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Stop and close" }));

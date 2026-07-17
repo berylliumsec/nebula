@@ -764,14 +764,14 @@ export function ContainerTerminalPanel({
 
   const launchInProgress = Boolean(launchingKey);
   const canAdd = !launchInProgress && capacity.availableSessions > 0;
+  const activeTab = tabs.find((tab) => tab.key === activeKey);
 
   return <section className="terminal-workspace" aria-label="Project terminals">
     <header className="terminal-tab-bar">
       <div className="terminal-tab-strip" role="tablist" aria-label="Open terminals">
-        {tabs.map((tab) => <div className={`terminal-tab-item${activeKey === tab.key ? " active" : ""}`} key={tab.key}>
-          <button
+        {tabs.map((tab) => <button
             id={`terminal-tab-${tab.key}`}
-            className="terminal-tab-button"
+            className={`terminal-tab-item terminal-tab-button${activeKey === tab.key ? " active" : ""}`}
             type="button"
             role="tab"
             aria-controls={`terminal-panel-${tab.key}`}
@@ -782,12 +782,11 @@ export function ContainerTerminalPanel({
           >
             <span className={`terminal-tab-status ${tabStatus(tab)}`} aria-hidden="true" />
             <span>Terminal {tab.ordinal}</span>
-          </button>
-          <button className="terminal-tab-close" type="button" aria-label={`Close Terminal ${tab.ordinal}`} onClick={() => void closeTab(tab)}><X size={13} /></button>
-        </div>)}
+          </button>)}
       </div>
       <div className="terminal-tab-actions">
         <span className="terminal-capacity" title="Active terminal containers across all Projects">{capacity.activeSessions} / {capacity.maxActiveSessions}</span>
+        {activeTab && <button className="icon-button subtle terminal-tab-close" type="button" aria-label={`Close Terminal ${activeTab.ordinal}`} onClick={() => void closeTab(activeTab)}><X size={14} /></button>}
         <button className="icon-button subtle terminal-add" type="button" aria-label="New terminal" title={canAdd ? "New terminal" : capacity.availableSessions <= 0 ? "Terminal capacity is full" : "Wait for the current terminal to finish starting"} disabled={!canAdd} onClick={addTerminal}><Plus size={16} /></button>
         <div className="terminal-overflow">
           <button className="icon-button subtle" type="button" aria-label="List all terminals" aria-expanded={overflowOpen} onClick={() => setOverflowOpen((value) => !value)}><ChevronDown size={16} /></button>
