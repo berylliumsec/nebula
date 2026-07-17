@@ -49,6 +49,7 @@ import { ExecutionReviewDialog } from "../components/ExecutionReviewDialog";
 import { NewMissionButton } from "../components/MissionControls";
 import { NotesPanel } from "../components/NotesPanel";
 import { PageHeader } from "../components/PageHeader";
+import { PostToolAssistant } from "../components/PostToolAssistant";
 import { TerminalCommandHistoryPanel } from "../components/TerminalCommandHistoryPanel";
 import { useConfirmation } from "../components/DialogSystem";
 import { createHashedSelectionAttachment } from "../components/selection";
@@ -1724,6 +1725,7 @@ export function SessionsPage() {
           </button>
         </div>
       </div>
+      {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} onRun={setRunCandidate} />}
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelExpanded ? " conversation-panel-expanded" : ""}`}>
         {view === "chat" && <aside className="session-list" aria-label="Conversations">

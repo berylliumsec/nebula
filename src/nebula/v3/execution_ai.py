@@ -43,7 +43,7 @@ from .providers import (
 from .redaction import redacted_display
 from .storage import ConflictError, NebulaStore
 
-PROMPT_VERSION = "execution-note/v1"
+PROMPT_VERSION = "post-tool-analysis/v1"
 SOURCE_LIMIT = 32 * 1024
 OUTPUT_LIMIT = 64 * 1024
 
@@ -59,6 +59,17 @@ class ExecutionAIError(RuntimeError):
 class DraftNoteRequest(NebulaModel):
     provider_id: str = Field(min_length=1, max_length=200)
     model: str = Field(min_length=1, max_length=500)
+    cloud_confirmed: bool = False
+    suggest_next_steps: bool = False
+    take_notes: bool = True
+    automatic: bool = False
+
+
+class PostToolAssistantConfig(NebulaModel):
+    suggest_next_steps: bool = False
+    take_notes: bool = False
+    provider_id: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=500)
     cloud_confirmed: bool = False
 
 
@@ -150,6 +161,9 @@ class ExecutionAIService:
                 profile.id,
                 request.model,
                 fingerprint,
+                automatic=request.automatic,
+                suggest_next_steps=request.suggest_next_steps,
+                take_notes=request.take_notes,
             )
             if existing is not None and existing.status != GeneratedDraftStatus.FAILED:
                 return existing
@@ -161,7 +175,7 @@ class ExecutionAIService:
                     model=request.model,
                     prompt_version=PROMPT_VERSION,
                     context_fingerprint=fingerprint,
-                    metadata=metadata,
+                    metadata={**metadata, "suggest_next_steps": request.suggest_next_steps, "take_notes": request.take_notes, "automatic": request.automatic},
                 )
                 self.store.create(draft)
             else:
@@ -174,7 +188,7 @@ class ExecutionAIService:
                         "provider_request_id": None,
                         "usage": None,
                         "error_detail": None,
-                        "metadata": metadata,
+                        "metadata": {**metadata, "suggest_next_steps": request.suggest_next_steps, "take_notes": request.take_notes, "automatic": request.automatic},
                     },
                     expected_revision=existing.revision,
                 )
@@ -197,6 +211,32 @@ class ExecutionAIService:
             self._tasks[draft.id] = task
             task.add_done_callback(lambda _task: self._tasks.pop(draft.id, None))
             return draft
+
+    def get_config(self, engagement_id: str) -> PostToolAssistantConfig:
+        engagement = self.store.get(Engagement, engagement_id)
+        value = engagement.metadata.get("post_tool_assistant", {})
+        return PostToolAssistantConfig.model_validate(value if isinstance(value, dict) else {})
+
+    def set_config(self, engagement_id: str, config: PostToolAssistantConfig) -> PostToolAssistantConfig:
+        engagement = self.store.get(Engagement, engagement_id)
+        if (config.suggest_next_steps or config.take_notes) and (not config.provider_id or not config.model):
+            raise ExecutionAIError("configuration_invalid", "enabled post-tool assistance requires a provider and model")
+        metadata = {**engagement.metadata, "post_tool_assistant": config.model_dump(mode="json")}
+        self.store.update(Engagement, engagement.id, {"metadata": metadata}, expected_revision=engagement.revision)
+        return config
+
+    def list_results(self, engagement_id: str) -> list[GeneratedDraft]:
+        return sorted(
+            [item for item in self._all_drafts() if item.engagement_id == engagement_id and item.prompt_version == PROMPT_VERSION],
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+
+    def dismiss_suggestion(self, draft_id: str) -> GeneratedDraft:
+        draft = self.store.get(GeneratedDraft, draft_id)
+        updated = self.store.update(GeneratedDraft, draft.id, {"metadata": {**draft.metadata, "dismissed": True, "dismissed_by": self.operator_id()}}, expected_revision=draft.revision)
+        self._event(updated, "generated_draft.suggestion_dismissed", {})
+        return updated
 
     def edit(self, draft_id: str, request: DraftEditRequest) -> GeneratedDraft:
         draft = self.store.get(GeneratedDraft, draft_id)
@@ -352,10 +392,10 @@ class ExecutionAIService:
             request = ModelRequest(
                 model=draft.model,
                 instructions=(
-                    "Create a concise analyst note from the execution JSON data. "
-                    "Use only observed context. Put uncertain security implications in "
-                    "potential_findings as hypotheses. Never claim a finding is verified. "
-                    "Return only the strict response schema."
+                    "Analyze the untrusted execution JSON using only observed context. "
+                    + ("Create a concise analyst note; keep uncertainty in potential_findings. " if draft.metadata.get("take_notes") else "Return an empty note title of 'Next step' and no observations or findings. ")
+                    + ("Provide one prioritized, exact next_step command that logically follows the result. " if draft.metadata.get("suggest_next_steps") else "Set next_step to null. ")
+                    + "Never claim a finding is verified and never execute anything. Return only the strict response schema."
                 ),
                 messages=[ModelMessage(role="user", content=context)],
                 max_output_tokens=4096,
@@ -414,6 +454,26 @@ class ExecutionAIService:
                     else None,
                 },
             )
+            if draft.metadata.get("take_notes") and draft.metadata.get("automatic"):
+                observation = Observation(
+                    engagement_id=draft.engagement_id,
+                    observation_type="ai_tool_note",
+                    title=content.title,
+                    body=_observation_body(content),
+                    evidence_ids=content.evidence_ids,
+                    source="automatic-post-tool-analysis",
+                    metadata={
+                        "execution_id": draft.execution_id,
+                        "generated_draft_id": draft.id,
+                        "provider_profile_id": draft.provider_profile_id,
+                        "model": draft.model,
+                        "prompt_version": draft.prompt_version,
+                        "context_fingerprint": draft.context_fingerprint,
+                        "provenance": "ai-generated",
+                    },
+                )
+                self.store.create(observation)
+                ready = self.store.update(GeneratedDraft, ready.id, {"status": GeneratedDraftStatus.ACCEPTED, "observation_id": observation.id}, expected_revision=ready.revision)
         except asyncio.CancelledError as caught_error:
             record_caught_exception(
                 "executions",
@@ -637,6 +697,10 @@ class ExecutionAIService:
         provider_id: str,
         model: str,
         context_fingerprint: str,
+        *,
+        automatic: bool,
+        suggest_next_steps: bool,
+        take_notes: bool,
     ) -> GeneratedDraft | None:
         for draft in self._all_drafts(execution.engagement_id):
             if (
@@ -645,6 +709,9 @@ class ExecutionAIService:
                 and draft.model == model
                 and draft.prompt_version == PROMPT_VERSION
                 and draft.context_fingerprint == context_fingerprint
+                and bool(draft.metadata.get("automatic")) == automatic
+                and bool(draft.metadata.get("suggest_next_steps")) == suggest_next_steps
+                and bool(draft.metadata.get("take_notes", True)) == take_notes
             ):
                 return draft
         return None

@@ -198,6 +198,7 @@ from .execution_ai import (
     ExecutionAIService,
     ExecutionChatAttachRequest,
     ExecutionChatAttachment,
+    PostToolAssistantConfig,
 )
 from .knowledge import (
     MAX_DOCUMENT_BYTES,
@@ -3934,6 +3935,42 @@ def create_app(
         execution_id: str, request: ExecutionChatAttachRequest
     ) -> ExecutionChatAttachment:
         return require_execution_ai_service().attach_to_chat(execution_id, request)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-assistant",
+        response_model=PostToolAssistantConfig,
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_post_tool_assistant(engagement_id: str) -> PostToolAssistantConfig:
+        return require_execution_ai_service().get_config(engagement_id)
+
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-assistant",
+        response_model=PostToolAssistantConfig,
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def put_post_tool_assistant(engagement_id: str, request: PostToolAssistantConfig) -> PostToolAssistantConfig:
+        return require_execution_ai_service().set_config(engagement_id, request)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-results",
+        response_model=list[GeneratedDraft],
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_post_tool_results(engagement_id: str) -> list[GeneratedDraft]:
+        return require_execution_ai_service().list_results(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/generated-drafts/{{draft_id}}/dismiss-suggestion",
+        response_model=GeneratedDraft,
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def dismiss_post_tool_suggestion(draft_id: str) -> GeneratedDraft:
+        return require_execution_ai_service().dismiss_suggestion(draft_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace",

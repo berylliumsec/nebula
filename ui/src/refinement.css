@@ -554,6 +554,16 @@ kbd { font-size: 11px; }
 .sessions-page.full-screen .workbench-activity-stack { min-height: 100%; }
 .session-toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
 .workbench-full-screen-toggle { color: var(--muted-strong); }
+.post-tool-toggles { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 6px 12px; border-bottom: 1px solid var(--border-soft); color: var(--muted); background: var(--surface-muted); font-size: 11px; }
+.post-tool-toggles label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.post-tool-error { position: fixed; z-index: 90; right: 18px; bottom: 18px; width: min(390px, calc(100vw - 36px)); }
+.post-tool-suggestion { position: fixed; z-index: 80; right: 18px; bottom: 18px; width: min(390px, calc(100vw - 36px)); overflow: hidden; border: 1px solid color-mix(in srgb, var(--blue-bright) 38%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--surface-raised) 96%, transparent); box-shadow: 0 14px 38px #0006; backdrop-filter: blur(14px); }
+.post-tool-suggestion > header { display: flex; align-items: center; gap: 9px; padding: 11px 12px 8px; }
+.post-tool-suggestion > header > span { display: grid; min-width: 0; flex: 1; gap: 2px; }.post-tool-suggestion > header small { color: var(--blue-bright); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }.post-tool-suggestion > header strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.post-tool-suggestion-body { display: grid; gap: 8px; padding: 2px 12px 10px; }.post-tool-suggestion-body p { margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.45; }.post-tool-suggestion-body label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }.post-tool-suggestion-body textarea { resize: vertical; padding: 8px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--canvas); font: 11px/1.5 var(--mono); }
+.post-tool-suggestion > footer { display: flex; justify-content: flex-end; gap: 5px; padding: 8px; border-top: 1px solid var(--border-soft); }
+@media (max-width: 680px) { .post-tool-toggles { justify-content: flex-start; overflow-x: auto; }.post-tool-suggestion { right: 10px; bottom: 10px; width: calc(100vw - 20px); } }
+@media (prefers-reduced-motion: reduce) { .post-tool-suggestion { transition: none; } }
 .workbench-full-screen-toggle:hover { color: var(--text-strong); }
 .session-layout.chat { grid-template-columns: 220px minmax(420px, 1fr) 280px; grid-template-rows: minmax(0, 1fr); }
 .session-layout.chat.conversation-panel-expanded { grid-template-columns: 340px minmax(420px, 1fr) 280px; }

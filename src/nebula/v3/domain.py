@@ -2054,6 +2054,15 @@ class PotentialFindingDraft(NebulaModel):
     rationale: str = Field(default="", max_length=20_000)
 
 
+class SuggestedCommand(NebulaModel):
+    title: str = Field(min_length=1, max_length=500)
+    rationale: str = Field(default="", max_length=20_000)
+    command: str = Field(min_length=1, max_length=50_000)
+    language: str = Field(default="bash", pattern=r"^(bash|sh|python)$")
+    network_target: str | None = Field(default=None, max_length=500)
+    network_ports: list[int] = Field(default_factory=list, max_length=100)
+
+
 class GeneratedDraftContent(NebulaModel):
     title: str = Field(min_length=1, max_length=500)
     summary: str = Field(default="", max_length=50_000)
@@ -2062,6 +2071,7 @@ class GeneratedDraftContent(NebulaModel):
         default_factory=list, max_length=100
     )
     evidence_ids: list[str] = Field(default_factory=list, max_length=500)
+    next_step: SuggestedCommand | None = None
 
 
 class GeneratedDraft(Entity):

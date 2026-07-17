@@ -35,6 +35,7 @@ from nebula.v3.execution_ai import (
     ExecutionAIError,
     ExecutionAIService,
     ExecutionChatAttachRequest,
+    PostToolAssistantConfig,
     SOURCE_LIMIT,
 )
 from nebula.v3.providers import ModelResponse, ModelUsage, ProviderError
@@ -170,6 +171,44 @@ def _fixture(tmp_path, *, local: bool = True, strict: bool = True):
         operator_id=lambda: "operator",
     )
     return store, artifacts, engagement, execution, profile, evidence, provider, service
+
+
+@async_test
+async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path):
+    store, _artifacts, engagement, execution, profile, evidence, provider, service = _fixture(tmp_path)
+    config = service.set_config(engagement.id, PostToolAssistantConfig(
+        suggest_next_steps=True, take_notes=True, provider_id=profile.id, model="model-1"
+    ))
+    assert service.get_config(engagement.id) == config
+    provider.response_text = json.dumps({
+        "title": "AI-generated execution note",
+        "summary": "The command completed.",
+        "observations": ["stdout contained hello"],
+        "potential_findings": [],
+        "evidence_ids": [evidence.id],
+        "next_step": {
+            "title": "Inspect the service",
+            "rationale": "Confirm the observed response.",
+            "command": "curl -I https://example.test",
+            "language": "bash",
+            "network_target": "example.test",
+            "network_ports": [443],
+        },
+    })
+    draft = await service.generate(execution.id, DraftNoteRequest(
+        provider_id=profile.id, model="model-1", suggest_next_steps=True,
+        take_notes=True, automatic=True,
+    ))
+    await service._tasks[draft.id]
+    result = store.get(GeneratedDraft, draft.id)
+    assert result.status == GeneratedDraftStatus.ACCEPTED
+    assert result.content and result.content.next_step
+    assert result.content.next_step.command.startswith("curl")
+    note = store.get(Observation, result.observation_id)
+    assert note.observation_type == "ai_tool_note"
+    assert note.metadata["provenance"] == "ai-generated"
+    dismissed = service.dismiss_suggestion(result.id)
+    assert dismissed.metadata["dismissed"] is True
 
 
 @async_test

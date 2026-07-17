@@ -91,7 +91,7 @@ export function NotesPanel({
     setError(undefined);
     try {
       const response = await api.listObservations(engagementId, signal);
-      const next = response.items.filter((item) => item.observationType === "note");
+      const next = response.items.filter((item) => item.observationType === "note" || item.observationType === "ai_tool_note");
       const captured = capturedNoteRef.current;
       const merged = captured && !next.some((item) => item.id === captured.id) ? [captured, ...next] : next;
       setNotes(merged);
@@ -257,7 +257,7 @@ export function NotesPanel({
             <button className="button quiet square" type="button" aria-label="Create note" onClick={startNote}><Plus size={15} /></button>
           </div>
         </header>
-        {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} onClick={() => { setCreating(false); setSelectedId(note.id); }}><strong>{note.title}</strong><small>{new Date(note.updatedAt).toLocaleString()}</small></button>)}
+        {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} onClick={() => { setCreating(false); setSelectedId(note.id); }}><strong>{note.title}</strong><small>{note.observationType === "ai_tool_note" ? "AI-generated · " : ""}{new Date(note.updatedAt).toLocaleString()}</small></button>)}
         {!notes.length && !loading && <p>No notes yet.</p>}
       </aside>
       <section className={`note-editor${creating || selected ? "" : " is-empty"}`} aria-label={creating ? "New note" : selected ? `Edit ${selected.title}` : "Note editor"}>

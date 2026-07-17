@@ -66,6 +66,7 @@ import type {
   OperatorProfile,
   OperatorProfileCreateRequest,
   OperatorProfileUpdateRequest,
+  PostToolAssistantConfig,
   Page,
   PersistedChatMessage,
   LocalProviderDetection,
@@ -332,6 +333,10 @@ interface WireGeneratedDraft extends WireEntity {
     observations?: string[];
     potential_findings?: Array<{ title: string; rationale?: string }>;
     evidence_ids?: string[];
+    next_step?: {
+      title: string; rationale?: string; command: string; language?: "bash" | "sh" | "python";
+      network_target?: string | null; network_ports?: number[];
+    } | null;
   } | null;
   observation_id?: string | null;
   provider_request_id?: string | null;
@@ -1522,6 +1527,14 @@ function mapGeneratedDraft(value: WireGeneratedDraft): GeneratedDraft {
             }),
           ),
           evidenceIds: value.content.evidence_ids ?? [],
+          nextStep: value.content.next_step ? {
+            title: value.content.next_step.title,
+            rationale: value.content.next_step.rationale ?? "",
+            command: value.content.next_step.command,
+            language: value.content.next_step.language ?? "bash",
+            networkTarget: value.content.next_step.network_target ?? undefined,
+            networkPorts: value.content.next_step.network_ports ?? [],
+          } : undefined,
         }
       : undefined,
     observationId: value.observation_id ?? undefined,
@@ -1542,6 +1555,11 @@ function wireDraftContent(content: GeneratedDraftContent): JsonObject {
       rationale: item.rationale,
     })),
     evidence_ids: content.evidenceIds,
+    next_step: content.nextStep ? {
+      title: content.nextStep.title, rationale: content.nextStep.rationale,
+      command: content.nextStep.command, language: content.nextStep.language,
+      network_target: content.nextStep.networkTarget, network_ports: content.nextStep.networkPorts,
+    } : null,
   };
 }
 
@@ -4838,6 +4856,7 @@ export class ApiClient {
     providerId: string,
     model: string,
     cloudConfirmed: boolean,
+    modes?: { suggestNextSteps?: boolean; takeNotes?: boolean },
   ): Promise<GeneratedDraft> {
     return this.request<WireGeneratedDraft>(
       `executions/${encodeURIComponent(executionId)}/draft-notes`,
@@ -4847,9 +4866,34 @@ export class ApiClient {
           provider_id: providerId,
           model,
           cloud_confirmed: cloudConfirmed,
+          suggest_next_steps: modes?.suggestNextSteps ?? false,
+          take_notes: modes?.takeNotes ?? true,
+          automatic: Boolean(modes),
         }),
       },
     ).then(mapGeneratedDraft);
+  }
+
+  getPostToolAssistant(engagementId: string): Promise<PostToolAssistantConfig> {
+    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; provider_id?: string | null; model?: string | null; cloud_confirmed: boolean }>(
+      `engagements/${encodeURIComponent(engagementId)}/post-tool-assistant`,
+    ).then((value) => ({ suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, providerId: value.provider_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
+  }
+
+  setPostToolAssistant(engagementId: string, config: PostToolAssistantConfig): Promise<PostToolAssistantConfig> {
+    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; provider_id?: string | null; model?: string | null; cloud_confirmed: boolean }>(
+      `engagements/${encodeURIComponent(engagementId)}/post-tool-assistant`, {
+        method: "PUT", body: JSON.stringify({ suggest_next_steps: config.suggestNextSteps, take_notes: config.takeNotes, provider_id: config.providerId, model: config.model, cloud_confirmed: config.cloudConfirmed }),
+      },
+    ).then((value) => ({ suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, providerId: value.provider_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
+  }
+
+  listPostToolResults(engagementId: string): Promise<GeneratedDraft[]> {
+    return this.request<WireGeneratedDraft[]>(`engagements/${encodeURIComponent(engagementId)}/post-tool-results`).then((items) => items.map(mapGeneratedDraft));
+  }
+
+  dismissPostToolSuggestion(id: string): Promise<GeneratedDraft> {
+    return this.request<WireGeneratedDraft>(`generated-drafts/${encodeURIComponent(id)}/dismiss-suggestion`, { method: "POST" }).then(mapGeneratedDraft);
   }
 
   getGeneratedDraft(id: string, signal?: AbortSignal): Promise<GeneratedDraft> {

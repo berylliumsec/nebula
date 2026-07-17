@@ -513,6 +513,22 @@ export interface GeneratedDraftContent {
   observations: string[];
   potentialFindings: PotentialFindingDraft[];
   evidenceIds: Identifier[];
+  nextStep?: {
+    title: string;
+    rationale: string;
+    command: string;
+    language: ExecutionLanguage;
+    networkTarget?: string;
+    networkPorts: number[];
+  };
+}
+
+export interface PostToolAssistantConfig {
+  suggestNextSteps: boolean;
+  takeNotes: boolean;
+  providerId?: Identifier;
+  model?: string;
+  cloudConfirmed: boolean;
 }
 
 export interface GeneratedDraft {
