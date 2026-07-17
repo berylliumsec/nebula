@@ -74,7 +74,7 @@ describe("CodeEditorPanel", () => {
     expect(args[4]).toBeUndefined();
     expect(args[5]).toMatch(/^[a-f0-9]{64}$/);
     expect(await (args[2] as Blob).text()).toBe("print('saved')");
-    expect(await screen.findByText("Saved /workspace/tool.py. Run it from Terminal with its interpreter.")).toBeVisible();
+    expect(await screen.findByText("Saved /workspace/tool.py. Use it from Terminal when you're ready.")).toBeVisible();
   });
 
   it("retains a stale draft and requires explicit confirmation to force overwrite", async () => {

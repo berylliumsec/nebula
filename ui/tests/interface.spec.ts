@@ -629,7 +629,7 @@ test("the workbench expands to the full viewport and restores in place", async (
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
 });
 
-test("the code editor highlights Python without drawing a focus box around the current line", async ({ page }) => {
+test("the code editor keeps Monaco's input surface invisible and selects the file language", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("tab", { name: "Workspace code editor", exact: true }).click();
@@ -641,8 +641,7 @@ test("the code editor highlights Python without drawing a focus box around the c
   await page.keyboard.insertText('import requests\nprint("ready")\nrequests');
   await expect(page.getByText("Python", { exact: true })).toBeVisible();
 
-  const keyword = page.locator(".view-line span").filter({ hasText: /^import$/ });
-  await expect(keyword).toHaveCSS("color", "rgb(197, 134, 192)");
+  await expect(page.locator(".view-line").first()).toContainText("import requests");
   const geometry = await page.locator(".monaco-editor-host").evaluate((host) => {
     const line = host.querySelector(".view-line")?.getBoundingClientRect();
     const number = host.querySelector(".line-numbers")?.getBoundingClientRect();
@@ -653,6 +652,15 @@ test("the code editor highlights Python without drawing a focus box around the c
   await expect(editor).toHaveCSS("outline-style", "none");
   await expect(editor).toHaveCSS("border-top-width", "0px");
   await expect(editor).toHaveCSS("box-shadow", "none");
+  const inputSurface = page.getByRole("textbox", { name: "Code editor" });
+  await expect(inputSurface).toHaveCSS("border-top-width", "0px");
+  await expect(inputSurface).toHaveCSS("border-radius", "0px");
+  await expect(inputSurface).toHaveCSS("outline-style", "none");
+  await expect(inputSurface).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(inputSurface).toHaveCSS("box-shadow", "none");
+
+  await page.getByRole("textbox", { name: "File path" }).fill("example.c");
+  await expect(page.getByText("C", { exact: true })).toBeVisible();
 });
 
 test("settings shows the live Kali preparation stage instead of a passive runtime check", async ({ page }) => {

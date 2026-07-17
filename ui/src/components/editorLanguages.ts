@@ -1,5 +1,8 @@
 const languageByExtension: Record<string, { id: string; label: string }> = {
   bash: { id: "shell", label: "Shell" }, css: { id: "css", label: "CSS" },
+  c: { id: "c", label: "C" }, cc: { id: "cpp", label: "C++" },
+  cpp: { id: "cpp", label: "C++" }, cxx: { id: "cpp", label: "C++" },
+  h: { id: "c", label: "C header" }, hpp: { id: "cpp", label: "C++ header" },
   go: { id: "go", label: "Go" }, htm: { id: "html", label: "HTML" },
   html: { id: "html", label: "HTML" }, java: { id: "java", label: "Java" },
   js: { id: "javascript", label: "JavaScript" }, cjs: { id: "javascript", label: "JavaScript" },

@@ -180,7 +180,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
         savedContent: buffer.content,
       };
       setBuffer(saved);
-      setNotice(`Saved /workspace/${result.path}. Run it from Terminal with its interpreter.`);
+      setNotice(`Saved /workspace/${result.path}. Use it from Terminal when you're ready.`);
       const parent = result.path.includes("/") ? result.path.slice(0, result.path.lastIndexOf("/")) : "";
       if (parent === directory) await load(0);
     } catch (caughtError) {
@@ -235,7 +235,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
         {error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}{notice && <p className="workspace-notice" role="status">{notice}</p>}
         {conflict && <div className="code-editor-conflict" role="alert"><ShieldAlert size={17} /><span><strong>Newer workspace version detected</strong><small>Your draft is still open. Reload the Terminal version or overwrite it explicitly.</small></span><button className="button quiet" type="button" onClick={() => void reloadConflict()}><RotateCcw size={13} /> Reload</button><button className="button danger" type="button" onClick={() => void forceOverwrite()}>Force overwrite</button></div>}
         <MonacoEditorSurface active={active} filePath={buffer.filePath} value={buffer.content} onChange={(content) => updateBuffer({ content })} onCursorChange={(line, column) => setCursor({ line, column })} onSave={() => void save()} />
-        <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span>UTF-8 · spaces: 2</span><span>/workspace · interpreter execution</span></footer>
+        <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span>UTF-8 · spaces: 2</span><span>/workspace · Terminal execution</span></footer>
       </> : <><div className="empty-state"><Braces size={25} /><strong>Shared workspace editor</strong><p>Open or create a text file here, then run it from Terminal in /workspace using its interpreter.</p><button className="button primary" type="button" onClick={() => void createFile()}><FilePlus2 size={15} /> New file</button></div>{error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}</>}
     </section>
   </div>;
