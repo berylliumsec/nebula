@@ -618,6 +618,27 @@ test("the workbench expands to the full viewport and restores in place", async (
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
 });
 
+test("the code editor highlights Python without drawing a focus box around the current line", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await openWorkspace(page, "/", "Workbench");
+  await page.getByRole("tab", { name: "Workspace code editor", exact: true }).click();
+  await page.getByRole("button", { name: "New file", exact: true }).first().click();
+  await page.getByRole("textbox", { name: "File path" }).fill("example.py");
+
+  const editor = page.getByRole("textbox", { name: "Code editor" });
+  await editor.fill('import requests\nprint("ready")\nrequests');
+  await expect(page.getByText("Python", { exact: true })).toBeVisible();
+
+  const keyword = page.locator(".cm-line span").filter({ hasText: /^import$/ });
+  await expect(keyword).toHaveCSS("color", "rgb(197, 134, 192)");
+  await expect(editor).toHaveCSS("outline-style", "none");
+  await expect(editor).toHaveCSS("border-top-width", "0px");
+  await expect(editor).toHaveCSS("box-shadow", "none");
+
+  await editor.press("Control+Space");
+  await expect(page.locator(".cm-tooltip-autocomplete")).toContainText("requests");
+});
+
 test("the populated finding editor stays contained and accessible", async ({ page }) => {
   const finding = {
     ...entity,

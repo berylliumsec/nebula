@@ -1,5 +1,19 @@
 import { completeAnyWord } from "@codemirror/autocomplete";
+import { css } from "@codemirror/lang-css";
+import { html } from "@codemirror/lang-html";
+import { javascript } from "@codemirror/lang-javascript";
+import { json } from "@codemirror/lang-json";
+import { markdown } from "@codemirror/lang-markdown";
+import { python } from "@codemirror/lang-python";
+import { sql } from "@codemirror/lang-sql";
 import { HighlightStyle, StreamLanguage, indentUnit, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
+import { java } from "@codemirror/legacy-modes/mode/clike";
+import { go } from "@codemirror/legacy-modes/mode/go";
+import { ruby } from "@codemirror/legacy-modes/mode/ruby";
+import { rust } from "@codemirror/legacy-modes/mode/rust";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { yaml } from "@codemirror/legacy-modes/mode/yaml";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
@@ -26,27 +40,26 @@ export function languageLabelForPath(path: string): string {
   } as Record<string, string>)[extension] ?? "Plain text";
 }
 
-async function languageForPath(path: string): Promise<Extension> {
+function languageForPath(path: string): Extension | LanguageSupport {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   if (["js", "cjs", "mjs", "jsx", "ts", "tsx"].includes(extension)) {
-    const { javascript } = await import("@codemirror/lang-javascript");
     return javascript({ typescript: extension === "ts" || extension === "tsx", jsx: extension === "jsx" || extension === "tsx" });
   }
-  if (extension === "py") return (await import("@codemirror/lang-python")).python();
-  if (extension === "html" || extension === "htm") return (await import("@codemirror/lang-html")).html();
-  if (extension === "css") return (await import("@codemirror/lang-css")).css();
-  if (extension === "json") return (await import("@codemirror/lang-json")).json();
-  if (extension === "md") return (await import("@codemirror/lang-markdown")).markdown();
-  if (extension === "sql") return (await import("@codemirror/lang-sql")).sql();
+  if (extension === "py") return python();
+  if (extension === "html" || extension === "htm") return html();
+  if (extension === "css") return css();
+  if (extension === "json") return json();
+  if (extension === "md") return markdown();
+  if (extension === "sql") return sql();
 
   let parser: Parameters<typeof StreamLanguage.define>[0] | undefined;
-  if (["sh", "bash", "zsh"].includes(extension)) parser = (await import("@codemirror/legacy-modes/mode/shell")).shell;
-  else if (extension === "yaml" || extension === "yml") parser = (await import("@codemirror/legacy-modes/mode/yaml")).yaml;
-  else if (extension === "toml") parser = (await import("@codemirror/legacy-modes/mode/toml")).toml;
-  else if (extension === "go") parser = (await import("@codemirror/legacy-modes/mode/go")).go;
-  else if (extension === "rs") parser = (await import("@codemirror/legacy-modes/mode/rust")).rust;
-  else if (extension === "java") parser = (await import("@codemirror/legacy-modes/mode/clike")).java;
-  else if (extension === "rb") parser = (await import("@codemirror/legacy-modes/mode/ruby")).ruby;
+  if (["sh", "bash", "zsh"].includes(extension)) parser = shell;
+  else if (extension === "yaml" || extension === "yml") parser = yaml;
+  else if (extension === "toml") parser = toml;
+  else if (extension === "go") parser = go;
+  else if (extension === "rs") parser = rust;
+  else if (extension === "java") parser = java;
+  else if (extension === "rb") parser = ruby;
   return parser ? StreamLanguage.define(parser) : [];
 }
 
@@ -127,7 +140,7 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
           syntaxHighlighting(nebulaHighlightStyle),
           documentWordCompletion,
           indentUnit.of("  "),
-          languageRef.current.of([]),
+          languageRef.current.of(languageForPath(filePath)),
           EditorView.contentAttributes.of({ "aria-label": "Code editor", spellcheck: "false" }),
           keymap.of([{ key: "Mod-s", run: () => { onSaveRef.current(); return true; } }]),
           EditorView.updateListener.of((update) => {
@@ -151,11 +164,8 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
   }, [value]);
 
   useEffect(() => {
-    let cancelled = false;
-    void languageForPath(filePath).then((language: Extension | LanguageSupport) => {
-      if (!cancelled && viewRef.current) viewRef.current.dispatch({ effects: languageRef.current.reconfigure(language) });
-    });
-    return () => { cancelled = true; };
+    const view = viewRef.current;
+    if (view) view.dispatch({ effects: languageRef.current.reconfigure(languageForPath(filePath)) });
   }, [filePath]);
 
   useEffect(() => { if (active) viewRef.current?.requestMeasure(); }, [active]);
