@@ -149,6 +149,13 @@ export function reasoningSummaryText(item: HarnessActivityItem): string | undefi
   return item.streams.reasoning_summary || undefined;
 }
 
+export function shouldShowActivityItem(item: HarnessActivityItem): boolean {
+  if (item.kind !== "reasoning") return true;
+  if (item.payload.reasoning_summary_malformed === true) return true;
+  const completed = ["completed", "complete", "success"].includes(item.status ?? "");
+  return !(completed && reasoningSummaryState(item) === "not_provided");
+}
+
 export function shouldShowActivityKind(item: HarnessActivityItem): boolean {
   if (!item.kind) return false;
   const normalize = (value: string) => value.toLowerCase().replaceAll(/[_\s-]/g, "");

@@ -6,6 +6,7 @@ import {
   reasoningSummaryState,
   reasoningSummaryText,
   reduceHarnessActivity,
+  shouldShowActivityItem,
   shouldShowActivityKind,
 } from "./harnessActivity";
 
@@ -115,6 +116,41 @@ describe("harness activity presentation", () => {
     expect(item.summary).toBeUndefined();
     expect(reasoningSummaryState(item)).toBe("not_provided");
     expect(reasoningSummaryText(item)).toBeUndefined();
+    expect(shouldShowActivityItem(item)).toBe(false);
+  });
+
+  it("keeps active, summarized, and malformed reasoning items visible", () => {
+    const base = {
+      assistantId: "assistant-1",
+      key: "turn-1:reasoning-1",
+      kind: "reasoning" as const,
+      type: "item_upsert",
+      vendor: "codex_app_server" as const,
+      title: "Reasoning",
+      sequence: 1,
+      streams: {},
+      artifactIds: [],
+    };
+
+    expect(shouldShowActivityItem({
+      ...base,
+      status: "streaming",
+      payload: { reasoning_summary_state: "pending" },
+    })).toBe(true);
+    expect(shouldShowActivityItem({
+      ...base,
+      status: "completed",
+      streams: { reasoning_summary: "Safe summary" },
+      payload: { reasoning_summary_state: "available" },
+    })).toBe(true);
+    expect(shouldShowActivityItem({
+      ...base,
+      status: "completed",
+      payload: {
+        reasoning_summary_state: "not_provided",
+        reasoning_summary_malformed: true,
+      },
+    })).toBe(true);
   });
 
   it("preserves streamed summaries when the completed item has no snapshot", () => {

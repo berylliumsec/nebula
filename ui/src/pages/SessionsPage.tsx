@@ -66,6 +66,7 @@ import {
   reasoningSummaryState,
   reasoningSummaryText,
   reduceHarnessActivity,
+  shouldShowActivityItem,
   shouldShowActivityKind,
   type HarnessActivityItem,
 } from "./harnessActivity";
@@ -1814,8 +1815,8 @@ export function SessionsPage() {
                     <div>
                       <header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>
                       {message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p>{message.content}</p>)}
-                      {activityItems.some((item) => item.assistantId === message.id) && <section className="harness-timeline" aria-label="Harness activity">
-                        {activityItems.filter((item) => item.assistantId === message.id).map((item) => <details className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} open={["running", "streaming", "waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? "") || item.kind === "plan"} key={item.key}>
+                      {activityItems.some((item) => item.assistantId === message.id && shouldShowActivityItem(item)) && <section className="harness-timeline" aria-label="Harness activity">
+                        {activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item)).map((item) => <details className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} open={["running", "streaming", "waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? "") || item.kind === "plan"} key={item.key}>
                           <summary><span className={`status-dot ${["completed", "complete", "success"].includes(item.status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(item.status ?? "") ? "unavailable" : "pending"}`} /><strong>{item.title}</strong>{shouldShowActivityKind(item) && <code>{item.kind?.replaceAll("_", " ")}</code>}{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</summary>
                           <div className="harness-activity-body">
                             {item.summary && <p>{item.summary}</p>}
