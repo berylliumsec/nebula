@@ -144,7 +144,7 @@ function LiveContainerTerminal({
     const terminal = new Terminal({
       cursorBlink: true,
       cursorStyle: "block",
-      cursorInactiveStyle: "outline",
+      cursorInactiveStyle: "block",
       fontFamily: '"Noto Sans Mono", "SFMono-Regular", Consolas, monospace',
       fontSize: 13,
       lineHeight: 1.25,
@@ -152,7 +152,7 @@ function LiveContainerTerminal({
       theme: {
         background: "#071017",
         foreground: "#d9e5e9",
-        cursor: "#54d6a3",
+        cursor: "#7ce9bd",
         cursorAccent: "#071017",
         selectionBackground: "#245f5588",
         black: "#071017",

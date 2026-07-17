@@ -661,6 +661,10 @@ test("the code editor keeps Monaco's input surface invisible and selects the fil
 
   await page.getByRole("textbox", { name: "File path" }).fill("example.c");
   await expect(page.getByText("C", { exact: true })).toBeVisible();
+  await editor.click();
+  const caret = editor.locator(".cursor").first();
+  await expect(caret).toBeVisible();
+  expect(await caret.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(2);
 });
 
 test("settings shows the live Kali preparation stage instead of a passive runtime check", async ({ page }) => {
