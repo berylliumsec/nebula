@@ -26,12 +26,9 @@ import {
 import { Link, useSearchParams } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
 import type {
-  ChatCitation,
   ChatCompletionRequest,
-  ChatMessage,
   ChatSessionSummary,
   ChatStreamEvent,
-  ChatUsage,
   ExecutionCapabilities,
   ExecutionLanguage,
   HarnessProfile,
@@ -61,7 +58,6 @@ import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { AgentsPage } from "./AgentsPage";
 import {
-  finalAssistantContent,
   isTimelineActivity,
   reasoningSummaryState,
   reasoningSummaryText,
@@ -71,11 +67,13 @@ import {
   type HarnessActivityItem,
 } from "./harnessActivity";
 import { detachHarnessStream } from "./chatStreamLifecycle";
+import {
+  reconcileCompletedAssistantMessage,
+  type ReconciledConversationMessage,
+} from "./chatMessageReconciliation";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
-type MessageState = "complete" | "streaming" | "waiting_approval" | "error" | "cancelled";
-
 interface ToolLifecycleCard {
   assistantId: string;
   toolCallId: string;
@@ -107,17 +105,7 @@ interface HarnessProgress {
 const ContainerTerminalPanel = lazy(() => import("../components/ContainerTerminalPanel").then((module) => ({ default: module.ContainerTerminalPanel })));
 const CodeEditorPanel = lazy(() => import("../components/CodeEditorPanel").then((module) => ({ default: module.CodeEditorPanel })));
 
-interface ConversationMessage extends ChatMessage {
-  id: string;
-  createdAt: string;
-  citations: ChatCitation[];
-  usage?: ChatUsage;
-  state: MessageState;
-  durable: boolean;
-  detail?: string;
-  sequence?: number;
-  harnessTurnId?: string;
-}
+interface ConversationMessage extends ReconciledConversationMessage {}
 
 function makeId(prefix: string): string {
   return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`;
@@ -1153,19 +1141,15 @@ export function SessionsPage() {
           ? { ...item, assistantId: durableAssistantId }
           : item));
       }
-      setMessages((current) => current.map((message) => {
-        if (message.id === userId) return { ...message, durable: true };
-        if (message.id !== assistantId) return message;
-        return {
-          ...message,
-          id: streamEvent.message.id ?? message.id,
-          content: finalAssistantContent(message.content, streamEvent.message.content),
-          citations: streamEvent.citations,
-          usage: streamEvent.usage,
-          state: "complete",
-          durable: Boolean(streamEvent.message.id),
-          harnessTurnId: streamEvent.harnessTurnId ?? message.harnessTurnId,
-        };
+      setMessages((current) => reconcileCompletedAssistantMessage(current, {
+        temporaryAssistantId: assistantId,
+        durableAssistantId: streamEvent.message.id,
+        userId,
+        content: streamEvent.message.content,
+        citations: streamEvent.citations,
+        usage: streamEvent.usage,
+        harnessTurnId: streamEvent.harnessTurnId,
+        createdAt: new Date().toISOString(),
       }));
     }
     if (streamEvent.type === "interrupted" && request.backend === "harness") {
