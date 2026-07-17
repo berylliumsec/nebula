@@ -629,7 +629,7 @@ test("the workbench expands to the full viewport and restores in place", async (
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
 });
 
-test("the code editor keeps Monaco's input surface invisible and selects the file language", async ({ page }) => {
+test("the code editor keeps its caret and syntax layers aligned while typing", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await page.goto("/?view=code");
   await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 15_000 });
@@ -637,18 +637,19 @@ test("the code editor keeps Monaco's input surface invisible and selects the fil
   await page.getByRole("button", { name: "New file", exact: true }).first().click();
   await page.getByRole("textbox", { name: "File path" }).fill("example.c");
 
-  const editor = page.locator(".monaco-editor-host .monaco-editor");
+  const editor = page.locator(".code-mirror-host .cm-editor");
   await editor.click({ force: true });
   await page.keyboard.insertText("#include <stdio.h>\nint main(void) {\n  return 0;\n}");
   await expect(page.getByText("C", { exact: true })).toBeVisible();
 
-  await expect(page.locator(".view-line").nth(2)).toContainText("return 0;");
-  const tokenColors = await page.locator(".view-line").nth(2).locator("span").evaluateAll((tokens) =>
+  await expect(page.locator(".cm-line").nth(2)).toContainText("return 0;");
+  const tokenColors = await page.locator(".cm-line").nth(2).locator("span").evaluateAll((tokens) =>
     [...new Set(tokens.map((token) => getComputedStyle(token).color))]);
   expect(tokenColors.length).toBeGreaterThan(1);
-  const geometry = await page.locator(".monaco-editor-host").evaluate((host) => {
-    const line = host.querySelector(".view-line")?.getBoundingClientRect();
-    const number = host.querySelector(".line-numbers")?.getBoundingClientRect();
+  const geometry = await page.locator(".code-mirror-host").evaluate((host) => {
+    const line = host.querySelector(".cm-line")?.getBoundingClientRect();
+    const number = [...host.querySelectorAll<HTMLElement>(".cm-lineNumbers .cm-gutterElement")]
+      .find((element) => element.textContent === "1")?.getBoundingClientRect();
     return { hostHeight: host.getBoundingClientRect().height, lineTop: line?.top, numberTop: number?.top };
   });
   expect(geometry.hostHeight).toBeGreaterThan(400);
@@ -664,15 +665,18 @@ test("the code editor keeps Monaco's input surface invisible and selects the fil
   await expect(inputSurface).toHaveCSS("box-shadow", "none");
 
   await editor.click({ force: true });
-  const caret = editor.locator(".cursor").first();
+  const caret = editor.locator(".cm-cursor-primary");
   await expect(caret).toBeVisible();
-  expect(await caret.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(2);
-  const caretAlignment = await page.locator(".monaco-editor-host").evaluate((host) => {
-    const lines = host.querySelectorAll<HTMLElement>(".view-line");
-    const caret = host.querySelector<HTMLElement>(".cursor");
-    return { caretTop: caret?.getBoundingClientRect().top, currentLineTop: lines[3]?.getBoundingClientRect().top };
+  await expect(caret).toHaveCSS("border-left-width", "2px");
+  const caretAlignment = await page.locator(".code-mirror-host").evaluate((host) => {
+    const lines = host.querySelectorAll<HTMLElement>(".cm-line");
+    const caret = host.querySelector<HTMLElement>(".cm-cursor-primary");
+    const caretRect = caret?.getBoundingClientRect();
+    const lineRect = lines[3]?.getBoundingClientRect();
+    return { caretTop: caretRect?.top, caretBottom: caretRect?.bottom, lineTop: lineRect?.top, lineBottom: lineRect?.bottom };
   });
-  expect(Math.abs((caretAlignment.caretTop ?? 0) - (caretAlignment.currentLineTop ?? 0))).toBeLessThan(2);
+  expect(caretAlignment.caretTop ?? 0).toBeGreaterThanOrEqual((caretAlignment.lineTop ?? 0) - 1);
+  expect(caretAlignment.caretBottom ?? 0).toBeLessThanOrEqual((caretAlignment.lineBottom ?? 0) + 1);
 });
 
 test("settings shows the live Kali preparation stage instead of a passive runtime check", async ({ page }) => {

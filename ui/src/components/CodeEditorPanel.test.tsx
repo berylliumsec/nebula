@@ -7,8 +7,8 @@ import { WorkbenchEditorProvider } from "../state/WorkbenchEditorContext";
 import { CodeEditorPanel } from "./CodeEditorPanel";
 import { DialogProvider } from "./DialogSystem";
 
-vi.mock("./MonacoEditorSurface", () => ({
-  MonacoEditorSurface: ({ value, onChange, onSave }: { value: string; onChange(value: string): void; onSave(): void }) => <textarea
+vi.mock("./CodeMirrorSurface", () => ({
+  CodeMirrorSurface: ({ value, onChange, onSave }: { value: string; onChange(value: string): void; onSave(): void }) => <textarea
     aria-label="Code editor"
     value={value}
     onChange={(event) => onChange(event.target.value)}
