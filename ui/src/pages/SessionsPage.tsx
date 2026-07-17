@@ -69,6 +69,7 @@ import {
   shouldShowActivityKind,
   type HarnessActivityItem,
 } from "./harnessActivity";
+import { detachHarnessStream } from "./chatStreamLifecycle";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
@@ -265,6 +266,8 @@ export function SessionsPage() {
   const [chatError, setChatError] = useState<string>();
   const [discoveringProviderId, setDiscoveringProviderId] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
+  const streamBackendRef = useRef<ChatCompletionRequest["backend"] | undefined>(undefined);
+  const detachedHarnessStreamsRef = useRef(new WeakSet<AbortController>());
   const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
@@ -288,6 +291,18 @@ export function SessionsPage() {
   const modelVerification = providerModelVerification(selectedProvider, model);
   const modelVerified = modelVerification?.status === "verified";
   const commandRuntimeAvailable = Boolean(modelVerified && commandRuntimeReady && !toolRuntimeReason);
+
+  const detachActiveHarnessStream = () => {
+    const controller = abortRef.current;
+    if (!detachHarnessStream(
+      controller,
+      streamBackendRef.current,
+      detachedHarnessStreamsRef.current,
+    )) return false;
+    abortRef.current = undefined;
+    streamBackendRef.current = undefined;
+    return true;
+  };
   const commandRuntimeReason = !modelVerified
     ? model ? `Tool calling is unverified for ${model}.` : "Select a model to verify tool calling."
     : toolRuntimeReason ?? (!commandRuntimeReady ? "The command runtime is not ready." : undefined);
@@ -479,7 +494,7 @@ export function SessionsPage() {
   }, [canUseKnowledge, coreState, runtimeKind, selectedHarness, selectedProvider]);
 
   useEffect(() => {
-    abortRef.current?.abort();
+    if (!detachActiveHarnessStream()) abortRef.current?.abort();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
     setSending(false);
@@ -528,7 +543,9 @@ export function SessionsPage() {
   }, [api, coreState, engagement]);
 
   useEffect(() => {
-    return () => abortRef.current?.abort();
+    return () => {
+      if (!detachActiveHarnessStream()) abortRef.current?.abort();
+    };
   }, []);
 
   useEffect(() => {
@@ -547,7 +564,7 @@ export function SessionsPage() {
   };
 
   const resetConversation = (open: boolean) => {
-    abortRef.current?.abort();
+    if (!detachActiveHarnessStream()) abortRef.current?.abort();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
     setSending(false);
@@ -726,6 +743,8 @@ export function SessionsPage() {
       return;
     }
     if (!api) return;
+    detachActiveHarnessStream();
+    setSending(false);
     setConversationOpen(true);
     setLoadingHistory(true);
     setChatError(undefined);
@@ -971,6 +990,7 @@ export function SessionsPage() {
   ) => {
     if (streamEvent.type === "started" && streamEvent.sessionId) {
       setSessionId(streamEvent.sessionId);
+      void refreshSessions();
     }
     if (streamEvent.type === "started") {
       if (streamEvent.harnessSessionId) setHarnessSessionId(streamEvent.harnessSessionId);
@@ -1258,6 +1278,7 @@ export function SessionsPage() {
     }
     const controller = new AbortController();
     abortRef.current = controller;
+    streamBackendRef.current = runtimeKind;
     const initialSessionId = sessionId || undefined;
     let returnedSessionId = initialSessionId;
     const chatRequest: ChatCompletionRequest = {
@@ -1286,6 +1307,7 @@ export function SessionsPage() {
 
     try {
       const response = await api.streamChat(chatRequest, (streamEvent) => {
+        if (controller.signal.aborted) return;
         if (streamEvent.type === "started") returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
         if (streamEvent.type === "done") returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
         applyChatEvent(streamEvent, assistantId, userId, chatRequest);
@@ -1295,6 +1317,8 @@ export function SessionsPage() {
         await refreshSessions(returnedSessionId);
       }
     } catch (error) {
+      const detached = detachedHarnessStreamsRef.current.has(controller);
+      if (detached) return;
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_13", "A handled interface operation failed.", error, "sessions_page");
       const cancelled = controller.signal.aborted;
       const detail = cancelled ? "Response stopped by the operator." : error instanceof Error ? error.message : "Chat completion failed.";
@@ -1316,8 +1340,11 @@ export function SessionsPage() {
         setSessionId("");
       }
     } finally {
-      if (abortRef.current === controller) abortRef.current = undefined;
-      setSending(false);
+      if (abortRef.current === controller) {
+        abortRef.current = undefined;
+        streamBackendRef.current = undefined;
+        setSending(false);
+      }
     }
   };
 
