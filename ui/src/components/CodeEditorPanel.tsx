@@ -4,8 +4,7 @@ import { ApiError, type ApiClient } from "../api/client";
 import type { WorkspaceEntry } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useWorkbenchEditor, type WorkbenchEditorBuffer } from "../state/WorkbenchEditorContext";
-import { CodeMirrorSurface } from "./CodeMirrorSurface";
-import { languageLabelForPath } from "./editorLanguages";
+import { CodeMirrorSurface, languageLabelForPath } from "./CodeMirrorSurface";
 import { useConfirmation } from "./DialogSystem";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;

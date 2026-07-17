@@ -19,6 +19,7 @@ vi.mock("./CodeMirrorSurface", () => ({
       }
     }}
   />,
+  languageLabelForPath: (path: string) => path.endsWith(".py") ? "Python" : "Plain text",
 }));
 
 const pythonEntry = {

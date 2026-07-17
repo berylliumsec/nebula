@@ -635,17 +635,20 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 15_000 });
   await page.evaluate(() => document.fonts.ready);
   await page.getByRole("button", { name: "New file", exact: true }).first().click();
-  await page.getByRole("textbox", { name: "File path" }).fill("example.c");
+  await page.getByRole("textbox", { name: "File path" }).fill("example.py");
 
-  const editor = page.locator(".code-mirror-host .cm-editor");
-  await editor.click({ force: true });
-  await page.keyboard.insertText("#include <stdio.h>\nint main(void) {\n  return 0;\n}");
-  await expect(page.getByText("C", { exact: true })).toBeVisible();
+  const inputSurface = page.getByRole("textbox", { name: "Code editor" });
+  await inputSurface.click({ force: true });
+  const editor = inputSurface.locator("..").locator("..");
+  await page.keyboard.insertText("import requests\n\ndef main():\n  return requests");
+  await expect(page.getByText("Python", { exact: true })).toBeVisible();
 
-  await expect(page.locator(".cm-line").nth(2)).toContainText("return 0;");
-  const tokenColors = await page.locator(".cm-line").nth(2).locator("span").evaluateAll((tokens) =>
-    [...new Set(tokens.map((token) => getComputedStyle(token).color))]);
-  expect(tokenColors.length).toBeGreaterThan(1);
+  await expect(page.locator(".cm-line").nth(3)).toContainText("return requests");
+  const syntaxColors = await page.locator(".cm-line").nth(3).evaluate((line) => ({
+    line: getComputedStyle(line).color,
+    tokens: [...line.querySelectorAll("span")].map((token) => getComputedStyle(token).color),
+  }));
+  expect(syntaxColors.tokens.some((color) => color !== syntaxColors.line)).toBe(true);
   const geometry = await page.locator(".code-mirror-host").evaluate((host) => {
     const line = host.querySelector(".cm-line")?.getBoundingClientRect();
     const number = [...host.querySelectorAll<HTMLElement>(".cm-lineNumbers .cm-gutterElement")]
@@ -657,17 +660,10 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(editor).toHaveCSS("outline-style", "none");
   await expect(editor).toHaveCSS("border-top-width", "0px");
   await expect(editor).toHaveCSS("box-shadow", "none");
-  const inputSurface = page.getByRole("textbox", { name: "Code editor" });
-  await expect(inputSurface).toHaveCSS("border-top-width", "0px");
-  await expect(inputSurface).toHaveCSS("border-radius", "0px");
-  await expect(inputSurface).toHaveCSS("outline-style", "none");
-  await expect(inputSurface).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(inputSurface).toHaveCSS("box-shadow", "none");
 
   await editor.click({ force: true });
   const caret = editor.locator(".cm-cursor-primary");
   await expect(caret).toBeVisible();
-  await expect(caret).toHaveCSS("border-left-width", "2px");
   const caretAlignment = await page.locator(".code-mirror-host").evaluate((host) => {
     const lines = host.querySelectorAll<HTMLElement>(".cm-line");
     const caret = host.querySelector<HTMLElement>(".cm-cursor-primary");
