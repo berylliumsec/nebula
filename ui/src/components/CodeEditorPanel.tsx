@@ -4,7 +4,8 @@ import { ApiError, type ApiClient } from "../api/client";
 import type { WorkspaceEntry } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useWorkbenchEditor, type WorkbenchEditorBuffer } from "../state/WorkbenchEditorContext";
-import { CodeMirrorSurface, languageLabelForPath } from "./CodeMirrorSurface";
+import { MonacoEditorSurface } from "./MonacoEditorSurface";
+import { languageLabelForPath } from "./editorLanguages";
 import { useConfirmation } from "./DialogSystem";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
@@ -233,7 +234,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
         <header className="code-editor-toolbar"><label><span className="sr-only">File path</span><span aria-hidden="true">/workspace/</span><input aria-label="File path" value={buffer.filePath} readOnly={buffer.existing} spellCheck={false} onChange={(event) => updateBuffer({ filePath: event.target.value })} /></label><span className={`code-editor-dirty${dirty ? " dirty" : ""}`} aria-live="polite">{dirty ? "Unsaved" : "Saved"}</span><button className="button primary" type="button" disabled={saving || (!dirty && buffer.existing) || !validWorkspacePath(buffer.filePath.trim())} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />} {saving ? "Saving…" : "Save"}</button></header>
         {error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}{notice && <p className="workspace-notice" role="status">{notice}</p>}
         {conflict && <div className="code-editor-conflict" role="alert"><ShieldAlert size={17} /><span><strong>Newer workspace version detected</strong><small>Your draft is still open. Reload the Terminal version or overwrite it explicitly.</small></span><button className="button quiet" type="button" onClick={() => void reloadConflict()}><RotateCcw size={13} /> Reload</button><button className="button danger" type="button" onClick={() => void forceOverwrite()}>Force overwrite</button></div>}
-        <CodeMirrorSurface active={active} filePath={buffer.filePath} value={buffer.content} onChange={(content) => updateBuffer({ content })} onCursorChange={(line, column) => setCursor({ line, column })} onSave={() => void save()} />
+        <MonacoEditorSurface active={active} filePath={buffer.filePath} value={buffer.content} onChange={(content) => updateBuffer({ content })} onCursorChange={(line, column) => setCursor({ line, column })} onSave={() => void save()} />
         <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span>UTF-8 · spaces: 2</span><span>/workspace · interpreter execution</span></footer>
       </> : <><div className="empty-state"><Braces size={25} /><strong>Shared workspace editor</strong><p>Open or create a text file here, then run it from Terminal in /workspace using its interpreter.</p><button className="button primary" type="button" onClick={() => void createFile()}><FilePlus2 size={15} /> New file</button></div>{error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}</>}
     </section>

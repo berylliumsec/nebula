@@ -7,6 +7,12 @@ import { DialogProvider } from "./components/DialogSystem";
 import { ThemeProvider } from "./state/ThemeContext";
 import { WorkspaceProvider } from "./state/WorkspaceContext";
 
+vi.mock("./components/MonacoEditorSurface", () => ({
+  MonacoEditorSurface: ({ value, onChange }: { value: string; onChange(value: string): void }) => (
+    <textarea aria-label="Code editor" value={value} onChange={(event) => onChange(event.target.value)} />
+  ),
+}));
+
 function renderApp(route = "/") {
   return render(
     <MemoryRouter initialEntries={[route]}>

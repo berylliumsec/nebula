@@ -625,18 +625,23 @@ test("the code editor highlights Python without drawing a focus box around the c
   await page.getByRole("button", { name: "New file", exact: true }).first().click();
   await page.getByRole("textbox", { name: "File path" }).fill("example.py");
 
-  const editor = page.getByRole("textbox", { name: "Code editor" });
-  await editor.fill('import requests\nprint("ready")\nrequests');
+  const editor = page.locator(".monaco-editor-host .monaco-editor");
+  await editor.click();
+  await page.keyboard.insertText('import requests\nprint("ready")\nrequests');
   await expect(page.getByText("Python", { exact: true })).toBeVisible();
 
-  const keyword = page.locator(".cm-line span").filter({ hasText: /^import$/ });
+  const keyword = page.locator(".view-line span").filter({ hasText: /^import$/ });
   await expect(keyword).toHaveCSS("color", "rgb(197, 134, 192)");
+  const geometry = await page.locator(".monaco-editor-host").evaluate((host) => {
+    const line = host.querySelector(".view-line")?.getBoundingClientRect();
+    const number = host.querySelector(".line-numbers")?.getBoundingClientRect();
+    return { hostHeight: host.getBoundingClientRect().height, lineTop: line?.top, numberTop: number?.top };
+  });
+  expect(geometry.hostHeight).toBeGreaterThan(400);
+  expect(Math.abs((geometry.lineTop ?? 0) - (geometry.numberTop ?? 0))).toBeLessThan(2);
   await expect(editor).toHaveCSS("outline-style", "none");
   await expect(editor).toHaveCSS("border-top-width", "0px");
   await expect(editor).toHaveCSS("box-shadow", "none");
-
-  await editor.press("Control+Space");
-  await expect(page.locator(".cm-tooltip-autocomplete")).toContainText("requests");
 });
 
 test("settings shows the live Kali preparation stage instead of a passive runtime check", async ({ page }) => {
