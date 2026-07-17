@@ -4696,6 +4696,12 @@ class HarnessRuntimeService:
                         expected_revision=session.revision,
                     )
                 turn = self.store.get(HarnessTurn, turn.id)
+                # Followers use the harness turn's terminal status as the signal
+                # that all durable chat state is ready to reload. Complete the
+                # owning chat/run first so a reconnect can never observe a
+                # terminal harness turn before its final assistant message.
+                self._complete_owner(turn, final_message, usage)
+                turn = self.store.get(HarnessTurn, turn.id)
                 turn = self.store.update(
                     HarnessTurn,
                     turn.id,
@@ -4708,7 +4714,6 @@ class HarnessRuntimeService:
                     },
                     expected_revision=turn.revision,
                 )
-                self._complete_owner(turn, final_message, usage)
                 session = self.store.get(HarnessSession, session.id)
                 self.store.update(
                     HarnessSession,

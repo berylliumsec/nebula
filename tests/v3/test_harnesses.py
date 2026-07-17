@@ -300,6 +300,14 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
 def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        owner_statuses: list[HarnessTurnStatus] = []
+        complete_owner = runtime._complete_owner
+
+        def observed_complete_owner(turn, final_message, usage):
+            owner_statuses.append(store.get(HarnessTurn, turn.id).status)
+            complete_owner(turn, final_message, usage)
+
+        runtime._complete_owner = observed_complete_owner
         _, chat_turn, harness_turn = runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
@@ -316,6 +324,7 @@ def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_
 
         finished = store.get(HarnessTurn, harness_turn.id)
         assert finished.status == HarnessTurnStatus.COMPLETE
+        assert owner_statuses == [HarnessTurnStatus.RUNNING]
         assert store.get(ChatTurn, chat_turn.id).status.value == "complete"
         replay = runtime.activity_events(harness_turn.id)
         assert replay.events
