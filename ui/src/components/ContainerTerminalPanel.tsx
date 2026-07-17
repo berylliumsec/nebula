@@ -324,13 +324,31 @@ function StartingTerminalPanel({
   onClose: () => void;
   onRetry: () => void;
 }) {
+  const preparationPhase = tab.imagePreparation?.phase;
   const status = tab.phase === "detecting"
-    ? "Detecting a supported local container runtime…"
+    ? "Finding container runtime"
     : tab.phase === "checking"
-      ? "Checking the verified container runner…"
+      ? "Checking Kali runtime"
       : tab.phase === "preparing"
-        ? "Preparing the Kali headless tool image…"
-        : "Starting the content-pinned Kali terminal…";
+        ? preparationPhase === "queued"
+          ? "Kali preparation queued"
+          : preparationPhase === "resolving_runtime"
+            ? "Checking container runtime"
+            : preparationPhase === "cancelling"
+              ? "Stopping preparation"
+              : "Preparing Kali runtime"
+        : "Starting Kali terminal";
+  const progressPercent = tab.imagePreparation?.progressPercent;
+  const progressIndeterminate = progressPercent === undefined
+    || tab.imagePreparation?.progressIndeterminate === true;
+  const progressDetail = tab.phaseDetail
+    ?? (tab.phase === "detecting"
+      ? "Looking for Docker or Podman on this Mac."
+      : tab.phase === "checking"
+        ? "Verifying the local container runtime and cached image."
+        : tab.phase === "preparing"
+          ? "Pulling or reusing Kali, then verifying the prepared image."
+          : "Creating the terminal session and connecting its console.");
 
   return <div className="container-terminal-panel">
     <section className="container-terminal-intro">
@@ -339,7 +357,15 @@ function StartingTerminalPanel({
       <span className="terminal-boundary"><AlertTriangle size={15} /> Root + network</span>
     </section>
     <section className="terminal-auto-start" aria-live="polite">
-      {tab.error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><DiagnosticErrorNotice error={tab.error} fallback="The terminal operation could not be completed." compact /><div className="terminal-start-actions"><button className="button secondary" type="button" onClick={onClose}>Close</button><button className="button primary" type="button" onClick={onRetry}><RotateCcw size={15} /> Retry</button></div></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><p>{tab.phaseDetail ?? <>Terminal verifies the configured official image and launches its immutable image ID with no host shell or runtime socket. The first preparation can take several minutes.</>}</p>{tab.imagePreparation?.progressPercent !== undefined && <progress max={100} value={tab.imagePreparation.progressPercent} aria-label="Workstation image preparation progress" />}{tab.phase === "preparing" && <small>Image layers use local container-runtime storage. Cached verified launches do not contact the registry.</small>}{tab.imagePreparation?.canCancel && <button className="button secondary" type="button" onClick={onCancelPreparation}><CircleStop size={15} /> Cancel preparation</button>}</>}
+      {tab.error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><DiagnosticErrorNotice error={tab.error} fallback="The terminal operation could not be completed." compact /><div className="terminal-start-actions"><button className="button secondary" type="button" onClick={onClose}>Close</button><button className="button primary" type="button" onClick={onRetry}><RotateCcw size={15} /> Retry</button></div></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><div
+        className={`terminal-start-progress${progressIndeterminate ? " indeterminate" : ""}`}
+        role="progressbar"
+        aria-label="Kali terminal startup progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={progressIndeterminate ? undefined : progressPercent}
+        aria-valuetext={progressIndeterminate ? status : `${progressPercent}%`}
+      ><span style={progressIndeterminate ? undefined : { width: `${progressPercent}%` }} /></div><small className="terminal-start-detail">{progressDetail}</small>{tab.imagePreparation?.canCancel && <button className="button secondary" type="button" onClick={onCancelPreparation}><CircleStop size={15} /> Cancel</button>}</>}
     </section>
   </div>;
 }

@@ -126,6 +126,42 @@ describe("ContainerTerminalPanel", () => {
     terminalSpies.selection = "";
   });
 
+  it("keeps an accessible progress indicator visible while Kali preparation is indeterminate", async () => {
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(0)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+      setupStatus: vi.fn().mockResolvedValue({
+        core: { status: "ready" },
+        scratchProjectId: "engagement-1",
+        terminal: {
+          status: "preparing_image",
+          runnerProfileId: "local",
+          candidates: [],
+          imagePreparation: {
+            phase: "preparing_image",
+            progressIndeterminate: true,
+            canCancel: true,
+            canRetry: false,
+            detail: "Downloading and verifying the Kali runtime.",
+          },
+        },
+        assistant: { status: "needs_model" },
+      }),
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+
+    expect(await screen.findByText("Preparing Kali runtime")).toBeVisible();
+    const progress = screen.getByRole("progressbar", { name: "Kali terminal startup progress" });
+    expect(progress).toBeVisible();
+    expect(progress).toHaveAttribute("aria-valuetext", "Preparing Kali runtime");
+    expect(progress).not.toHaveAttribute("aria-valuenow");
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+  });
+
   it("copies highlighted terminal text and polls Project audit health only once", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
