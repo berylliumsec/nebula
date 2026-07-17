@@ -98,11 +98,17 @@ export function MonacoEditorSurface({ active, filePath, onChange, onCursorChange
       // WKWebView's native EditContext can lose the caret and reposition input
       // while typing. Monaco's textarea path is stable across WebKit/Chromium.
       editContext: false,
-      fontFamily: "var(--mono)",
+      // Give Monaco concrete font metrics. A CSS variable here can resolve after
+      // Monaco measures glyphs, which misplaces the caret in WebKit/WebViews.
+      fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+      fontLigatures: false,
       fontSize: 13,
       lineHeight: 21,
+      disableMonospaceOptimizations: true,
       minimap: { enabled: false },
-      padding: { top: 10, bottom: 10 },
+      // Monaco's internal vertical padding offsets text from the gutter/caret
+      // by 10px in WKWebView/WebKit. Keep all editor planes on one origin.
+      padding: { top: 0, bottom: 0 },
       renderWhitespace: "selection",
       scrollBeyondLastLine: false,
       smoothScrolling: true,

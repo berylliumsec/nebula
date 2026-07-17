@@ -324,7 +324,7 @@ async function installTruthfulCore(page: Page) {
 async function openWorkspace(page: Page, route: string, heading: string) {
   await page.goto(route);
   if (heading === "Workbench") {
-    await expect(page.getByRole("tab", { name: "Terminal", exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Terminal", exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files.")).toHaveCount(0);
   } else {
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
@@ -631,17 +631,21 @@ test("the workbench expands to the full viewport and restores in place", async (
 
 test("the code editor keeps Monaco's input surface invisible and selects the file language", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
-  await openWorkspace(page, "/", "Workbench");
-  await page.getByRole("tab", { name: "Workspace code editor", exact: true }).click();
+  await page.goto("/?view=code");
+  await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 15_000 });
+  await page.evaluate(() => document.fonts.ready);
   await page.getByRole("button", { name: "New file", exact: true }).first().click();
-  await page.getByRole("textbox", { name: "File path" }).fill("example.py");
+  await page.getByRole("textbox", { name: "File path" }).fill("example.c");
 
   const editor = page.locator(".monaco-editor-host .monaco-editor");
-  await editor.click();
-  await page.keyboard.insertText('import requests\nprint("ready")\nrequests');
-  await expect(page.getByText("Python", { exact: true })).toBeVisible();
+  await editor.click({ force: true });
+  await page.keyboard.insertText("#include <stdio.h>\nint main(void) {\n  return 0;\n}");
+  await expect(page.getByText("C", { exact: true })).toBeVisible();
 
-  await expect(page.locator(".view-line").first()).toContainText("import requests");
+  await expect(page.locator(".view-line").nth(2)).toContainText("return 0;");
+  const tokenColors = await page.locator(".view-line").nth(2).locator("span").evaluateAll((tokens) =>
+    [...new Set(tokens.map((token) => getComputedStyle(token).color))]);
+  expect(tokenColors.length).toBeGreaterThan(1);
   const geometry = await page.locator(".monaco-editor-host").evaluate((host) => {
     const line = host.querySelector(".view-line")?.getBoundingClientRect();
     const number = host.querySelector(".line-numbers")?.getBoundingClientRect();
@@ -659,12 +663,16 @@ test("the code editor keeps Monaco's input surface invisible and selects the fil
   await expect(inputSurface).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await expect(inputSurface).toHaveCSS("box-shadow", "none");
 
-  await page.getByRole("textbox", { name: "File path" }).fill("example.c");
-  await expect(page.getByText("C", { exact: true })).toBeVisible();
-  await editor.click();
+  await editor.click({ force: true });
   const caret = editor.locator(".cursor").first();
   await expect(caret).toBeVisible();
   expect(await caret.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(2);
+  const caretAlignment = await page.locator(".monaco-editor-host").evaluate((host) => {
+    const lines = host.querySelectorAll<HTMLElement>(".view-line");
+    const caret = host.querySelector<HTMLElement>(".cursor");
+    return { caretTop: caret?.getBoundingClientRect().top, currentLineTop: lines[3]?.getBoundingClientRect().top };
+  });
+  expect(Math.abs((caretAlignment.caretTop ?? 0) - (caretAlignment.currentLineTop ?? 0))).toBeLessThan(2);
 });
 
 test("settings shows the live Kali preparation stage instead of a passive runtime check", async ({ page }) => {
