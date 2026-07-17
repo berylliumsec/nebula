@@ -1682,6 +1682,7 @@ export function SessionsPage() {
       <PageHeader
         title="Workbench"
         description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
+        showIntroduction={false}
         actions={view === "chat" ? <button className="button primary" type="button" disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : view === "missions" ? <NewMissionButton /> : undefined}
       />
 

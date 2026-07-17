@@ -323,7 +323,12 @@ async function installTruthfulCore(page: Page) {
 
 async function openWorkspace(page: Page, route: string, heading: string) {
   await page.goto(route);
-  await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+  if (heading === "Workbench") {
+    await expect(page.getByRole("tab", { name: "Terminal", exact: true })).toBeVisible();
+    await expect(page.getByText("Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files.")).toHaveCount(0);
+  } else {
+    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+  }
   await expect(page.getByText("Interface preview")).toHaveCount(0);
   await expect(page.getByText(/Jordan|Acme/i)).toHaveCount(0);
   if (route === "/") {
@@ -503,6 +508,12 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("tab", { name: "Analyst chat", exact: true }).click();
+
+  if (testInfo.project.name === "narrow") await page.getByRole("button", { name: "Conversations" }).click();
+  const conversationRow = page.locator(".session-list nav > button").first();
+  await expect(conversationRow).toBeVisible();
+  expect(await conversationRow.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(50);
+  if (testInfo.project.name === "narrow") await page.getByRole("button", { name: "Current chat" }).click();
 
   const workspace = page.locator(".session-layout.chat .session-workspace");
   const emptyState = page.locator(".chat-empty-state");
@@ -1045,6 +1056,34 @@ test("Zero preserves the appearance selector", async ({ page }, testInfo) => {
   await page.getByRole("link", { name: "Advanced settings" }).click();
   await expect(page.locator(".appearance-panel")).toBeVisible();
   await expect(page.locator(".appearance-panel")).toHaveScreenshot("settings-zero-appearance.png");
+});
+
+test("advanced settings keeps the binary inventory collapsed until requested", async ({ page }) => {
+  await page.route("**/api/v1/automation/runtime", async (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      configured: true,
+      ready: true,
+      detail: "Prepared runtime is ready",
+      digest: `sha256:${"a".repeat(64)}`,
+      runner_profile_id: "local",
+      inventory: [
+        { name: "nmap", path: "/usr/bin/nmap", version: "7.95" },
+        { name: "sqlmap", path: "/usr/bin/sqlmap", version: "1.8" },
+      ],
+    }),
+  }));
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+
+  const inventory = page.locator("details.inventory-disclosure");
+  await expect(inventory).not.toHaveAttribute("open", "");
+  await expect(inventory.getByText("2", { exact: true })).toBeVisible();
+  await expect(inventory.getByText("nmap", { exact: true })).toBeHidden();
+  await inventory.locator("summary").click();
+  await expect(inventory).toHaveAttribute("open", "");
+  await expect(inventory.getByText("nmap", { exact: true })).toBeVisible();
 });
 
 test("appearance variants preserve each critical workspace hierarchy", async ({ page }) => {

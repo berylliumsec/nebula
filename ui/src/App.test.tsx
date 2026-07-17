@@ -50,7 +50,8 @@ describe("Nebula workspace", () => {
     for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
       expect(screen.getByRole("link", { name: label })).toBeVisible();
     }
-    expect(await screen.findByRole("heading", { name: "Workbench" })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: "Terminal" })).toBeVisible();
+    expect(screen.queryByText("Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files.")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Workspace code editor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Autonomous missions" })).toBeVisible();
@@ -98,7 +99,7 @@ describe("Nebula workspace", () => {
 
   it("restores legacy mission links to the Workbench mission view", async () => {
     renderApp("/missions");
-    expect(await screen.findByRole("heading", { name: "Workbench" })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: "Autonomous missions" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Autonomous missions" })).toHaveAttribute("aria-selected", "true");
   });
 
@@ -170,7 +171,7 @@ describe("Nebula workspace", () => {
     await user.keyboard("{Control>},{/Control}");
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
     await user.keyboard("{Control>}1{/Control}");
-    expect(await screen.findByRole("heading", { name: "Workbench" })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: "Terminal" })).toBeVisible();
   });
 
   it("shows a truthful Core failure without fabricated workspace records", async () => {
