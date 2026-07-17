@@ -235,6 +235,11 @@ def test_setup_status_contract_is_authenticated_and_model_optional(tmp_path):
 
     assert response.status_code == 200
     assert response.json() == {
+        "application_stage": "ready",
+        "stage_detail": "Nebula is ready.",
+        "stage_started_at": None,
+        "retryable": False,
+        "recovery_actions": [],
         "core": {"status": "ready", "detail": None},
         "scratch_project_id": "scratch-project",
         "terminal": {

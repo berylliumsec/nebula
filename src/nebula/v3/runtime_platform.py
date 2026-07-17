@@ -325,6 +325,7 @@ class RuntimePlatform:
         try:
             payload = json.loads(self.runtime_metadata_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
+            # diagnostic-expected: absent/invalid cached metadata means no verified inventory.
             return None
         return payload if isinstance(payload, dict) else None
 
@@ -439,6 +440,7 @@ class RuntimePlatform:
                 runners.append(runner)
                 seen.add(identity)
             except (ValueError, RuntimePlatformError) as exc:
+                # diagnostic-expected: warning is emitted and cleanup continues with other runners.
                 LOGGER.warning(
                     "Skipped orphan terminal cleanup for runner %s: %s",
                     profile.id,

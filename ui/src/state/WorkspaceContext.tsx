@@ -50,7 +50,16 @@ import type {
 import { logCaughtDiagnostic } from "../diagnostics";
 
 type CoreState = "checking" | "online" | "offline";
-export type WorkspaceState = "starting" | "ready" | "degraded" | "failed";
+export type WorkspaceState = "starting" | "bootstrapping" | "ready" | "degraded" | "failed";
+export type ResourceLoadState = "loading" | "ready" | "empty" | "failed";
+export type WorkspaceResource = "projects" | "providers" | "providerCatalog" | "operators" | "setup" | "activity" | "approvals" | "assets" | "findings" | "evidence" | "notes" | "sources" | "reports";
+export interface ResourceStatus {
+  state: ResourceLoadState;
+  error?: unknown;
+}
+
+const workspaceResources: WorkspaceResource[] = ["projects", "providers", "providerCatalog", "operators", "setup", "activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "reports"];
+const initialResourceStatus = Object.fromEntries(workspaceResources.map((key) => [key, { state: "loading" }])) as Record<WorkspaceResource, ResourceStatus>;
 
 export function evolveRunFromEvent(current: AgentRunSummary, event: RunEvent): AgentRunSummary {
   if (event.runId && event.runId !== current.id) return current;
@@ -87,6 +96,7 @@ interface WorkspaceContextValue {
   coreError?: string;
   health?: HealthResponse;
   setupStatus?: SetupStatus;
+  resourceStatus: Record<WorkspaceResource, ResourceStatus>;
   engagements: EngagementSummary[];
   operatorProfiles: OperatorProfile[];
   activeOperator?: OperatorProfile;
@@ -135,6 +145,7 @@ interface WorkspaceContextValue {
   removeKnowledgeSource: (id: string) => Promise<void>;
   refreshSetupRuntime: () => Promise<void>;
   reconnect: () => void;
+  retryResource: (resource: WorkspaceResource) => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | undefined>(undefined);
@@ -147,6 +158,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [coreError, setCoreError] = useState<string>();
   const [health, setHealth] = useState<HealthResponse>();
   const [setupStatus, setSetupStatus] = useState<SetupStatus>();
+  const [resourceStatus, setResourceStatus] = useState<Record<WorkspaceResource, ResourceStatus>>(initialResourceStatus);
   const [engagements, setEngagements] = useState<EngagementSummary[]>([]);
   const [operatorProfiles, setOperatorProfiles] = useState<OperatorProfile[]>([]);
   const [engagement, setEngagement] = useState<EngagementSummary>();
@@ -169,8 +181,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const reconnect = useCallback(() => {
     setWorkspaceState("starting");
     setCoreError(undefined);
-    setHealth(undefined);
-    setSetupStatus(undefined);
+    setResourceStatus((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, value.state === "failed" ? { state: "loading" } : value])) as Record<WorkspaceResource, ResourceStatus>);
     runtimeResolution.current = undefined;
     setAttempt((value) => value + 1);
   }, []);
@@ -201,7 +212,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           nextHealth.diagnosticsDegraded ? "Nebula Core reported degraded local diagnostics." : undefined,
         );
         setHealth(nextHealth);
-        setWorkspaceState(nextHealth.status === "degraded" ? "degraded" : "ready");
+        setWorkspaceState("bootstrapping");
 
         const loadErrors: string[] = [];
         const [engagementResult, providerResult, catalogResult, operatorResult, setupResult] = await Promise.allSettled([
@@ -247,6 +258,14 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           setSetupStatus(undefined);
           loadErrors.push("setup status");
         }
+        setResourceStatus((current) => ({
+          ...current,
+          projects: engagementResult.status === "fulfilled" ? { state: engagementItems.length ? "ready" : "empty" } : { state: "failed", error: engagementResult.reason },
+          providers: providerResult.status === "fulfilled" ? { state: providerResult.value.items.length ? "ready" : "empty" } : { state: "failed", error: providerResult.reason },
+          providerCatalog: catalogResult.status === "fulfilled" ? { state: catalogResult.value.length ? "ready" : "empty" } : { state: "failed", error: catalogResult.reason },
+          operators: operatorResult.status === "fulfilled" ? { state: operatorResult.value.length ? "ready" : "empty" } : { state: "failed", error: operatorResult.reason },
+          setup: setupResult.status === "fulfilled" ? { state: "ready" } : { state: "failed", error: setupResult.reason },
+        }));
 
         let nextRun: AgentRunSummary | undefined;
         setApprovals([]);
@@ -273,6 +292,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           detailResults.forEach((result, index) => {
             if (result.status === "rejected") loadErrors.push(labels[index]);
           });
+          setResourceStatus((current) => ({
+            ...current,
+            ...Object.fromEntries(detailResults.map((result, index) => [labels[index], result.status === "fulfilled" ? { state: result.value.items.length ? "ready" : "empty" } : { state: "failed", error: result.reason }])),
+          }));
           const [runResult, approvalResult, assetResult, findingResult, evidenceResult, observationResult, knowledgeResult, reportResult] = detailResults;
           if (runResult.status === "fulfilled") nextRun = runResult.value.items[runResult.value.items.length - 1];
           if (approvalResult.status === "fulfilled") setApprovals(approvalResult.value.items);
@@ -289,7 +312,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         const degraded = nextHealth.status === "degraded" || loadErrors.length > 0;
         setWorkspaceState(degraded ? "degraded" : "ready");
         setCoreError(loadErrors.length
-          ? `Some workspace data could not be loaded: ${loadErrors.join(", ")}.`
+          ? undefined
           : nextHealth.status === "degraded" ? "Nebula Core reported limited availability." : undefined);
         setEvents([]);
 
@@ -336,21 +359,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         if (active) {
           setCoreError(error instanceof Error ? error.message : "Nebula Core could not be reached.");
           setWorkspaceState("failed");
-          setHealth(undefined);
-          setSetupStatus(undefined);
-          setEngagements([]);
-          setEngagement(undefined);
-          setRun(undefined);
-          setEvents([]);
-          setApprovals([]);
-          setAssets([]);
-          setFindings([]);
-          setEvidence([]);
-          setObservations([]);
-          setReports([]);
-          setProviders([]);
-          setProviderCatalog([]);
-          setKnowledgeSources([]);
           setStreamState("closed");
         }
       }
@@ -393,6 +401,35 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     const next = await api.refreshSetupRuntime();
     setSetupStatus(next);
   }, [api, workspaceState]);
+
+  const retryResource = useCallback(async (resource: WorkspaceResource) => {
+    if (!api) throw new Error("Nebula Core must be available to retry this resource.");
+    setResourceStatus((current) => ({ ...current, [resource]: { state: "loading" } }));
+    try {
+      let count = 1;
+      if (resource === "projects") { const value = await api.listEngagements(); setEngagements(value.items); count = value.items.length; }
+      else if (resource === "providers") { const value = await api.listProviders(); setProviders(value.items); count = value.items.length; }
+      else if (resource === "providerCatalog") { const value = await api.listProviderCatalog(); setProviderCatalog(value); count = value.length; }
+      else if (resource === "operators") { const value = await api.listOperatorProfiles(); setOperatorProfiles(value); count = value.length; }
+      else if (resource === "setup") setSetupStatus(await api.setupStatus());
+      else {
+        if (!engagement) throw new Error("Select a Project before retrying this resource.");
+        if (resource === "activity") { const value = await api.listRuns(engagement.id); setRun(value.items[value.items.length - 1]); count = value.items.length; }
+        else if (resource === "approvals") { const value = await api.listApprovals(engagement.id); setApprovals(value.items); count = value.items.length; }
+        else if (resource === "assets") { const value = await api.listAssets(engagement.id); setAssets(value.items); count = value.items.length; }
+        else if (resource === "findings") { const value = await api.listFindings(engagement.id); setFindings(value.items); count = value.items.length; }
+        else if (resource === "evidence") { const value = await api.listEvidence(engagement.id); setEvidence(value.items); count = value.items.length; }
+        else if (resource === "notes") { const value = await api.listObservations(engagement.id); setObservations(value.items); count = value.items.length; }
+        else if (resource === "sources") { const value = await api.listKnowledgeSources(engagement.id); setKnowledgeSources(value.items); count = value.items.length; }
+        else if (resource === "reports") { const value = await api.listReports(engagement.id); setReports(value.items); count = value.items.length; }
+      }
+      setResourceStatus((current) => ({ ...current, [resource]: { state: count ? "ready" : "empty" } }));
+    } catch (error) {
+      void logCaughtDiagnostic(`interface.workspace.resource_${resource}_retry_failed`, `The ${resource} resource could not be reloaded.`, error, "workspace_context");
+      setResourceStatus((current) => ({ ...current, [resource]: { state: "failed", error } }));
+      throw error;
+    }
+  }, [api, engagement]);
 
   const selectEngagement = useCallback((id: string) => {
     if (!id || id === selectedEngagementId) return;
@@ -729,6 +766,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       coreError,
       health,
       setupStatus,
+      resourceStatus,
       engagements,
       operatorProfiles,
       activeOperator: operatorProfiles.find((profile) => profile.active),
@@ -777,6 +815,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       removeKnowledgeSource,
       refreshSetupRuntime,
       reconnect,
+      retryResource,
     }),
     [
       api,
@@ -795,6 +834,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       reports,
       health,
       setupStatus,
+      resourceStatus,
       providers,
       providerCatalog,
       knowledgeSources,
@@ -821,6 +861,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteOperatorProfile,
       createReport,
       updateReport,
+      retryResource,
       signOffReport,
       ingestKnowledgeSource,
       reindexKnowledgeSource,

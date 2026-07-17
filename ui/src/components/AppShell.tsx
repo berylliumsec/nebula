@@ -13,6 +13,13 @@ import { TopBar } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
 import { DiagnosticErrorNotice, DiagnosticsAvailabilityBanner, logDiagnostic } from "../diagnostics";
 
+const resourceLabels: Record<string, string> = {
+  projects: "Projects", providers: "Model providers", providerCatalog: "Provider setup",
+  operators: "Operator profiles", setup: "Terminal setup", activity: "Activity",
+  approvals: "Approvals", assets: "Assets", findings: "Findings", evidence: "Evidence",
+  notes: "Notes", sources: "Knowledge sources", reports: "Reports",
+};
+
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -21,6 +28,9 @@ export function AppShell() {
     approvals,
     coreError,
     reconnect,
+    resourceStatus,
+    retryResource,
+    setupStatus,
     workspaceState,
   } = useWorkspace();
   const zero = resolvedTheme === "zero";
@@ -146,8 +156,15 @@ export function AppShell() {
               <main id="main-content" className="main-content" tabIndex={-1}>
                 {workspaceState !== "failed" && <DiagnosticsAvailabilityBanner />}
                 {zero && <span className="zero-route-flare" aria-hidden="true" key={`${location.pathname}${location.search}`} />}
-                {workspaceState === "starting" && <div className="workspace-state-banner starting" role="status">Starting Nebula…</div>}
-                {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><span><strong>Nebula is ready with limited features.</strong>{coreError && <small>{coreError}</small>}</span><button className="button quiet" type="button" onClick={reconnect}>Retry</button></div>}
+                {workspaceState === "starting" && <div className="workspace-state-banner starting" role="status"><span><strong>Starting Nebula…</strong><small>Connecting to the local Core service.</small></span></div>}
+                {workspaceState === "bootstrapping" && <div className="workspace-state-banner starting" role="status"><span><strong>Preparing your workspace…</strong><small>{setupStatus?.stageDetail ?? "Loading Projects and checking Terminal setup."}</small></span></div>}
+                {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><span><strong>Nebula is ready with limited features.</strong>{coreError && <small>{coreError}</small>}</span>{coreError && <button className="button quiet" type="button" onClick={reconnect}>Retry Core</button>}</div>}
+                {workspaceState !== "failed" && Object.entries(resourceStatus).some(([, status]) => status.state === "failed") && <section className="workspace-resource-failures" aria-label="Workspace features needing attention">
+                  {Object.entries(resourceStatus).filter(([, status]) => status.state === "failed").map(([resource, status]) => <div className="workspace-state-banner degraded" key={resource}>
+                    <DiagnosticErrorNotice error={status.error} title={`${resourceLabels[resource] ?? resource} could not be loaded.`} fallback="This feature is temporarily unavailable; other loaded features remain usable." compact />
+                    <button className="button quiet" type="button" disabled={status.state === "loading"} onClick={() => void retryResource(resource as Parameters<typeof retryResource>[0]).catch((error: unknown) => logDiagnostic({ level: "error", eventCode: "interface.workspace.resource_retry_failed", message: "A workspace resource retry failed.", outcome: "failure", stage: "resource-retry", retryable: true, exception: error }))}>Retry {resourceLabels[resource] ?? resource}</button>
+                  </div>)}
+                </section>}
                 {workspaceState === "failed" && <div className="workspace-state-banner failed"><DiagnosticErrorNotice error={coreError ?? "Check the local service and try again."} title="Nebula Core could not start." fallback="Check the local service and try again." compact /><button className="button primary" type="button" onClick={reconnect}>Try again</button></div>}
                 <UpdateBanner />
                 <Outlet />

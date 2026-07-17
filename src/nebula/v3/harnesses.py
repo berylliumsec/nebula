@@ -811,6 +811,7 @@ def _codex_app_server_version(user_agent: Any) -> Version | None:
     try:
         return Version(match.group(1))
     except InvalidVersion:
+        # diagnostic-expected: an unparseable advertised version is rejected by the caller.
         return None
 
 

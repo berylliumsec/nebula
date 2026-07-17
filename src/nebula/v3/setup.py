@@ -102,6 +102,26 @@ class SetupEventReason(StringEnum):
     IMAGE_PREPARATION_ERROR = "image_preparation_error"
 
 
+class ApplicationSetupStage(StringEnum):
+    """Truthful high-level stage exposed to startup surfaces."""
+
+    STARTING_CORE = "starting_core"
+    MIGRATING = "migrating"
+    LOADING_PROJECT = "loading_project"
+    DETECTING_RUNNER = "detecting_runner"
+    PREPARING_IMAGE = "preparing_image"
+    LOADING_WORKSPACE = "loading_workspace"
+    READY = "ready"
+    DEGRADED = "degraded"
+    FAILED = "failed"
+
+
+class SetupRecoveryAction(NebulaModel):
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    label: str = Field(min_length=1, max_length=120)
+    destination: str | None = Field(default=None, max_length=256)
+
+
 class CoreSetupStatus(NebulaModel):
     status: CoreSetupState
     detail: str | None = None
@@ -160,6 +180,15 @@ class AssistantSetupStatus(NebulaModel):
 
 
 class SetupStatus(NebulaModel):
+    application_stage: ApplicationSetupStage = cast(
+        ApplicationSetupStage, ApplicationSetupStage.READY
+    )
+    stage_detail: str = Field(
+        default="Nebula is ready.", min_length=1, max_length=2_000
+    )
+    stage_started_at: datetime | None = None
+    retryable: bool = False
+    recovery_actions: list[SetupRecoveryAction] = Field(default_factory=list)
     core: CoreSetupStatus
     scratch_project_id: str | None = None
     terminal: TerminalSetupStatus
@@ -1267,7 +1296,34 @@ class SetupService:
                 detail="Assistant setup is optional; Terminal is available independently.",
             )
         )
+        terminal = self._terminal
+        if terminal.status == TerminalSetupState.DETECTING_RUNNER:
+            application_stage = ApplicationSetupStage.DETECTING_RUNNER
+            stage_detail = terminal.detail or "Checking supported local container runtimes."
+        elif terminal.status == TerminalSetupState.PREPARING_IMAGE:
+            application_stage = ApplicationSetupStage.PREPARING_IMAGE
+            stage_detail = terminal.detail or "Preparing the verified Kali workstation image."
+        elif terminal.status in {TerminalSetupState.ERROR, TerminalSetupState.NEEDS_RUNNER}:
+            application_stage = ApplicationSetupStage.DEGRADED
+            stage_detail = terminal.detail or "Terminal setup needs attention; Files remain available."
+        else:
+            application_stage = ApplicationSetupStage.READY
+            stage_detail = "Nebula is ready."
+        recovery_actions: list[SetupRecoveryAction] = []
+        if terminal.status == TerminalSetupState.NEEDS_RUNNER:
+            recovery_actions.append(SetupRecoveryAction(
+                id="open_setup", label="Open Terminal setup", destination="/settings#setup-settings"
+            ))
+        elif terminal.image_preparation.can_retry:
+            recovery_actions.append(SetupRecoveryAction(
+                id="retry_image", label="Retry Kali preparation", destination="/settings#setup-settings"
+            ))
         return SetupStatus(
+            application_stage=application_stage,
+            stage_detail=stage_detail,
+            stage_started_at=terminal.image_preparation.started_at,
+            retryable=bool(recovery_actions),
+            recovery_actions=recovery_actions,
             core=CoreSetupStatus(status=CoreSetupState.READY),
             scratch_project_id=current_scratch_project_id(self.store),
             terminal=self._terminal,
@@ -1285,9 +1341,11 @@ def _container_platform() -> Literal["linux/amd64", "linux/arm64"]:
 
 
 __all__ = [
+    "ApplicationSetupStage",
     "AssistantSetupState",
     "AssistantSetupStatus",
     "CoreSetupState",
+    "SetupRecoveryAction",
     "CoreSetupStatus",
     "DEFAULT_SETUP_EVENT_RETENTION",
     "ImagePreparationCancellationRequest",

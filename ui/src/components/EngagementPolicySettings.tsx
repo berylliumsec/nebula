@@ -38,7 +38,7 @@ export function EngagementPolicySettings() {
   const [networkEnabled, setNetworkEnabled] = useState(false);
   const [maxTimeoutMs, setMaxTimeoutMs] = useState(300_000);
   const [saving, setSaving] = useState<"scope" | "runtime">();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<unknown>();
 
   const applyScope = (next: EngagementScopePolicy) => {
     setScope(next);
@@ -108,7 +108,8 @@ export function EngagementPolicySettings() {
         expectedRevision: scope.revision,
       }));
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Could not save project scope.");
+      void logCaughtDiagnostic("interface.engagement_policy.scope_save_failed", "Project scope could not be saved.", saveError, "engagement_policy");
+      setError(saveError);
     } finally { setSaving(undefined); }
   };
 
@@ -125,13 +126,14 @@ export function EngagementPolicySettings() {
         expectedRevision: policy.revision,
       }));
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Could not save command-runtime policy.");
+      void logCaughtDiagnostic("interface.engagement_policy.runtime_save_failed", "Project command-runtime policy could not be saved.", saveError, "engagement_policy");
+      setError(saveError);
     } finally { setSaving(undefined); }
   };
 
   return <section className="settings-section" id="engagement-policy-settings">
     <div className="section-heading"><div><h2>Project execution policy</h2><p>Freeze the scope, approval behavior, and whole-project network boundary used by new agent sessions.</p></div><ShieldCheck size={20} /></div>
-    {error && <DiagnosticErrorNotice error={error} fallback="The project policy could not be updated." compact />}
+    {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The project policy could not be updated." compact />}
     <div className="runner-layout">
       <form className="panel policy-form" onSubmit={(event) => void saveRuntime(event)}>
         <header className="panel-header compact"><div><h3>Command runtime</h3><p>Workspace commands never need a target address.</p></div><TerminalSquare size={18} /></header>

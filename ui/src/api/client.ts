@@ -118,6 +118,11 @@ interface WireEntity extends JsonObject {
 }
 
 interface WireSetupStatus {
+  application_stage?: SetupStatus["applicationStage"];
+  stage_detail?: string | null;
+  stage_started_at?: string | null;
+  retryable?: boolean;
+  recovery_actions?: Array<{ id: string; label: string; destination?: string | null }>;
   core: { status: SetupStatus["core"]["status"]; detail?: string | null };
   scratch_project_id?: string | null;
   terminal: {
@@ -1099,6 +1104,8 @@ export class ApiError extends Error {
   readonly operatorDetail?: string;
   readonly impact?: string;
   readonly remediationId?: string;
+  readonly recoveryAction?: string;
+  readonly recoveryDestination?: string;
 
   constructor(
     message: string,
@@ -1129,6 +1136,8 @@ export class ApiError extends Error {
     this.operatorDetail = stringField(envelope?.operator_detail);
     this.impact = stringField(envelope?.impact);
     this.remediationId = stringField(envelope?.remediation_id);
+    this.recoveryAction = stringField(envelope?.recovery_action);
+    this.recoveryDestination = stringField(envelope?.recovery_destination);
     rememberDiagnosticErrorPresentation(reference, {
       retryable: this.retryable,
       code: this.code,
@@ -2563,6 +2572,15 @@ async function responseError(response: Response): Promise<ApiError> {
 
 function mapSetupStatus(value: WireSetupStatus): SetupStatus {
   return {
+    applicationStage: value.application_stage ?? "ready",
+    stageDetail: value.stage_detail ?? "Nebula is ready.",
+    stageStartedAt: value.stage_started_at ?? undefined,
+    retryable: value.retryable ?? false,
+    recoveryActions: (value.recovery_actions ?? []).map((action) => ({
+      id: action.id,
+      label: action.label,
+      destination: action.destination ?? undefined,
+    })),
     core: {
       status: value.core.status,
       detail: value.core.detail ?? undefined,

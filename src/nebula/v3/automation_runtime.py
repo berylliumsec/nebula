@@ -24,6 +24,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .artifacts import ArtifactStore
+from .diagnostics import create_diagnostic_task
 from .domain import (
     Approval,
     ApprovalStatus,
@@ -253,10 +254,12 @@ class _ContainerProcess(RuntimeBackendProcess):
         try:
             await asyncio.wait_for(self.process.wait(), timeout=2)
         except asyncio.TimeoutError:
+            # diagnostic-expected: TERM escalation to KILL is bounded cleanup control flow.
             await self.session._signal_process(self.pid_file, "KILL")
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=2)
             except asyncio.TimeoutError:
+                # diagnostic-expected: the final local kill is the verified fallback.
                 if self.process.returncode is None:
                     self.process.kill()
                     await self.process.wait()
@@ -461,6 +464,7 @@ class ContainerRuntimeSession(RuntimeBackendSession):
         try:
             await asyncio.wait_for(send.wait(), timeout=5)
         except asyncio.TimeoutError:
+            # diagnostic-expected: helper shutdown escalates after the bounded wait.
             send.kill()
             await send.wait()
 
@@ -680,6 +684,7 @@ class AutomationRuntimeManager:
         try:
             profile = self.store.get(StoredRunnerProfile, session.runner_profile_id)
         except NotFoundError:
+            # diagnostic-expected: deleted runner state is returned to startup recovery.
             return "Core restarted; runtime teardown skipped because its runner was removed"
         if profile.revision != session.runner_profile_revision:
             return "Core restarted; runtime teardown skipped because its runner changed"
@@ -695,6 +700,7 @@ class AutomationRuntimeManager:
             await runner._force_remove(container_name)
             await runner._force_remove(f"{container_name}-egress")
         except Exception as exc:
+            # diagnostic-expected: orphan cleanup detail is durably returned to reconciliation.
             return f"Core restarted; runtime teardown failed: {str(exc)[:2_000]}"
         return "Core restarted; detached runtime teardown requested"
 
@@ -712,6 +718,7 @@ class AutomationRuntimeManager:
         try:
             return self.store.get(AutomationProjectPolicy, policy_id)
         except NotFoundError:
+            # diagnostic-expected: first access creates the deterministic default policy.
             try:
                 return self.store.create(
                     AutomationProjectPolicy(
@@ -720,6 +727,7 @@ class AutomationRuntimeManager:
                     )
                 )
             except ConflictError:
+                # diagnostic-expected: a concurrent creator won; read its durable value.
                 return self.store.get(AutomationProjectPolicy, policy_id)
 
     def update_project_policy(
@@ -900,6 +908,7 @@ class AutomationRuntimeManager:
                 if isinstance(item, dict)
             ][:10_000]
         except (ValueError, json.JSONDecodeError, SandboxUnavailable) as exc:
+            # diagnostic-expected: readiness reports the verified inventory failure to callers.
             return info.model_copy(
                 update={
                     "ready": False,
@@ -1033,13 +1042,13 @@ class AutomationRuntimeManager:
             workspace_before=workspace_before,
         )
         process.drain_tasks = (
-            asyncio.create_task(process.stdout.drain(backend.stdout)),
-            asyncio.create_task(process.stderr.drain(backend.stderr)),
+            create_diagnostic_task(process.stdout.drain(backend.stdout), feature="runtime", event_code="runtime.stdout_drain", failure_message="Command stdout capture stopped unexpectedly."),
+            create_diagnostic_task(process.stderr.drain(backend.stderr), feature="runtime", event_code="runtime.stderr_drain", failure_message="Command stderr capture stopped unexpectedly."),
         )
-        process.final_task = asyncio.create_task(self._finalize_process(process))
+        process.final_task = create_diagnostic_task(self._finalize_process(process), feature="runtime", event_code="runtime.process_finalize", failure_message="Command finalization stopped unexpectedly.")
         managed.processes[process_id] = process
         self._processes[process_id] = process
-        asyncio.create_task(self._timeout_process(process, timeout_ms / 1_000))
+        create_diagnostic_task(self._timeout_process(process, timeout_ms / 1_000), feature="runtime", event_code="runtime.process_timeout", failure_message="Command timeout supervision stopped unexpectedly.")
         if request.background:
             return self._result(managed, process, stdout="", stderr="")
         await process.final_task
@@ -1173,6 +1182,7 @@ class AutomationRuntimeManager:
             if session_id in self._sessions:
                 await self.close_session(session_id)
         except asyncio.CancelledError:
+            # diagnostic-expected: session shutdown cancels the scope-expiry timer.
             return
 
     async def _get_or_create_session(
@@ -1289,8 +1299,11 @@ class AutomationRuntimeManager:
                 and scope.not_after is not None
                 and has_network_boundary
             ):
-                managed.scope_expiry_task = asyncio.create_task(
-                    self._expire_session_at_scope_boundary(session.id, scope.not_after)
+                managed.scope_expiry_task = create_diagnostic_task(
+                    self._expire_session_at_scope_boundary(session.id, scope.not_after),
+                    feature="runtime",
+                    event_code="runtime.scope_expiry",
+                    failure_message="Scope-expiry supervision stopped unexpectedly.",
                 )
             return managed
 
@@ -1459,6 +1472,7 @@ class AutomationRuntimeManager:
         try:
             await asyncio.wait_for(asyncio.shield(process.final_task), timeout=seconds)
         except asyncio.TimeoutError:
+            # diagnostic-expected: the supervised deadline deliberately terminalizes the process.
             process.forced_status = CommandExecutionStatus.TIMED_OUT
             await process.backend.terminate()
 
@@ -1659,6 +1673,7 @@ def _workspace_snapshot(workspace: Path) -> dict[str, tuple[str, int, int]]:
             try:
                 metadata = path.lstat()
             except FileNotFoundError:
+                # diagnostic-expected: workspace files may disappear during a concurrent command.
                 continue
             relative = path.relative_to(workspace).as_posix()
             kind = (

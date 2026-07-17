@@ -13,6 +13,13 @@ Keywords: nebula core offline, desktop blank, browser workspace offline, sidecar
 
 Sources: docs/NEBULA3.md#run-from-a-source-checkout, src/nebula/v3/cli.py:serve, src/nebula/v3/cli.py:doctor
 
+The desktop distinguishes connecting to Core from bootstrapping Project data and
+Terminal setup. A feature-specific loading failure does not make other loaded
+features unavailable: keep working in healthy surfaces and use the Retry action
+beside the affected feature. Failures link to their verified recovery destination.
+Reconnecting preserves the last successfully loaded Project
+data while Core availability is checked again.
+
 Use the native `nebula` launcher for an installed desktop. From a source checkout,
 build the workspace and use `poetry run nebula-core ui`; that command chooses an
 available loopback port, starts Core, serves the built UI, and transfers the bearer

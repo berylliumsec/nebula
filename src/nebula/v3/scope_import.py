@@ -447,6 +447,7 @@ def _normalize_candidates(
                     engagement_id="validation", allowed_urls=[item.raw_value]
                 ).allowed_urls[0]
         except ValueError as exc:
+            # diagnostic-expected: invalid model proposals become operator-visible warnings.
             item_warnings.append(str(exc))
             warnings.append(f"{item.raw_value}: {exc}")
         classification = ScopeImportClassification(item.classification)

@@ -83,6 +83,8 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                 "operator_detail": "Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.",
                 "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
                 "remediation_id": "storage.unknown_internal_fault",
+                "recovery_action": "Review recovery guidance",
+                "recovery_destination": "/settings#diagnostics-settings",
             }
 
             matching = [

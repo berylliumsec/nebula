@@ -1423,6 +1423,22 @@ def create_app(
             impact=getattr(exc, "_nebula_diagnostic_impact", None),
             remediation_id=getattr(exc, "_nebula_diagnostic_remediation_id", None),
         )
+        recovery_destinations = {
+            "setup": "/settings#setup-settings",
+            "terminal": "/?view=terminal",
+            "providers": "/settings#providers-settings",
+            "harnesses": "/settings#harnesses-settings",
+            "missions": "/?view=missions",
+            "workspace": "/?view=files",
+            "evidence": "/project?view=evidence",
+            "findings": "/findings",
+            "reports": "/reports",
+            "diagnostics": "/settings#diagnostics-settings",
+        }
+        recovery_destination = recovery_destinations.get(feature)
+        recovery_action = (
+            "Retry this operation" if retryable else "Review recovery guidance"
+        )
         recorded_id = existing_error_id
         if existing_error_id is None:
             recorded_id = emit_diagnostic(
@@ -1463,6 +1479,9 @@ def create_app(
             "operator_detail": guidance.cause,
             "impact": guidance.impact,
             "remediation_id": guidance.remediation_id,
+            "recovery_action": recovery_action,
+            "recovery_destination": recovery_destination
+            or "/settings#diagnostics-settings",
         }
         if operation_id:
             content["operation_id"] = operation_id
@@ -1524,6 +1543,8 @@ def create_app(
                     "operator_detail": "Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.",
                     "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
                     "remediation_id": f"{failure_feature}.unknown_internal_fault",
+                    "recovery_action": "Review recovery guidance",
+                    "recovery_destination": "/settings#diagnostics-settings",
                 }
                 response = JSONResponse(status_code=500, content=content)
                 request.state.diagnostic_error_recorded = True
@@ -4842,6 +4863,7 @@ def create_app(
                 requested_by=active_operator_id(),
             )
         except CommandApprovalRequired as exc:
+            # diagnostic-expected: a durable approval pause is a normal policy state.
             return JSONResponse(
                 status_code=409,
                 content=jsonable_encoder(

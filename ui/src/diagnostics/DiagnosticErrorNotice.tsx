@@ -51,9 +51,11 @@ export function DiagnosticErrorNotice({
   const operatorDetail = stringField(value, "operatorDetail", "operator_detail") ?? remembered?.operatorDetail;
   const impact = stringField(value, "impact") ?? remembered?.impact;
   const reasonCode = stringField(value, "reasonCode", "reason_code") ?? remembered?.reasonCode;
-  const href = reference
+  const recoveryAction = stringField(value, "recoveryAction", "recovery_action");
+  const recoveryDestination = stringField(value, "recoveryDestination", "recovery_destination");
+  const href = recoveryDestination ?? (reference
     ? `/settings?diagnostic=${encodeURIComponent(reference)}#diagnostics-settings`
-    : "/settings#diagnostics-settings";
+    : "/settings#diagnostics-settings");
   const classes = ["diagnostic-error-notice", compact ? "compact" : undefined, className]
     .filter(Boolean)
     .join(" ");
@@ -76,7 +78,7 @@ export function DiagnosticErrorNotice({
         </small>
         <small>Reference: {reference ?? "pending local diagnostic"}{reasonCode ? ` · ${humanize(reasonCode)}` : code ? ` · ${code}` : ""}</small>
       </span>
-      <a href={href}>View diagnostics</a>
+      <a href={href}>{recoveryAction ?? "View diagnostics"}</a>
     </Root>
   );
 }

@@ -332,6 +332,7 @@ class PolicyResolver:
                 if len(response) >= 4 and response[:2] == request[:2]:
                     return response
             except OSError as exc:
+                # diagnostic-expected: try the next configured upstream resolver.
                 last_error = exc
         raise OSError("all upstream DNS resolvers failed") from last_error
 
@@ -339,6 +340,7 @@ class PolicyResolver:
         try:
             name, question_end = _question(request)
         except (UnicodeError, ValueError):
+            # diagnostic-expected: malformed untrusted DNS requests receive no answer.
             return b""
         if not self._domain_allowed(name):
             return _error_response(request, question_end, 5)
@@ -361,6 +363,7 @@ class PolicyResolver:
                             self.installed.add(key)
             return response
         except (OSError, subprocess.SubprocessError, ValueError):
+            # diagnostic-expected: protocol failures become a bounded DNS SERVFAIL response.
             return _error_response(request, question_end, 2)
 
     def _udp(self, server: socket.socket) -> None:
@@ -371,8 +374,10 @@ class PolicyResolver:
                 if response:
                     server.sendto(response, peer)
             except TimeoutError:
+                # diagnostic-expected: socket timeout permits cooperative shutdown checks.
                 continue
             except OSError:
+                # diagnostic-expected: transient datagram errors do not stop the broker loop.
                 if not self.stopped.is_set():
                     continue
 
@@ -393,8 +398,10 @@ class PolicyResolver:
                     target=self._tcp_client, args=(connection,), daemon=True
                 ).start()
             except TimeoutError:
+                # diagnostic-expected: socket timeout permits cooperative shutdown checks.
                 continue
             except OSError:
+                # diagnostic-expected: transient accept errors do not stop the broker loop.
                 if not self.stopped.is_set():
                     continue
 
@@ -502,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
             disabled=options.disabled,
         )
     except Exception as exc:
+        # diagnostic-expected: this isolated helper reports startup failure to its supervisor.
         print(f"{exc.__class__.__name__}: {exc}", file=sys.stderr, flush=True)
         return 1
 

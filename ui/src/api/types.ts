@@ -1244,6 +1244,20 @@ export interface SetupImagePreparation {
 }
 
 export interface SetupStatus {
+  applicationStage:
+    | "starting_core"
+    | "migrating"
+    | "loading_project"
+    | "detecting_runner"
+    | "preparing_image"
+    | "loading_workspace"
+    | "ready"
+    | "degraded"
+    | "failed";
+  stageDetail: string;
+  stageStartedAt?: string;
+  retryable: boolean;
+  recoveryActions: Array<{ id: string; label: string; destination?: string }>;
   core: {
     status: "ready" | "degraded" | "error";
     detail?: string;

@@ -173,6 +173,8 @@ describe("ApiClient", () => {
       impact: "The harness turn did not complete.",
       remediation_id: "harnesses.transport_closed",
       help_article: "harnesses",
+      recovery_action: "Retry this operation",
+      recovery_destination: "/settings#harnesses-settings",
     };
     const client = new ApiClient({
       fetch: vi.fn<typeof fetch>().mockResolvedValue(
@@ -192,11 +194,18 @@ describe("ApiClient", () => {
       operatorDetail: envelope.operator_detail,
       impact: envelope.impact,
       remediationId: "harnesses.transport_closed",
+      recoveryAction: "Retry this operation",
+      recoveryDestination: "/settings#harnesses-settings",
     });
   });
 
   it("maps zero-setup readiness and refreshes runtime detection idempotently", async () => {
     const status = {
+      application_stage: "ready",
+      stage_detail: "Terminal is ready.",
+      stage_started_at: "2026-07-17T10:00:00Z",
+      retryable: false,
+      recovery_actions: [],
       core: { status: "degraded", detail: "A model is optional" },
       scratch_project_id: "scratch-project",
       terminal: {
@@ -240,6 +249,8 @@ describe("ApiClient", () => {
     const refreshed = await client.refreshSetupRuntime();
 
     expect(initial).toMatchObject({
+      applicationStage: "ready",
+      stageDetail: "Terminal is ready.",
       core: { status: "degraded", detail: "A model is optional" },
       scratchProjectId: "scratch-project",
       terminal: {

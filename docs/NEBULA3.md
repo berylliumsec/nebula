@@ -46,6 +46,13 @@ poetry run nebula-core migrate
 poetry run nebula-core serve --host 127.0.0.1 --port 8765
 ```
 
+Run the Nebula 3 test boundary without installing or importing the legacy Qt
+application:
+
+```bash
+poetry run python scripts/test_nebula3.py
+```
+
 The server prints a generated bearer token. Remote binding requires an explicit
 `--allow-remote` acknowledgement and should be placed behind a properly
 authenticated deployment boundary. Local mode never exposes a runner socket.
