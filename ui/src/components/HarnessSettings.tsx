@@ -3,6 +3,7 @@ import { Bot, Network, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, X } from "l
 import type { HarnessNativeCapabilities, HarnessProfile, McpServerProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { announceSettingsSaved } from "./SettingsSaveFeedback";
 
 const approvalOptions = ["risk_based", "ask", "allow", "deny"] as const;
 
@@ -146,6 +147,7 @@ export function HarnessSettings() {
       await api.checkHarness(saved.id);
       await reload();
       setHarnessDialog(false);
+      announceSettingsSaved("Harness profile saved and checked.");
     } catch (saveError) {
       void logCaughtDiagnostic("interface.harness_settings.caught_failure_02", "A handled interface operation failed.", saveError, "harness_settings");
       setError(saveError instanceof Error ? saveError.message : "Could not save the harness profile.");
@@ -206,6 +208,7 @@ export function HarnessSettings() {
       else await api.createMcpServer(payload);
       await reload();
       setMcpDialog(false);
+      announceSettingsSaved("MCP server settings updated.");
     } catch (saveError) {
       void logCaughtDiagnostic("interface.harness_settings.caught_failure_03", "A handled interface operation failed.", saveError, "harness_settings");
       setError(saveError instanceof Error ? saveError.message : "Could not save the MCP server.");

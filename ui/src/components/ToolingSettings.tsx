@@ -4,6 +4,7 @@ import { ApiError } from "../api/client";
 import type { AutomationRuntimeInfo, RunnerProfile, RunnerIsolation, RunnerRuntime } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { announceSettingsSaved } from "./SettingsSaveFeedback";
 
 function unavailable(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 404 || error.status === 501);
@@ -127,6 +128,7 @@ export function RunnerSettings() {
       const saved = await api.updateRunnerProfile(selectedId, { name, runtimeType: defaults.runtime, isolationMode: defaults.isolation, executable, context: context || undefined, socket: socket || undefined, platform, seccompProfile: seccompProfile || undefined, expectedRevision: current?.revision });
       setProfiles((items) => [saved, ...items.filter((profile) => profile.id !== saved.id)]);
       setSelectedId(saved.id);
+      announceSettingsSaved("Runner profile verified and updated.");
     } catch (saveError) {
       void logCaughtDiagnostic("interface.tooling_settings.caught_failure_03", "A handled interface operation failed.", saveError, "tooling_settings");
       setError(saveError instanceof Error ? saveError.message : "Could not save the runner profile.");

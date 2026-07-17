@@ -3,6 +3,7 @@ import { Save, ShieldCheck, TerminalSquare } from "lucide-react";
 import type { AutomationProjectPolicy, EngagementScopePolicy } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { announceSettingsSaved } from "./SettingsSaveFeedback";
 
 function lines(value: string): string[] {
   return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
@@ -107,6 +108,7 @@ export function EngagementPolicySettings() {
         grants: scope.grants,
         expectedRevision: scope.revision,
       }));
+      announceSettingsSaved("Network scope updated for new sessions.");
     } catch (saveError) {
       void logCaughtDiagnostic("interface.engagement_policy.scope_save_failed", "Project scope could not be saved.", saveError, "engagement_policy");
       setError(saveError);
@@ -125,6 +127,7 @@ export function EngagementPolicySettings() {
         maxTimeoutMs,
         expectedRevision: policy.revision,
       }));
+      announceSettingsSaved("Runtime policy updated for new sessions.");
     } catch (saveError) {
       void logCaughtDiagnostic("interface.engagement_policy.runtime_save_failed", "Project command-runtime policy could not be saved.", saveError, "engagement_policy");
       setError(saveError);

@@ -8,6 +8,7 @@ import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
 import { EngagementPolicySettings } from "../components/EngagementPolicySettings";
 import { AutomationRuntimeSettings, RunnerSettings } from "../components/ToolingSettings";
 import { HarnessSettings } from "../components/HarnessSettings";
+import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, DiagnosticsPanel, logCaughtDiagnostic } from "../diagnostics";
@@ -325,6 +326,7 @@ export function SettingsPage() {
       }
       setAdding(false);
       setCredentialSecret("");
+      announceSettingsSaved(editingProvider ? "Provider changes are ready to use." : "Provider added and ready to configure.");
     } catch (error) {
       void logCaughtDiagnostic("interface.settings_page.caught_failure_02", "A handled interface operation failed.", error, "settings_page");
       if (createdCredentialRef && api) {
@@ -388,6 +390,7 @@ export function SettingsPage() {
         await createOperatorProfile({ displayName: operatorName, email: operatorEmail || undefined, role: operatorRole || undefined });
       }
       setOperatorDialog(false);
+      announceSettingsSaved("Operator profile updated.");
     } catch (error) {
       void logCaughtDiagnostic("interface.settings_page.caught_failure_06", "A handled interface operation failed.", error, "settings_page");
       setOperatorError(error instanceof Error ? error.message : "Could not save the operator profile.");
@@ -479,6 +482,7 @@ export function SettingsPage() {
     || imagePreparation?.progressPercent === undefined;
   return (
     <div className="page settings-page">
+      <SettingsSaveFeedback />
       <PageHeader title="Settings" description="Workspace preferences." />
       <div className="settings-workspace">
       <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); window.history.replaceState(null, "", `#${id}`); setSettingsSection(id); }}>{label}</a>)}</nav>

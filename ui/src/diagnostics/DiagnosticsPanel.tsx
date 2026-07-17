@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { HealthResponse, SetupStatus } from "../api/types";
 import { useConfirmation } from "../components/DialogSystem";
+import { announceSettingsSaved } from "../components/SettingsSaveFeedback";
 import { useWorkspace } from "../state/WorkspaceContext";
 import {
   diagnosticsFallbackErrors,
@@ -539,6 +540,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
       setDiagnosticSettings(normalizedSettings);
       setSettings(normalizedSettings);
       setDraft(normalizedSettings);
+      announceSettingsSaved("Diagnostic logging preferences updated.");
     } catch (error) {
       setFailure(error);
       void logDiagnostic({

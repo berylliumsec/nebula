@@ -508,3 +508,12 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .mission-event-details summary { cursor: pointer; }
 .mission-event-details pre { max-height: 260px; padding: 9px; overflow: auto; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--surface-muted); color: var(--text); font: 10px/1.5 var(--mono); }
 .button.danger { color: var(--red); }
+
+/* Quiet, consistent confirmation for settings saves. */
+.settings-save-feedback { position: fixed; z-index: 1200; right: 22px; bottom: 22px; display: flex; min-width: 230px; max-width: min(360px, calc(100vw - 32px)); align-items: center; gap: 10px; padding: 10px 13px; border: 1px solid color-mix(in srgb, var(--green) 34%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--surface-raised) 94%, var(--green)); box-shadow: 0 12px 32px rgb(0 0 0 / 22%); animation: settings-save-in .18s ease-out; }
+.settings-save-feedback > span { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border-radius: 8px; color: var(--green); background: var(--green-muted); }
+.settings-save-feedback > div { display: grid; gap: 2px; }
+.settings-save-feedback strong { color: var(--text-strong); font-size: 11px; }
+.settings-save-feedback small { color: var(--muted); font-size: 10px; line-height: 1.35; }
+@keyframes settings-save-in { from { opacity: 0; transform: translateY(7px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .settings-save-feedback { animation: none; } }
