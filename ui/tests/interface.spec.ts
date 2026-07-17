@@ -678,6 +678,25 @@ test("settings shows the live Kali preparation stage instead of a passive runtim
   await expect(page.getByRole("button", { name: "Preparing Kali…" })).toBeDisabled();
 });
 
+test("terminal and notes keep a visible focused caret", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await openWorkspace(page, "/", "Workbench");
+
+  const terminalSurface = page.locator(".xterm-shell").first();
+  await terminalSurface.click();
+  await expect(page.locator(".xterm").first()).toHaveCSS("cursor", "text");
+  await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("Terminal input");
+
+  await page.getByRole("tab", { name: "Project notes", exact: true }).click();
+  await page.getByRole("button", { name: "New note", exact: true }).click();
+  const noteBody = page.getByRole("textbox", { name: "Note body" });
+  await noteBody.click();
+  await expect(noteBody).toBeFocused();
+  const caretColor = await noteBody.evaluate((element) => getComputedStyle(element).caretColor);
+  expect(caretColor).not.toBe("auto");
+  expect(caretColor).not.toBe("rgba(0, 0, 0, 0)");
+});
+
 test("the populated finding editor stays contained and accessible", async ({ page }) => {
   const finding = {
     ...entity,

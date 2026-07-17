@@ -812,6 +812,7 @@ kbd { font-size: 11px; }
 .terminal-live-notices > .terminal-audit-warning { display: flex; align-items: center; gap: 7px; margin: 0; padding: 8px 14px; border-bottom: 1px solid #5a252b; color: #ff9da3; background: #2a151a; font-size: 11px; font-weight: 650; line-height: 1.4; }
 .terminal-network-warning { display: flex; align-items: center; gap: 7px; margin: 0; padding: 7px 14px; border-bottom: 1px solid #4b3d20; color: #e3c877; background: #211c10; font-size: 11px; line-height: 1.4; }
 .xterm-shell { min-width: 0; min-height: 420px; padding: 10px 12px; overflow: hidden; background: #071017; }
+.xterm-shell .xterm { cursor: text; }
 .xterm-shell .xterm { height: 100%; }
 .xterm-shell .xterm-viewport { scrollbar-color: #40535d #071017; }
 .container-terminal-live > footer { display: flex; min-height: 32px; align-items: center; gap: 6px; padding: 6px 13px; border-top: 1px solid #20303a; color: #84979f; background: #0c171e; font-size: 11px; }

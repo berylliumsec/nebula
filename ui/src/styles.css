@@ -99,7 +99,8 @@ h1, h2, h3, strong { color: var(--text-strong); }
 code, pre, kbd { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 .connection-chip:disabled { opacity: 1; }
-input, textarea { color: var(--text); background: transparent; }
+input, textarea { color: var(--text); background: transparent; caret-color: var(--text-strong); }
+:where(textarea, input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="password"], input[type="number"], [contenteditable="true"]) { cursor: text; caret-color: var(--text-strong); }
 
 .sr-only {
   position: absolute !important;

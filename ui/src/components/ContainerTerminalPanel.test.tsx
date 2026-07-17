@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
@@ -16,6 +16,7 @@ const terminalSpies = vi.hoisted(() => ({
   fit: vi.fn(),
   focus: vi.fn(),
   keyHandler: undefined as ((event: KeyboardEvent) => boolean) | undefined,
+  options: undefined as Record<string, unknown> | undefined,
   selection: "",
 }));
 
@@ -45,6 +46,9 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 100;
     rows = 30;
+    constructor(options: Record<string, unknown>) {
+      terminalSpies.options = options;
+    }
     dispose(): void {}
     focus = terminalSpies.focus;
     loadAddon(): void {}
@@ -123,6 +127,7 @@ describe("ContainerTerminalPanel", () => {
     terminalSpies.fit.mockClear();
     terminalSpies.focus.mockClear();
     terminalSpies.keyHandler = undefined;
+    terminalSpies.options = undefined;
     terminalSpies.selection = "";
   });
 
@@ -205,6 +210,15 @@ describe("ContainerTerminalPanel", () => {
     expect(terminalSpies.keyHandler?.(copy)).toBe(false);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("nmap output"));
     expect(copy.defaultPrevented).toBe(true);
+    expect(terminalSpies.options).toMatchObject({
+      cursorBlink: true,
+      cursorInactiveStyle: "outline",
+      cursorStyle: "block",
+      theme: expect.objectContaining({ cursor: "#54d6a3", cursorAccent: "#071017" }),
+    });
+    const focusCalls = terminalSpies.focus.mock.calls.length;
+    fireEvent.pointerDown(screen.getAllByLabelText("Terminal output").at(-1)!);
+    expect(terminalSpies.focus).toHaveBeenCalledTimes(focusCalls + 1);
   });
 
   it("prepares and starts exactly one initial terminal during the StrictMode probe", async () => {

@@ -143,7 +143,8 @@ function LiveContainerTerminal({
     if (!host) return;
     const terminal = new Terminal({
       cursorBlink: true,
-      cursorStyle: "bar",
+      cursorStyle: "block",
+      cursorInactiveStyle: "outline",
       fontFamily: '"Noto Sans Mono", "SFMono-Regular", Consolas, monospace',
       fontSize: 13,
       lineHeight: 1.25,
@@ -152,6 +153,7 @@ function LiveContainerTerminal({
         background: "#071017",
         foreground: "#d9e5e9",
         cursor: "#54d6a3",
+        cursorAccent: "#071017",
         selectionBackground: "#245f5588",
         black: "#071017",
         brightBlack: "#53656d",
@@ -171,6 +173,11 @@ function LiveContainerTerminal({
     terminalRef.current = terminal;
     fitRef.current = fit;
     host.querySelector("textarea")?.setAttribute("aria-label", "Terminal input");
+    const focusTerminal = () => {
+      if (activeRef.current) terminal.focus();
+    };
+    host.addEventListener("pointerdown", focusTerminal);
+    globalThis.addEventListener("focus", focusTerminal);
     terminal.attachCustomKeyEventHandler((event) => {
       const copyShortcut = event.type === "keydown"
         && (event.ctrlKey || event.metaKey)
@@ -239,6 +246,8 @@ function LiveContainerTerminal({
       globalThis.clearTimeout(connectTimer);
       if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame);
       observer?.disconnect();
+      host.removeEventListener("pointerdown", focusTerminal);
+      globalThis.removeEventListener("focus", focusTerminal);
       globalThis.removeEventListener("resize", fitTerminal);
       input.dispose();
       resize.dispose();
