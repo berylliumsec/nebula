@@ -85,7 +85,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
       <div className="page agents-page">
         {!embedded && <PageHeader
           title="Missions"
-          description="Supervise specialists, approvals, and mission limits."
+          description="Missions, agents, and approvals."
         />}
         <section className="mission-commandbar" aria-label="Mission controls">
           <div><Radio size={15} /><span><strong>{run ? "Mission control" : "No mission selected"}</strong><small>{run ? `Core status: ${run.status.replaceAll("_", " ")} · live feed ${streamState}` : "Start a mission to see its plan and live execution here."}</small></span></div>
@@ -125,7 +125,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
     <div className="page agents-page">
       {!embedded && <PageHeader
         title="Missions"
-        description="Supervise specialists, approvals, and mission limits."
+        description="Missions, agents, and approvals."
         actions={
           <>
             <StopMissionButton />
@@ -151,7 +151,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
 
       <div className="agent-layout">
         <section className="panel agent-graph-panel">
-          <header className="panel-header compact"><div><h2>Mission graph</h2><p>Dependencies and live execution state</p></div><GitBranch size={19} /></header>
+          <header className="panel-header compact"><div><h2>Mission graph</h2><p>Live dependencies</p></div><GitBranch size={19} /></header>
           <div className="agent-graph" aria-label="Agent mission dependency graph">
             <div className="graph-node supervisor"><span><Bot size={20} /></span><div><strong>Supervisor</strong><small>Routing and synthesis</small></div><em>running</em></div>
             <div className="graph-line vertical" />
@@ -170,7 +170,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
         </section>
 
         <section className="panel budget-panel">
-          <header className="panel-header compact"><div><h2>Mission guardrails</h2><p>Hard limits enforced by Core</p></div><ShieldCheck size={19} /></header>
+          <header className="panel-header compact"><div><h2>Guardrails</h2><p>Core-enforced limits</p></div><ShieldCheck size={19} /></header>
           <div className="budget-item"><div><span><DollarSign size={15} /> Model cost</span><strong>$18.42 / $50</strong></div><div className="progress-track small"><span style={{ width: "37%" }} /></div></div>
           <div className="budget-item"><div><span><Clock3 size={15} /> Duration</span><strong>1h 28m / 4h</strong></div><div className="progress-track small"><span style={{ width: "37%" }} /></div></div>
           <div className="budget-item"><div><span><Sparkles size={15} /> Tool calls</span><strong>86 / 250</strong></div><div className="progress-track small"><span style={{ width: "34%" }} /></div></div>
@@ -179,7 +179,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
       </div>
 
       <section className="agent-roster">
-        <div className="section-heading"><div><h2>Specialists</h2><p>Least-privilege tools and structured context</p></div></div>
+        <div className="section-heading"><div><h2>Specialists</h2><p>Scoped tools and context</p></div></div>
         <div className="agent-card-grid">
           {agents.map(({ name, detail, state, icon: Icon, tools }) => (
             <article className="agent-card" key={name}>

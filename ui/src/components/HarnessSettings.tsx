@@ -266,7 +266,7 @@ export function HarnessSettings() {
 
   return <>
     <section className="settings-section" id="harness-settings">
-      <div className="section-heading"><div><h2>Agent harnesses</h2><p>Stateful Codex and Claude runtimes shared by chat and missions.</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add harness</button></div>
+      <div className="section-heading"><div><h2>Agent harnesses</h2><p>Codex and Claude runtimes</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add harness</button></div>
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
       {harnesses.length ? <div className="provider-grid">{harnesses.map((profile) => <article className="panel provider-card integration-card" key={profile.id}>
         <header className="integration-card-heading"><span className={`status-dot ${profile.enabled ? profile.healthy ? "healthy" : "warning" : "unavailable"}`} /><div><small>{profile.kind === "codex_app_server" ? "Codex App Server" : "Claude Agent SDK"}</small><h3>{profile.name}</h3></div></header>
@@ -287,7 +287,7 @@ export function HarnessSettings() {
       </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex App Server or Claude Agent SDK when you want vendor-managed sessions.</p></div>}
     </section>
     <section className="settings-section" id="mcp-settings">
-      <div className="section-heading"><div><h2>MCP servers</h2><p>Core-owned profiles available to native agents, missions, Codex, and Claude. Schemas are frozen per turn/run and every result is captured as an artifact.</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openMcp()}><Plus size={16} /> Add MCP server</button></div>
+      <div className="section-heading"><div><h2>MCP servers</h2><p>Shared tools for agents and missions</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openMcp()}><Plus size={16} /> Add MCP server</button></div>
       {servers.length ? <div className="provider-grid">{servers.map((server) => <article className="panel provider-card integration-card" key={server.id}>
         <header className="integration-card-heading"><span className={`status-dot ${server.enabled ? server.checkedAt ? "healthy" : "warning" : "unavailable"}`} /><div><small>{server.transport === "stdio" ? "Trusted local program" : "Streamable HTTP"}</small><h3>{server.name}</h3></div></header>
         {server.transport === "stdio" && <p className="provider-dialog-note"><ShieldAlert size={14} /> Runs outside the automation-container boundary. Enable only after trusting this executable.</p>}

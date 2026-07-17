@@ -52,14 +52,14 @@ export function OverviewPage() {
         title={engagement?.name ?? "No project available"}
         description={run
             ? `${run.title} · ${run.status.replace("_", " ")}`
-            : "Project assets, findings, and mission progress at a glance."}
+            : "Project status at a glance."}
         actions={<NewMissionButton />}
       />
 
       {approvals.length > 0 && (
         <div className="callout approval-callout" role="status">
           <Clock3 size={19} aria-hidden="true" />
-          <div><strong>{approvals.length} approval{approvals.length === 1 ? "" : "s"} waiting</strong><p>Mission work is paused until an operator reviews the exact request and expected effects.</p></div>
+          <div><strong>{approvals.length} approval{approvals.length === 1 ? "" : "s"} waiting</strong><p>Mission paused for review.</p></div>
           <button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button>
         </div>
       )}
@@ -142,7 +142,7 @@ export function OverviewPage() {
               <p>{priorityFinding.evidenceCount} evidence record{priorityFinding.evidenceCount === 1 ? "" : "s"} · {priorityFinding.status.replace("_", " ")}</p>
               <Link to="/findings">Review finding <ArrowUpRight size={14} /></Link>
             </div>
-          ) : <div className="priority-finding empty"><strong>No findings recorded</strong><p>Candidate and verified findings will appear here.</p></div>}
+          ) : <div className="priority-finding empty"><strong>No findings yet</strong></div>}
         </section>
 
         <section className="panel coverage-panel">
@@ -163,7 +163,7 @@ export function OverviewPage() {
                 <strong>{value}%</strong>
               </div>
             ))}
-          </div> : <div className="coverage-empty"><strong>Waiting for mission records</strong><span>Coverage appears as Core records activity.</span></div>}
+          </div> : <div className="coverage-empty"><strong>No mission coverage yet</strong></div>}
         </section>
 
         <section className="panel policy-panel">

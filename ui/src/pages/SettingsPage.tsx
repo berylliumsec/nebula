@@ -476,7 +476,7 @@ export function SettingsPage() {
       <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); window.history.replaceState(null, "", `#${id}`); setSettingsSection(id); }}>{label}</a>)}</nav>
       <div className="settings-detail" data-section={settingsSection}>
       <section className="settings-section setup-overview" id="setup-settings">
-        <div className="section-heading"><div><h2>Ready to work</h2><p>Terminal works independently. Add a model only when you want the assistant.</p></div></div>
+        <div className="section-heading"><div><h2>Ready to work</h2><p>Models are optional.</p></div></div>
         <div className="setup-card-grid">
           <article className="panel setup-card">
             <header><span className={`status-dot ${setupStatus?.terminal.status === "ready" ? "healthy" : ["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{setupStatus?.terminal.status === "ready" ? "Ready" : setupStatus?.terminal.status === "detecting_runner" ? "Checking your runtime…" : setupStatus?.terminal.status === "preparing_image" ? "Preparing workstation…" : setupStatus?.terminal.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>
@@ -498,7 +498,7 @@ export function SettingsPage() {
       </section>
       <DiagnosticsPanel hidden={settingsSection !== "diagnostics-settings"} />
       <section className="settings-section" id="provider-settings">
-        <div className="section-heading"><div><h2>Model providers</h2><p>Configured provider profiles and their declared capabilities.</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
+        <div className="section-heading"><div><h2>Model providers</h2><p>Models and capabilities</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <DiagnosticErrorNotice error={providerActionError} fallback="The provider operation could not be completed." />}
         {providers.length > 0 ? (
           <div className="provider-grid">{providers.map((provider) => <ProviderHealthCard provider={provider} preview={previewMode} busy={providerBusy === provider.id} onRefresh={refreshProvider} onReverify={reverifyProvider} onEdit={openProviderEdit} onToggle={toggleProvider} onDelete={removeProvider} key={provider.id} />)}</div>
@@ -511,7 +511,7 @@ export function SettingsPage() {
       <RunnerSettings />
       <EngagementPolicySettings />
       <section className="settings-section" id="operator-settings">
-        <div className="section-heading"><div><h2>Local operator profiles</h2><p>Durable attribution for local activity. Profiles do not grant authentication or RBAC permissions.</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openOperator()}><Plus size={16} /> Add operator</button></div>
+        <div className="section-heading"><div><h2>Operator profiles</h2><p>Local activity attribution</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openOperator()}><Plus size={16} /> Add operator</button></div>
         {operatorError && <DiagnosticErrorNotice error={operatorError} fallback="The operator profile operation could not be completed." />}
         {operatorProfiles.length ? <div className="operator-profile-list">{operatorProfiles.map((profile) => <article className={profile.active ? "active" : undefined} key={profile.id}><span className="operator-profile-avatar">{profile.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "OP"}</span><div><h3 title={profile.displayName}>{profile.displayName}</h3><p title={`${profile.role || "Local operator"}${profile.email ? ` · ${profile.email}` : ""}`}>{profile.role || "Local operator"}{profile.email ? ` · ${profile.email}` : ""}</p></div>{profile.active ? <span className="operator-active"><Check size={13} /> Active</span> : <button className="button quiet" type="button" disabled={operatorBusy === profile.id} onClick={() => void activateOperator(profile)}>Activate</button>}<button className="icon-button subtle" type="button" aria-label={`Edit ${profile.displayName}`} disabled={operatorBusy === profile.id} onClick={() => openOperator(profile)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete ${profile.displayName}`} title={profile.active ? "Activate another profile before deleting this one" : operatorProfiles.length <= 1 ? "The last operator profile cannot be deleted" : "Delete operator profile"} disabled={operatorBusy === profile.id || profile.active || operatorProfiles.length <= 1} onClick={() => void removeOperator(profile)}><Trash2 size={14} /></button></article>)}</div> : <div className="empty-state compact"><UserRound size={23} /><strong>No durable operator profile</strong><p>Create a local profile so new evidence has explicit attribution and the workspace can show who is active.</p></div>}
       </section>
@@ -527,7 +527,7 @@ export function SettingsPage() {
         </section>
         <section className="panel secrets-panel" id="security-settings">
           <header className="panel-header compact"><div><h2>Credential references</h2><p>Secrets never enter agent context</p></div><KeyRound size={19} /></header>
-          <div className="empty-state compact"><KeyRound size={23} /><strong>Write-only by design</strong><p>Provider secrets entered here go to the operating-system credential vault; profiles retain only opaque references. Environment and session-only credentials remain available when needed.</p></div>
+          <div className="empty-state compact"><KeyRound size={23} /><strong>Write-only</strong><p>Secrets stay in the system vault.</p></div>
         </section>
         <ReleaseSettingsPanel />
       </div>

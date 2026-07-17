@@ -302,8 +302,8 @@ function LiveContainerTerminal({
       {error && <DiagnosticErrorNotice error={error} fallback="The terminal operation could not be completed." compact />}
       {managementError && <DiagnosticErrorNotice error={managementError} fallback="The terminal could not be stopped." compact />}
       {(auditWarningCount > 0 || auditHealthUnavailable) && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {auditHealthUnavailable ? "Terminal audit health is unavailable. Capture failures cannot be ruled out." : `${auditWarningCount} terminal audit warning${auditWarningCount === 1 ? "" : "s"} detected. Review Terminal Audit for classification, truncation, interruption, recovery, or persistence gaps.`}</p>}
-      <p className="terminal-audit-active"><ShieldCheck size={14} /> Selective audit active · command metadata is retained; merged PTY results are retained only for configured security tools.</p>
-      <p>Installed baseline: <code>kali-linux-headless</code> and <code>iputils-ping</code>. The official base is <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code>.</p>
+      <p className="terminal-audit-active"><ShieldCheck size={14} /> Selective audit active</p>
+      <p><code>kali-linux-headless</code> · <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code></p>
       <p className="terminal-network-warning"><AlertTriangle size={14} /> Bridge networking can reach the public Internet and any host-addressable service. No ports, raw-packet capabilities, host shell, or runtime socket are granted.</p>
     </div>
     <div className="xterm-shell" ref={hostRef} aria-label="Terminal output" />
@@ -353,7 +353,7 @@ function StartingTerminalPanel({
   return <div className="container-terminal-panel">
     <section className="container-terminal-intro">
       <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
-      <div><small>Kali shell</small><h2>Terminal {tab.ordinal}</h2><p>A fresh Kali Rolling container starts for <strong>{engagementName}</strong> as root with a writable disposable filesystem, unrestricted outbound networking, and the verified <code>kali-linux-headless</code> baseline. Additional packages disappear when the session closes, while <code>/workspace</code> is shared by this Project’s terminals.</p></div>
+      <div><small>Kali shell · {engagementName}</small><h2>Terminal {tab.ordinal}</h2><p><code>kali-linux-headless</code> · disposable · shared <code>/workspace</code></p></div>
       <span className="terminal-boundary"><AlertTriangle size={15} /> Root + network</span>
     </section>
     <section className="terminal-auto-start" aria-live="polite">
@@ -742,7 +742,7 @@ export function ContainerTerminalPanel({
     return <div className="container-terminal-panel">
       <section className="container-terminal-intro">
         <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
-        <div><small>Kali shell</small><h2>Terminal</h2><p>Project terminals run the verified <code>kali-linux-headless</code> baseline in independent disposable Kali containers and share the persistent <code>/workspace</code>.</p></div>
+        <div><small>Kali shell</small><h2>Terminal</h2><p><code>kali-linux-headless</code> · disposable · shared <code>/workspace</code></p></div>
         <span className="terminal-boundary"><AlertTriangle size={15} /> Root + network</span>
       </section>
       <section className="terminal-auto-start" aria-live="polite">
