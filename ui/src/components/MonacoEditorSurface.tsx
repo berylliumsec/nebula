@@ -95,6 +95,9 @@ export function MonacoEditorSurface({ active, filePath, onChange, onCursorChange
       cursorSmoothCaretAnimation: "off",
       cursorStyle: "line",
       cursorWidth: 2,
+      // WKWebView's native EditContext can lose the caret and reposition input
+      // while typing. Monaco's textarea path is stable across WebKit/Chromium.
+      editContext: false,
       fontFamily: "var(--mono)",
       fontSize: 13,
       lineHeight: 21,
