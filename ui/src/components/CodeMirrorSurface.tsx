@@ -1,7 +1,7 @@
-import { StreamLanguage, indentUnit, type LanguageSupport } from "@codemirror/language";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { bracketMatching, defaultHighlightStyle, indentOnInput, StreamLanguage, indentUnit, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
-import { basicSetup } from "codemirror";
+import { dropCursor, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 
 interface CodeMirrorSurfaceProps {
@@ -16,7 +16,8 @@ interface CodeMirrorSurfaceProps {
 export function languageLabelForPath(path: string): string {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   return ({
-    bash: "Shell", css: "CSS", go: "Go", htm: "HTML", html: "HTML", java: "Java",
+    bash: "Shell", c: "C", cc: "C++", cpp: "C++", css: "CSS", cxx: "C++",
+    go: "Go", h: "C header", hpp: "C++ header", htm: "HTML", html: "HTML", java: "Java",
     js: "JavaScript", cjs: "JavaScript", mjs: "JavaScript", jsx: "JavaScript",
     json: "JSON", md: "Markdown", py: "Python", rb: "Ruby", rs: "Rust", sh: "Shell",
     sql: "SQL", toml: "TOML", ts: "TypeScript", tsx: "TypeScript", yaml: "YAML",
@@ -45,17 +46,22 @@ async function languageForPath(path: string): Promise<Extension> {
   else if (extension === "rs") parser = (await import("@codemirror/legacy-modes/mode/rust")).rust;
   else if (extension === "java") parser = (await import("@codemirror/legacy-modes/mode/clike")).java;
   else if (extension === "rb") parser = (await import("@codemirror/legacy-modes/mode/ruby")).ruby;
+  else if (["c", "h", "cc", "cpp", "cxx", "hpp"].includes(extension)) {
+    const clike = await import("@codemirror/legacy-modes/mode/clike");
+    parser = ["c", "h"].includes(extension) ? clike.c : clike.cpp;
+  }
   return parser ? StreamLanguage.define(parser) : [];
 }
 
 const nebulaTheme = EditorView.theme({
-  "&": { height: "100%", color: "var(--text)", backgroundColor: "var(--canvas)", fontSize: "12px" },
-  ".cm-content": { caretColor: "var(--text-strong)", fontFamily: "var(--mono)", padding: "10px 0" },
+  "&": { width: "100%", height: "100%", color: "var(--text)", backgroundColor: "var(--canvas)", fontSize: "13px" },
+  ".cm-scroller": { overflow: "auto", fontFamily: "var(--mono)", lineHeight: "1.5" },
+  ".cm-content": { minHeight: "100%", caretColor: "var(--text-strong)", fontFamily: "inherit", padding: "10px 0", outline: "none" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text-strong)" },
   "&.cm-focused": { outline: "none" },
   ".cm-gutters": { color: "var(--muted)", backgroundColor: "var(--surface-muted)", borderRight: "1px solid var(--border-soft)" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "color-mix(in srgb, var(--blue-muted) 42%, transparent)" },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "color-mix(in srgb, var(--blue) 35%, transparent)" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": { borderRadius: "0", backgroundColor: "color-mix(in srgb, var(--blue) 35%, transparent)" },
   ".cm-panels": { color: "var(--text)", backgroundColor: "var(--surface-raised)" },
   ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
   ".cm-searchMatch": { backgroundColor: "var(--yellow-muted)", outline: "1px solid var(--yellow)" },
@@ -74,12 +80,37 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
 
   useEffect(() => {
     if (!hostRef.current) return;
+    const host = hostRef.current;
+    const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
+    root.replaceChildren();
+    const boundaryStyle = document.createElement("style");
+    boundaryStyle.textContent = `
+      :host { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+      .code-mirror-mount { display: flex; min-width: 0; min-height: 0; flex: 1 1 0; overflow: hidden; }
+      .code-mirror-mount > .cm-editor { min-width: 0; min-height: 0; flex: 1 1 0; }
+    `;
+    const mount = document.createElement("div");
+    mount.className = "code-mirror-mount";
+    root.append(boundaryStyle, mount);
     const view = new EditorView({
-      parent: hostRef.current,
+      parent: mount,
+      root,
       state: EditorState.create({
         doc: value,
         extensions: [
-          basicSetup,
+          // Do not use basicSetup/drawSelection here. Its synthetic cursor layer is
+          // positioned on the wrong line by macOS WKWebView after Enter key updates.
+          // The native contenteditable caret stays coupled to the browser selection.
+          lineNumbers(),
+          highlightActiveLineGutter(),
+          highlightSpecialChars(),
+          history(),
+          dropCursor(),
+          indentOnInput(),
+          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          bracketMatching(),
+          highlightActiveLine(),
+          keymap.of([...defaultKeymap, ...historyKeymap]),
           nebulaTheme,
           indentUnit.of("  "),
           languageRef.current.of([]),
@@ -96,7 +127,22 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
       }),
     });
     viewRef.current = view;
-    return () => { view.destroy(); viewRef.current = undefined; };
+    let measureFrame = 0;
+    const requestMeasurement = () => {
+      cancelAnimationFrame(measureFrame);
+      measureFrame = requestAnimationFrame(() => view.requestMeasure());
+    };
+    const resizeObserver = new ResizeObserver(requestMeasurement);
+    resizeObserver.observe(host);
+    void document.fonts.ready.then(() => { if (viewRef.current === view) requestMeasurement(); });
+    requestMeasurement();
+    return () => {
+      cancelAnimationFrame(measureFrame);
+      resizeObserver.disconnect();
+      view.destroy();
+      root.replaceChildren();
+      viewRef.current = undefined;
+    };
   }, []);
 
   useEffect(() => {
@@ -107,8 +153,13 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
 
   useEffect(() => {
     let cancelled = false;
+    const host = hostRef.current;
+    host?.removeAttribute("data-language-ready");
     void languageForPath(filePath).then((language: Extension | LanguageSupport) => {
-      if (!cancelled && viewRef.current) viewRef.current.dispatch({ effects: languageRef.current.reconfigure(language) });
+      if (!cancelled && viewRef.current) {
+        viewRef.current.dispatch({ effects: languageRef.current.reconfigure(language) });
+        host?.setAttribute("data-language-ready", filePath);
+      }
     });
     return () => { cancelled = true; };
   }, [filePath]);

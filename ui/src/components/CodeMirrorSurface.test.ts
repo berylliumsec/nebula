@@ -7,6 +7,8 @@ describe("CodeMirror language selection", () => {
     expect(languageLabelForPath("scripts/scan.sh")).toBe("Shell");
     expect(languageLabelForPath("frontend/view.tsx")).toBe("TypeScript");
     expect(languageLabelForPath("config/rules.yaml")).toBe("YAML");
+    expect(languageLabelForPath("src/main.c")).toBe("C");
+    expect(languageLabelForPath("src/worker.cpp")).toBe("C++");
     expect(languageLabelForPath("README.unknown")).toBe("Plain text");
   });
 });

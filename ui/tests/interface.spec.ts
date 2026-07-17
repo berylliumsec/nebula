@@ -635,44 +635,62 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 15_000 });
   await page.evaluate(() => document.fonts.ready);
   await page.getByRole("button", { name: "New file", exact: true }).first().click();
-  await page.getByRole("textbox", { name: "File path" }).fill("example.py");
+  const filePath = page.getByRole("textbox", { name: "File path" });
+  await filePath.evaluate((input: HTMLInputElement) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "example.c");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await expect(filePath).toHaveValue("example.c");
+  await expect(page.locator(".code-mirror-host")).toHaveAttribute("data-language-ready", "example.c");
 
   const inputSurface = page.getByRole("textbox", { name: "Code editor" });
   await inputSurface.click({ force: true });
   const editor = inputSurface.locator("..").locator("..");
-  await page.keyboard.insertText("import requests\n\ndef main():\n  return requests");
-  await expect(page.getByText("Python", { exact: true })).toBeVisible();
+  await page.keyboard.type("#include <stdio.h>", { delay: 10 });
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("int main(void) ", { delay: 10 });
+  await page.keyboard.insertText("{");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("  return 0;", { delay: 10 });
+  await page.keyboard.press("Enter");
+  await page.keyboard.insertText("}");
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("C", { exact: true })).toBeVisible();
 
-  await expect(page.locator(".cm-line").nth(3)).toContainText("return requests");
+  await expect(page.locator(".cm-line")).toHaveCount(5);
+  await expect(page.locator(".cm-line").nth(3)).toContainText("return 0;");
   const syntaxColors = await page.locator(".cm-line").nth(3).evaluate((line) => ({
     line: getComputedStyle(line).color,
     tokens: [...line.querySelectorAll("span")].map((token) => getComputedStyle(token).color),
   }));
   expect(syntaxColors.tokens.some((color) => color !== syntaxColors.line)).toBe(true);
   const geometry = await page.locator(".code-mirror-host").evaluate((host) => {
-    const line = host.querySelector(".cm-line")?.getBoundingClientRect();
-    const number = [...host.querySelectorAll<HTMLElement>(".cm-lineNumbers .cm-gutterElement")]
-      .find((element) => element.textContent === "1")?.getBoundingClientRect();
-    return { hostHeight: host.getBoundingClientRect().height, lineTop: line?.top, numberTop: number?.top };
+    const root = host.shadowRoot!;
+    const lines = [...root.querySelectorAll<HTMLElement>(".cm-line")].map((line) => line.getBoundingClientRect());
+    const numbers = [...root.querySelectorAll<HTMLElement>(".cm-lineNumbers .cm-gutterElement")]
+      .filter((element) => Number(element.textContent) > 0 && getComputedStyle(element).visibility !== "hidden")
+      .map((number) => number.getBoundingClientRect());
+    return {
+      hasShadowBoundary: Boolean(root),
+      hostHeight: host.getBoundingClientRect().height,
+      lineTops: lines.map((line) => line.top),
+      numberTops: numbers.map((number) => number.top),
+    };
   });
+  expect(geometry.hasShadowBoundary).toBe(true);
   expect(geometry.hostHeight).toBeGreaterThan(400);
-  expect(Math.abs((geometry.lineTop ?? 0) - (geometry.numberTop ?? 0))).toBeLessThan(2);
+  expect(geometry.lineTops).toHaveLength(5);
+  expect(geometry.numberTops).toHaveLength(5);
+  geometry.lineTops.forEach((lineTop, index) => expect(Math.abs(lineTop - geometry.numberTops[index])).toBeLessThan(2));
   await expect(editor).toHaveCSS("outline-style", "none");
   await expect(editor).toHaveCSS("border-top-width", "0px");
   await expect(editor).toHaveCSS("box-shadow", "none");
-
-  await editor.click({ force: true });
-  const caret = editor.locator(".cm-cursor-primary");
-  await expect(caret).toBeVisible();
-  const caretAlignment = await page.locator(".code-mirror-host").evaluate((host) => {
-    const lines = host.querySelectorAll<HTMLElement>(".cm-line");
-    const caret = host.querySelector<HTMLElement>(".cm-cursor-primary");
-    const caretRect = caret?.getBoundingClientRect();
-    const lineRect = lines[3]?.getBoundingClientRect();
-    return { caretTop: caretRect?.top, caretBottom: caretRect?.bottom, lineTop: lineRect?.top, lineBottom: lineRect?.bottom };
-  });
-  expect(caretAlignment.caretTop ?? 0).toBeGreaterThanOrEqual((caretAlignment.lineTop ?? 0) - 1);
-  expect(caretAlignment.caretBottom ?? 0).toBeLessThanOrEqual((caretAlignment.lineBottom ?? 0) + 1);
+  await expect(inputSurface).toHaveCSS("outline-style", "none");
+  await expect(inputSurface).toHaveCSS("box-shadow", "none");
+  await expect(inputSurface).not.toHaveCSS("caret-color", "rgba(0, 0, 0, 0)");
+  await expect(page.getByText("Ln 5, Col 2", { exact: true })).toBeVisible();
+  await expect(editor.locator(".cm-cursor-primary")).toHaveCount(0);
 });
 
 test("settings shows the live Kali preparation stage instead of a passive runtime check", async ({ page }) => {

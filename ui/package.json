@@ -17,6 +17,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.11",
     "@codemirror/lang-javascript": "^6.2.5",
@@ -31,7 +32,6 @@
     "@tauri-apps/api": "^2.11.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "codemirror": "^6.0.2",
     "lucide-react": "^1.24.0",
     "prism-react-renderer": "^2.4.1",
     "react": "^19.2.7",
