@@ -267,8 +267,9 @@ class ContainerRuntimeSession(RuntimeBackendSession):
 
     _PROCESS_WRAPPER = (
         "import os,sys;"
-        "os.setsid();"
-        "open(sys.argv[1],'w',encoding='ascii').write(str(os.getpid()));"
+        "pid=os.getpid();"
+        "os.setpgid(0,0) if os.getpgrp()!=pid else None;"
+        "open(sys.argv[1],'w',encoding='ascii').write(str(os.getpgrp()));"
         "os.execv('/bin/bash',['/bin/bash','--noprofile','--norc','-c',sys.argv[2]])"
     )
 
@@ -1234,7 +1235,9 @@ class AutomationRuntimeManager:
                     "nameserver 127.0.0.53\noptions attempts:1 timeout:2\n",
                     encoding="ascii",
                 )
-                resolver_file.chmod(0o600)
+                # The file contains only the loopback resolver address and must
+                # be readable by the non-root process inside the container.
+                resolver_file.chmod(0o644)
             try:
                 backend = await self.session_factory(
                     SessionLaunch(
@@ -1248,7 +1251,7 @@ class AutomationRuntimeManager:
                         egress_rules=tuple(rules),
                         egress_domains=tuple(domains),
                         egress_ports=tuple(scope.allowed_ports)
-                        if scope is not None
+                        if scope is not None and domains
                         else (),
                         resolv_conf=resolver_file,
                         network_granted=session.network_granted,
@@ -1621,7 +1624,7 @@ async def _communicate(
         process.kill()
         await process.wait()
         raise AutomationRuntimeUnavailable("container runtime operation timed out")
-    return stdout[:2_000_000], stderr[:2_000_000]
+    return (stdout or b"")[:2_000_000], (stderr or b"")[:2_000_000]
 
 
 def _dedupe_rules(rules: list[EgressRule]) -> list[EgressRule]:

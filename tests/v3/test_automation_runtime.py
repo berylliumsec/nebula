@@ -13,6 +13,7 @@ from nebula.v3.automation_runtime import (
     AutomationRuntimeManager,
     AutomationPolicyDenied,
     CommandApprovalRequired,
+    ContainerRuntimeSession,
     ProcessIORequest,
     RunCommandRequest,
     RuntimeBackendProcess,
@@ -202,6 +203,45 @@ def test_general_command_reuses_session_and_persists_artifacts(tmp_path):
         closed = await manager.close_session(first.session_id)
         assert closed.status == AutomationSessionStatus.CLOSED
         assert sessions[0].closed is True
+
+    asyncio.run(scenario())
+
+
+def test_process_wrapper_accepts_an_existing_process_group(tmp_path):
+    async def scenario():
+        pid_file = tmp_path / "process.pid"
+        process = await asyncio.create_subprocess_exec(
+            "/usr/bin/python3",
+            "-c",
+            ContainerRuntimeSession._PROCESS_WRAPPER,
+            str(pid_file),
+            "printf wrapper-ok",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        stdout, stderr = await process.communicate()
+
+        assert process.returncode == 0, stderr.decode()
+        assert stdout == b"wrapper-ok"
+        assert int(pid_file.read_text(encoding="ascii")) > 1
+
+    asyncio.run(scenario())
+
+
+def test_communicate_accepts_discarded_stderr():
+    async def scenario():
+        process = await asyncio.create_subprocess_exec(
+            "/usr/bin/python3",
+            "-c",
+            "import sys; print('output'); print('discarded', file=sys.stderr)",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, stderr = await automation_runtime._communicate(process, timeout=5)
+
+        assert stdout == b"output\n"
+        assert stderr == b""
 
     asyncio.run(scenario())
 
@@ -564,6 +604,73 @@ def test_network_request_fails_closed_when_disabled_or_scope_is_url_only(tmp_pat
                 owner_id="url-only-network",
                 request=request,
             )
+
+    asyncio.run(scenario())
+
+
+def test_cidr_only_scope_keeps_ports_on_cidr_rules(tmp_path):
+    async def scenario():
+        manager, _store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        launches = []
+
+        async def launch(configuration):
+            launches.append(configuration)
+            return FakeSession(
+                network_granted=configuration.network_granted,
+                workspace=configuration.workspace,
+            )
+
+        manager.session_factory = launch
+        await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="api",
+            owner_id="cidr-only",
+            request=RunCommandRequest(command="pwd", network="none"),
+        )
+
+        assert len(launches) == 1
+        assert launches[0].egress_domains == ()
+        assert launches[0].egress_ports == ()
+        assert [(rule.address, rule.ports) for rule in launches[0].egress_rules] == [
+            ("203.0.113.0/24", [443])
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_domain_scope_resolver_is_readable_by_the_non_root_runtime(tmp_path):
+    async def scenario():
+        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        store.update(
+            ScopePolicy,
+            scope.id,
+            {"allowed_cidrs": [], "allowed_domains": ["example.test"]},
+            expected_revision=scope.revision,
+        )
+        launches = []
+
+        async def launch(configuration):
+            launches.append(configuration)
+            return FakeSession(
+                network_granted=configuration.network_granted,
+                workspace=configuration.workspace,
+            )
+
+        manager.session_factory = launch
+        await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="api",
+            owner_id="domain-scope",
+            request=RunCommandRequest(command="pwd", network="none"),
+        )
+
+        resolver = launches[0].resolv_conf
+        assert resolver is not None
+        assert resolver.stat().st_mode & 0o777 == 0o644
+        assert resolver.read_text(encoding="ascii").startswith(
+            "nameserver 127.0.0.53\n"
+        )
 
     asyncio.run(scenario())
 

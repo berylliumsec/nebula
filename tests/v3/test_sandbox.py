@@ -118,7 +118,11 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
         network=SandboxNetwork.SCOPED,
         network_name="nebula-scope-eng-1",
         pinned_hosts={"target.example.test": "10.20.30.40"},
-        environment={"LANG": "C.UTF-8"},
+        environment={
+            "HOME": "/tmp",
+            "LANG": "C.UTF-8",
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+        },
     )
     workspace = runner._validate(request)
     argv = runner._argv(request, workspace)
@@ -132,6 +136,8 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
     assert "--user=65532:65532" in argv
     assert "--network=nebula-scope-eng-1" in argv
     assert "--add-host=target.example.test:10.20.30.40" in argv
+    assert "HOME=/tmp" in argv
+    assert "PATH=/usr/local/bin:/usr/bin:/bin" in argv
     assert argv[-4:] == [DIGEST_IMAGE, "nmap", "-sV", "10.20.30.40"]
     assert all(value not in {"sh", "-c", "/bin/sh"} for value in argv[:-4])
 

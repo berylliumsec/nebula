@@ -1028,10 +1028,12 @@ class ContainerSandboxRunner(SandboxRunner):
         self.egress_controller = egress_controller or NoEgressController()
         self.allow_unpinned_images = allow_unpinned_images
         self.allowed_environment = allowed_environment or {
+            "HOME",
             "HISTFILE",
             "LANG",
             "LC_ALL",
             "NEBULA_OUTPUT_DIR",
+            "PATH",
             "TZ",
             "TERM",
             "NO_COLOR",
