@@ -849,11 +849,17 @@ def test_human_terminal_rejects_missing_malformed_or_unsafe_tool_manifests(
 
 def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    progress = []
+
+    async def on_progress(detail):
+        progress.append(detail)
+
     preparer = ContainerImagePreparer(
         runner=runner,
         platform="linux/amd64",
         source_reference="docker.io/kalilinux/kali-rolling:latest",
         expected_repository="docker.io/kalilinux/kali-rolling",
+        on_progress=on_progress,
     )
     calls = []
     dockerfiles = []
@@ -918,6 +924,13 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
     assert image.refreshed is True
     assert image.base_digest == "sha256:" + "e" * 64
     assert image.digest == "sha256:" + "d" * 64
+    assert progress == [
+        "Checking Docker and the local Kali image cache.",
+        "Downloading the official Kali base image.",
+        "Verifying the downloaded Kali base image.",
+        "Building the Kali runtime and installing its tools.",
+        "Verifying the Kali runtime, tools, and metadata.",
+    ]
     build = next(call for call in calls if call[0][0] == "build")
     assert build[0][1] == "--platform=linux/amd64"
     assert build[0][2] == "--pull=false"

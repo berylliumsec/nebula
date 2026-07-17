@@ -908,8 +908,27 @@ class SetupService:
                 terminal_state=TerminalSetupState.PREPARING_IMAGE,
             )
             self._emit(SetupEventReason.IMAGE_PREPARATION_PROGRESS)
+
+            async def report_progress(detail: str) -> None:
+                if self._image_preparation.operation_id != operation_id:
+                    return
+                progressing = self._image_preparation.model_copy(
+                    update={
+                        "phase": ImagePreparationPhase.PREPARING_IMAGE,
+                        "progress_percent": None,
+                        "progress_indeterminate": True,
+                        "detail": detail,
+                    }
+                )
+                self._transition_preparation(
+                    progressing,
+                    terminal_state=TerminalSetupState.PREPARING_IMAGE,
+                )
+                self._emit(SetupEventReason.IMAGE_PREPARATION_PROGRESS)
+
             resolution = await self.tool_platform.resolve_human_terminal_runtime(
-                project_id
+                project_id,
+                on_progress=report_progress,
             )
             image = resolution.image
             ready = self._image_preparation.model_copy(

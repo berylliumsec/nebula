@@ -12,7 +12,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Awaitable, Callable, Literal, cast
 
 from .artifacts import ArtifactStore
 from .diagnostics import gather_diagnostic, record_caught_exception
@@ -224,7 +224,10 @@ class RuntimePlatform:
         )
 
     async def resolve_human_terminal_runtime(
-        self, engagement_id: str
+        self,
+        engagement_id: str,
+        *,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> HumanTerminalRuntimeResolution:
         """Prepare and return the one Kali image shared with agent automation."""
 
@@ -245,6 +248,7 @@ class RuntimePlatform:
                             ),
                             source_reference=self.kali_source_image,
                             expected_repository=self.kali_repository,
+                            on_progress=on_progress,
                         ).prepare()
                     except (SandboxError, ValueError) as exc:
                         record_caught_exception(

@@ -452,9 +452,11 @@ def test_image_preparation_reports_phases_can_cancel_and_retry(tmp_path, monkeyp
     second_release = asyncio.Event()
     calls = 0
 
-    async def resolve(project_id):
+    async def resolve(project_id, *, on_progress=None):
         nonlocal calls
         assert project_id == project.id
+        if on_progress is not None:
+            await on_progress("Downloading the official Kali base image.")
         calls += 1
         if calls == 1:
             raise RuntimePlatformError("image registry is unavailable")
@@ -532,7 +534,13 @@ def test_image_preparation_reports_phases_can_cancel_and_retry(tmp_path, monkeyp
     assert ready.terminal.image_preparation.progress_percent == 100
     assert ready.terminal.status == "ready"
     reasons = [event.reason.value for event in service.replay_events(0).events]
+    progress_details = [
+        event.snapshot.terminal.image_preparation.detail
+        for event in service.replay_events(0).events
+        if event.reason.value == "image_preparation_progress"
+    ]
     assert "image_preparation_progress" in reasons
+    assert "Downloading the official Kali base image." in progress_details
     assert "image_preparation_error" in reasons
     assert "image_preparation_cancelling" in reasons
     assert "image_preparation_cancelled" in reasons
@@ -556,7 +564,9 @@ def test_setup_control_api_and_sse_are_authenticated_and_path_closed(
     store = NebulaStore(tmp_path / "setup-api.db")
     platform = _platform(tmp_path, store)
 
-    async def resolve(_project_id):
+    async def resolve(_project_id, *, on_progress=None):
+        if on_progress is not None:
+            await on_progress("Verifying the prepared Kali runtime image.")
         return SimpleNamespace(
             image=SimpleNamespace(
                 digest="sha256:" + "b" * 64,

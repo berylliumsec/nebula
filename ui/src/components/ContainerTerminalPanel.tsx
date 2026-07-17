@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import { ContainerTerminalSocket, type ContainerTerminalSocketState } from "../api/containerTerminal";
+import { ContainerTerminalSocket, type ContainerTerminalExit, type ContainerTerminalSocketState } from "../api/containerTerminal";
 import type {
   ContainerTerminalCapacity,
   ContainerTerminalRequest,
@@ -65,7 +65,7 @@ interface LiveTerminalTab {
   session: ContainerTerminalSession;
   runtime: ContainerTerminalRuntimeSnapshot;
   socketState: ContainerTerminalSocketState;
-  exit?: { outcome: string; exitCode?: number };
+  exit?: ContainerTerminalExit;
   error?: string;
 }
 
@@ -119,7 +119,7 @@ function LiveContainerTerminal({
   capturedBy?: string;
   engagementId: string;
   managementError?: string;
-  onExit: (result: { outcome: string; exitCode?: number }) => void;
+  onExit: (result: ContainerTerminalExit) => void;
   onNewTerminal: () => void;
   onSocketState: (state: ContainerTerminalSocketState) => void;
   onUploadEvidence?: (request: EvidenceUploadRequest) => Promise<EvidenceSummary>;
@@ -136,7 +136,7 @@ function LiveContainerTerminal({
   const socketRef = useRef<ContainerTerminalSocket | undefined>(undefined);
   const [state, setState] = useState<ContainerTerminalSocketState>("connecting");
   const [error, setError] = useState<string>();
-  const [exit, setExit] = useState<{ outcome: string; exitCode?: number }>();
+  const [exit, setExit] = useState<ContainerTerminalExit>();
 
   useEffect(() => {
     const host = hostRef.current;
@@ -213,6 +213,7 @@ function LiveContainerTerminal({
       onError: (_code, detail) => setError(detail),
       onExit: (result) => {
         setExit(result);
+        if (result.detail) setError(result.detail);
         onExit(result);
       },
     });
@@ -275,6 +276,7 @@ function LiveContainerTerminal({
     + (auditHealth?.auditGapCount ?? 0)
     + (auditHealth?.classificationFailureCount ?? 0);
 
+  const failedExit = exit?.outcome === "failed" || exit?.outcome === "disconnected";
   const statusLabel = exit
     ? exit.outcome.replaceAll("_", " ")
     : state === "ready"
@@ -285,7 +287,7 @@ function LiveContainerTerminal({
 
   return <div className="container-terminal-live">
     <header>
-      <div><span className={`status-dot ${state === "ready" ? "healthy" : state === "error" ? "unavailable" : "warning"}`} /><span><strong>{statusLabel}</strong><small>Unrestricted outbound · root · writable · Kali headless <code title={`${runtime.image}\nOfficial base: ${runtime.baseImage}`}>{runtime.imageDigest.slice(0, 19)}…</code></small></span></div>
+      <div><span className={`status-dot ${failedExit || state === "error" ? "unavailable" : state === "ready" ? "healthy" : "warning"}`} /><span><strong>{statusLabel}</strong><small>Unrestricted outbound · root · writable · Kali headless <code title={`${runtime.image}\nOfficial base: ${runtime.baseImage}`}>{runtime.imageDigest.slice(0, 19)}…</code></small></span></div>
       <div className="terminal-header-actions">
         <TerminalScreenshotAction
           capturedBy={capturedBy}
@@ -372,7 +374,7 @@ function StartingTerminalPanel({
 
 function tabStatus(tab: TerminalTab): "healthy" | "warning" | "unavailable" | "muted" {
   if (tab.kind === "starting") return tab.error ? "unavailable" : "warning";
-  if (tab.exit) return "muted";
+  if (tab.exit) return ["failed", "disconnected"].includes(tab.exit.outcome) ? "unavailable" : "muted";
   if (tab.socketState === "ready") return "healthy";
   if (tab.socketState === "error" || tab.error) return "unavailable";
   return "warning";

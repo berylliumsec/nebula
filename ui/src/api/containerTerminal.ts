@@ -11,6 +11,8 @@ export type ContainerTerminalSocketState =
   | "error";
 
 export interface ContainerTerminalExit {
+  detail?: string;
+  errorCode?: string;
   exitCode?: number;
   outcome: string;
 }
@@ -263,6 +265,8 @@ export class ContainerTerminalSocket {
       }
       this.setState("closed");
       this.options.onExit?.({
+        detail: typeof value.detail === "string" ? value.detail : undefined,
+        errorCode: typeof value.error_code === "string" ? value.error_code : undefined,
         exitCode: typeof value.exit_code === "number" ? value.exit_code : undefined,
         outcome: typeof value.outcome === "string" ? value.outcome : "completed",
       });

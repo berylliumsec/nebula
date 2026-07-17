@@ -3170,24 +3170,16 @@ def create_app(
                         continue
                     if not isinstance(event, ContainerTerminalExit):
                         raise RuntimeError("unsupported terminal broker event")
+                    exit_frame: dict[str, object] = {
+                        "type": "exit",
+                        "exit_code": event.exit_code,
+                        "outcome": event.outcome,
+                    }
                     if event.error_code is not None:
-                        await websocket.send_json(
-                            stream_error_frame(
-                                feature="terminal",
-                                code=event.error_code,
-                                detail=event.detail or "terminal session ended",
-                                retryable=False,
-                                request_id=request_id,
-                                session_id=session_id,
-                            )
-                        )
-                    await websocket.send_json(
-                        {
-                            "type": "exit",
-                            "exit_code": event.exit_code,
-                            "outcome": event.outcome,
-                        }
-                    )
+                        exit_frame["error_code"] = event.error_code
+                    if event.detail is not None:
+                        exit_frame["detail"] = event.detail
+                    await websocket.send_json(exit_frame)
                     return
 
             async def receive_input() -> str:

@@ -891,7 +891,12 @@ async def test_terminal_process_exit_is_delivered_and_cleans_up(tmp_path):
         ContainerTerminalOutput(2, b"still buffered")
     )
     terminal = await asyncio.wait_for(service.next_event(attachment), timeout=1)
-    assert terminal == ContainerTerminalExit(outcome="completed", exit_code=23)
+    assert terminal == ContainerTerminalExit(
+        outcome="failed",
+        exit_code=23,
+        error_code="terminal_exit_nonzero",
+        detail="terminal container exited with status 23",
+    )
     await asyncio.sleep(0)
     assert process.closed == 1
     assert service.workspace_lock(engagement.id).locked() is False
@@ -983,7 +988,9 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
             assert terminal == {
                 "type": "exit",
                 "exit_code": 7,
-                "outcome": "completed",
+                "outcome": "failed",
+                "error_code": "terminal_exit_nonzero",
+                "detail": "terminal container exited with status 7",
             }
     assert runner.processes[0].closed == 1
 
@@ -1408,7 +1415,9 @@ def test_terminal_stream_strips_split_markers_and_persists_audited_result(
                 assert message == {
                     "type": "exit",
                     "exit_code": 7,
-                    "outcome": "completed",
+                    "outcome": "failed",
+                    "error_code": "terminal_exit_nonzero",
+                    "detail": "terminal container exited with status 7",
                 }
                 break
 

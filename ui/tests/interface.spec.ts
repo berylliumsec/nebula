@@ -639,6 +639,45 @@ test("the code editor highlights Python without drawing a focus box around the c
   await expect(page.locator(".cm-tooltip-autocomplete")).toContainText("requests");
 });
 
+test("settings shows the live Kali preparation stage instead of a passive runtime check", async ({ page }) => {
+  await page.route("**/api/v1/setup/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        core: { status: "ready", detail: null },
+        scratch_project_id: "scratch-project",
+        terminal: {
+          status: "preparing_image",
+          runner_profile_id: "local",
+          candidates: [],
+          image_preparation: {
+            phase: "preparing_image",
+            operation_id: "00000000-0000-4000-8000-000000000001",
+            project_id: "scratch-project",
+            progress_percent: null,
+            progress_indeterminate: true,
+            can_cancel: true,
+            can_retry: false,
+            detail: "Downloading the official Kali base image.",
+          },
+          detail: "Downloading the official Kali base image.",
+        },
+        assistant: { status: "needs_model", provider_profile_id: null, detail: null },
+      }),
+    });
+  });
+
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Preparing Kali runtime…" })).toBeVisible();
+  await expect(page.locator("#setup-settings").getByText("Downloading the official Kali base image.")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "Kali runtime preparation progress" })).toHaveAttribute(
+    "aria-valuetext",
+    "Downloading the official Kali base image.",
+  );
+  await expect(page.getByRole("button", { name: "Preparing Kali…" })).toBeDisabled();
+});
+
 test("the populated finding editor stays contained and accessible", async ({ page }) => {
   const finding = {
     ...entity,

@@ -1164,6 +1164,7 @@ kbd { font-size: 11px; }
 .setup-card h3 { margin: 0; font-size: 15px; }
 .setup-card p { margin: 0; color: var(--muted-strong); font-size: 12px; line-height: 1.5; }
 .setup-card > .button { justify-self: start; margin-top: auto; }
+.setup-preparation-progress { width: 100%; margin-top: 0; }
 .setup-runtime-options { display: grid; gap: 7px; }
 .setup-runtime-options article { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); }
 .setup-runtime-options article > span { display: grid; min-width: 0; gap: 2px; }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ContainerTerminalSocket } from "./containerTerminal";
+import { ContainerTerminalSocket, type ContainerTerminalExit } from "./containerTerminal";
 
 class MockTerminalWebSocket extends EventTarget {
   static instance?: MockTerminalWebSocket;
@@ -38,7 +38,7 @@ describe("ContainerTerminalSocket", () => {
   it("keeps auth and the one-use ticket out of the URL and decodes raw output", () => {
     const states: string[] = [];
     const output: Uint8Array[] = [];
-    const exits: Array<{ outcome: string; exitCode?: number }> = [];
+    const exits: ContainerTerminalExit[] = [];
     const socket = new ContainerTerminalSocket({
       apiBaseUrl: "https://nebula.test/api/v1",
       token: "secret-token",
@@ -79,8 +79,13 @@ describe("ContainerTerminalSocket", () => {
       { type: "resize", columns: 120, rows: 40 },
     ]);
 
-    transport.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "exit", exit_code: 7, outcome: "completed" }) }));
-    expect(exits).toEqual([{ exitCode: 7, outcome: "completed" }]);
+    transport.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "exit", exit_code: 7, outcome: "failed", error_code: "terminal_exit_nonzero", detail: "terminal container exited with status 7" }) }));
+    expect(exits).toEqual([{
+      detail: "terminal container exited with status 7",
+      errorCode: "terminal_exit_nonzero",
+      exitCode: 7,
+      outcome: "failed",
+    }]);
     transport.close();
     expect(exits).toHaveLength(1);
   });

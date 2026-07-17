@@ -1883,6 +1883,7 @@ class ContainerImagePreparer:
         expected_repository: str,
         pull_timeout_seconds: int = 900,
         build_timeout_seconds: int = 3600,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         if platform not in {"linux/amd64", "linux/arm64"}:
             raise ValueError(
@@ -1931,8 +1932,14 @@ class ContainerImagePreparer:
         )
         self.pull_timeout_seconds = pull_timeout_seconds
         self.build_timeout_seconds = build_timeout_seconds
+        self.on_progress = on_progress
+
+    async def _progress(self, detail: str) -> None:
+        if self.on_progress is not None:
+            await self.on_progress(detail)
 
     async def prepare(self) -> PreparedContainerImage:
+        await self._progress("Checking Docker and the local Kali image cache.")
         available, detail = await self.runner.available()
         if not available:
             raise SandboxUnavailable(detail)
@@ -1944,6 +1951,7 @@ class ContainerImagePreparer:
                 derived_tag, cached_base.resolved_reference
             )
             if cached_derived is not None:
+                await self._progress("Verified the cached Kali runtime image.")
                 return self._prepared_result(
                     cached_base,
                     cached_derived,
@@ -1960,6 +1968,7 @@ class ContainerImagePreparer:
                 prefix="using a verified cached official base image; ",
             )
 
+        await self._progress("Downloading the official Kali base image.")
         pull_detail: str | None = None
         try:
             stdout, stderr, return_code = await self._runtime_command(
@@ -1988,6 +1997,7 @@ class ContainerImagePreparer:
                 f"({cached_base_detail})"
             )
 
+        await self._progress("Verifying the downloaded Kali base image.")
         base = await self._verified_base(required=True)
         assert base is not None
         derived_tag = self._derived_tag(base.digest)
@@ -1995,6 +2005,7 @@ class ContainerImagePreparer:
             derived_tag, base.resolved_reference
         )
         if cached_derived is not None:
+            await self._progress("Verified the prepared Kali runtime image.")
             return self._prepared_result(
                 base,
                 cached_derived,
@@ -2375,6 +2386,7 @@ class ContainerImagePreparer:
         refreshed: bool,
         prefix: str,
     ) -> PreparedContainerImage:
+        await self._progress("Building the Kali runtime and installing its tools.")
         build_detail: str | None = None
         try:
             stdout, stderr, return_code = await self._build_derived_image(
@@ -2393,6 +2405,7 @@ class ContainerImagePreparer:
                 stage="sandbox",
             )
             build_detail = str(exc)[-1000:]
+        await self._progress("Verifying the Kali runtime, tools, and metadata.")
         try:
             derived = await self._verified_derived(
                 derived_tag, base.resolved_reference, required=True

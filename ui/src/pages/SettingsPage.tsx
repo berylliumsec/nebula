@@ -431,6 +431,9 @@ export function SettingsPage() {
     setCheckingTerminal(true);
     setSetupError(undefined);
     try {
+      if (api && ["error", "cancelled"].includes(setupStatus?.terminal.imagePreparation.phase ?? "")) {
+        await api.retrySetupImage(setupStatus?.scratchProjectId);
+      }
       await refreshSetupRuntime();
     } catch (error) {
       void logCaughtDiagnostic("interface.settings_page.caught_failure_09", "A handled interface operation failed.", error, "settings_page");
@@ -469,6 +472,11 @@ export function SettingsPage() {
   const moreProviderCatalog = providerCatalog.filter(
     (entry) => !primaryProviderFlavors.includes(entry.flavor),
   );
+  const imagePreparation = setupStatus?.terminal.imagePreparation;
+  const imagePreparationActive = setupStatus?.terminal.status === "preparing_image";
+  const imagePreparationFailed = imagePreparation?.phase === "error" || imagePreparation?.phase === "cancelled";
+  const imagePreparationIndeterminate = imagePreparation?.progressIndeterminate === true
+    || imagePreparation?.progressPercent === undefined;
   return (
     <div className="page settings-page">
       <PageHeader title="Settings" description="Workspace preferences." />
@@ -479,10 +487,19 @@ export function SettingsPage() {
         <div className="section-heading"><div><h2>Ready to work</h2><p>Models are optional.</p></div></div>
         <div className="setup-card-grid">
           <article className="panel setup-card">
-            <header><span className={`status-dot ${setupStatus?.terminal.status === "ready" ? "healthy" : ["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{setupStatus?.terminal.status === "ready" ? "Ready" : setupStatus?.terminal.status === "detecting_runner" ? "Checking your runtime…" : setupStatus?.terminal.status === "preparing_image" ? "Preparing workstation…" : setupStatus?.terminal.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>
+            <header><span className={`status-dot ${setupStatus?.terminal.status === "ready" ? "healthy" : ["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{setupStatus?.terminal.status === "ready" ? "Kali runtime ready" : setupStatus?.terminal.status === "detecting_runner" ? "Checking Docker or Podman…" : imagePreparationActive ? "Preparing Kali runtime…" : imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : setupStatus?.terminal.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>
             <p>{setupStatus?.terminal.detail ?? (setupStatus?.terminal.status === "ready" ? "A verified local container runtime is ready for project terminals." : "Nebula checks trusted local Docker and Podman installations automatically.")}</p>
+            {imagePreparationActive && <div
+              className={`terminal-start-progress setup-preparation-progress${imagePreparationIndeterminate ? " indeterminate" : ""}`}
+              role="progressbar"
+              aria-label="Kali runtime preparation progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={imagePreparationIndeterminate ? undefined : imagePreparation?.progressPercent}
+              aria-valuetext={setupStatus?.terminal.detail ?? "Preparing Kali runtime"}
+            ><span style={imagePreparationIndeterminate ? undefined : { width: `${imagePreparation?.progressPercent}%` }} /></div>}
             {setupStatus?.terminal.candidates.length ? <div className="setup-runtime-options" aria-label="Local container runtime choices">{setupStatus.terminal.candidates.map((candidate) => <article key={`${candidate.runtime}-${candidate.executable}`}><span><strong>{candidate.name}</strong><small>{candidate.runtime} · {candidate.platform} · {candidate.healthy ? "ready" : candidate.detail ?? "unavailable"}</small></span>{candidate.candidateId && candidate.healthy && candidate.runnerProfileId !== setupStatus.terminal.runnerProfileId ? <button className="button quiet" type="button" disabled={Boolean(selectingRuntime)} onClick={() => candidate.candidateId && void selectRuntime(candidate.candidateId)}>{selectingRuntime === candidate.candidateId ? "Selecting…" : "Use"}</button> : candidate.runnerProfileId === setupStatus.terminal.runnerProfileId ? <small><Check size={13} /> Selected</small> : null}</article>)}</div> : null}
-            <button className="button secondary" type="button" disabled={checkingTerminal || workspaceState === "starting" || workspaceState === "failed"} onClick={() => void checkTerminalSetup()}><RefreshCw className={checkingTerminal ? "spin" : undefined} size={15} /> {checkingTerminal ? "Checking…" : "Check again"}</button>
+            <button className="button secondary" type="button" disabled={checkingTerminal || imagePreparationActive || workspaceState === "starting" || workspaceState === "failed"} onClick={() => void checkTerminalSetup()}><RefreshCw className={checkingTerminal || imagePreparationActive ? "spin" : undefined} size={15} /> {imagePreparationActive ? "Preparing Kali…" : checkingTerminal ? imagePreparationFailed ? "Retrying…" : "Checking…" : imagePreparationFailed ? "Retry preparation" : "Check again"}</button>
           </article>
           <article className="panel setup-card">
             <header><span className={`status-dot ${setupStatus?.assistant.status === "configured" || providers.length ? "healthy" : "warning"}`} /><div><small>Assistant · optional</small><h3>{setupStatus?.assistant.status === "configured" || providers.length ? "Model connected" : "No model connected"}</h3></div></header>

@@ -1550,11 +1550,27 @@ class ContainerTerminalService:
                         stage="container_terminal",
                     )
                     pass
-            await self.finish(
-                session_id,
-                outcome="completed",
-                exit_code=exit_code,
-            )
+            if exit_code == 0:
+                await self.finish(
+                    session_id,
+                    outcome="completed",
+                    exit_code=exit_code,
+                )
+            else:
+                detail = (
+                    f"terminal container stopped by signal {-exit_code}"
+                    if exit_code < 0
+                    else f"terminal container exited with status {exit_code}"
+                )
+                await self.finish(
+                    session_id,
+                    outcome="failed",
+                    exit_code=exit_code,
+                    error_code=(
+                        "terminal_signal" if exit_code < 0 else "terminal_exit_nonzero"
+                    ),
+                    detail=detail,
+                )
         except asyncio.CancelledError as caught_error:
             record_caught_exception(
                 "terminal",
