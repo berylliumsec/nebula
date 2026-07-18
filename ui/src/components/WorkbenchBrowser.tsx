@@ -54,6 +54,7 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
   const [capabilities, setCapabilities] = useState<BrowserCapabilities>();
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(tabs);
   const activeRef = useRef(activeId);
@@ -68,7 +69,8 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
     const rect = surfaceRef.current?.getBoundingClientRect();
     if (!rect) return undefined;
     const x = Math.max(0, rect.left);
-    const y = Math.max(0, rect.top);
+    const toolbarBottom = toolbarRef.current?.getBoundingClientRect().bottom ?? rect.top;
+    const y = Math.max(0, rect.top, toolbarBottom);
     const right = Math.min(window.innerWidth, rect.right);
     const bottom = Math.min(window.innerHeight, rect.bottom);
     if (right - x < 1 || bottom - y < 1) return undefined;
@@ -204,6 +206,7 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
     };
     const observer = new ResizeObserver(sync);
     if (surfaceRef.current) observer.observe(surfaceRef.current);
+    if (toolbarRef.current) observer.observe(toolbarRef.current);
     const layoutRoot = surfaceRef.current?.parentElement;
     const mutationObserver = layoutRoot ? new MutationObserver(sync) : undefined;
     if (layoutRoot) {
@@ -257,7 +260,7 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
         {tabs.map((tab) => <div className={tab.id === activeId ? "browser-tab active" : "browser-tab"} key={tab.id}><button type="button" role="tab" aria-selected={tab.id === activeId} title={tab.title} onClick={() => setActiveId(tab.id)}>{tab.loading ? <LoaderCircle className="spin" size={13} /> : <Globe2 size={13} />}<span>{tab.title}</span></button><button type="button" aria-label={`Close ${tab.title}`} onClick={() => void closeTab(tab.id)}><X size={13} /></button></div>)}
         <button className="browser-new-tab" type="button" aria-label="New browser tab" disabled={tabs.length >= MAX_TABS} onClick={() => addTab()}><Plus size={15} /></button>
       </div>
-      <div className="browser-toolbar">
+      <div className="browser-toolbar" ref={toolbarRef}>
         <button type="button" aria-label="Back" disabled={!activeTab?.created} onClick={() => void runControl("back")}><ArrowLeft size={16} /></button>
         <button type="button" aria-label="Forward" disabled={!activeTab?.created} onClick={() => void runControl("forward")}><ArrowRight size={16} /></button>
         <button type="button" aria-label={activeTab?.loading ? "Stop loading" : "Reload"} disabled={!activeTab?.created} onClick={() => void runControl(activeTab?.loading ? "stop" : "reload")}>{activeTab?.loading ? <X size={15} /> : <RefreshCw size={15} />}</button>

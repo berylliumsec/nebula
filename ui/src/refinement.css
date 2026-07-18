@@ -604,7 +604,7 @@ kbd { font-size: 11px; }
 .persistent-browser { min-width: 0; }
 .workbench-browser { min-width: 0; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 11px; background: var(--surface); }
 .workbench-browser > :where(.browser-tab-strip, .browser-toolbar, .browser-privacy-notice, .browser-notice) { flex: 0 0 auto; }
-.browser-tab-strip { display: flex; min-height: 38px; align-items: end; gap: 2px; padding: 5px 7px 0; overflow-x: auto; border-bottom: 1px solid var(--border-soft); background: var(--surface-muted); scrollbar-width: thin; }
+.browser-tab-strip { display: flex; height: 38px; min-height: 38px; flex: 0 0 38px; align-items: end; gap: 2px; padding: 5px 7px 0; overflow-x: auto; border-bottom: 1px solid var(--border-soft); background: var(--surface-muted); scrollbar-width: thin; }
 .browser-tab { display: flex; min-width: 120px; max-width: 220px; align-items: center; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
 .browser-tab.active { color: var(--text); border-color: var(--border-soft); background: var(--surface); }
 .browser-tab > button { display: inline-flex; min-width: 0; height: 32px; align-items: center; gap: 6px; padding: 0 8px; border: 0; color: inherit; background: transparent; cursor: pointer; }
@@ -613,7 +613,7 @@ kbd { font-size: 11px; }
 .browser-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-new-tab { display: inline-flex; width: 32px; height: 32px; flex: 0 0 32px; align-items: center; justify-content: center; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .browser-tab button:hover, .browser-new-tab:hover { color: var(--text); background: var(--surface-hover); }
-.browser-toolbar { display: grid; grid-template-columns: 34px 34px 34px minmax(180px, 1fr) 34px; gap: 4px; align-items: center; min-height: 48px; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
+.browser-toolbar { display: grid; height: 48px; min-height: 48px; flex: 0 0 48px; grid-template-columns: 34px 34px 34px minmax(180px, 1fr) 34px; gap: 4px; align-items: center; padding: 6px 8px; overflow: visible; border-bottom: 1px solid var(--border-soft); }
 .browser-toolbar > button { display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .browser-toolbar > button:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
 .browser-toolbar > button:disabled { opacity: .4; cursor: default; }
