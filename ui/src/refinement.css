@@ -1088,6 +1088,8 @@ kbd { font-size: 11px; }
 }
 .diagnostics-unavailable > span { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; gap: 4px; }
 .diagnostics-unavailable a { color: var(--blue); font-weight: 650; }
+.diagnostics-unavailable-actions { display: flex; align-items: center; gap: 8px; }
+.diagnostics-unavailable-actions .icon-button { width: 26px; height: 26px; }
 .diagnostic-error-notice,
 .diagnostics-health {
   display: flex;

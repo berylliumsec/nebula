@@ -9,6 +9,7 @@ import {
   FolderOpen,
   RefreshCw,
   ShieldAlert,
+  X,
 } from "lucide-react";
 import type { HealthResponse, SetupStatus } from "../api/types";
 import { useConfirmation } from "../components/DialogSystem";
@@ -257,23 +258,28 @@ function FailureCard({
 export function DiagnosticsAvailabilityBanner() {
   const [available, setAvailable] = useState(isDiagnosticsAvailable);
   const [reason, setReason] = useState<string>();
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     const update = (event: Event) => {
       const detail = (event as CustomEvent<{ available: boolean; reason?: string }>).detail;
       setAvailable(detail.available);
       setReason(detail.reason);
+      setDismissed(false);
     };
     window.addEventListener("nebula-diagnostics-health", update);
     return () => window.removeEventListener("nebula-diagnostics-health", update);
   }, []);
 
-  if (available) return null;
+  if (available || dismissed) return null;
   return (
     <div className="diagnostics-unavailable" role="status">
       <ShieldAlert size={16} />
       <span><strong>{reason?.startsWith("Browser event capture") ? "Browser event capture is unavailable." : "Local diagnostics are unavailable."}</strong> {reason ?? "New failures are being retained in memory for this session."}</span>
-      <a href="/settings#diagnostics-settings">Diagnostics</a>
+      <div className="diagnostics-unavailable-actions">
+        <a href="/settings#diagnostics-settings">Diagnostics</a>
+        <button className="icon-button subtle" type="button" aria-label="Dismiss diagnostics notice" onClick={() => setDismissed(true)}><X size={15} /></button>
+      </div>
     </div>
   );
 }

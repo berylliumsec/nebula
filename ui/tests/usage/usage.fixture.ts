@@ -103,7 +103,7 @@ export const test = base.extend<Record<string, never>, WorkerFixtures>({
     });
     const page = await context.newPage();
     await page.addInitScript(() => {
-      localStorage.setItem("nebula.theme", "dark");
+      localStorage.setItem("nebula.theme", "zero");
       localStorage.setItem("nebula.conversations.expanded", "true");
     });
     try {

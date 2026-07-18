@@ -10,6 +10,31 @@ function lines(value: string): string[] {
   return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
 }
 
+export function parseAllowedPorts(value: string): number[] | undefined {
+  const ports = new Set<number>();
+  for (const item of lines(value)) {
+    const match = item.match(/^(\d+)\s*-\s*(\d+)$/);
+    const start = Number(match?.[1] ?? item);
+    const end = Number(match?.[2] ?? item);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > 65_535 || start > end) return undefined;
+    for (let port = start; port <= end; port += 1) ports.add(port);
+  }
+  return [...ports].sort((left, right) => left - right);
+}
+
+function formatAllowedPorts(values: number[]): string {
+  const ports = [...new Set(values)].sort((left, right) => left - right);
+  const entries: string[] = [];
+  for (let index = 0; index < ports.length;) {
+    const start = ports[index];
+    let end = start;
+    while (index + 1 < ports.length && ports[index + 1] === end + 1) end = ports[++index];
+    entries.push(end - start >= 2 ? `${start}-${end}` : end === start ? `${start}` : `${start}, ${end}`);
+    index += 1;
+  }
+  return entries.join(", ");
+}
+
 function inputDate(value?: string): string {
   if (!value) return "";
   const date = new Date(value);
@@ -48,7 +73,7 @@ export function EngagementPolicySettings() {
     setAllowedCidrs(next.allowedCidrs.join("\n"));
     setAllowedDomains(next.allowedDomains.join("\n"));
     setAllowedUrls(next.allowedUrls.join("\n"));
-    setAllowedPorts(next.allowedPorts.join(", "));
+    setAllowedPorts(formatAllowedPorts(next.allowedPorts));
     setNotBefore(inputDate(next.notBefore));
     setNotAfter(inputDate(next.notAfter));
     setProhibitedActions(next.prohibitedActions.join("\n"));
@@ -84,9 +109,9 @@ export function EngagementPolicySettings() {
   const saveScope = async (event: FormEvent) => {
     event.preventDefault();
     if (!api || !engagement || !scope) return;
-    const ports = lines(allowedPorts).map(Number);
-    if (ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65_535)) {
-      setValidationError("Allowed ports must be whole numbers from 1 through 65535. Correct the highlighted form and save again.");
+    const ports = parseAllowedPorts(allowedPorts);
+    if (!ports) {
+      setValidationError("Allowed ports must be numbers or ascending ranges from 0 through 65535, such as 80, 443, or 0-400.");
       return;
     }
     const start = wireDate(notBefore);
@@ -163,7 +188,7 @@ export function EngagementPolicySettings() {
         <div className="policy-form-body">
           <label>Allowed domains<textarea rows={4} value={allowedDomains} placeholder="example.com\n*.example.org" onChange={(event) => setAllowedDomains(event.target.value)} /></label>
           <label>Allowed CIDRs<textarea rows={4} value={allowedCidrs} placeholder="203.0.113.0/24" onChange={(event) => setAllowedCidrs(event.target.value)} /></label>
-          <label>Allowed TCP ports<input value={allowedPorts} placeholder="80, 443" onChange={(event) => setAllowedPorts(event.target.value)} /></label>
+          <label>Allowed TCP ports<input value={allowedPorts} placeholder="80, 443, 8000-8100" onChange={(event) => setAllowedPorts(event.target.value)} /></label>
           <label>URL-only scope entries<textarea rows={3} value={allowedUrls} placeholder="https://example.com/reviewed/path" onChange={(event) => setAllowedUrls(event.target.value)} /></label>
           <div className="resource-form-grid"><label>Active from<input type="datetime-local" value={notBefore} onChange={(event) => setNotBefore(event.target.value)} /></label><label>Expires<input type="datetime-local" value={notAfter} onChange={(event) => setNotAfter(event.target.value)} /></label></div>
           <label>Prohibited actions<textarea rows={3} value={prohibitedActions} onChange={(event) => setProhibitedActions(event.target.value)} /></label>

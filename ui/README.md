@@ -34,7 +34,9 @@ Record the realistic Nebula 3 workflows described in
 npm run record:usage
 ```
 
-The named WebM files are saved under the gitignored `usage-videos/` directory.
+The named H.264 MP4 files are saved under the gitignored `usage-videos/`
+directory. Recordings use Nebula's Zero Layer theme; Playwright's intermediate
+WebM files are removed after successful conversion.
 
 `nebula3 ui` launches the browser with a one-time token in the URL fragment. The runtime consumes `#token=…` into memory and immediately removes it with `history.replaceState`; it never stores the token in local or session storage.
 

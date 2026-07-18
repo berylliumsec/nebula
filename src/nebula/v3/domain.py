@@ -445,8 +445,8 @@ class ScopePolicy(Entity):
     @classmethod
     def normalize_ports(cls, values: list[int]) -> list[int]:
         for value in values:
-            if not 1 <= value <= 65535:
-                raise ValueError("ports must be between 1 and 65535")
+            if not 0 <= value <= 65535:
+                raise ValueError("ports must be between 0 and 65535")
         return sorted(set(values))
 
     @field_validator("allowed_urls")

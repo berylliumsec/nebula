@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:update": "playwright test --update-snapshots",
-    "record:usage": "npm run build && playwright test --config playwright.usage.config.ts",
+    "record:usage": "npm run build && playwright test --config playwright.usage.config.ts && npm run convert:usage",
+    "convert:usage": "node scripts/convert-usage-videos.mjs",
     "audit:diagnostics": "node ../scripts/audit_typescript_diagnostics.mjs",
     "tauri": "tauri"
   },
