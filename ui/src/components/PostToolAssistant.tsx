@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, ChevronUp, Clipboard, LoaderCircle, Play, Sparkles, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { GeneratedDraft, HarnessProfile, PostToolAssistantConfig, ProviderHealth } from "../api/types";
@@ -23,6 +24,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
   const [busy, setBusy] = useState(false);
   const [savingToggle, setSavingToggle] = useState(false);
   const [error, setError] = useState<string>();
+  const [savedMessage, setSavedMessage] = useState<string>();
 
   const refresh = useCallback(async () => {
     const [nextConfig, results] = await Promise.all([api.getPostToolAssistant(engagementId), api.listPostToolResults(engagementId)]);
@@ -64,6 +66,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
 
   const toggle = async (key: "suggestNextSteps" | "takeNotes") => {
     const enabled = !config[key];
+    setSavedMessage(undefined);
     const useHarness = config.backendKind === "harness";
     const harness = useHarness ? harnesses.find((item) => item.id === config.harnessProfileId && item.enabled) : undefined;
     const provider = useHarness ? undefined : providers.find((item) => item.id === config.providerId && item.enabled);
@@ -84,7 +87,11 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     if (enabled && remote && !cloudConfirmed) return;
     const next = { ...config, [key]: enabled, cloudConfirmed: Boolean(cloudConfirmed) };
     setSavingToggle(true);
-    try { setConfig(await api.setPostToolAssistant(engagementId, next)); setError(undefined); }
+    try {
+      setConfig(await api.setPostToolAssistant(engagementId, next));
+      setError(undefined);
+      setSavedMessage(`${key === "suggestNextSteps" ? "Next-step suggestions" : "Notes"} ${enabled ? "enabled" : "disabled"}.`);
+    }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Could not update tool assistance."); }
     finally { setSavingToggle(false); }
   };
@@ -107,7 +114,9 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
       <label title="Take notes"><input aria-label="Take notes" type="checkbox" checked={config.takeNotes} disabled={savingToggle} onChange={() => void toggle("takeNotes")} /><span>Take notes</span></label>
       {busy && <LoaderCircle className="spin" size={13} aria-label="Analyzing tool result" />}
     </div>
-    {error && <div className="post-tool-error"><DiagnosticErrorNotice error={error} fallback="Post-tool assistance is unavailable." compact /><a className="button quiet" href="/settings#post-tool-assistant-settings">Open tool follow-up settings</a></div>}
+    {(error || savedMessage) && createPortal(<div className={`post-tool-feedback${error ? " error" : " success"}`} role={error ? undefined : "status"} aria-live={error ? undefined : "polite"}>
+      {error ? <><DiagnosticErrorNotice error={error} fallback="Post-tool assistance is unavailable." compact /><a className="button quiet" href="/settings#post-tool-assistant-settings">Open tool follow-up settings</a></> : <span>{savedMessage}</span>}
+    </div>, document.body)}
     {config.suggestNextSteps && step && result && <aside className={`post-tool-suggestion${expanded ? " expanded" : ""}`} aria-label="Suggested next step">
       <header><Sparkles size={15} /><span><small>Suggested next step</small><strong>{step.title}</strong></span><button className="icon-button subtle" type="button" aria-label="Dismiss suggestion" onClick={() => void dismiss()}><X size={14} /></button></header>
       {expanded && <div className="post-tool-suggestion-body"><p>{step.rationale}</p><label>Exact command<textarea aria-label="Suggested command" rows={4} value={command} onChange={(event) => setCommand(event.target.value)} /></label>{step.networkTarget && <small>Network: {step.networkTarget}{step.networkPorts.length ? ` · ${step.networkPorts.join(", ")}` : ""}</small>}</div>}

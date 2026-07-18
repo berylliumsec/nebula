@@ -69,6 +69,7 @@ describe("PostToolAssistant", () => {
       suggestNextSteps: true,
     }));
     expect(suggestions).toBeChecked();
+    expect(await screen.findByRole("status")).toHaveTextContent("Next-step suggestions enabled.");
   });
 
   it("directs incomplete configurations to Settings instead of silently failing", async () => {
@@ -85,6 +86,7 @@ describe("PostToolAssistant", () => {
     await user.click(await screen.findByRole("checkbox", { name: "Take notes" }));
 
     expect(await screen.findByText(/Choose an enabled analysis runtime and model in Settings/)).toBeVisible();
+    expect(screen.getByRole("alert")).toBeVisible();
     expect(screen.getByRole("link", { name: "Open tool follow-up settings" })).toHaveAttribute("href", "/settings#post-tool-assistant-settings");
     expect(setPostToolAssistant).not.toHaveBeenCalled();
   });
