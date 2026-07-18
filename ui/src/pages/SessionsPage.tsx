@@ -1658,6 +1658,7 @@ export function SessionsPage() {
       }
       await startMission({
         engagementId: engagement.id,
+        name: `Continue: ${chat.title ?? "assistant investigation"}`,
         objective,
         backend: "harness",
         harnessProfileId: chat.harnessProfileId,

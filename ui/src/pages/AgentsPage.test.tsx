@@ -100,4 +100,24 @@ describe("mission activity", () => {
     expect(selectMission).toHaveBeenCalledWith("run-1");
     workspace.runs = [];
   });
+
+  it("keeps a hundred-mission history searchable and progressively rendered", async () => {
+    const user = userEvent.setup();
+    workspace.runs = Array.from({ length: 100 }, (_, index) => ({
+      ...workspace.run,
+      id: `run-${index + 1}`,
+      title: `Mission ${index + 1}`,
+      status: index % 2 ? "complete" : "failed",
+      updatedAt: new Date(Date.UTC(2026, 6, 18, 12, index)).toISOString(),
+    }));
+    render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+
+    const history = screen.getByRole("navigation", { name: "Mission history" });
+    expect(within(history).getAllByRole("button")).toHaveLength(12);
+    expect(screen.getByText("Showing 12 of 100")).toBeVisible();
+    await user.type(screen.getByRole("searchbox", { name: "Search missions" }), "Mission 99");
+    expect(within(history).getAllByRole("button")).toHaveLength(1);
+    expect(within(history).getByRole("button", { name: /Mission 99/ })).toBeVisible();
+    workspace.runs = [];
+  });
 });

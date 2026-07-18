@@ -24,6 +24,7 @@ export function NewMissionButton({ className = "button primary", children }: New
   const [harnessSessionId, setHarnessSessionId] = useState("");
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
   const [objective, setObjective] = useState("");
   const [providerId, setProviderId] = useState("");
   const provider = availableProviders.find((item) => item.id === providerId);
@@ -169,6 +170,7 @@ export function NewMissionButton({ className = "button primary", children }: New
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    const cleanName = name.trim();
     const cleanObjective = objective.trim();
     const cleanModel = model.trim();
     if (!engagement) {
@@ -181,6 +183,10 @@ export function NewMissionButton({ className = "button primary", children }: New
     }
     if (runtimeKind === "harness" && !selectedHarness) {
       setError("Select an enabled agent harness before starting a mission.");
+      return;
+    }
+    if (!cleanName) {
+      setError("Enter a mission name so you can identify it later.");
       return;
     }
     if (!cleanObjective) {
@@ -248,6 +254,7 @@ export function NewMissionButton({ className = "button primary", children }: New
     try {
       await startMission(runtimeKind === "harness" ? {
         engagementId: engagement.id,
+        name: cleanName,
         objective: cleanObjective,
         backend: "harness",
         harnessProfileId: selectedHarness?.id,
@@ -261,8 +268,9 @@ export function NewMissionButton({ className = "button primary", children }: New
         maxToolCalls,
         maxConcurrency: 1,
         allowCloudToolResults,
-      } : { engagementId: engagement.id, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, maxToolCalls: automaticTools.length || selectedMcpIds.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
+      } : { engagementId: engagement.id, name: cleanName, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, maxToolCalls: automaticTools.length || selectedMcpIds.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
       setOpen(false);
+      setName("");
       setObjective("");
       setMaxToolCalls(0);
       setMaxConcurrency(1);
@@ -283,7 +291,8 @@ export function NewMissionButton({ className = "button primary", children }: New
             <div><small>{automaticTools.length || selectedMcpIds.length ? "Supervised automation" : "Analysis-only automation"}</small><h2 id="mission-dialog-title">Automate task</h2></div>
             <button className="icon-button subtle" type="button" aria-label="Close automation dialog" onClick={() => setOpen(false)}><X size={17} /></button>
           </header>
-          <label>Objective<textarea required autoFocus rows={5} value={objective} placeholder="Describe the outcome you want Nebula to produce…" onChange={(event) => { setObjective(event.target.value); setError(undefined); }} /></label>
+          <label>Mission name<input required autoFocus maxLength={300} value={name} placeholder="Quarterly perimeter review" onChange={(event) => { setName(event.target.value); setError(undefined); }} /></label>
+          <label>Objective<textarea required rows={5} value={objective} placeholder="Describe the outcome you want Nebula to produce…" onChange={(event) => { setObjective(event.target.value); setError(undefined); }} /></label>
           <details className="provider-advanced mission-advanced">
             <summary>Advanced</summary>
             <label>Runtime<select aria-label="Mission runtime" value={runtimeKind} onChange={(event) => { const next = event.target.value as "native" | "harness"; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "native") selectProvider(providerId || availableProviders[0]?.id || ""); }}><option value="native">Native mission</option><option value="harness">Agent harness</option></select></label>

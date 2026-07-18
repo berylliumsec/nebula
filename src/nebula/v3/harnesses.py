@@ -4867,6 +4867,7 @@ class HarnessRuntimeService:
         self,
         *,
         engagement_id: str,
+        name: str | None = None,
         objective: str,
         profile_id: str,
         model: str | None,
@@ -4934,6 +4935,7 @@ class HarnessRuntimeService:
             },
             budget=budget,
             metadata={
+                "name": name.strip() if name and name.strip() else objective.strip(),
                 "origin": "api",
                 "analysis_only": False,
                 "forked_from_harness_session_id": forked_from_session_id,

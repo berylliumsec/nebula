@@ -53,6 +53,7 @@ export interface AgentRunSummary {
 
 export interface MissionCreateRequest {
   engagementId: Identifier;
+  name: string;
   objective: string;
   backend?: "native" | "harness";
   providerId?: Identifier;

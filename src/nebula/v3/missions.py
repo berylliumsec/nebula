@@ -180,6 +180,7 @@ class MissionService:
         self,
         *,
         engagement_id: str,
+        name: str | None = None,
         objective: str,
         provider_id: str,
         model: str,
@@ -311,6 +312,7 @@ class MissionService:
                 "mcp_snapshot": [item.model_dump(mode="json") for item in mcp_profiles],
             },
             metadata={
+                "name": name.strip() if name and name.strip() else clean_objective,
                 "analysis_only": not selected_action_tools,
                 "origin": "api",
                 **(

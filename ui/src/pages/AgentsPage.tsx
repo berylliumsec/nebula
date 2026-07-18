@@ -13,7 +13,7 @@ import {
   MessageSquare,
   Radio,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { AssistantMarkdown } from "../components/AssistantMarkdown";
 import { PageHeader } from "../components/PageHeader";
 import { DeleteMissionButton, NewMissionButton, StopMissionButton } from "../components/MissionControls";
@@ -51,6 +51,9 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const [steeringText, setSteeringText] = useState("");
   const [steering, setSteering] = useState(false);
   const [steeringError, setSteeringError] = useState<string>();
+  const [missionQuery, setMissionQuery] = useState("");
+  const [missionStatus, setMissionStatus] = useState("all");
+  const [visibleMissionCount, setVisibleMissionCount] = useState(12);
   const discuss = async () => {
     if (!api || !run || run.backend !== "harness") return;
     const chat = await api.discussRun(run.id);
@@ -82,6 +85,18 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const progress = run?.totalTasks ? Math.min(100, Math.round((run.completedTasks / run.totalTasks) * 100)) : 0;
   const terminal = Boolean(run && ["complete", "failed", "cancelled", "interrupted"].includes(run.status));
   const selectedApprovals = run ? approvals.filter((approval) => approval.runId === run.id) : [];
+  const filteredRuns = useMemo(() => {
+    const query = missionQuery.trim().toLocaleLowerCase();
+    return [...runs]
+      .filter((item) => {
+        if (missionStatus === "all") return true;
+        if (missionStatus === "active") return !["complete", "failed", "cancelled", "interrupted"].includes(item.status);
+        return item.status === missionStatus;
+      })
+      .filter((item) => !query || item.title.toLocaleLowerCase().includes(query))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, [missionQuery, missionStatus, runs]);
+  const visibleRuns = filteredRuns.slice(0, visibleMissionCount);
   if (!previewMode) {
     return (
       <div className="page agents-page">
@@ -94,9 +109,11 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           <div>{run?.backend === "harness" && <button className="button secondary" type="button" onClick={() => void discuss()}><MessageSquare size={15} /> Discuss in chat</button>}<StopMissionButton /><DeleteMissionButton /><NewMissionButton /></div>
         </section>
         <section className="panel mission-picker" aria-label="Missions">
-          <header><div><strong>Mission history</strong><small>Select a mission to inspect its result</small></div><span>{runs.length}</span></header>
-          <nav aria-label="Mission history">{[...runs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((item) => <button type="button" aria-current={item.id === run?.id ? "true" : undefined} className={item.id === run?.id ? "active" : undefined} onClick={() => selectMission(item.id)} key={item.id}><span><strong>{item.title}</strong><small>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.updatedAt))}</small></span><em className={`mission-picker-status ${item.status}`}>{item.status.replaceAll("_", " ")}</em></button>)}</nav>
-          {!runs.length && <p>No missions yet.</p>}
+          <header><div><strong>Mission history</strong><small>Select a named mission to inspect its result</small></div><span>{runs.length}</span></header>
+          {runs.length > 6 && <div className="mission-picker-tools"><label><span className="sr-only">Search missions</span><input type="search" value={missionQuery} placeholder="Search mission names…" onChange={(event) => { setMissionQuery(event.target.value); setVisibleMissionCount(12); }} /></label><label><span className="sr-only">Filter missions by status</span><select aria-label="Filter missions by status" value={missionStatus} onChange={(event) => { setMissionStatus(event.target.value); setVisibleMissionCount(12); }}><option value="all">All statuses</option><option value="active">Active</option><option value="complete">Complete</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="interrupted">Interrupted</option></select></label><small>{filteredRuns.length} matching</small></div>}
+          <nav aria-label="Mission history">{visibleRuns.map((item) => <button type="button" aria-current={item.id === run?.id ? "true" : undefined} className={item.id === run?.id ? "active" : undefined} onClick={() => selectMission(item.id)} key={item.id}><span><strong>{item.title}</strong><small>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.updatedAt))}</small></span><em className={`mission-picker-status ${item.status}`}>{item.status.replaceAll("_", " ")}</em></button>)}</nav>
+          {visibleMissionCount < filteredRuns.length && <footer><button className="button quiet" type="button" onClick={() => setVisibleMissionCount((count) => count + 12)}>Show 12 more</button><small>Showing {visibleRuns.length} of {filteredRuns.length}</small></footer>}
+          {!runs.length ? <p>No missions yet.</p> : !filteredRuns.length && <p>No missions match this search.</p>}
         </section>
         {selectedApprovals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission paused for review</strong><p>{selectedApprovals.length} request{selectedApprovals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
         {run && <details className="mission-overview-disclosure" open={!terminal}><summary>Mission overview <span>{run.status.replaceAll("_", " ")}</span></summary><section className="mission-hero panel">

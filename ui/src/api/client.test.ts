@@ -1256,7 +1256,7 @@ describe("ApiClient", () => {
     const report = await client.createReport({ engagementId: engagement.id, title: "  Assessment  " });
     const updatedReport = await client.updateReport(report.id, { status: "review", executiveSummary: "Updated", findingIds: ["finding-1"], expectedRevision: 1 });
     const evidence = await client.uploadEvidence({ engagementId: engagement.id, filename: "proof.txt", title: "proof.txt", evidenceType: "operator_upload", contentBase64: "cHJvb2Y=", mediaType: "text/plain", description: "Proof", assetIds: [asset.id] });
-    const run = await client.createMission({ engagementId: engagement.id, objective: "Review scope", providerId: "provider-1", model: "model-1", maxDurationSeconds: 600, maxTokens: 2000, maxCostUsd: 2, maxRetries: 1 });
+    const run = await client.createMission({ engagementId: engagement.id, name: "Scope review", objective: "Review scope", providerId: "provider-1", model: "model-1", maxDurationSeconds: 600, maxTokens: 2000, maxCostUsd: 2, maxRetries: 1 });
     const stopped = await client.stopRun(run.id, { reason: "Operator requested" });
 
     expect(engagement).toMatchObject({ description: "Bounded review", clientName: "Client", tags: ["external"] });
@@ -1274,8 +1274,8 @@ describe("ApiClient", () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(response), { status: 202 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
 
-    await client.createMission({ engagementId: "engagement-1", objective: "Review", providerId: "provider-1", model: "model-1" });
-    await client.createMission({ engagementId: "engagement-1", objective: "Scan", providerId: "provider-1", model: "model-1", maxToolCalls: 20, maxConcurrency: 2 });
+    await client.createMission({ engagementId: "engagement-1", name: "Review", objective: "Review", providerId: "provider-1", model: "model-1" });
+    await client.createMission({ engagementId: "engagement-1", name: "Scan", objective: "Scan", providerId: "provider-1", model: "model-1", maxToolCalls: 20, maxConcurrency: 2 });
 
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ max_tool_calls: 0, max_concurrency: 1 });
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({ max_tool_calls: 20, max_concurrency: 2 });
@@ -1361,6 +1361,7 @@ describe("ApiClient", () => {
     const activity = await client.getHarnessSessionActivity(session.id);
     const run = await client.createMission({
       engagementId: "engagement-1",
+      name: "Harness inspection",
       objective: "Inspect",
       backend: "harness",
       harnessProfileId: harness.id,

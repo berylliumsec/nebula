@@ -1249,7 +1249,7 @@ function mapRun(value: WireAgentRun): AgentRunSummary {
   return {
     id: value.id,
     engagementId: value.engagement_id,
-    title: value.objective,
+    title: typeof value.metadata?.name === "string" && value.metadata.name.trim() ? value.metadata.name : value.objective,
     status: value.status,
     startedAt: value.started_at ?? undefined,
     updatedAt: value.updated_at,
@@ -3115,6 +3115,7 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify({
         engagement_id: body.engagementId,
+        name: body.name,
         objective: body.objective,
         backend: body.backend ?? "native",
         provider_id: body.providerId,

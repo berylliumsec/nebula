@@ -146,6 +146,7 @@ def _wait_for_status(client, run_id, expected, timeout=8):
 def _start_payload(engagement, profile, **changes):
     payload = {
         "engagement_id": engagement.id,
+        "name": "Bounded scope review",
         "objective": "Review the explicitly bounded scope",
         "provider_id": profile.id,
         "model": "security-model",
@@ -343,6 +344,7 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
         completed = _wait_for_status(client, queued["id"], "complete")
         assert completed["completed_at"] is not None
         assert completed["metadata"] == {
+            "name": "Bounded scope review",
             "analysis_only": True,
             "origin": "api",
             "total_tasks": 1,
@@ -499,6 +501,16 @@ def test_allowlist_disabled_profiles_and_capacity_fail_before_extra_runs(tmp_pat
             },
         )
         assert missing_model.status_code == 422
+        missing_name = client.post(
+            "/api/v1/missions",
+            headers=_auth(),
+            json={
+                key: value
+                for key, value in _start_payload(engagement, profile).items()
+                if key != "name"
+            },
+        )
+        assert missing_name.status_code == 422
         assert store.count(AgentRun) == 0
 
         first = client.post(

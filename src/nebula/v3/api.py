@@ -491,6 +491,7 @@ class KnowledgeIngestRequest(NebulaModel):
 
 class MissionStartRequest(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=300)
     objective: str = Field(min_length=1, max_length=10_000)
     backend: RunBackend = RunBackend.NATIVE
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -5077,6 +5078,7 @@ def create_app(
         if request.backend == RunBackend.HARNESS:
             return await harness_runtime.start_mission(
                 engagement_id=request.engagement_id,
+                name=request.name,
                 objective=request.objective,
                 profile_id=request.harness_profile_id or "",
                 model=request.model,
@@ -5088,6 +5090,7 @@ def create_app(
             )
         return await missions.start_mission(
             engagement_id=request.engagement_id,
+            name=request.name,
             objective=request.objective,
             provider_id=request.provider_id or "",
             model=request.model or "",
