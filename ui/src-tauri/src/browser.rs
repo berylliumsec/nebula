@@ -15,7 +15,7 @@ use getrandom::fill as random_fill;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, Url, WebviewUrl,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, Url, WebviewUrl,
     webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder},
 };
 
@@ -55,6 +55,7 @@ pub(crate) struct BrowserBounds {
     y: f64,
     width: f64,
     height: f64,
+    scale_factor: f64,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -140,12 +141,28 @@ fn checked_bounds(bounds: BrowserBounds) -> Result<BrowserBounds, String> {
         || bounds.y < 0.0
         || bounds.width < 1.0
         || bounds.height < 1.0
+        || bounds.scale_factor < 0.5
+        || bounds.scale_factor > 8.0
         || bounds.width > 16_384.0
         || bounds.height > 16_384.0
     {
         return Err("The browser surface has invalid bounds.".to_string());
     }
     Ok(bounds)
+}
+
+fn physical_position(bounds: &BrowserBounds) -> PhysicalPosition<i32> {
+    PhysicalPosition::new(
+        (bounds.x * bounds.scale_factor).round() as i32,
+        (bounds.y * bounds.scale_factor).round() as i32,
+    )
+}
+
+fn physical_size(bounds: &BrowserBounds) -> PhysicalSize<u32> {
+    PhysicalSize::new(
+        (bounds.width * bounds.scale_factor).round() as u32,
+        (bounds.height * bounds.scale_factor).round() as u32,
+    )
 }
 
 fn project_key(project_id: &str) -> [u8; 16] {
@@ -480,8 +497,8 @@ pub(crate) fn browser_create_tab(
     let webview = window
         .add_child(
             builder,
-            LogicalPosition::new(bounds.x, bounds.y),
-            LogicalSize::new(bounds.width, bounds.height),
+            physical_position(&bounds),
+            physical_size(&bounds),
         )
         .map_err(|error| format!("cannot create browser tab: {error}"))?;
     if let Err(error) = webview.hide() {
@@ -554,8 +571,8 @@ pub(crate) fn browser_set_bounds(
         .get_webview(&label)
         .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
     webview
-        .set_position(LogicalPosition::new(bounds.x, bounds.y))
-        .and_then(|_| webview.set_size(LogicalSize::new(bounds.width, bounds.height)))
+        .set_position(physical_position(&bounds))
+        .and_then(|_| webview.set_size(physical_size(&bounds)))
         .map_err(|error| format!("cannot resize browser tab: {error}"))
 }
 
@@ -883,7 +900,8 @@ mod tests {
                 x: 1.0,
                 y: 2.0,
                 width: 900.0,
-                height: 600.0
+                height: 600.0,
+                scale_factor: 1.5,
             })
             .is_ok()
         );
@@ -892,7 +910,8 @@ mod tests {
                 x: -1.0,
                 y: 2.0,
                 width: 900.0,
-                height: 600.0
+                height: 600.0,
+                scale_factor: 1.5,
             })
             .is_err()
         );
@@ -901,10 +920,25 @@ mod tests {
                 x: 1.0,
                 y: 2.0,
                 width: 99_000.0,
-                height: 600.0
+                height: 600.0,
+                scale_factor: 1.5,
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn browser_bounds_convert_css_pixels_to_physical_pixels() {
+        let bounds = checked_bounds(BrowserBounds {
+            x: 12.5,
+            y: 86.0,
+            width: 900.0,
+            height: 600.0,
+            scale_factor: 2.0,
+        })
+        .unwrap();
+        assert_eq!(physical_position(&bounds), PhysicalPosition::new(25, 172));
+        assert_eq!(physical_size(&bounds), PhysicalSize::new(1800, 1200));
     }
 
     #[test]

@@ -74,7 +74,13 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
     const right = Math.min(window.innerWidth, rect.right);
     const bottom = Math.min(window.innerHeight, rect.bottom);
     if (right - x < 1 || bottom - y < 1) return undefined;
-    return { x, y, width: right - x, height: bottom - y };
+    return {
+      x,
+      y,
+      width: right - x,
+      height: bottom - y,
+      scaleFactor: window.devicePixelRatio || 1,
+    };
   }, []);
 
   const updateTab = useCallback((id: string, change: Partial<BrowserTab>) => {

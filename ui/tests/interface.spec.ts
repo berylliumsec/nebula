@@ -383,6 +383,75 @@ test.beforeEach(async ({ page }, testInfo) => {
   }
 });
 
+test("browser address bar stays above native bounds at 2x scale", async ({ browser }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Native browser geometry needs one explicit desktop run.");
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: 2,
+    colorScheme: "dark",
+    reducedMotion: "reduce",
+  });
+  const page = await context.newPage();
+  await installTruthfulCore(page);
+  await page.addInitScript(() => {
+    localStorage.setItem("nebula.theme", "dark");
+    const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+    Object.assign(window, { __NEBULA_BROWSER_CALLS__: calls });
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, unknown> = {}) => {
+          calls.push({ command, args });
+          if (command === "start_local_backend") {
+            return { endpoint: `${location.origin}/api/v1`, token: "", protocol: "nebula-sidecar-v1" };
+          }
+          if (command === "browser_capabilities") {
+            return { engine: "Playwright native-bounds mock", projectStorage: "persistent" };
+          }
+          return undefined;
+        },
+        transformCallback: () => 1,
+        unregisterCallback: () => undefined,
+        convertFileSrc: (path: string) => path,
+      },
+    });
+  });
+  await openWorkspace(page, "/", "Workbench");
+  await page.getByRole("tab", { name: "Project browser", exact: true }).click();
+  await page.getByRole("textbox", { name: "Start browsing" }).fill("example.com");
+  await page.getByRole("textbox", { name: "Start browsing" }).press("Enter");
+  await expect.poll(() => page.evaluate(() => (
+    (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string }> })
+      .__NEBULA_BROWSER_CALLS__?.some((call) => call.command === "browser_create_tab")
+  ))).toBe(true);
+
+  const geometry = await page.evaluate(() => {
+    const toolbar = document.querySelector<HTMLElement>(".browser-toolbar")!;
+    const address = document.querySelector<HTMLElement>("#browser-address")!;
+    const surface = document.querySelector<HTMLElement>(".browser-surface")!;
+    const toolbarRect = toolbar.getBoundingClientRect();
+    const addressRect = address.getBoundingClientRect();
+    const surfaceRect = surface.getBoundingClientRect();
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    const create = calls.find((call) => call.command === "browser_create_tab");
+    return {
+      toolbar: { top: toolbarRect.top, bottom: toolbarRect.bottom, height: toolbarRect.height },
+      address: { top: addressRect.top, bottom: addressRect.bottom, height: addressRect.height },
+      surfaceTop: surfaceRect.top,
+      bounds: create?.args.bounds as { y: number; scaleFactor: number },
+      devicePixelRatio: window.devicePixelRatio,
+    };
+  });
+  expect(geometry.toolbar.height).toBeGreaterThanOrEqual(48);
+  expect(geometry.address.top).toBeGreaterThanOrEqual(geometry.toolbar.top);
+  expect(geometry.address.bottom).toBeLessThanOrEqual(geometry.toolbar.bottom);
+  expect(geometry.surfaceTop).toBeGreaterThanOrEqual(geometry.toolbar.bottom);
+  expect(geometry.bounds.y).toBeGreaterThanOrEqual(geometry.toolbar.bottom);
+  expect(geometry.bounds.scaleFactor).toBe(geometry.devicePixelRatio);
+  expect(geometry.devicePixelRatio).toBe(2);
+  await page.screenshot({ path: testInfo.outputPath("browser-address-bar-2x.png") });
+  await context.close();
+});
+
 test("terminal screenshot capture opens a full-height integrated editor", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   const uploadRequest = page.waitForRequest((request) => request.url().endsWith("/evidence/upload") && request.method() === "POST");
