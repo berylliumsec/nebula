@@ -19,6 +19,13 @@ use tauri::{
     webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder},
 };
 
+#[cfg(target_os = "macos")]
+use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSView;
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSPoint, NSRect, NSSize};
+
 use crate::{
     diagnostics::{DiagnosticLevel, DiagnosticsState},
     sidecar::BackendState,
@@ -48,7 +55,7 @@ struct PendingDownload {
     finished: Arc<AtomicBool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BrowserBounds {
     x: f64,
@@ -148,48 +155,193 @@ fn checked_bounds(bounds: BrowserBounds) -> Result<BrowserBounds, String> {
     Ok(bounds)
 }
 
+fn child_position(bounds: &BrowserBounds) -> LogicalPosition<f64> {
+    LogicalPosition::new(bounds.x, bounds.y)
+}
+
+fn child_size(bounds: &BrowserBounds) -> LogicalSize<f64> {
+    LogicalSize::new(bounds.width, bounds.height)
+}
+
 #[cfg(any(target_os = "macos", test))]
-fn logical_titlebar_inset(inner_y: i32, outer_y: i32, scale_factor: f64) -> f64 {
-    if !scale_factor.is_finite() || scale_factor <= 0.0 {
-        return 0.0;
+fn appkit_child_y(
+    parent_origin_y: f64,
+    parent_height: f64,
+    y: f64,
+    height: f64,
+    parent_is_flipped: bool,
+) -> f64 {
+    if parent_is_flipped {
+        parent_origin_y + y
+    } else {
+        parent_origin_y + parent_height - y - height
     }
-    (f64::from(inner_y.saturating_sub(outer_y)) / scale_factor).clamp(0.0, 96.0)
 }
 
-// On macOS the Tao parent NSView extends beneath the decorated title bar while the main
-// application webview's DOM viewport begins at the client-area origin. Child WKWebViews are
-// positioned in the parent NSView, so translate the DOM rectangle by the measured decoration.
 #[cfg(target_os = "macos")]
-fn native_child_top_inset<R: tauri::Runtime>(window: &tauri::Window<R>) -> f64 {
-    let Ok(inner) = window.inner_position() else {
-        return 0.0;
-    };
-    let Ok(outer) = window.outer_position() else {
-        return 0.0;
-    };
-    logical_titlebar_inset(inner.y, outer.y, window.scale_factor().unwrap_or(1.0))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn native_child_top_inset<R: tauri::Runtime>(_window: &tauri::Window<R>) -> f64 {
-    0.0
-}
-
-fn child_position<R: tauri::Runtime>(
-    window: &tauri::Window<R>,
-    bounds: &BrowserBounds,
-) -> LogicalPosition<f64> {
-    LogicalPosition::new(bounds.x, bounds.y + native_child_top_inset(window))
-}
-
-fn child_size<R: tauri::Runtime>(
-    window: &tauri::Window<R>,
-    bounds: &BrowserBounds,
-) -> LogicalSize<f64> {
-    LogicalSize::new(
-        bounds.width,
-        (bounds.height - native_child_top_inset(window)).max(1.0),
+fn appkit_browser_frame(parent: &NSView, bounds: &BrowserBounds) -> NSRect {
+    let parent_bounds = parent.bounds();
+    NSRect::new(
+        NSPoint::new(
+            parent_bounds.origin.x + bounds.x,
+            appkit_child_y(
+                parent_bounds.origin.y,
+                parent_bounds.size.height,
+                bounds.y,
+                bounds.height,
+                parent.isFlipped(),
+            ),
+        ),
+        NSSize::new(bounds.width, bounds.height),
     )
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_native_browser_result(
+    receiver: std::sync::mpsc::Receiver<Result<(), String>>,
+) -> Result<(), String> {
+    receiver
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| "The macOS browser surface did not respond.".to_string())?
+}
+
+// Child WKWebViews created by Tauri are siblings of the main application WKWebView. AppKit
+// composites those native siblings above the DOM, so CSS overflow cannot stop a page from
+// covering Nebula's address bar. Reparent the page beneath a layer-backed NSView attached to the
+// main WKWebView. Its coordinates now match getBoundingClientRect(), and masksToBounds provides a
+// real native clip at every edge of the Browser surface.
+#[cfg(target_os = "macos")]
+fn install_macos_browser_container<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    browser: &tauri::Webview<R>,
+    bounds: BrowserBounds,
+) -> Result<(), String> {
+    let main = app
+        .get_webview("main")
+        .ok_or_else(|| "The Nebula webview is unavailable.".to_string())?;
+    let browser = browser.clone();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+
+    main.with_webview(move |main_native| {
+        let main_address = main_native.inner() as usize;
+        let callback_sender = sender.clone();
+        if let Err(error) = browser.with_webview(move |browser_native| {
+            let result = (|| {
+                let marker = MainThreadMarker::new().ok_or_else(|| {
+                    "The browser container must be created on the main thread.".to_string()
+                })?;
+                // SAFETY: Tauri supplies live WKWebView pointers to this main-thread callback.
+                // WKWebView inherits from NSView, and both views remain retained by Tauri.
+                let (parent, child): (&NSView, &NSView) = unsafe {
+                    (
+                        &*((main_address as *mut std::ffi::c_void).cast::<NSView>()),
+                        &*browser_native.inner().cast::<NSView>(),
+                    )
+                };
+                if std::ptr::eq(parent, child) {
+                    return Err(
+                        "The embedded browser cannot use Nebula's root webview.".to_string()
+                    );
+                }
+
+                let container = NSView::initWithFrame(
+                    NSView::alloc(marker),
+                    appkit_browser_frame(parent, &bounds),
+                );
+                container.setWantsLayer(true);
+                let layer = container
+                    .layer()
+                    .ok_or_else(|| "The browser clipping layer is unavailable.".to_string())?;
+                layer.setMasksToBounds(true);
+                container.setAutoresizesSubviews(true);
+                container.setHidden(true);
+
+                parent.addSubview(&container);
+                // The existing superview remains alive, and AppKit retains the child when it is
+                // immediately added to the new container.
+                child.removeFromSuperview();
+                container.addSubview(child);
+                child.setFrame(container.bounds());
+                child.setHidden(true);
+                Ok(())
+            })();
+            let _ = callback_sender.send(result);
+        }) {
+            let _ = sender.send(Err(format!(
+                "cannot access the embedded macOS browser view: {error}"
+            )));
+        }
+    })
+    .map_err(|error| format!("cannot access the Nebula macOS webview: {error}"))?;
+
+    wait_for_native_browser_result(receiver)
+}
+
+#[cfg(target_os = "macos")]
+fn with_macos_browser_container<R, F>(
+    browser: &tauri::Webview<R>,
+    operation: F,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    F: FnOnce(&NSView, &NSView) -> Result<(), String> + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    browser
+        .with_webview(move |native| {
+            let result = (|| {
+                // SAFETY: Tauri supplies a live WKWebView pointer on the AppKit main thread.
+                let child: &NSView = unsafe { &*native.inner().cast::<NSView>() };
+                // SAFETY: The container is retained by its parent and remains attached for the
+                // lifetime of the browser tab.
+                let container: Retained<NSView> = unsafe { child.superview() }
+                    .ok_or_else(|| "The browser clipping container is unavailable.".to_string())?;
+                operation(&container, child)
+            })();
+            let _ = sender.send(result);
+        })
+        .map_err(|error| format!("cannot access the embedded macOS browser view: {error}"))?;
+    wait_for_native_browser_result(receiver)
+}
+
+#[cfg(target_os = "macos")]
+fn resize_macos_browser_container<R: tauri::Runtime>(
+    browser: &tauri::Webview<R>,
+    bounds: BrowserBounds,
+) -> Result<(), String> {
+    with_macos_browser_container(browser, move |container, child| {
+        // SAFETY: The clipping container remains attached to Nebula's main WKWebView.
+        let parent = unsafe { container.superview() }
+            .ok_or_else(|| "The Nebula browser surface is unavailable.".to_string())?;
+        container.setFrame(appkit_browser_frame(&parent, &bounds));
+        child.setFrame(container.bounds());
+        Ok(())
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_browser_container_visible<R: tauri::Runtime>(
+    browser: &tauri::Webview<R>,
+    visible: bool,
+) -> Result<(), String> {
+    with_macos_browser_container(browser, move |container, child| {
+        container.setHidden(!visible);
+        child.setHidden(!visible);
+        Ok(())
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn remove_macos_browser_container<R: tauri::Runtime>(
+    browser: &tauri::Webview<R>,
+) -> Result<(), String> {
+    with_macos_browser_container(browser, |container, child| {
+        // Both views are retained for this callback. Removing the child first prevents an orphaned
+        // native view from intercepting input while Tauri closes it.
+        child.removeFromSuperview();
+        container.removeFromSuperview();
+        Ok(())
+    })
 }
 
 fn project_key(project_id: &str) -> [u8; 16] {
@@ -316,6 +468,15 @@ fn close_tab_internal(app: &AppHandle, state: &BrowserState, tab_id: &str) -> Re
         .remove(tab_id);
     if let Some(tab) = tab {
         if let Some(webview) = app.get_webview(&tab.label) {
+            #[cfg(target_os = "macos")]
+            if remove_macos_browser_container(&webview).is_err() {
+                record_browser_failure(
+                    app,
+                    "desktop.browser.native_container_cleanup_failed",
+                    "A macOS browser clipping container could not be removed cleanly.",
+                    "tab-cleanup",
+                );
+            }
             webview
                 .close()
                 .map_err(|error| format!("cannot close browser tab: {error}"))?;
@@ -522,11 +683,7 @@ pub(crate) fn browser_create_tab(
         .get_window("main")
         .ok_or_else(|| "The Nebula window is unavailable.".to_string())?;
     let webview = window
-        .add_child(
-            builder,
-            child_position(&window, &bounds),
-            child_size(&window, &bounds),
-        )
+        .add_child(builder, child_position(&bounds), child_size(&bounds))
         .map_err(|error| format!("cannot create browser tab: {error}"))?;
     if let Err(error) = webview.hide() {
         if webview.close().is_err() {
@@ -538,6 +695,20 @@ pub(crate) fn browser_create_tab(
             );
         }
         return Err(format!("cannot initialize browser tab visibility: {error}"));
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(error) = install_macos_browser_container(&app, &webview, bounds) {
+        if webview.close().is_err() {
+            record_browser_failure(
+                &app,
+                "desktop.browser.failed_tab_cleanup_failed",
+                "A browser tab with a failed clipping container could not be closed.",
+                "tab-cleanup",
+            );
+        }
+        return Err(format!(
+            "cannot initialize the macOS browser surface: {error}"
+        ));
     }
     state
         .tabs
@@ -597,13 +768,18 @@ pub(crate) fn browser_set_bounds(
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
-    let window = webview.window();
-    let position = child_position(&window, &bounds);
-    let size = child_size(&window, &bounds);
-    webview
-        .set_position(position)
-        .and_then(|_| webview.set_size(size))
-        .map_err(|error| format!("cannot resize browser tab: {error}"))
+    #[cfg(target_os = "macos")]
+    {
+        resize_macos_browser_container(&webview, bounds)
+            .map_err(|error| format!("cannot resize browser tab: {error}"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        webview
+            .set_position(child_position(&bounds))
+            .and_then(|_| webview.set_size(child_size(&bounds)))
+            .map_err(|error| format!("cannot resize browser tab: {error}"))
+    }
 }
 
 #[tauri::command]
@@ -618,12 +794,20 @@ pub(crate) fn browser_set_visible(
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
-    if visible {
-        webview.show()
-    } else {
-        webview.hide()
+    #[cfg(target_os = "macos")]
+    {
+        set_macos_browser_container_visible(&webview, visible)
+            .map_err(|error| format!("cannot change browser visibility: {error}"))
     }
-    .map_err(|error| format!("cannot change browser visibility: {error}"))
+    #[cfg(not(target_os = "macos"))]
+    {
+        if visible {
+            webview.show()
+        } else {
+            webview.hide()
+        }
+        .map_err(|error| format!("cannot change browser visibility: {error}"))
+    }
 }
 
 #[tauri::command]
@@ -970,11 +1154,10 @@ mod tests {
     }
 
     #[test]
-    fn macos_titlebar_offset_is_converted_to_logical_pixels() {
-        assert_eq!(logical_titlebar_inset(152, 96, 2.0), 28.0);
-        assert_eq!(logical_titlebar_inset(96, 96, 2.0), 0.0);
-        assert_eq!(logical_titlebar_inset(400, 96, 2.0), 96.0);
-        assert_eq!(logical_titlebar_inset(152, 96, 0.0), 0.0);
+    fn macos_browser_frame_uses_the_main_webview_coordinate_space() {
+        assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, true), 120.0);
+        assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, false), 180.0);
+        assert_eq!(appkit_child_y(12.0, 900.0, 120.0, 600.0, false), 192.0);
     }
 
     #[test]

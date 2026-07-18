@@ -36,7 +36,10 @@ keyring = { version = "3.6.3", default-features = false, features = ["sync-secre
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }
-objc2-foundation = { version = "0.3.2", features = ["NSProcessInfo"] }
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSResponder", "NSView", "objc2-quartz-core"] }
+objc2-foundation = { version = "0.3.2", features = ["NSGeometry", "NSProcessInfo"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["CALayer"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
