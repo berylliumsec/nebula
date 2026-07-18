@@ -211,10 +211,16 @@ describe("ContainerTerminalPanel", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("nmap output"));
     expect(copy.defaultPrevented).toBe(true);
     expect(terminalSpies.options).toMatchObject({
-      cursorBlink: true,
+      cursorBlink: false,
       cursorInactiveStyle: "block",
       cursorStyle: "block",
-      theme: expect.objectContaining({ cursor: "#7ce9bd", cursorAccent: "#071017" }),
+      theme: expect.objectContaining({
+        cursor: "#b8ffe3",
+        cursorAccent: "#071017",
+        selectionBackground: "#2f6f9f",
+        selectionInactiveBackground: "#285f88",
+        selectionForeground: "#ffffff",
+      }),
     });
     const focusCalls = terminalSpies.focus.mock.calls.length;
     fireEvent.pointerDown(screen.getAllByLabelText("Terminal output").at(-1)!);

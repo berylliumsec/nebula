@@ -142,7 +142,9 @@ function LiveContainerTerminal({
     const host = hostRef.current;
     if (!host) return;
     const terminal = new Terminal({
-      cursorBlink: true,
+      // A steady cursor remains identifiable in dark themes and when the
+      // terminal renderer does not receive reliable focus/blur repaint events.
+      cursorBlink: false,
       cursorStyle: "block",
       cursorInactiveStyle: "block",
       fontFamily: '"Noto Sans Mono", "SFMono-Regular", Consolas, monospace',
@@ -152,9 +154,11 @@ function LiveContainerTerminal({
       theme: {
         background: "#071017",
         foreground: "#d9e5e9",
-        cursor: "#7ce9bd",
+        cursor: "#b8ffe3",
         cursorAccent: "#071017",
-        selectionBackground: "#245f5588",
+        selectionBackground: "#2f6f9f",
+        selectionInactiveBackground: "#285f88",
+        selectionForeground: "#ffffff",
         black: "#071017",
         brightBlack: "#53656d",
         green: "#54d6a3",
