@@ -144,6 +144,52 @@ def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
     assert artifacts.read(artifact) == payload
 
 
+def test_workspace_entry_rename_and_delete_are_bounded_and_audited(tmp_path):
+    store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    (root / "old.txt").write_text("content", encoding="utf-8")
+    (root / "occupied.txt").write_text("keep", encoding="utf-8")
+    (root / "nonempty").mkdir()
+    (root / "nonempty" / "child.txt").write_text("keep", encoding="utf-8")
+
+    with client:
+        renamed = client.patch(
+            f"/api/v1/engagements/{engagement.id}/workspace/entry",
+            headers=AUTH,
+            json={"path": "old.txt", "new_name": "renamed.txt"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["path"] == "renamed.txt"
+        assert not (root / "old.txt").exists()
+        assert (root / "renamed.txt").read_text(encoding="utf-8") == "content"
+
+        collision = client.patch(
+            f"/api/v1/engagements/{engagement.id}/workspace/entry",
+            headers=AUTH,
+            json={"path": "renamed.txt", "new_name": "occupied.txt"},
+        )
+        assert collision.status_code == 409
+
+        nonempty = client.delete(
+            f"/api/v1/engagements/{engagement.id}/workspace/entry",
+            headers=AUTH,
+            params={"path": "nonempty"},
+        )
+        assert nonempty.status_code == 409
+        assert (root / "nonempty" / "child.txt").exists()
+
+        deleted = client.delete(
+            f"/api/v1/engagements/{engagement.id}/workspace/entry",
+            headers=AUTH,
+            params={"path": "renamed.txt"},
+        )
+        assert deleted.status_code == 200
+        assert not (root / "renamed.txt").exists()
+
+    events = store.list_operation_events(engagement.id, limit=100)
+    assert {event.event_type for event in events} >= {"workspace.renamed", "workspace.deleted"}
+
+
 def test_reset_refuses_a_queued_execution(tmp_path):
     store, _artifacts, _platform, workspace, engagement, _client = _services(tmp_path)
     store.create(

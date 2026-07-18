@@ -291,8 +291,10 @@ from .tool_results import (
 from .version import __version__, build_metadata
 from .workspace import (
     WorkspaceListing,
+    WorkspaceMutationResult,
     WorkspacePreview,
     WorkspacePromotionRequest,
+    WorkspaceRenameRequest,
     WorkspaceResetRequest,
     WorkspaceResetResult,
     WorkspaceService,
@@ -4128,6 +4130,29 @@ def create_app(
         # safely coexist with a user's persistent terminal; destructive reset
         # remains guarded until the terminal stops.
         return await upload()
+
+    @app.patch(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/entry",
+        response_model=WorkspaceMutationResult,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def rename_workspace_entry(
+        engagement_id: str, request: WorkspaceRenameRequest
+    ) -> WorkspaceMutationResult:
+        return require_workspace_service().rename(engagement_id, request)
+
+    @app.delete(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/entry",
+        response_model=WorkspaceMutationResult,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_workspace_entry(
+        engagement_id: str,
+        path: str = Query(min_length=1, max_length=4096),
+    ) -> WorkspaceMutationResult:
+        return require_workspace_service().delete(engagement_id, path)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/promote",

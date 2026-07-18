@@ -4,6 +4,7 @@ import { ApiError, type ApiClient } from "../api/client";
 import type { WorkspaceEntry, WorkspacePreview } from "../api/types";
 import { useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { WorkspaceEntryContextMenu, type WorkspaceEntryMenuState } from "./WorkspaceEntryContextMenu";
 
 interface WorkspacePanelProps {
   api: ApiClient;
@@ -38,6 +39,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
   const [resetName, setResetName] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState<{ name: string; path: string }>();
+  const [entryMenu, setEntryMenu] = useState<WorkspaceEntryMenuState>();
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadAbortRef = useRef<AbortController | undefined>(undefined);
   const crumbs = useMemo(() => path ? path.split("/") : [], [path]);
@@ -193,6 +195,61 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
 
   const navigateCrumb = (index: number) => setPath(crumbs.slice(0, index + 1).join("/"));
 
+  const copyPath = async (entry: WorkspaceEntry) => {
+    try {
+      await navigator.clipboard.writeText(`/workspace/${entry.path}`);
+      setNotice(`Copied /workspace/${entry.path}.`);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Could not copy the file path.");
+    }
+  };
+
+  const copyContents = async (entry: WorkspaceEntry) => {
+    try {
+      const blob = await api.downloadWorkspaceFile(engagementId, entry.path);
+      if (blob.size > 1024 * 1024) throw new Error("Copy to clipboard is limited to 1 MiB. Download larger files instead.");
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      if (text.includes("\0")) throw new Error("Binary file contents cannot be copied as text.");
+      await navigator.clipboard.writeText(text);
+      setNotice(`Copied the contents of ${entry.name}.`);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Could not copy file contents.");
+    }
+  };
+
+  const renameEntry = async (entry: WorkspaceEntry, newName: string) => {
+    try {
+      const result = await api.renameWorkspaceEntry(engagementId, entry.path, newName);
+      if (selected?.path === entry.path) {
+        setSelected({ ...entry, path: result.path, name: newName });
+        setPreview(undefined);
+      }
+      setNotice(`Renamed ${entry.name} to ${newName}.`);
+      await load(0);
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : "Could not rename the workspace entry.");
+    }
+  };
+
+  const deleteEntry = async (entry: WorkspaceEntry) => {
+    const approved = await confirm({
+      title: `Delete ${entry.name}?`,
+      message: entry.kind === "directory" ? "Only an empty folder can be deleted. This cannot be undone." : "This removes the scratch workspace entry. Promoted evidence remains unchanged.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!approved) return;
+    try {
+      await api.deleteWorkspaceEntry(engagementId, entry.path);
+      if (selected?.path === entry.path) { setSelected(undefined); setPreview(undefined); }
+      setNotice(`Deleted ${entry.name}.`);
+      await load(0);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete the workspace entry.");
+    }
+  };
+
   return (
     <div className="workspace-browser">
       <header className="workspace-browser-toolbar">
@@ -217,7 +274,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
         >
           <header><span>{uploading ? `Uploading ${uploading.name}…` : `${total} entr${total === 1 ? "y" : "ies"}`}</span><small>Drop a file here · symlinks are inert</small></header>
           {dragActive && <div className="workspace-drop-prompt" role="status"><Upload size={22} /><strong>Upload to /workspace/{path}</strong><span>Drop to copy the file into this folder</span></div>}
-          {entries.map((entry) => <button type="button" title={entry.path} className={selected?.path === entry.path ? "active" : undefined} disabled={entry.kind === "other"} onClick={() => void openEntry(entry)} key={entry.path}>{entry.kind === "directory" ? <Folder size={16} /> : entry.kind === "symlink" ? <Link2 size={16} /> : <File size={16} />}<span><strong>{entry.name}</strong><small>{entry.kind} · {sizeLabel(entry.size)} · {new Date(entry.modifiedAt).toLocaleString()}</small></span></button>)}
+          {entries.map((entry) => <button type="button" title={`${entry.path} · Right-click for actions`} className={selected?.path === entry.path ? "active" : undefined} disabled={entry.kind === "other"} onContextMenu={(event) => { event.preventDefault(); setEntryMenu({ entry, x: event.clientX, y: event.clientY }); }} onClick={() => void openEntry(entry)} key={entry.path}>{entry.kind === "directory" ? <Folder size={16} /> : entry.kind === "symlink" ? <Link2 size={16} /> : <File size={16} />}<span><strong>{entry.name}</strong><small>{entry.kind} · {sizeLabel(entry.size)} · {new Date(entry.modifiedAt).toLocaleString()}</small></span></button>)}
           {!entries.length && !loading && <div className="empty-state compact"><Folder size={21} /><strong>Workspace is empty</strong><p>Files created by reviewed executions persist here until reset.</p></div>}
           {nextOffset !== undefined && <button className="button quiet" type="button" disabled={loading} onClick={() => void load(nextOffset)}>Load more</button>}
         </section>
@@ -230,6 +287,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
         <label>Type <strong>{engagementName}</strong><input value={resetName} onChange={(event) => setResetName(event.target.value)} /></label>
         <button className="button danger" type="button" disabled={resetName !== engagementName} onClick={() => void reset()}>Reset workspace</button>
       </section>
+      {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
     </div>
   );
 }

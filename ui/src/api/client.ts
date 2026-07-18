@@ -5125,6 +5125,27 @@ export class ApiClient {
     return response.blob();
   }
 
+  renameWorkspaceEntry(
+    engagementId: string,
+    path: string,
+    newName: string,
+  ): Promise<{ path: string; previousPath?: string }> {
+    return this.request<{ path: string; previous_path?: string | null }>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/entry`,
+      { method: "PATCH", body: JSON.stringify({ path, new_name: newName }) },
+    ).then((value) => ({ path: value.path, previousPath: value.previous_path ?? undefined }));
+  }
+
+  deleteWorkspaceEntry(
+    engagementId: string,
+    path: string,
+  ): Promise<{ path: string }> {
+    return this.request<{ path: string }>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/entry?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" },
+    );
+  }
+
   completeChat(
     body: ChatCompletionRequest,
     signal?: AbortSignal,

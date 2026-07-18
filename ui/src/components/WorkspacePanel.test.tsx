@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../api/client";
@@ -24,6 +24,29 @@ function listing() {
 }
 
 describe("WorkspacePanel uploads", () => {
+  it("offers right-click file actions and renames without overwriting", async () => {
+    const user = userEvent.setup();
+    const listWorkspace = vi.fn().mockResolvedValue({
+      ...listing(), total: 1, entries: [{
+        path: "proof.txt", name: "proof.txt", kind: "file", size: 5,
+        modifiedAt: "2026-07-13T12:00:00Z",
+      }],
+    });
+    const renameWorkspaceEntry = vi.fn().mockResolvedValue({ path: "finding.txt", previousPath: "proof.txt" });
+    renderPanel({ listWorkspace, renameWorkspaceEntry });
+
+    const entry = await screen.findByRole("button", { name: /proof\.txt/ });
+    fireEvent.contextMenu(entry, { clientX: 40, clientY: 50 });
+    const menu = await screen.findByRole("menu", { name: "Actions for proof.txt" });
+    await user.click(within(menu).getByRole("menuitem", { name: "Rename" }));
+    await user.clear(within(menu).getByRole("textbox", { name: "New name" }));
+    await user.type(within(menu).getByRole("textbox", { name: "New name" }), "finding.txt");
+    await user.click(within(menu).getByRole("button", { name: "Rename" }));
+
+    await waitFor(() => expect(renameWorkspaceEntry).toHaveBeenCalledWith("project-1", "proof.txt", "finding.txt"));
+    expect(await screen.findByText("Renamed proof.txt to finding.txt.")).toBeVisible();
+  });
+
   it("uploads a selected file into the open workspace folder", async () => {
     const user = userEvent.setup();
     const uploadWorkspaceFile = vi.fn().mockResolvedValue({

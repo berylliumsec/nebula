@@ -47,7 +47,7 @@ const formatEventKind = (kind: string) => kind.replaceAll(".", " · ").replaceAl
 
 export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const { setActivityOpen } = useChrome();
-  const { api, approvals, events, previewMode, run, streamState = "closed" } = useWorkspace();
+  const { api, approvals, events, previewMode, run, runs = [], selectMission = () => undefined, streamState = "closed" } = useWorkspace();
   const [steeringText, setSteeringText] = useState("");
   const [steering, setSteering] = useState(false);
   const [steeringError, setSteeringError] = useState<string>();
@@ -80,6 +80,8 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const harnessEvents = events.filter((event) => event.kind.startsWith("harness."));
   const latestEvent = events[0];
   const progress = run?.totalTasks ? Math.min(100, Math.round((run.completedTasks / run.totalTasks) * 100)) : 0;
+  const terminal = Boolean(run && ["complete", "failed", "cancelled", "interrupted"].includes(run.status));
+  const selectedApprovals = run ? approvals.filter((approval) => approval.runId === run.id) : [];
   if (!previewMode) {
     return (
       <div className="page agents-page">
@@ -91,11 +93,16 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           <div><Radio size={15} /><span><strong>{run ? "Mission control" : "No mission selected"}</strong><small>{run ? `Core status: ${run.status.replaceAll("_", " ")} · live feed ${streamState}` : "Start a mission to see its plan and live execution here."}</small></span></div>
           <div>{run?.backend === "harness" && <button className="button secondary" type="button" onClick={() => void discuss()}><MessageSquare size={15} /> Discuss in chat</button>}<StopMissionButton /><DeleteMissionButton /><NewMissionButton /></div>
         </section>
-        {approvals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission paused for review</strong><p>{approvals.length} request{approvals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
-        <section className="mission-hero panel">
-          <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replaceAll("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{run ? missionStatusCopy[run.status] : "Start a mission to begin recording work."}</p>{latestEvent && <div className="mission-now" aria-live="polite"><small>Latest update</small><AssistantMarkdown content={latestEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /><span>{formatEventKind(latestEvent.kind)} · {new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(latestEvent.occurredAt))}</span></div>}</div>
-          <div className="mission-hero-progress"><span><strong>{run?.completedTasks ?? 0}</strong><small>complete</small></span><span><strong>{run?.totalTasks ?? 0}</strong><small>recorded tasks</small></span><span><strong>{approvals.length}</strong><small>need review</small></span></div>
+        <section className="panel mission-picker" aria-label="Missions">
+          <header><div><strong>Mission history</strong><small>Select a mission to inspect its result</small></div><span>{runs.length}</span></header>
+          <nav aria-label="Mission history">{[...runs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((item) => <button type="button" aria-current={item.id === run?.id ? "true" : undefined} className={item.id === run?.id ? "active" : undefined} onClick={() => selectMission(item.id)} key={item.id}><span><strong>{item.title}</strong><small>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.updatedAt))}</small></span><em className={`mission-picker-status ${item.status}`}>{item.status.replaceAll("_", " ")}</em></button>)}</nav>
+          {!runs.length && <p>No missions yet.</p>}
         </section>
+        {selectedApprovals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission paused for review</strong><p>{selectedApprovals.length} request{selectedApprovals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
+        {run && <details className="mission-overview-disclosure" open={!terminal}><summary>Mission overview <span>{run.status.replaceAll("_", " ")}</span></summary><section className="mission-hero panel">
+          <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replaceAll("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{run ? missionStatusCopy[run.status] : "Start a mission to begin recording work."}</p>{latestEvent && <div className="mission-now" aria-live="polite"><small>Latest update</small><AssistantMarkdown content={latestEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /><span>{formatEventKind(latestEvent.kind)} · {new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(latestEvent.occurredAt))}</span></div>}</div>
+          <div className="mission-hero-progress"><span><strong>{run?.completedTasks ?? 0}</strong><small>complete</small></span><span><strong>{run?.totalTasks ?? 0}</strong><small>recorded tasks</small></span><span><strong>{selectedApprovals.length}</strong><small>need review</small></span></div>
+        </section></details>}
         {run && <div className="mission-progress" aria-label={`${progress}% of recorded mission tasks complete`}><span style={{ width: `${progress}%` }} /><small>{progress}% of recorded tasks complete · {events.length} timeline event{events.length === 1 ? "" : "s"} loaded</small></div>}
         {run?.backend === "harness" && ["running", "waiting_approval"].includes(run.status) && <form className="panel mission-steer" onSubmit={(event) => void steer(event)}><label htmlFor="harness-steering">Steer active harness turn</label><div><input id="harness-steering" value={steeringText} maxLength={20_000} placeholder="Add direction without starting another turn" onChange={(event) => setSteeringText(event.target.value)} /><button className="button secondary" type="submit" disabled={steering || !steeringText.trim()}>{steering ? "Sending…" : "Steer"}</button></div>{steeringError && <DiagnosticErrorNotice error={steeringError} fallback="The harness could not be steered." compact />}</form>}
         {resultEvent && <section className={`panel mission-result ${resultEvent.kind === "run.failed" ? "failed" : "complete"}`} aria-labelledby="mission-result-title">
@@ -103,7 +110,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           <div className="mission-result-body"><AssistantMarkdown content={resultEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /></div>
           <footer>{resultEvent.actor ?? "Nebula Core"} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resultEvent.occurredAt))}</footer>
         </section>}
-        <section className="panel data-panel">
+        <details className="panel data-panel mission-activity-disclosure"><summary><span><strong>Activity</strong><small>{events.length} event{events.length === 1 ? "" : "s"} · expand for technical timeline</small></span><GitBranch size={19} /></summary><section>
           <header className="panel-header compact"><div><h2>Activity</h2><p>{harnessEvents.length ? "Replayable harness timeline with newest updates first" : "Full loaded mission timeline with newest updates first"}</p></div><GitBranch size={19} /></header>
           {harnessEvents.length > 0 ? <div className="harness-timeline" aria-live="polite">{events.map((event) => {
             const payload = event.payload;
@@ -112,12 +119,12 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
             const status = typeof payload.item_status === "string" ? payload.item_status : undefined;
             const title = typeof payload.title === "string" ? payload.title : event.kind.replace("harness.", "").replaceAll("_", " ");
             const delta = typeof payload.delta === "string" ? payload.delta : undefined;
-            return <details className={`harness-activity-card kind-${kind}${payload.parent_item_id ? " nested" : ""}`} open={kind !== "reasoning" && kind !== "compaction"} key={event.id}>
+            return <details className={`harness-activity-card kind-${kind}${payload.parent_item_id ? " nested" : ""}`} key={event.id}>
               <summary><span className={`status-dot ${["complete", "completed", "success"].includes(status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(status ?? "") ? "unavailable" : "pending"}`} /><strong>{title}</strong><code>{kind.replaceAll("_", " ")}</code>{status && <span>{status.replaceAll("_", " ")}</span>}</summary>
               <div className="harness-activity-body"><p>{event.summary}</p>{delta && <div className="harness-output"><small>{typeof payload.stream === "string" ? payload.stream : "output"}</small><pre>{delta}</pre></div>}{typeof data.diff === "string" && data.diff && <div className="harness-output diff"><small>Unified diff</small><pre>{data.diff}</pre></div>}{Object.keys(data).length > 0 && kind !== "reasoning" && <pre className="harness-structured">{JSON.stringify(data, null, 2)}</pre>}<small>#{event.sequence} · {new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(event.occurredAt))}</small></div>
             </details>;
           })}</div> : events.length > 0 ? <ol className="event-list mission-event-list">{events.map((event) => <li key={event.id}><span className="event-icon"><Bot size={15} /></span><div className="event-summary"><span className="event-kind">{formatEventKind(event.kind)}</span><AssistantMarkdown content={event.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /><small>{event.actor ?? "Nebula Core"} · #{event.sequence} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" }).format(new Date(event.occurredAt))}</small>{Object.keys(event.payload).length > 0 && <details className="mission-event-details"><summary>Technical details</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>}</div></li>)}</ol> : <div className="empty-state compact"><CircleDashed size={23} /><strong>No run events</strong><p>{run ? `Core feed is ${streamState}. The first recorded transition will appear here.` : "Start a mission to create a live execution timeline."}</p></div>}
-        </section>
+        </section></details>
       </div>
     );
   }

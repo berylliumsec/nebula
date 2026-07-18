@@ -5,6 +5,7 @@ import { DialogProvider } from "../components/DialogSystem";
 import { AgentsPage } from "./AgentsPage";
 
 const steerRun = vi.fn().mockResolvedValue(undefined);
+const selectMission = vi.fn();
 const workspace = {
   api: { steerRun, discussRun: vi.fn() },
   approvals: [],
@@ -25,6 +26,8 @@ const workspace = {
   reverifyProvider: vi.fn(),
   startMission: vi.fn(),
   stopMission: vi.fn(),
+  selectMission,
+  runs: [] as Array<Record<string, unknown>>,
   run: {
     id: "run-1",
     backend: "harness" as const,
@@ -73,7 +76,8 @@ describe("mission activity", () => {
     expect(steerRun).toHaveBeenCalledWith("run-1", "Prioritize the login flow");
   });
 
-  it("keeps mission controls and current progress visible in the embedded workbench", () => {
+  it("keeps mission controls visible and technical activity collapsed", async () => {
+    const user = userEvent.setup();
     render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
 
     expect(screen.getByRole("region", { name: "Mission controls" })).toBeVisible();
@@ -81,6 +85,19 @@ describe("mission activity", () => {
     expect(screen.getByRole("button", { name: "Delete mission" })).toBeDisabled();
     expect(screen.getByText("Specialists are actively working through the plan.")).toBeVisible();
     expect(screen.getByLabelText("50% of recorded mission tasks complete")).toBeVisible();
+    expect(screen.getByText(/Full loaded mission timeline/)).not.toBeVisible();
+    await user.click(screen.getByText(/expand for technical timeline/i));
     expect(screen.getByText(/Full loaded mission timeline/)).toBeVisible();
+  });
+
+  it("allows an individual mission to be selected", async () => {
+    const user = userEvent.setup();
+    selectMission.mockClear();
+    workspace.runs = [{ ...workspace.run, updatedAt: "2026-07-14T12:00:00Z" }];
+    render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+
+    await user.click(screen.getByRole("button", { name: /Network review/ }));
+    expect(selectMission).toHaveBeenCalledWith("run-1");
+    workspace.runs = [];
   });
 });

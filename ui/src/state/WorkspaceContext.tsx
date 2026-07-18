@@ -102,6 +102,8 @@ interface WorkspaceContextValue {
   activeOperator?: OperatorProfile;
   engagement?: EngagementSummary;
   run?: AgentRunSummary;
+  runs: AgentRunSummary[];
+  selectMission: (id: string) => void;
   streamState: StreamState;
   events: RunEvent[];
   approvals: ApprovalSummary[];
@@ -163,6 +165,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [operatorProfiles, setOperatorProfiles] = useState<OperatorProfile[]>([]);
   const [engagement, setEngagement] = useState<EngagementSummary>();
   const [run, setRun] = useState<AgentRunSummary>();
+  const [runs, setRuns] = useState<AgentRunSummary[]>([]);
   const [streamState, setStreamState] = useState<StreamState>("closed");
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [approvals, setApprovals] = useState<ApprovalSummary[]>([]);
@@ -176,6 +179,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([]);
   const [attempt, setAttempt] = useState(0);
   const [selectedEngagementId, setSelectedEngagementId] = useState(() => localStorage.getItem("nebula.engagement") ?? "");
+  const [selectedMissionId, setSelectedMissionId] = useState(() => localStorage.getItem("nebula.mission") ?? "");
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
 
   const reconnect = useCallback(() => {
@@ -275,6 +279,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         setObservations([]);
         setKnowledgeSources([]);
         setReports([]);
+        setRuns([]);
 
         if (nextEngagement) {
           const detailResults = await Promise.allSettled([
@@ -297,7 +302,11 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
             ...Object.fromEntries(detailResults.map((result, index) => [labels[index], result.status === "fulfilled" ? { state: result.value.items.length ? "ready" : "empty" } : { state: "failed", error: result.reason }])),
           }));
           const [runResult, approvalResult, assetResult, findingResult, evidenceResult, observationResult, knowledgeResult, reportResult] = detailResults;
-          if (runResult.status === "fulfilled") nextRun = runResult.value.items[runResult.value.items.length - 1];
+          if (runResult.status === "fulfilled") {
+            setRuns(runResult.value.items);
+            nextRun = runResult.value.items.find((item) => item.id === selectedMissionId)
+              ?? runResult.value.items[runResult.value.items.length - 1];
+          }
           if (approvalResult.status === "fulfilled") setApprovals(approvalResult.value.items);
           if (assetResult.status === "fulfilled") setAssets(assetResult.value.items);
           if (findingResult.status === "fulfilled") setFindings(findingResult.value.items);
@@ -329,6 +338,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
             onEvent: (event) => {
               setEvents((current) => [event, ...current].slice(0, 100));
               setRun((current) => current ? evolveRunFromEvent(current, event) : current);
+              setRuns((current) => current.map((item) => item.id === event.runId ? evolveRunFromEvent(item, event) : item));
               if (!nextEngagement) return;
               if (event.kind === "approval.requested" || event.kind === "approval.resolved") {
                 void nextApi.listApprovals(nextEngagement.id, controller.signal)
@@ -369,7 +379,15 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       controller.abort();
       eventStream?.disconnect();
     };
-  }, [attempt, selectedEngagementId]);
+  }, [attempt, selectedEngagementId, selectedMissionId]);
+
+  const selectMission = useCallback((id: string) => {
+    if (!id || id === selectedMissionId) return;
+    localStorage.setItem("nebula.mission", id);
+    setRun(runs.find((item) => item.id === id));
+    setEvents([]);
+    setSelectedMissionId(id);
+  }, [runs, selectedMissionId]);
 
   useEffect(() => {
     if (!api || workspaceState === "failed" || !["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "")) return;
@@ -637,6 +655,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       throw new Error("Nebula Core must be online to start a mission.");
     }
     const created = await api.createMission(request);
+    localStorage.setItem("nebula.mission", created.id);
+    setSelectedMissionId(created.id);
+    setRuns((current) => [created, ...current.filter((item) => item.id !== created.id)]);
     setRun(created);
     setAttempt((value) => value + 1);
     return created;
@@ -647,6 +668,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       throw new Error("Nebula Core must be online to stop a mission.");
     }
     const updated = await api.stopRun(id, request);
+    setRuns((current) => current.map((item) => item.id === id ? updated : item));
     setRun(updated);
     setAttempt((value) => value + 1);
     return updated;
@@ -657,11 +679,16 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       throw new Error("Nebula Core must be online to delete a mission.");
     }
     await api.deleteRun(id);
+    setRuns((current) => current.filter((item) => item.id !== id));
+    if (selectedMissionId === id) {
+      localStorage.removeItem("nebula.mission");
+      setSelectedMissionId("");
+    }
     setRun((current) => current?.id === id ? undefined : current);
     setEvents([]);
     setApprovals((current) => current.filter((approval) => approval.runId !== id));
     setAttempt((value) => value + 1);
-  }, [api, coreState]);
+  }, [api, coreState, selectedMissionId]);
 
   const createOperatorProfile = useCallback(async (request: OperatorProfileCreateRequest) => {
     if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to create an operator profile.");
@@ -772,6 +799,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       activeOperator: operatorProfiles.find((profile) => profile.active),
       engagement,
       run,
+      runs,
+      selectMission,
       streamState,
       events,
       approvals,
@@ -871,6 +900,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       reverifyProvider,
       resolveApproval,
       run,
+      runs,
+      selectMission,
       runtime,
       streamState,
     ],

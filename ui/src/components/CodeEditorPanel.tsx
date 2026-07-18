@@ -6,6 +6,7 @@ import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useWorkbenchEditor, type WorkbenchEditorBuffer } from "../state/WorkbenchEditorContext";
 import { CodeMirrorSurface, languageLabelForPath } from "./CodeMirrorSurface";
 import { useConfirmation } from "./DialogSystem";
+import { WorkspaceEntryContextMenu, type WorkspaceEntryMenuState } from "./WorkspaceEntryContextMenu";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
 
@@ -56,6 +57,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
   const [notice, setNotice] = useState<string>();
   const [conflict, setConflict] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
+  const [entryMenu, setEntryMenu] = useState<WorkspaceEntryMenuState>();
   const dirty = Boolean(buffer && (!buffer.existing || buffer.content !== buffer.savedContent));
   const crumbs = useMemo(() => directory ? directory.split("/") : [], [directory]);
 
@@ -222,11 +224,65 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
     if (buffer) setBuffer({ ...buffer, ...changes });
   };
 
+  const copyPath = async (entry: WorkspaceEntry) => {
+    try {
+      await navigator.clipboard.writeText(`/workspace/${entry.path}`);
+      setNotice(`Copied /workspace/${entry.path}.`);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Could not copy the file path.");
+    }
+  };
+
+  const copyContents = async (entry: WorkspaceEntry) => {
+    try {
+      const decoded = await decodeWorkspaceFile(await api.downloadWorkspaceFile(engagementId, entry.path));
+      await navigator.clipboard.writeText(decoded.content);
+      setNotice(`Copied the contents of ${entry.name}.`);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Could not copy file contents.");
+    }
+  };
+
+  const renameEntry = async (entry: WorkspaceEntry, newName: string) => {
+    if (buffer?.existing && buffer.filePath === entry.path && dirty && !await confirm({
+      title: "Rename with unsaved changes?",
+      message: "The open draft will keep its unsaved changes and move to the renamed workspace path.",
+      confirmLabel: "Rename",
+    })) return;
+    try {
+      const result = await api.renameWorkspaceEntry(engagementId, entry.path, newName);
+      if (buffer?.existing && buffer.filePath === entry.path) setBuffer({ ...buffer, filePath: result.path });
+      setNotice(`Renamed ${entry.name} to ${newName}.`);
+      await load(0);
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : "Could not rename the workspace entry.");
+    }
+  };
+
+  const deleteEntry = async (entry: WorkspaceEntry) => {
+    const open = buffer?.existing && buffer.filePath === entry.path;
+    const approved = await confirm({
+      title: `Delete ${entry.name}?`,
+      message: open && dirty ? "This deletes the file and discards the unsaved editor changes. This cannot be undone." : entry.kind === "directory" ? "Only an empty folder can be deleted. This cannot be undone." : "This deletes the scratch workspace file. This cannot be undone.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!approved) return;
+    try {
+      await api.deleteWorkspaceEntry(engagementId, entry.path);
+      if (open) setBuffer(undefined);
+      setNotice(`Deleted ${entry.name}.`);
+      await load(0);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete the workspace entry.");
+    }
+  };
+
   return <div className="code-editor-panel">
     <aside className="code-editor-sidebar" aria-label="Editor files">
       <header><div><Braces size={16} /><strong>Workspace</strong></div><div><button className="icon-button subtle" type="button" aria-label="New file" onClick={() => void createFile()}><FilePlus2 size={15} /></button><button className="icon-button subtle" type="button" aria-label="Refresh editor files" disabled={loading} onClick={() => void load(0)}><RefreshCw className={loading ? "spin" : undefined} size={14} /></button></div></header>
       <nav className="code-editor-crumbs" aria-label="Editor workspace path"><button type="button" onClick={() => setDirectory("")}>/workspace</button>{crumbs.map((crumb, index) => <span key={`${crumb}-${index}`}>/<button type="button" onClick={() => setDirectory(crumbs.slice(0, index + 1).join("/"))}>{crumb}</button></span>)}</nav>
-      <div className="code-editor-files">{entries.map((entry) => <button type="button" className={buffer?.existing && buffer.filePath === entry.path ? "active" : undefined} disabled={entry.kind === "symlink" || entry.kind === "other"} onClick={() => chooseEntry(entry)} key={entry.path}>{entry.kind === "directory" ? <Folder size={15} /> : <File size={15} />}<span><strong>{entry.name}</strong><small>{entry.kind === "file" ? `${entry.size.toLocaleString()} bytes` : entry.kind}</small></span></button>)}{!entries.length && !loading && <div className="empty-state compact"><Folder size={20} /><strong>No files here</strong><p>Create a text file or use Terminal to populate /workspace.</p></div>}{nextOffset !== undefined && <button className="button quiet" type="button" onClick={() => void load(nextOffset)}>Load more</button>}</div>
+      <div className="code-editor-files">{entries.map((entry) => <button type="button" title={`${entry.path} · Right-click for actions`} className={buffer?.existing && buffer.filePath === entry.path ? "active" : undefined} disabled={entry.kind === "symlink" || entry.kind === "other"} onContextMenu={(event) => { event.preventDefault(); setEntryMenu({ entry, x: event.clientX, y: event.clientY }); }} onClick={() => chooseEntry(entry)} key={entry.path}>{entry.kind === "directory" ? <Folder size={15} /> : <File size={15} />}<span><strong>{entry.name}</strong><small>{entry.kind === "file" ? `${entry.size.toLocaleString()} bytes` : entry.kind}</small></span></button>)}{!entries.length && !loading && <div className="empty-state compact"><Folder size={20} /><strong>No files here</strong><p>Create a text file or use Terminal to populate /workspace.</p></div>}{nextOffset !== undefined && <button className="button quiet" type="button" onClick={() => void load(nextOffset)}>Load more</button>}</div>
     </aside>
     <section className={`code-editor-main${buffer ? "" : " is-empty"}`}>
       {buffer ? <>
@@ -237,5 +293,6 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
         <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span>UTF-8 · spaces: 2</span><span>/workspace · Terminal execution</span></footer>
       </> : <><div className="empty-state"><Braces size={25} /><strong>Shared workspace editor</strong><p>Open or create a text file here, then run it from Terminal in /workspace using its interpreter.</p><button className="button primary" type="button" onClick={() => void createFile()}><FilePlus2 size={15} /> New file</button></div>{error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}</>}
     </section>
+    {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
   </div>;
 }

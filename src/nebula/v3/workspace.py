@@ -5,6 +5,7 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception
 
 import asyncio
+import errno
 import hashlib
 import hmac
 import mimetypes
@@ -16,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Literal
 from uuid import uuid4
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 
 from .artifacts import ArtifactStore
 from .domain import (
@@ -85,6 +86,24 @@ class WorkspacePromotionRequest(NebulaModel):
 
 class WorkspaceResetRequest(NebulaModel):
     engagement_name: str = Field(min_length=1, max_length=300)
+
+
+class WorkspaceRenameRequest(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    new_name: str = Field(min_length=1, max_length=255)
+
+    @field_validator("new_name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        if not value.strip() or "/" in value or "\\" in value or "\0" in value or value in {".", ".."}:
+            raise ValueError("new name must be one non-empty workspace path segment")
+        return value
+
+
+class WorkspaceMutationResult(NebulaModel):
+    engagement_id: str
+    path: str
+    previous_path: str | None = None
 
 
 class WorkspaceResetResult(NebulaModel):
@@ -555,6 +574,87 @@ class WorkspaceService:
             engagement_id=engagement.id, removed_entries=removed
         )
 
+    def rename(
+        self, engagement_id: str, request: WorkspaceRenameRequest
+    ) -> WorkspaceMutationResult:
+        self.store.get(Engagement, engagement_id)
+        relative = _relative_parts(request.path)
+        if "/" in request.new_name or "\\" in request.new_name or request.new_name in {".", ".."}:
+            raise ExecutionServiceError(
+                "workspace_name_invalid", "new name must be one workspace path segment", status_code=422
+            )
+        parent = self._open_directory(engagement_id, relative[:-1])
+        try:
+            os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
+            try:
+                os.stat(request.new_name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise ExecutionServiceError(
+                    "workspace_file_exists", "a workspace entry already has that name", status_code=409
+                )
+            os.rename(
+                relative[-1], request.new_name, src_dir_fd=parent, dst_dir_fd=parent
+            )
+            os.fsync(parent)
+        except FileNotFoundError as exc:
+            raise ExecutionServiceError(
+                "workspace_path_missing", "workspace entry does not exist", status_code=404
+            ) from exc
+        finally:
+            os.close(parent)
+        path = PurePosixPath(*relative[:-1], request.new_name).as_posix()
+        result = WorkspaceMutationResult(
+            engagement_id=engagement_id, path=path, previous_path=request.path
+        )
+        self._record_mutation(engagement_id, "renamed", result)
+        return result
+
+    def delete(self, engagement_id: str, path: str) -> WorkspaceMutationResult:
+        self.store.get(Engagement, engagement_id)
+        relative = _relative_parts(path)
+        parent = self._open_directory(engagement_id, relative[:-1])
+        try:
+            metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
+            if stat.S_ISDIR(metadata.st_mode):
+                try:
+                    os.rmdir(relative[-1], dir_fd=parent)
+                except OSError as exc:
+                    if exc.errno == errno.ENOTEMPTY:
+                        raise ExecutionServiceError(
+                            "workspace_directory_not_empty",
+                            "only empty workspace directories can be deleted",
+                            status_code=409,
+                        ) from exc
+                    raise
+            else:
+                os.unlink(relative[-1], dir_fd=parent)
+            os.fsync(parent)
+        except FileNotFoundError as exc:
+            raise ExecutionServiceError(
+                "workspace_path_missing", "workspace entry does not exist", status_code=404
+            ) from exc
+        finally:
+            os.close(parent)
+        result = WorkspaceMutationResult(engagement_id=engagement_id, path=path)
+        self._record_mutation(engagement_id, "deleted", result)
+        return result
+
+    def _record_mutation(
+        self, engagement_id: str, action: str, result: WorkspaceMutationResult
+    ) -> None:
+        operation_id = str(uuid4())
+        self.store.append_operation_event(
+            operation_id,
+            f"workspace_{action}",
+            engagement_id,
+            f"workspace.{action}",
+            result.model_dump(mode="json"),
+            actor_id=self.operator_id(),
+            idempotency_key=f"workspace-{action}:{operation_id}",
+        )
+
     def _workspace_root(self, engagement_id: str) -> Path:
         root = self.tool_platform.workspace_for(engagement_id)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -698,6 +798,8 @@ __all__ = [
     "WorkspaceListing",
     "WorkspacePreview",
     "WorkspacePromotionRequest",
+    "WorkspaceMutationResult",
+    "WorkspaceRenameRequest",
     "WorkspaceResetRequest",
     "WorkspaceResetResult",
     "WorkspaceUploadResult",
