@@ -31,6 +31,7 @@ interface WorkbenchBrowserProps {
 }
 
 const MAX_TABS = 16;
+const CLIPPING_OVERFLOW = new Set(["auto", "clip", "hidden", "scroll"]);
 
 function tabId(): string {
   return `tab-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -42,6 +43,27 @@ function blankTab(): BrowserTab {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function visibleSurfaceRect(element: HTMLElement): DOMRect {
+  const rect = element.getBoundingClientRect();
+  let top = Math.max(0, rect.top);
+  let right = Math.min(window.innerWidth, rect.right);
+  let bottom = Math.min(window.innerHeight, rect.bottom);
+  let left = Math.max(0, rect.left);
+  for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    const style = getComputedStyle(ancestor);
+    const ancestorRect = ancestor.getBoundingClientRect();
+    if (CLIPPING_OVERFLOW.has(style.overflowX)) {
+      left = Math.max(left, ancestorRect.left);
+      right = Math.min(right, ancestorRect.right);
+    }
+    if (CLIPPING_OVERFLOW.has(style.overflowY)) {
+      top = Math.max(top, ancestorRect.top);
+      bottom = Math.min(bottom, ancestorRect.bottom);
+    }
+  }
+  return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
 export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBrowserProps) {
@@ -66,21 +88,16 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
     && (sidebarCollapsed || !window.matchMedia("(max-width: 760px)").matches);
 
   const bounds = useCallback((): BrowserBounds | undefined => {
-    const rect = surfaceRef.current?.getBoundingClientRect();
-    if (!rect) return undefined;
-    const x = Math.max(0, rect.left);
+    const surface = surfaceRef.current;
+    if (!surface) return undefined;
+    const rect = visibleSurfaceRect(surface);
+    const x = rect.left;
     const toolbarBottom = toolbarRef.current?.getBoundingClientRect().bottom ?? rect.top;
     const y = Math.max(0, rect.top, toolbarBottom);
-    const right = Math.min(window.innerWidth, rect.right);
-    const bottom = Math.min(window.innerHeight, rect.bottom);
+    const right = rect.right;
+    const bottom = rect.bottom;
     if (right - x < 1 || bottom - y < 1) return undefined;
-    return {
-      x,
-      y,
-      width: right - x,
-      height: bottom - y,
-      scaleFactor: window.devicePixelRatio || 1,
-    };
+    return { x, y, width: right - x, height: bottom - y };
   }, []);
 
   const updateTab = useCallback((id: string, change: Partial<BrowserTab>) => {
@@ -216,7 +233,7 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
     const layoutRoot = surfaceRef.current?.parentElement;
     const mutationObserver = layoutRoot ? new MutationObserver(sync) : undefined;
     if (layoutRoot) {
-      observer.observe(layoutRoot);
+      for (let ancestor: HTMLElement | null = layoutRoot; ancestor; ancestor = ancestor.parentElement) observer.observe(ancestor);
       mutationObserver?.observe(layoutRoot, { childList: true });
     }
     window.addEventListener("resize", sync);

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export interface BrowserBounds { x: number; y: number; width: number; height: number; scaleFactor: number }
+export interface BrowserBounds { x: number; y: number; width: number; height: number }
 export interface BrowserCapabilities { engine: string; projectStorage: "persistent" | "ephemeral" }
 export interface BrowserPageEvent {
   tabId: string;

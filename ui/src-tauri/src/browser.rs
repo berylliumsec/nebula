@@ -15,7 +15,7 @@ use getrandom::fill as random_fill;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, Url, WebviewUrl,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, Url, WebviewUrl,
     webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder},
 };
 
@@ -55,7 +55,6 @@ pub(crate) struct BrowserBounds {
     y: f64,
     width: f64,
     height: f64,
-    scale_factor: f64,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -141,8 +140,6 @@ fn checked_bounds(bounds: BrowserBounds) -> Result<BrowserBounds, String> {
         || bounds.y < 0.0
         || bounds.width < 1.0
         || bounds.height < 1.0
-        || bounds.scale_factor < 0.5
-        || bounds.scale_factor > 8.0
         || bounds.width > 16_384.0
         || bounds.height > 16_384.0
     {
@@ -151,17 +148,47 @@ fn checked_bounds(bounds: BrowserBounds) -> Result<BrowserBounds, String> {
     Ok(bounds)
 }
 
-fn physical_position(bounds: &BrowserBounds) -> PhysicalPosition<i32> {
-    PhysicalPosition::new(
-        (bounds.x * bounds.scale_factor).round() as i32,
-        (bounds.y * bounds.scale_factor).round() as i32,
-    )
+#[cfg(any(target_os = "macos", test))]
+fn logical_titlebar_inset(inner_y: i32, outer_y: i32, scale_factor: f64) -> f64 {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return 0.0;
+    }
+    (f64::from(inner_y.saturating_sub(outer_y)) / scale_factor).clamp(0.0, 96.0)
 }
 
-fn physical_size(bounds: &BrowserBounds) -> PhysicalSize<u32> {
-    PhysicalSize::new(
-        (bounds.width * bounds.scale_factor).round() as u32,
-        (bounds.height * bounds.scale_factor).round() as u32,
+// On macOS the Tao parent NSView extends beneath the decorated title bar while the main
+// application webview's DOM viewport begins at the client-area origin. Child WKWebViews are
+// positioned in the parent NSView, so translate the DOM rectangle by the measured decoration.
+#[cfg(target_os = "macos")]
+fn native_child_top_inset<R: tauri::Runtime>(window: &tauri::Window<R>) -> f64 {
+    let Ok(inner) = window.inner_position() else {
+        return 0.0;
+    };
+    let Ok(outer) = window.outer_position() else {
+        return 0.0;
+    };
+    logical_titlebar_inset(inner.y, outer.y, window.scale_factor().unwrap_or(1.0))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_child_top_inset<R: tauri::Runtime>(_window: &tauri::Window<R>) -> f64 {
+    0.0
+}
+
+fn child_position<R: tauri::Runtime>(
+    window: &tauri::Window<R>,
+    bounds: &BrowserBounds,
+) -> LogicalPosition<f64> {
+    LogicalPosition::new(bounds.x, bounds.y + native_child_top_inset(window))
+}
+
+fn child_size<R: tauri::Runtime>(
+    window: &tauri::Window<R>,
+    bounds: &BrowserBounds,
+) -> LogicalSize<f64> {
+    LogicalSize::new(
+        bounds.width,
+        (bounds.height - native_child_top_inset(window)).max(1.0),
     )
 }
 
@@ -497,8 +524,8 @@ pub(crate) fn browser_create_tab(
     let webview = window
         .add_child(
             builder,
-            physical_position(&bounds),
-            physical_size(&bounds),
+            child_position(&window, &bounds),
+            child_size(&window, &bounds),
         )
         .map_err(|error| format!("cannot create browser tab: {error}"))?;
     if let Err(error) = webview.hide() {
@@ -570,9 +597,12 @@ pub(crate) fn browser_set_bounds(
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+    let window = webview.window();
+    let position = child_position(&window, &bounds);
+    let size = child_size(&window, &bounds);
     webview
-        .set_position(physical_position(&bounds))
-        .and_then(|_| webview.set_size(physical_size(&bounds)))
+        .set_position(position)
+        .and_then(|_| webview.set_size(size))
         .map_err(|error| format!("cannot resize browser tab: {error}"))
 }
 
@@ -901,7 +931,6 @@ mod tests {
                 y: 2.0,
                 width: 900.0,
                 height: 600.0,
-                scale_factor: 1.5,
             })
             .is_ok()
         );
@@ -911,7 +940,6 @@ mod tests {
                 y: 2.0,
                 width: 900.0,
                 height: 600.0,
-                scale_factor: 1.5,
             })
             .is_err()
         );
@@ -921,24 +949,32 @@ mod tests {
                 y: 2.0,
                 width: 99_000.0,
                 height: 600.0,
-                scale_factor: 1.5,
             })
             .is_err()
         );
     }
 
     #[test]
-    fn browser_bounds_convert_css_pixels_to_physical_pixels() {
+    fn browser_bounds_remain_logical_at_high_density() {
         let bounds = checked_bounds(BrowserBounds {
             x: 12.5,
             y: 86.0,
             width: 900.0,
             height: 600.0,
-            scale_factor: 2.0,
         })
         .unwrap();
-        assert_eq!(physical_position(&bounds), PhysicalPosition::new(25, 172));
-        assert_eq!(physical_size(&bounds), PhysicalSize::new(1800, 1200));
+        assert_eq!(bounds.x, 12.5);
+        assert_eq!(bounds.y, 86.0);
+        assert_eq!(bounds.width, 900.0);
+        assert_eq!(bounds.height, 600.0);
+    }
+
+    #[test]
+    fn macos_titlebar_offset_is_converted_to_logical_pixels() {
+        assert_eq!(logical_titlebar_inset(152, 96, 2.0), 28.0);
+        assert_eq!(logical_titlebar_inset(96, 96, 2.0), 0.0);
+        assert_eq!(logical_titlebar_inset(400, 96, 2.0), 96.0);
+        assert_eq!(logical_titlebar_inset(152, 96, 0.0), 0.0);
     }
 
     #[test]

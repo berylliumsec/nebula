@@ -383,7 +383,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   }
 });
 
-test("browser address bar stays above native bounds at 2x scale", async ({ browser }, testInfo) => {
+test("browser address bar stays above logical native bounds at 2x scale", async ({ browser }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Native browser geometry needs one explicit desktop run.");
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
@@ -428,16 +428,19 @@ test("browser address bar stays above native bounds at 2x scale", async ({ brows
     const toolbar = document.querySelector<HTMLElement>(".browser-toolbar")!;
     const address = document.querySelector<HTMLElement>("#browser-address")!;
     const surface = document.querySelector<HTMLElement>(".browser-surface")!;
+    const browserPanel = document.querySelector<HTMLElement>(".workbench-browser")!;
     const toolbarRect = toolbar.getBoundingClientRect();
     const addressRect = address.getBoundingClientRect();
     const surfaceRect = surface.getBoundingClientRect();
+    const panelRect = browserPanel.getBoundingClientRect();
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
     const create = calls.find((call) => call.command === "browser_create_tab");
     return {
       toolbar: { top: toolbarRect.top, bottom: toolbarRect.bottom, height: toolbarRect.height },
       address: { top: addressRect.top, bottom: addressRect.bottom, height: addressRect.height },
       surfaceTop: surfaceRect.top,
-      bounds: create?.args.bounds as { y: number; scaleFactor: number },
+      panelBottom: panelRect.bottom,
+      bounds: create?.args.bounds as { y: number; height: number },
       devicePixelRatio: window.devicePixelRatio,
     };
   });
@@ -446,7 +449,7 @@ test("browser address bar stays above native bounds at 2x scale", async ({ brows
   expect(geometry.address.bottom).toBeLessThanOrEqual(geometry.toolbar.bottom);
   expect(geometry.surfaceTop).toBeGreaterThanOrEqual(geometry.toolbar.bottom);
   expect(geometry.bounds.y).toBeGreaterThanOrEqual(geometry.toolbar.bottom);
-  expect(geometry.bounds.scaleFactor).toBe(geometry.devicePixelRatio);
+  expect(geometry.bounds.y + geometry.bounds.height).toBeLessThanOrEqual(geometry.panelBottom + 1);
   expect(geometry.devicePixelRatio).toBe(2);
   await page.screenshot({ path: testInfo.outputPath("browser-address-bar-2x.png") });
   await context.close();
