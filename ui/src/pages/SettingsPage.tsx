@@ -8,6 +8,7 @@ import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
 import { EngagementPolicySettings } from "../components/EngagementPolicySettings";
 import { AutomationRuntimeSettings, RunnerSettings } from "../components/ToolingSettings";
 import { HarnessSettings } from "../components/HarnessSettings";
+import { PostToolAssistantSettings } from "../components/PostToolAssistantSettings";
 import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -69,6 +70,7 @@ export function SettingsPage() {
     refreshSetupRuntime,
     setupStatus,
     workspaceState,
+    engagement,
   } = useWorkspace();
   const [adding, setAdding] = useState(false);
   const [editingProvider, setEditingProvider] = useState<ProviderHealth>();
@@ -527,6 +529,7 @@ export function SettingsPage() {
           <div className="empty-state compact"><Server size={23} /><strong>No provider profiles</strong><p>Add a provider profile in Core before assigning a model to a mission.</p></div>
         )}
       </section>
+      <PostToolAssistantSettings api={api} engagementId={engagement?.id} providers={providers} previewMode={previewMode} />
       <HarnessSettings />
       <AutomationRuntimeSettings />
       <RunnerSettings />

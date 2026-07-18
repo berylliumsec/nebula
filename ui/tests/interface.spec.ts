@@ -1222,6 +1222,69 @@ test("advanced settings keeps the binary inventory collapsed until requested", a
   await expect(inventory.getByText("nmap", { exact: true })).toBeVisible();
 });
 
+test("tool follow-up runtime lives in Settings and its Workbench toggles persist", async ({ page }, testInfo) => {
+  let postToolConfig = {
+    suggest_next_steps: false,
+    take_notes: false,
+    backend_kind: "harness",
+    provider_id: null,
+    harness_profile_id: "harness-1",
+    model: "gpt-5-codex",
+    cloud_confirmed: false,
+  };
+  const harness = {
+    ...entity,
+    id: "harness-1",
+    name: "Codex harness",
+    kind: "codex_app_server",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "codex",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "gpt-5-codex",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
+    capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0" },
+  };
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/harnesses")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([harness]) });
+      return;
+    }
+    if (path.endsWith("/engagements/scratch-project/post-tool-assistant")) {
+      if (request.method() === "PUT") postToolConfig = request.postDataJSON() as typeof postToolConfig;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(postToolConfig) });
+      return;
+    }
+    if (path.endsWith("/engagements/scratch-project/post-tool-results")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/", "Workbench");
+  await expect(page.getByRole("combobox", { name: "Post-tool analysis backend" })).toHaveCount(0);
+  const suggestions = page.getByRole("checkbox", { name: "Suggest next steps" });
+  await suggestions.click();
+  await expect(suggestions).toBeChecked();
+  await expect.poll(() => postToolConfig.suggest_next_steps).toBe(true);
+  if (testInfo.project.name === "desktop") await expect(page.locator(".session-toolbar")).toHaveScreenshot("tool-follow-up-workbench-toolbar.png");
+
+  await openWorkspace(page, "/settings#post-tool-assistant-settings", "Settings");
+  const panel = page.locator("#post-tool-assistant-settings");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole("combobox", { name: "Tool follow-up runtime" })).toHaveValue("harness:harness-1");
+  await expect(panel.getByLabel("Tool follow-up model")).toHaveValue("gpt-5-codex");
+  expect(await findPathologicalText(page)).toEqual([]);
+  if (testInfo.project.name === "desktop") await expect(panel).toHaveScreenshot("tool-follow-up-settings.png");
+});
+
 test("appearance variants preserve each critical workspace hierarchy", async ({ page }) => {
   for (const theme of ["light", "high-contrast"] as const) {
     await openWorkspace(page, "/", "Workbench");
