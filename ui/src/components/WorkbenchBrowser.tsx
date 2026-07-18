@@ -204,11 +204,17 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
     };
     const observer = new ResizeObserver(sync);
     if (surfaceRef.current) observer.observe(surfaceRef.current);
+    const layoutRoot = surfaceRef.current?.parentElement;
+    const mutationObserver = layoutRoot ? new MutationObserver(sync) : undefined;
+    if (layoutRoot) {
+      observer.observe(layoutRoot);
+      mutationObserver?.observe(layoutRoot, { childList: true });
+    }
     window.addEventListener("resize", sync);
     window.addEventListener("scroll", sync, true);
     sync();
-    return () => { observer.disconnect(); window.removeEventListener("resize", sync); window.removeEventListener("scroll", sync, true); cancelAnimationFrame(frame); };
-  }, [activeTab?.created, activeTab?.id, bounds, browserVisible, desktop, projectId]);
+    return () => { observer.disconnect(); mutationObserver?.disconnect(); window.removeEventListener("resize", sync); window.removeEventListener("scroll", sync, true); cancelAnimationFrame(frame); };
+  }, [activeTab?.created, activeTab?.id, bounds, browserVisible, capabilities?.projectStorage, desktop, error, notice, projectId]);
 
   useEffect(() => () => {
     for (const tab of tabsRef.current) if (tab.created) void workbenchBrowser.close(tab.id, projectId).catch((caught) => {

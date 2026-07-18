@@ -4856,7 +4856,7 @@ export class ApiClient {
     providerId: string,
     model: string,
     cloudConfirmed: boolean,
-    modes?: { suggestNextSteps?: boolean; takeNotes?: boolean },
+    modes?: PostToolAssistantConfig,
   ): Promise<GeneratedDraft> {
     return this.request<WireGeneratedDraft>(
       `executions/${encodeURIComponent(executionId)}/draft-notes`,
@@ -4864,6 +4864,8 @@ export class ApiClient {
         method: "POST",
         body: JSON.stringify({
           provider_id: providerId,
+          backend_kind: modes?.backendKind ?? "provider",
+          harness_profile_id: modes?.harnessProfileId,
           model,
           cloud_confirmed: cloudConfirmed,
           suggest_next_steps: modes?.suggestNextSteps ?? false,
@@ -4875,17 +4877,17 @@ export class ApiClient {
   }
 
   getPostToolAssistant(engagementId: string): Promise<PostToolAssistantConfig> {
-    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; provider_id?: string | null; model?: string | null; cloud_confirmed: boolean }>(
+    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; backend_kind: "provider" | "harness"; provider_id?: string | null; harness_profile_id?: string | null; model?: string | null; cloud_confirmed: boolean }>(
       `engagements/${encodeURIComponent(engagementId)}/post-tool-assistant`,
-    ).then((value) => ({ suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, providerId: value.provider_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
+    ).then((value) => ({ suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, backendKind: value.backend_kind, providerId: value.provider_id ?? undefined, harnessProfileId: value.harness_profile_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
   }
 
   setPostToolAssistant(engagementId: string, config: PostToolAssistantConfig): Promise<PostToolAssistantConfig> {
-    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; provider_id?: string | null; model?: string | null; cloud_confirmed: boolean }>(
+    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; backend_kind: "provider" | "harness"; provider_id?: string | null; harness_profile_id?: string | null; model?: string | null; cloud_confirmed: boolean }>(
       `engagements/${encodeURIComponent(engagementId)}/post-tool-assistant`, {
-        method: "PUT", body: JSON.stringify({ suggest_next_steps: config.suggestNextSteps, take_notes: config.takeNotes, provider_id: config.providerId, model: config.model, cloud_confirmed: config.cloudConfirmed }),
+        method: "PUT", body: JSON.stringify({ suggest_next_steps: config.suggestNextSteps, take_notes: config.takeNotes, backend_kind: config.backendKind, provider_id: config.providerId, harness_profile_id: config.harnessProfileId, model: config.model, cloud_confirmed: config.cloudConfirmed }),
       },
-    ).then((value) => ({ suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, providerId: value.provider_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
+    ).then((value) => ({ suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, backendKind: value.backend_kind, providerId: value.provider_id ?? undefined, harnessProfileId: value.harness_profile_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
   }
 
   listPostToolResults(engagementId: string): Promise<GeneratedDraft[]> {

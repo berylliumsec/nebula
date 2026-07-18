@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, Clipboard, LoaderCircle, Play, Sparkles, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import type { GeneratedDraft, PostToolAssistantConfig, ProviderHealth } from "../api/types";
+import type { GeneratedDraft, HarnessProfile, PostToolAssistantConfig, ProviderHealth } from "../api/types";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 
@@ -9,19 +9,20 @@ interface Props {
   api: ApiClient;
   engagementId: string;
   providers: ProviderHealth[];
+  harnesses: HarnessProfile[];
   onRun: (candidate: FencedRunCandidate) => void;
 }
 
-const EMPTY: PostToolAssistantConfig = { suggestNextSteps: false, takeNotes: false, cloudConfirmed: false };
+const EMPTY: PostToolAssistantConfig = { suggestNextSteps: false, takeNotes: false, backendKind: "provider", cloudConfirmed: false };
 
-export function PostToolAssistant({ api, engagementId, providers, onRun }: Props) {
+export function PostToolAssistant({ api, engagementId, providers, harnesses, onRun }: Props) {
   const [config, setConfig] = useState<PostToolAssistantConfig>(EMPTY);
   const [result, setResult] = useState<GeneratedDraft>();
   const [expanded, setExpanded] = useState(false);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const structured = useMemo(() => providers.find((item) => item.enabled && item.capabilities.some((value) => value.toLowerCase().includes("strict structured"))), [providers]);
+  const availableProvider = useMemo(() => providers.find((item) => item.enabled), [providers]);
 
   const refresh = useCallback(async () => {
     const [nextConfig, results] = await Promise.all([api.getPostToolAssistant(engagementId), api.listPostToolResults(engagementId)]);
@@ -34,7 +35,8 @@ export function PostToolAssistant({ api, engagementId, providers, onRun }: Props
   useEffect(() => { void refresh().catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load tool assistance.")); }, [refresh]);
 
   useEffect(() => {
-    if (!config.suggestNextSteps && !config.takeNotes || !config.providerId || !config.model) return;
+    const backendId = config.backendKind === "harness" ? config.harnessProfileId : config.providerId;
+    if ((!config.suggestNextSteps && !config.takeNotes) || !backendId || !config.model) return;
     let active = true;
     const tick = async () => {
       try {
@@ -43,7 +45,7 @@ export function PostToolAssistant({ api, engagementId, providers, onRun }: Props
         const next = executions.items.filter((item) => ["completed", "failed", "timed_out"].includes(item.status) && !known.has(item.id)).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt))[0];
         if (next) {
           setBusy(true);
-          let generated = await api.generateExecutionDraft(next.id, config.providerId!, config.model!, config.cloudConfirmed, config);
+          let generated = await api.generateExecutionDraft(next.id, config.providerId ?? "harness", config.model!, config.cloudConfirmed, config);
           for (let attempt = 0; attempt < 150 && generated.status === "generating"; attempt += 1) {
             await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
             generated = await api.getGeneratedDraft(generated.id);
@@ -62,13 +64,17 @@ export function PostToolAssistant({ api, engagementId, providers, onRun }: Props
 
   const toggle = async (key: "suggestNextSteps" | "takeNotes") => {
     const enabled = !config[key];
-    const provider = config.providerId ? providers.find((item) => item.id === config.providerId) : structured;
-    if (enabled && !provider) { setError("Configure an enabled provider with strict structured output first."); return; }
-    const cloudConfirmed = enabled && provider && !provider.local && !config.cloudConfirmed
-      ? globalThis.confirm(`Allow bounded, redacted tool results to be sent to ${provider.name} for this project?`)
+    const harness = config.harnessProfileId ? harnesses.find((item) => item.id === config.harnessProfileId && item.enabled) : harnesses.find((item) => item.enabled);
+    const useHarness = config.backendKind === "harness" || (!availableProvider && Boolean(harness));
+    const provider = config.providerId ? providers.find((item) => item.id === config.providerId) : availableProvider;
+    const backend = useHarness ? harness : provider;
+    if (enabled && !backend) { setError("Configure an enabled strict-output provider or agent harness first."); return; }
+    const remote = useHarness ? !harness?.localOnly : provider ? !provider.local : false;
+    const cloudConfirmed = enabled && backend && remote && !config.cloudConfirmed
+      ? globalThis.confirm(`Allow bounded, redacted tool results to be sent to ${backend.name} for this project?`)
       : config.cloudConfirmed;
-    if (enabled && provider && !provider.local && !cloudConfirmed) return;
-    const next = { ...config, [key]: enabled, providerId: provider?.id, model: config.model ?? provider?.defaultModel ?? provider?.models[0], cloudConfirmed: Boolean(cloudConfirmed) };
+    if (enabled && remote && !cloudConfirmed) return;
+    const next = { ...config, [key]: enabled, backendKind: useHarness ? "harness" as const : "provider" as const, providerId: useHarness ? undefined : provider?.id, harnessProfileId: useHarness ? harness?.id : undefined, model: config.model ?? (useHarness ? harness?.defaultModel ?? harness?.models[0] : provider?.defaultModel ?? provider?.models[0]), cloudConfirmed: Boolean(cloudConfirmed) };
     try { setConfig(await api.setPostToolAssistant(engagementId, next)); setError(undefined); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Could not update tool assistance."); }
   };
@@ -87,6 +93,11 @@ export function PostToolAssistant({ api, engagementId, providers, onRun }: Props
 
   return <>
     <div className="post-tool-toggles" aria-label="Post-tool assistance">
+      <select aria-label="Post-tool analysis backend" value={`${config.backendKind}:${config.backendKind === "harness" ? config.harnessProfileId ?? "" : config.providerId ?? ""}`} onChange={(event) => {
+        const [kind, id] = event.target.value.split(":", 2) as ["provider" | "harness", string];
+        const item = kind === "harness" ? harnesses.find((value) => value.id === id) : providers.find((value) => value.id === id);
+        void api.setPostToolAssistant(engagementId, { ...config, backendKind: kind, providerId: kind === "provider" ? id : undefined, harnessProfileId: kind === "harness" ? id : undefined, model: item?.defaultModel ?? item?.models[0], cloudConfirmed: false }).then(setConfig).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not select analysis backend."));
+      }}><option value="provider:">Analysis backend</option>{providers.filter((item) => item.enabled).map((item) => <option key={item.id} value={`provider:${item.id}`}>{item.name}</option>)}{harnesses.filter((item) => item.enabled).map((item) => <option key={item.id} value={`harness:${item.id}`}>{item.name} harness</option>)}</select>
       <label title="Suggest next steps"><input type="checkbox" checked={config.suggestNextSteps} onChange={() => void toggle("suggestNextSteps")} /> Suggest next steps</label>
       <label title="Take notes"><input type="checkbox" checked={config.takeNotes} onChange={() => void toggle("takeNotes")} /> Take notes</label>
       {busy && <LoaderCircle className="spin" size={13} aria-label="Analyzing tool result" />}

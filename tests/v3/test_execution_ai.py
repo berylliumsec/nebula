@@ -25,6 +25,8 @@ from nebula.v3.domain import (
     OperatorExecutionStatus,
     ProviderPrivacy,
     ProviderProfile,
+    HarnessKind,
+    HarnessProfile,
     RunnerIsolation,
     RunnerRuntime,
     Engagement,
@@ -72,6 +74,20 @@ class StubProvider:
             text=self.response_text,
             usage=ModelUsage(input_tokens=12, output_tokens=8, total_tokens=20),
             provider_request_id="request-1",
+        )
+
+
+class StubHarnessRuntime:
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.requests = []
+
+    async def analyze_structured(self, **request):
+        self.requests.append(request)
+        return SimpleNamespace(
+            id="harness-turn-1",
+            response=self.response,
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
         )
 
 
@@ -209,6 +225,61 @@ async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path
     assert note.metadata["provenance"] == "ai-generated"
     dismissed = service.dismiss_suggestion(result.id)
     assert dismissed.metadata["dismissed"] is True
+
+
+@async_test
+async def test_post_tool_assistant_supports_tool_disabled_harness_analysis(tmp_path):
+    store, artifacts, engagement, execution, _profile, evidence, _provider, _service = _fixture(tmp_path)
+    harness = store.create(HarnessProfile(
+        name="Local Codex",
+        kind=HarnessKind.CODEX_APP_SERVER,
+        executable="/usr/bin/codex",
+        default_model="model-1",
+        privacy=ProviderPrivacy(local_only=True),
+    ))
+    runtime = StubHarnessRuntime(json.dumps({
+        "title": "Harness note",
+        "summary": "Execution completed.",
+        "observations": ["stdout contained hello"],
+        "potential_findings": [],
+        "evidence_ids": [evidence.id],
+        "next_step": {
+            "title": "Inspect output",
+            "rationale": "Confirm the result.",
+            "command": "printf '%s\\n' hello",
+            "language": "bash",
+            "network_ports": [],
+        },
+    }))
+    service = ExecutionAIService(
+        store=store,
+        artifact_store=artifacts,
+        harness_runtime=runtime,  # type: ignore[arg-type]
+    )
+    config = service.set_config(engagement.id, PostToolAssistantConfig(
+        suggest_next_steps=True,
+        backend_kind="harness",
+        harness_profile_id=harness.id,
+        model="model-1",
+    ))
+    assert config.backend_kind == "harness"
+    draft = await service.generate(execution.id, DraftNoteRequest(
+        backend_kind="harness",
+        harness_profile_id=harness.id,
+        model="model-1",
+        suggest_next_steps=True,
+        take_notes=False,
+        automatic=True,
+    ))
+    await service._tasks[draft.id]
+    result = store.get(GeneratedDraft, draft.id)
+    assert result.status == GeneratedDraftStatus.READY
+    assert result.content and result.content.next_step.command.startswith("printf")
+    assert result.metadata["backend_kind"] == "harness"
+    assert runtime.requests[0]["profile_id"] == harness.id
+    assert "normal project container tools are available" in runtime.requests[0]["prompt"]
+    assert "hello" in runtime.requests[0]["files"]["stdout.txt"]
+    assert "anothersecret123" not in runtime.requests[0]["files"]["stdout.txt"]
 
 
 @async_test

@@ -152,6 +152,7 @@ class HarnessSessionStatus(StringEnum):
 class HarnessTurnOrigin(StringEnum):
     CHAT = "chat"
     MISSION = "mission"
+    ANALYSIS = "analysis"
 
 
 class HarnessTurnStatus(StringEnum):
@@ -1717,8 +1718,12 @@ class HarnessTurn(Entity):
         if self.origin == HarnessTurnOrigin.CHAT:
             if not self.chat_session_id or not self.chat_turn_id or self.run_id:
                 raise ValueError("chat harness turns require chat bindings only")
-        elif not self.run_id or self.chat_turn_id:
+        elif self.origin == HarnessTurnOrigin.MISSION and (not self.run_id or self.chat_turn_id):
             raise ValueError("mission harness turns require run_id and no chat_turn_id")
+        elif self.origin == HarnessTurnOrigin.ANALYSIS and (
+            self.chat_session_id or self.chat_turn_id or self.run_id
+        ):
+            raise ValueError("analysis harness turns cannot bind chat or mission owners")
         return self
 
 

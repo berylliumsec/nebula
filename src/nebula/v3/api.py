@@ -1059,6 +1059,7 @@ def create_app(
             artifact_store=artifact_store,
             provider_factory=provider_factory,
             operator_id=active_operator_id,
+            harness_runtime=harness_runtime,
         )
     if execution_ai is not None and execution_ai.store is not store:
         raise ValueError("execution_ai_service must use the API store")

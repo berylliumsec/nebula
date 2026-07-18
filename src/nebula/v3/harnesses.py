@@ -4032,6 +4032,71 @@ class HarnessRuntimeService:
             self._gateway_oci_components[created.id] = components
         return created
 
+    async def analyze_structured(
+        self,
+        *,
+        engagement_id: str,
+        profile_id: str,
+        model: str | None,
+        prompt: str,
+        files: dict[str, str] | None = None,
+    ) -> HarnessTurn:
+        """Run a tool-disabled, durable harness turn for bounded analysis."""
+
+        profile = self.store.get(HarnessProfile, profile_id)
+        self._validate_harness_privacy(
+            engagement_id, profile, [], allow_remote_mcp=False
+        )
+        selected_model = (model or profile.default_model or "").strip()
+        if not selected_model:
+            raise HarnessConfigurationError(
+                "harness analysis requires an explicit model or profile default"
+            )
+        session = self.create_session(
+            engagement_id=engagement_id,
+            profile_id=profile.id,
+            model=selected_model,
+            mcp_server_ids=[],
+        )
+        native = profile.native_capabilities.model_copy(
+            update={"workspace_access": HarnessWorkspaceAccess.WRITE}
+        )
+        session = self.store.update(
+            HarnessSession,
+            session.id,
+            {
+                "metadata": {
+                    **session.metadata,
+                    "context_management": "isolated_analysis",
+                    "analysis_only": True,
+                    "analysis_files": files or {},
+                    "native_capabilities": native.model_dump(mode="json"),
+                }
+            },
+            expected_revision=session.revision,
+        )
+        turn = self.store.create(
+            HarnessTurn(
+                id=str(uuid4()),
+                engagement_id=engagement_id,
+                harness_session_id=session.id,
+                origin=HarnessTurnOrigin.ANALYSIS,
+                prompt=prompt,
+                metadata={"analysis_only": True},
+            )
+        )
+        try:
+            async for _event in self.stream_turn(turn.id):
+                pass
+            completed = self.store.get(HarnessTurn, turn.id)
+            if completed.status != HarnessTurnStatus.COMPLETE:
+                raise HarnessUnavailableError(
+                    completed.error or "harness analysis did not complete"
+                )
+            return completed
+        finally:
+            await self.close_session(session.id)
+
     def _fork_session(self, session: HarnessSession, *, reason: str) -> HarnessSession:
         """Create an independent vendor session with the same frozen capabilities."""
 
@@ -6321,11 +6386,30 @@ class HarnessRuntimeService:
         if existing is not None:
             return existing
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        analysis_only = bool(session.metadata.get("analysis_only"))
+        if analysis_only:
+            profile = profile.model_copy(update={
+                "native_capabilities": _session_native_capabilities(session, profile)
+            })
         self._ensure_oci_components(session)
 
         async def permission_handler(
             request: HarnessPermissionRequest,
         ) -> PermissionTicket:
+            if analysis_only:
+                future: asyncio.Future[HarnessPermissionDecision] = (
+                    asyncio.get_running_loop().create_future()
+                )
+                future.set_result(
+                    HarnessPermissionDecision(
+                        allowed=True,
+                        reason=(
+                            "Approved within the isolated post-tool analysis session; "
+                            "no execution capabilities are attached"
+                        ),
+                    )
+                )
+                return PermissionTicket(None, None, future)
             active_turn = self._active_gateway_turn(session.id)
             return await self._request_permission(active_turn.id, request)
 
@@ -6345,6 +6429,16 @@ class HarnessRuntimeService:
         self._gateways[session.id] = gateway
         isolated_workspace = gateway.root / "vendor-workspace"
         isolated_workspace.mkdir(mode=0o700)
+        if analysis_only:
+            raw_files = session.metadata.get("analysis_files", {})
+            if isinstance(raw_files, dict):
+                for name, content in raw_files.items():
+                    if isinstance(content, str) and name in {
+                        "execution.json", "source.txt", "stdout.txt", "stderr.txt"
+                    }:
+                        (isolated_workspace / name).write_text(
+                            content, encoding="utf-8", errors="replace"
+                        )
 
         try:
             connection = await self.adapter_factory(profile.kind).open(
@@ -7292,7 +7386,7 @@ class HarnessRuntimeService:
                 payload=event.payload,
             )
             canonical_payload = self._activity_payload(turn, session, canonical_status)
-            if turn.origin == HarnessTurnOrigin.CHAT:
+            if turn.origin in {HarnessTurnOrigin.CHAT, HarnessTurnOrigin.ANALYSIS}:
                 self.store.append_operation_event(
                     turn.id,
                     "harness_turn",
@@ -7310,7 +7404,7 @@ class HarnessRuntimeService:
                 )
         payload = self._activity_payload(turn, session, event)
         durable: OperationEvent | RunEvent
-        if turn.origin == HarnessTurnOrigin.CHAT:
+        if turn.origin in {HarnessTurnOrigin.CHAT, HarnessTurnOrigin.ANALYSIS}:
             durable = self.store.append_operation_event(
                 turn.id,
                 "harness_turn",
@@ -7345,7 +7439,7 @@ class HarnessRuntimeService:
             raise ValueError("limit must be between 1 and 10000")
         turn = self.store.get(HarnessTurn, turn_id)
         durable_events: Sequence[OperationEvent | RunEvent]
-        if turn.origin == HarnessTurnOrigin.CHAT:
+        if turn.origin in {HarnessTurnOrigin.CHAT, HarnessTurnOrigin.ANALYSIS}:
             durable_events = self.store.replay_operation_events(
                 turn.id, after_sequence=after_sequence, limit=limit
             )

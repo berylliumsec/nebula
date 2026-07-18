@@ -1713,7 +1713,7 @@ export function SessionsPage() {
         {view === "chat" && <button className="session-mobile-list" type="button" aria-pressed={mobileListOpen} onClick={() => setMobileListOpen((value) => !value)}><MessageSquare size={15} /> {mobileListOpen ? "Current chat" : "Conversations"}</button>}
         <div className="session-toolbar-actions">
           <div className="session-scope"><ShieldCheck size={15} /> Human controlled · {engagement?.name ?? "no project"}</div>
-          {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} onRun={setRunCandidate} />}
+          {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} />}
           <button
             className="icon-button subtle workbench-full-screen-toggle"
             type="button"

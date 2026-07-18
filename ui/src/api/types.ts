@@ -527,6 +527,8 @@ export interface PostToolAssistantConfig {
   suggestNextSteps: boolean;
   takeNotes: boolean;
   providerId?: Identifier;
+  backendKind: "provider" | "harness";
+  harnessProfileId?: Identifier;
   model?: string;
   cloudConfirmed: boolean;
 }
