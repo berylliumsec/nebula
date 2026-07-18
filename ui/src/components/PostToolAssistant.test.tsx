@@ -72,22 +72,28 @@ describe("PostToolAssistant", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Next-step suggestions enabled.");
   });
 
-  it("directs incomplete configurations to Settings instead of silently failing", async () => {
+  it("persists enablement before runtime setup and directs the user to Settings", async () => {
     const user = userEvent.setup();
-    const { api, setPostToolAssistant } = apiFor({
+    const config: PostToolAssistantConfig = {
       suggestNextSteps: false,
       takeNotes: false,
       backendKind: "harness",
       harnessProfileId: harness.id,
       cloudConfirmed: false,
-    });
+    };
+    const { api, setPostToolAssistant } = apiFor(config);
     render(<PostToolAssistant api={api} engagementId="project-1" providers={[]} harnesses={[harness]} onRun={vi.fn()} />);
 
-    await user.click(await screen.findByRole("checkbox", { name: "Take notes" }));
+    const notes = await screen.findByRole("checkbox", { name: "Take notes" });
+    await user.click(notes);
 
-    expect(await screen.findByText(/Choose an enabled analysis runtime and model in Settings/)).toBeVisible();
-    expect(screen.getByRole("alert")).toBeVisible();
+    expect(notes).toBeChecked();
+    await waitFor(() => expect(setPostToolAssistant).toHaveBeenCalledWith("project-1", {
+      ...config,
+      takeNotes: true,
+    }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Notes enabled");
+    expect(screen.getByRole("status")).toHaveTextContent("Complete the analysis runtime setup");
     expect(screen.getByRole("link", { name: "Open tool follow-up settings" })).toHaveAttribute("href", "/settings#post-tool-assistant-settings");
-    expect(setPostToolAssistant).not.toHaveBeenCalled();
   });
 });

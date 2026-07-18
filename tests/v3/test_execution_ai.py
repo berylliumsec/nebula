@@ -227,6 +227,14 @@ async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path
     assert dismissed.metadata["dismissed"] is True
 
 
+def test_post_tool_config_can_be_enabled_before_runtime_setup(tmp_path):
+    _store, _artifacts, engagement, _execution, _profile, _evidence, _provider, service = _fixture(tmp_path)
+    config = service.set_config(engagement.id, PostToolAssistantConfig(suggest_next_steps=True))
+    assert config.suggest_next_steps is True
+    assert config.model is None
+    assert service.get_config(engagement.id) == config
+
+
 @async_test
 async def test_post_tool_assistant_supports_tool_disabled_harness_analysis(tmp_path):
     store, artifacts, engagement, execution, _profile, evidence, _provider, _service = _fixture(tmp_path)

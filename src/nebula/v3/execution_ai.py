@@ -256,10 +256,6 @@ class ExecutionAIService:
 
     def set_config(self, engagement_id: str, config: PostToolAssistantConfig) -> PostToolAssistantConfig:
         engagement = self.store.get(Engagement, engagement_id)
-        if config.suggest_next_steps or config.take_notes:
-            identity = config.harness_profile_id if config.backend_kind == "harness" else config.provider_id
-            if not identity or not config.model:
-                raise ExecutionAIError("configuration_invalid", "enabled post-tool assistance requires a backend and model")
         metadata = {**engagement.metadata, "post_tool_assistant": config.model_dump(mode="json")}
         self.store.update(Engagement, engagement.id, {"metadata": metadata}, expected_revision=engagement.revision)
         return config

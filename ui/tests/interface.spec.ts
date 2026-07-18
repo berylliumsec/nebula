@@ -1327,6 +1327,42 @@ test("tool follow-up runtime lives in Settings and its Workbench toggles persist
   if (testInfo.project.name === "desktop") await expect(panel).toHaveScreenshot("tool-follow-up-settings.png");
 });
 
+test("tool follow-up toggles persist while runtime setup is pending", async ({ page }) => {
+  let postToolConfig = {
+    suggest_next_steps: false,
+    take_notes: false,
+    backend_kind: "provider" as const,
+    provider_id: null,
+    harness_profile_id: null,
+    model: null,
+    cloud_confirmed: false,
+  };
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/engagements/scratch-project/post-tool-assistant")) {
+      if (request.method() === "PUT") postToolConfig = request.postDataJSON() as typeof postToolConfig;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(postToolConfig) });
+      return;
+    }
+    if (path.endsWith("/engagements/scratch-project/post-tool-results")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/", "Workbench");
+  const notes = page.getByRole("checkbox", { name: "Take notes" });
+  await notes.click();
+
+  await expect(notes).toBeChecked();
+  await expect.poll(() => postToolConfig.take_notes).toBe(true);
+  const feedback = page.getByRole("status");
+  await expect(feedback).toContainText("Notes enabled");
+  await expect(feedback.getByRole("link", { name: "Open tool follow-up settings" })).toBeVisible();
+});
+
 test("appearance variants preserve each critical workspace hierarchy", async ({ page }) => {
   for (const theme of ["light", "high-contrast"] as const) {
     await openWorkspace(page, "/", "Workbench");
