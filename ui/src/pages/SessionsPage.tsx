@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
   Bot,
   Braces,
@@ -542,8 +542,15 @@ export function SessionsPage() {
     return () => harnessFollowDetachRef.current?.();
   }, []);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+
+    // Assistant output can update several times per second. Starting a new
+    // smooth animation for every chunk leaves the browser chasing stale
+    // positions and can anchor the viewport at the start of a long response.
+    // Set the final position synchronously after each committed render instead.
+    scroll.scrollTop = scroll.scrollHeight;
   }, [messages, sending]);
 
   const refreshSessions = async (selectedId?: string) => {

@@ -4876,6 +4876,31 @@ export class ApiClient {
     ).then(mapGeneratedDraft);
   }
 
+  generateMissionDraft(
+    runId: string,
+    providerId: string,
+    model: string,
+    cloudConfirmed: boolean,
+    modes?: PostToolAssistantConfig,
+  ): Promise<GeneratedDraft> {
+    return this.request<WireGeneratedDraft>(
+      `runs/${encodeURIComponent(runId)}/draft-notes`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          provider_id: providerId,
+          backend_kind: modes?.backendKind ?? "provider",
+          harness_profile_id: modes?.harnessProfileId,
+          model,
+          cloud_confirmed: cloudConfirmed,
+          suggest_next_steps: modes?.suggestNextSteps ?? false,
+          take_notes: modes?.takeNotes ?? true,
+          automatic: Boolean(modes),
+        }),
+      },
+    ).then(mapGeneratedDraft);
+  }
+
   getPostToolAssistant(engagementId: string): Promise<PostToolAssistantConfig> {
     return this.request<{ suggest_next_steps: boolean; take_notes: boolean; backend_kind: "provider" | "harness"; provider_id?: string | null; harness_profile_id?: string | null; model?: string | null; cloud_confirmed: boolean }>(
       `engagements/${encodeURIComponent(engagementId)}/post-tool-assistant`,

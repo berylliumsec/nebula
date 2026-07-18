@@ -3892,6 +3892,18 @@ def create_app(
     ) -> GeneratedDraft:
         return await require_execution_ai_service().generate(execution_id, request)
 
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/draft-notes",
+        response_model=GeneratedDraft,
+        status_code=202,
+        tags=["execution-ai"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def generate_mission_draft_note(
+        run_id: str, request: DraftNoteRequest
+    ) -> GeneratedDraft:
+        return await require_execution_ai_service().generate_mission(run_id, request)
+
     @app.patch(
         f"{API_PREFIX}/generated-drafts/{{draft_id}}",
         response_model=GeneratedDraft,

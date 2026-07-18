@@ -18,6 +18,8 @@ from pydantic import Field
 
 from .artifacts import ArtifactStore
 from .domain import (
+    AgentAttempt,
+    AgentRun,
     Artifact,
     ChatMessage,
     ChatRole,
@@ -31,6 +33,7 @@ from .domain import (
     Observation,
     OperatorExecution,
     ProviderProfile,
+    RunStatus,
     HarnessProfile,
 )
 from .harnesses import HarnessRuntimeService
@@ -244,6 +247,105 @@ class ExecutionAIService:
                 event_code="executions.note_draft",
                 failure_message="The execution-note draft task stopped unexpectedly.",
                 name=f"execution-note-{draft.id}",
+            )
+            self._tasks[draft.id] = task
+            task.add_done_callback(lambda _task: self._tasks.pop(draft.id, None))
+            return draft
+
+    async def generate_mission(
+        self, run_id: str, request: DraftNoteRequest
+    ) -> GeneratedDraft:
+        """Generate the same opt-in follow-up from a completed Mission result."""
+        async with self._lock:
+            run = self.store.get(AgentRun, run_id)
+            if run.status not in {
+                RunStatus.COMPLETE,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }:
+                raise ExecutionAIError(
+                    "mission_not_terminal",
+                    "mission output can only be analyzed after the mission finishes",
+                )
+            provider: ModelProvider | None = None
+            if request.backend_kind == "harness":
+                backend_id = self._validate_harness_backend(
+                    engagement_id=run.engagement_id,
+                    harness_profile_id=request.harness_profile_id,
+                    model=request.model,
+                    cloud_confirmed=request.cloud_confirmed,
+                )
+                strict_structured_output = False
+            else:
+                if not request.provider_id:
+                    raise ExecutionAIError("configuration_invalid", "provider is required")
+                profile, provider = self._validate_provider_backend(
+                    engagement_id=run.engagement_id,
+                    provider_id=request.provider_id,
+                    model=request.model,
+                    cloud_confirmed=request.cloud_confirmed,
+                )
+                backend_id = profile.id
+                strict_structured_output = profile.capabilities.strict_structured_output
+            context, fingerprint, metadata = self._mission_context(run)
+            existing = next(
+                (
+                    item
+                    for item in self._all_drafts()
+                    if item.execution_id == run.id
+                    and item.provider_profile_id == backend_id
+                    and item.model == request.model
+                    and item.context_fingerprint == fingerprint
+                    and item.metadata.get("source_kind") == "mission"
+                    and item.metadata.get("automatic") == request.automatic
+                    and item.metadata.get("suggest_next_steps") == request.suggest_next_steps
+                    and item.metadata.get("take_notes") == request.take_notes
+                ),
+                None,
+            )
+            if existing is not None and existing.status != GeneratedDraftStatus.FAILED:
+                return existing
+            draft_metadata = {
+                **metadata,
+                "backend_kind": request.backend_kind,
+                "strict_structured_output": strict_structured_output,
+                "suggest_next_steps": request.suggest_next_steps,
+                "take_notes": request.take_notes,
+                "automatic": request.automatic,
+            }
+            if existing is None:
+                draft = self.store.create(GeneratedDraft(
+                    engagement_id=run.engagement_id,
+                    execution_id=run.id,
+                    provider_profile_id=backend_id,
+                    model=request.model,
+                    prompt_version=PROMPT_VERSION,
+                    context_fingerprint=fingerprint,
+                    metadata=draft_metadata,
+                ))
+            else:
+                draft = self.store.update(
+                    GeneratedDraft,
+                    existing.id,
+                    {"status": GeneratedDraftStatus.GENERATING, "content": None,
+                     "provider_request_id": None, "usage": None, "error_detail": None,
+                     "metadata": draft_metadata},
+                    expected_revision=existing.revision,
+                )
+            self._event(draft, "generated_draft.generating", {
+                "provider_profile_id": backend_id,
+                "model": request.model,
+                "context_fingerprint": fingerprint,
+                "source_kind": "mission",
+            })
+            task = create_diagnostic_task(
+                self._generate_harness(draft.id, context)
+                if request.backend_kind == "harness"
+                else self._generate(draft.id, provider, context),  # type: ignore[arg-type]
+                feature="executions",
+                event_code="executions.mission_note_draft",
+                failure_message="The mission-note draft task stopped unexpectedly.",
+                name=f"mission-note-{draft.id}",
             )
             self._tasks[draft.id] = task
             task.add_done_callback(lambda _task: self._tasks.pop(draft.id, None))
@@ -503,6 +605,7 @@ class ExecutionAIService:
                     source="automatic-post-tool-analysis",
                     metadata={
                         "execution_id": draft.execution_id,
+                        **({"mission_id": draft.metadata["mission_id"]} if draft.metadata.get("source_kind") == "mission" else {}),
                         "generated_draft_id": draft.id,
                         "provider_profile_id": draft.provider_profile_id,
                         "model": draft.model,
@@ -676,6 +779,25 @@ class ExecutionAIService:
                 raise ExecutionAIError("cloud_confirmation_required", "explicit confirmation is required for a remote harness", status_code=428)
         return execution, profile.id
 
+    def _validate_harness_backend(
+        self, *, engagement_id: str, harness_profile_id: str | None,
+        model: str, cloud_confirmed: bool
+    ) -> str:
+        if self.harness_runtime is None or not harness_profile_id:
+            raise ExecutionAIError("harness_unavailable", "an enabled harness is required", status_code=422)
+        self.store.get(Engagement, engagement_id)
+        profile = self.store.get(HarnessProfile, harness_profile_id)
+        if not profile.enabled:
+            raise ExecutionAIError("harness_unavailable", "harness profile is disabled")
+        if profile.capabilities.models and model not in profile.capabilities.models:
+            raise ExecutionAIError("model_not_allowed", f"model {model!r} is not supported by the harness", status_code=422)
+        if not profile.privacy.local_only:
+            if not profile.privacy.permits_sensitive_data:
+                raise ExecutionAIError("privacy_denied", "harness profile does not permit engagement data transfer")
+            if not cloud_confirmed:
+                raise ExecutionAIError("cloud_confirmation_required", "explicit confirmation is required for a remote harness", status_code=428)
+        return profile.id
+
     def _provider_context(
         self,
         execution_id: str,
@@ -740,6 +862,90 @@ class ExecutionAIService:
                 "provider_unavailable", str(exc), status_code=422
             ) from exc
         return execution, profile, provider
+
+    def _validate_provider_backend(
+        self, *, engagement_id: str, provider_id: str, model: str,
+        cloud_confirmed: bool
+    ) -> tuple[ProviderProfile, ModelProvider]:
+        engagement = self.store.get(Engagement, engagement_id)
+        profile = self.store.get(ProviderProfile, provider_id)
+        if not profile.enabled:
+            raise ExecutionAIError("provider_unavailable", "provider profile is disabled")
+        if profile.model_allowlist and model not in profile.model_allowlist:
+            raise ExecutionAIError("model_not_allowed", f"model {model!r} is outside the provider allowlist", status_code=422)
+        if not profile.is_local:
+            if not profile.privacy.permits_sensitive_data:
+                raise ExecutionAIError("privacy_denied", "provider profile does not permit engagement data transfer")
+            if not cloud_confirmed:
+                raise ExecutionAIError("cloud_confirmation_required", "explicit confirmation is required to send redacted mission data to a cloud provider", status_code=428)
+        try:
+            provider = self.provider_factory(profile)
+            validate_engagement_provider_privacy(self.store, engagement, provider)
+        except ProviderPrivacyViolation as exc:
+            raise ExecutionAIError("privacy_denied", str(exc)) from exc
+        except (ProviderError, ValueError) as exc:
+            raise ExecutionAIError("provider_unavailable", str(exc), status_code=422) from exc
+        return profile, provider
+
+    def _mission_context(self, run: AgentRun) -> tuple[str, str, dict[str, Any]]:
+        attempts = [
+            attempt for attempt in self.store.list_entities(
+                AgentAttempt, engagement_id=run.engagement_id, limit=1_000
+            )
+            if attempt.run_id == run.id and attempt.output is not None
+        ]
+        payload = {
+            "kind": "mission_result",
+            "mission_id": run.id,
+            "objective": redacted_display(run.objective),
+            "status": run.status.value,
+            "final_summary": redacted_display(str(run.metadata.get("final_summary") or "")),
+            "attempts": [
+                {
+                    "task_id": item.task_id,
+                    "status": item.status.value,
+                    "output": item.output,
+                    "error": redacted_display(item.error or ""),
+                }
+                for item in attempts
+            ],
+        }
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        redacted = redacted_display(raw)
+        context = (
+            redacted
+            if len(redacted.encode("utf-8")) <= OUTPUT_LIMIT
+            else json.dumps(
+                {
+                    "kind": "mission_result",
+                    "mission_id": run.id,
+                    "bounded_output_excerpt": bounded_excerpt(
+                        redacted, OUTPUT_LIMIT - 1_024, "mission output"
+                    ),
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+        )
+        fingerprint = hashlib.sha256(context.encode("utf-8")).hexdigest()
+        evidence_ids: set[str] = set()
+        def collect_evidence(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    if key == "evidence_ids" and isinstance(nested, list):
+                        evidence_ids.update(item for item in nested if isinstance(item, str))
+                    else:
+                        collect_evidence(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect_evidence(nested)
+        collect_evidence(payload)
+        return context, fingerprint, {
+            "source_kind": "mission",
+            "mission_id": run.id,
+            "mission_status": run.status.value,
+            "allowed_evidence_ids": sorted(evidence_ids),
+        }
 
     def _context(self, execution: OperatorExecution) -> tuple[str, str, dict[str, Any]]:
         source_artifact = self.store.get(Artifact, execution.source_artifact_id)
@@ -840,8 +1046,11 @@ class ExecutionAIService:
     def _validate_evidence(
         self, draft: GeneratedDraft, content: GeneratedDraftContent
     ) -> None:
-        execution = self.store.get(OperatorExecution, draft.execution_id)
-        allowed = {execution.evidence_id} if execution.evidence_id else set()
+        if draft.metadata.get("source_kind") == "mission":
+            allowed = set(draft.metadata.get("allowed_evidence_ids", []))
+        else:
+            execution = self.store.get(OperatorExecution, draft.execution_id)
+            allowed = {execution.evidence_id} if execution.evidence_id else set()
         if not set(content.evidence_ids) <= allowed:
             raise ExecutionAIError(
                 "structured_response_invalid",

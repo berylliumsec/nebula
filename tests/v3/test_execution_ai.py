@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
+    AgentAttempt,
+    AgentRun,
     ChatSession,
     Evidence,
     ExecutionOrigin,
@@ -29,6 +31,8 @@ from nebula.v3.domain import (
     HarnessProfile,
     RunnerIsolation,
     RunnerRuntime,
+    RunStatus,
+    TaskStatus,
     Engagement,
 )
 from nebula.v3.execution_ai import (
@@ -217,7 +221,7 @@ async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path
     ))
     await service._tasks[draft.id]
     result = store.get(GeneratedDraft, draft.id)
-    assert result.status == GeneratedDraftStatus.ACCEPTED
+    assert result.status == GeneratedDraftStatus.ACCEPTED, result.error_detail
     assert result.content and result.content.next_step
     assert result.content.next_step.command.startswith("curl")
     note = store.get(Observation, result.observation_id)
@@ -233,6 +237,46 @@ def test_post_tool_config_requires_runtime_before_enablement(tmp_path):
         service.set_config(engagement.id, PostToolAssistantConfig(suggest_next_steps=True))
     assert refusal.value.code == "configuration_invalid"
     assert service.get_config(engagement.id).suggest_next_steps is False
+
+
+@async_test
+async def test_post_tool_assistant_analyzes_completed_mission_output(tmp_path):
+    store, _artifacts, engagement, _execution, profile, _evidence, provider, service = _fixture(tmp_path)
+    run = store.create(AgentRun(
+        engagement_id=engagement.id,
+        objective="Review the target",
+        status=RunStatus.COMPLETE,
+        metadata={"final_summary": "Mission found an exposed service."},
+    ))
+    store.create(AgentAttempt(
+        engagement_id=engagement.id,
+        run_id=run.id,
+        task_id="task-1",
+        agent_role="researcher",
+        attempt_number=1,
+        status=TaskStatus.COMPLETE,
+        output={"summary": "Port 443 responded."},
+    ))
+    provider.response_text = json.dumps({
+        "title": "Mission note",
+        "summary": "The mission completed.",
+        "observations": ["Port 443 responded."],
+        "potential_findings": [],
+        "evidence_ids": [],
+        "next_step": None,
+    })
+    draft = await service.generate_mission(run.id, DraftNoteRequest(
+        provider_id=profile.id, model="model-1", take_notes=True, automatic=True,
+    ))
+    await service._tasks[draft.id]
+    result = store.get(GeneratedDraft, draft.id)
+    assert result.status == GeneratedDraftStatus.ACCEPTED, result.error_detail
+    assert result.execution_id == run.id
+    assert result.metadata["source_kind"] == "mission"
+    assert "Port 443 responded" in provider.requests[-1].messages[0].content
+    note = store.get(Observation, result.observation_id)
+    assert note.observation_type == "ai_tool_note"
+    assert note.metadata["mission_id"] == run.id
 
 
 @async_test

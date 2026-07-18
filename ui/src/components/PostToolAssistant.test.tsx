@@ -42,6 +42,7 @@ function apiFor(config: PostToolAssistantConfig) {
     setPostToolAssistant,
     listPostToolResults: vi.fn().mockResolvedValue([]),
     listExecutions: vi.fn().mockResolvedValue({ items: [] }),
+    listRuns: vi.fn().mockResolvedValue({ items: [] }),
   } as unknown as ApiClient;
   return { api, setPostToolAssistant };
 }

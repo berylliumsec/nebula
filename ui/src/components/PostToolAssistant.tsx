@@ -94,7 +94,11 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     let active = true;
     const tick = async () => {
       try {
-        const [executions, results] = await Promise.all([api.listExecutions(engagementId, { limit: 30 }), api.listPostToolResults(engagementId)]);
+        const [executions, missions, results] = await Promise.all([
+          api.listExecutions(engagementId, { limit: 30 }),
+          api.listRuns(engagementId),
+          api.listPostToolResults(engagementId),
+        ]);
         const known = new Set(results.map((item) => item.executionId));
         const next = executions.items.filter((item) => ["completed", "failed", "timed_out"].includes(item.status) && !known.has(item.id)).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt))[0];
         if (next) {
@@ -103,6 +107,18 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
           for (let attempt = 0; attempt < 150 && generated.status === "generating"; attempt += 1) {
             await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
             generated = await api.getGeneratedDraft(generated.id);
+          }
+        } else {
+          const mission = missions.items
+            .filter((item) => ["complete", "failed", "cancelled"].includes(item.status) && !known.has(item.id))
+            .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
+          if (mission) {
+            setBusy(true);
+            let generated = await api.generateMissionDraft(mission.id, config.providerId ?? "harness", config.model!, config.cloudConfirmed, config);
+            for (let attempt = 0; attempt < 150 && generated.status === "generating"; attempt += 1) {
+              await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
+              generated = await api.getGeneratedDraft(generated.id);
+            }
           }
         }
         if (active) await refresh();
