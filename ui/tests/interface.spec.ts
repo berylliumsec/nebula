@@ -54,6 +54,7 @@ const limits = {
 
 async function installTruthfulCore(page: Page) {
   await page.addInitScript(() => {
+    (globalThis as typeof globalThis & { __terminalFrames?: unknown[] }).__terminalFrames = [];
     class PreviewTerminalWebSocket extends EventTarget {
       static readonly CONNECTING = 0;
       static readonly OPEN = 1;
@@ -89,7 +90,13 @@ async function installTruthfulCore(page: Page) {
         }, 10);
       }
 
-      send(): void {}
+      send(value: string): void {
+        try {
+          (globalThis as typeof globalThis & { __terminalFrames?: unknown[] }).__terminalFrames?.push(JSON.parse(value));
+        } catch {
+          // The production transport sends JSON text frames only.
+        }
+      }
       close(code = 1000, reason = "preview closed"): void {
         if (this.readyState === PreviewTerminalWebSocket.CLOSED) return;
         this.readyState = PreviewTerminalWebSocket.CLOSED;
@@ -528,6 +535,38 @@ test("terminal drag selection has a visible high-contrast highlight", async ({ p
   expect(selectionRects.length).toBeGreaterThan(0);
   expect(selectionRects.some((rect) => rect.width > 20 && rect.height > 8)).toBe(true);
   expect(selectionRects.every((rect) => ["rgb(22, 139, 210)", "rgb(18, 111, 168)"].includes(rect.background))).toBe(true);
+});
+
+test("hidden terminal views stop emitting resize frames", async ({ page }) => {
+  await openWorkspace(page, "/", "Workbench");
+  await expect.poll(() => page.evaluate(() => (
+    (globalThis as typeof globalThis & { __terminalFrames?: Array<{ type?: string }> }).__terminalFrames
+      ?.filter((frame) => frame.type === "resize").length ?? 0
+  ))).toBeGreaterThan(0);
+
+  await page.getByRole("tab", { name: "Workspace code editor", exact: true }).click();
+  await expect(page.locator(".persistent-terminal")).toBeHidden();
+  await page.waitForTimeout(50);
+  const before = await page.evaluate(() => (
+    (globalThis as typeof globalThis & { __terminalFrames?: Array<{ type?: string }> }).__terminalFrames
+      ?.filter((frame) => frame.type === "resize") ?? []
+  ));
+  await page.setViewportSize({ width: 1320, height: 820 });
+  await page.waitForTimeout(100);
+  const after = await page.evaluate(() => (
+    (globalThis as typeof globalThis & { __terminalFrames?: Array<{ columns?: number; rows?: number; type?: string }> }).__terminalFrames
+      ?.filter((frame) => frame.type === "resize") ?? []
+  ));
+
+  expect(after).toHaveLength(before.length);
+  expect(after.every((frame) => (
+    Number.isInteger(frame.columns)
+    && Number.isInteger(frame.rows)
+    && frame.columns! >= 1
+    && frame.columns! <= 1_000
+    && frame.rows! >= 1
+    && frame.rows! <= 1_000
+  ))).toBe(true);
 });
 
 test(firstRunThemeTest, async ({ page }) => {

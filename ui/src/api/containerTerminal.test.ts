@@ -74,9 +74,13 @@ describe("ContainerTerminalSocket", () => {
 
     socket.sendInput("whoami\r");
     socket.resize(120, 40);
+    socket.resize(120, 40);
+    socket.resize(Number.NaN, 40);
+    socket.resize(5_000, 0);
     expect(transport.sent.map((value) => JSON.parse(value))).toEqual([
       { type: "input", data: "whoami\r" },
       { type: "resize", columns: 120, rows: 40 },
+      { type: "resize", columns: 1_000, rows: 1 },
     ]);
 
     transport.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "exit", exit_code: 7, outcome: "failed", error_code: "terminal_exit_nonzero", detail: "terminal container exited with status 7" }) }));
@@ -114,6 +118,50 @@ describe("ContainerTerminalSocket", () => {
     expect(errors[0]).toMatch(/malformed/i);
     socket.requestClose();
     expect(JSON.parse(transport.sent[0])).toEqual({ type: "close" });
+  });
+
+  it("preserves structured Core error diagnostics", () => {
+    const errors: Array<{ code: string; detail: string; metadata: unknown }> = [];
+    const socket = new ContainerTerminalSocket({
+      apiBaseUrl: "http://127.0.0.1:8765/api/v1",
+      session: {
+        sessionId: "terminal-diagnostic",
+        createdAt: "2026-07-15T12:00:00Z",
+        websocketTicket: "ticket-diagnostic",
+        ticketExpiresAt: "2026-07-15T18:00:00Z",
+        websocketPath: "/api/v1/container-terminals/terminal-diagnostic/ws",
+        reconnectGraceSeconds: 600,
+        replayMaxBytes: 1_048_576,
+        lastSequence: 0,
+      },
+      websocketFactory: (url, protocols) => new MockTerminalWebSocket(url, protocols) as unknown as WebSocket,
+      onOutput: vi.fn(),
+      onError: (code, detail, metadata) => errors.push({ code, detail, metadata }),
+    });
+    socket.connect();
+    MockTerminalWebSocket.instance!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+      type: "error",
+      code: "invalid_frame",
+      detail: "terminal dimensions must be between 1 and 1000",
+      error_id: "err_terminal_dimensions",
+      request_id: "req_terminal_dimensions",
+      retryable: false,
+      reason_code: "terminal_dimensions_invalid",
+      operator_detail: "The terminal received invalid dimensions.",
+      impact: "The resize was rejected; the terminal remains attached.",
+    }) }));
+    expect(errors).toEqual([{
+      code: "invalid_frame",
+      detail: "terminal dimensions must be between 1 and 1000",
+      metadata: {
+        errorId: "err_terminal_dimensions",
+        requestId: "req_terminal_dimensions",
+        retryable: false,
+        reasonCode: "terminal_dimensions_invalid",
+        operatorDetail: "The terminal received invalid dimensions.",
+        impact: "The resize was rejected; the terminal remains attached.",
+      },
+    }]);
   });
 
   it("retries a recovered ticket until the previous route attachment detaches", async () => {

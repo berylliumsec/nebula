@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import { ContainerTerminalSocket, type ContainerTerminalExit, type ContainerTerminalSocketState } from "../api/containerTerminal";
+import { ContainerTerminalSocket, type ContainerTerminalErrorMetadata, type ContainerTerminalExit, type ContainerTerminalSocketState } from "../api/containerTerminal";
 import type {
   ContainerTerminalCapacity,
   ContainerTerminalRequest,
@@ -135,7 +135,7 @@ function LiveContainerTerminal({
   const activeRef = useRef(active);
   const socketRef = useRef<ContainerTerminalSocket | undefined>(undefined);
   const [state, setState] = useState<ContainerTerminalSocketState>("connecting");
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<unknown>();
   const [exit, setExit] = useState<ContainerTerminalExit>();
 
   useEffect(() => {
@@ -224,7 +224,16 @@ function LiveContainerTerminal({
         setError(undefined);
         if (activeRef.current) terminal.focus();
       },
-      onError: (_code, detail) => setError(detail),
+      onError: (code, detail, metadata?: ContainerTerminalErrorMetadata) => setError({
+        message: detail,
+        code,
+        errorId: metadata?.errorId,
+        requestId: metadata?.requestId,
+        retryable: metadata?.retryable,
+        reasonCode: metadata?.reasonCode,
+        operatorDetail: metadata?.operatorDetail,
+        impact: metadata?.impact,
+      }),
       onExit: (result) => {
         setExit(result);
         if (result.detail) setError(result.detail);
@@ -233,8 +242,11 @@ function LiveContainerTerminal({
     });
     socketRef.current = socket;
     const input = terminal.onData((data) => socket.sendInput(data));
-    const resize = terminal.onResize(({ cols, rows }) => socket.resize(cols, rows));
+    const resize = terminal.onResize(({ cols, rows }) => {
+      if (activeRef.current) socket.resize(cols, rows);
+    });
     const fitTerminal = () => {
+      if (!activeRef.current || host.closest("[hidden]")) return;
       try {
         fit.fit();
         if (terminal.cols > 0 && terminal.rows > 0) socket.resize(terminal.cols, terminal.rows);
@@ -317,7 +329,7 @@ function LiveContainerTerminal({
       </div>
     </header>
     <div className="terminal-live-notices">
-      {error && <DiagnosticErrorNotice error={error} fallback="The terminal operation could not be completed." compact />}
+      {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The terminal operation could not be completed." compact />}
       {managementError && <DiagnosticErrorNotice error={managementError} fallback="The terminal could not be stopped." compact />}
       {(auditWarningCount > 0 || auditHealthUnavailable) && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {auditHealthUnavailable ? "Terminal audit health is unavailable. Capture failures cannot be ruled out." : `${auditWarningCount} terminal audit warning${auditWarningCount === 1 ? "" : "s"} detected. Review Terminal Audit for classification, truncation, interruption, recovery, or persistence gaps.`}</p>}
       <p className="terminal-audit-active"><ShieldCheck size={14} /> Selective audit active</p>

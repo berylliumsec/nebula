@@ -17,6 +17,15 @@ export interface ContainerTerminalExit {
   outcome: string;
 }
 
+export interface ContainerTerminalErrorMetadata {
+  errorId?: string;
+  requestId?: string;
+  retryable?: boolean;
+  reasonCode?: string;
+  operatorDetail?: string;
+  impact?: string;
+}
+
 export interface ContainerTerminalSocketOptions {
   apiBaseUrl: string;
   token?: string;
@@ -31,7 +40,7 @@ export interface ContainerTerminalSocketOptions {
     replayMaxBytes: number;
   }) => void;
   onExit?: (result: ContainerTerminalExit) => void;
-  onError?: (code: string, detail: string) => void;
+  onError?: (code: string, detail: string, metadata?: ContainerTerminalErrorMetadata) => void;
 }
 
 const TERMINAL_PROTOCOL = "nebula.container-terminal.v1";
@@ -65,6 +74,7 @@ export class ContainerTerminalSocket {
   private reconnectAttempt = 0;
   private reconnectDeadline?: number;
   private reconnectTimer?: ReturnType<typeof globalThis.setTimeout>;
+  private lastResize?: string;
 
   constructor(private readonly options: ContainerTerminalSocketOptions) {
     this.currentTicket = options.session.websocketTicket;
@@ -109,6 +119,7 @@ export class ContainerTerminalSocket {
       return;
     }
     this.socket = socket;
+    this.lastResize = undefined;
     socket.addEventListener("message", (event) => this.receive(event));
     // Browsers expose no actionable detail on the error event. The following
     // close event carries the protocol close code and drives reconnect policy.
@@ -130,7 +141,14 @@ export class ContainerTerminalSocket {
   }
 
   resize(columns: number, rows: number): void {
-    this.send({ type: "resize", columns, rows });
+    if (!Number.isFinite(columns) || !Number.isFinite(rows)) return;
+    const safeColumns = Math.min(1_000, Math.max(1, Math.trunc(columns)));
+    const safeRows = Math.min(1_000, Math.max(1, Math.trunc(rows)));
+    const signature = `${safeColumns}x${safeRows}`;
+    if (signature === this.lastResize) return;
+    if (this.send({ type: "resize", columns: safeColumns, rows: safeRows })) {
+      this.lastResize = signature;
+    }
   }
 
   requestClose(): void {
@@ -159,9 +177,10 @@ export class ContainerTerminalSocket {
     }
   }
 
-  private send(frame: Record<string, unknown>): void {
-    if (!this.socket || this.socket.readyState !== 1) return;
+  private send(frame: Record<string, unknown>): boolean {
+    if (!this.socket || this.socket.readyState !== 1) return false;
     this.socket.send(JSON.stringify(frame));
+    return true;
   }
 
   private receive(event: MessageEvent): void {
@@ -254,6 +273,14 @@ export class ContainerTerminalSocket {
       this.options.onError?.(
         typeof value.code === "string" ? value.code : "terminal_error",
         typeof value.detail === "string" ? value.detail : "Terminal failed.",
+        {
+          errorId: typeof value.error_id === "string" ? value.error_id : undefined,
+          requestId: typeof value.request_id === "string" ? value.request_id : undefined,
+          retryable: typeof value.retryable === "boolean" ? value.retryable : undefined,
+          reasonCode: typeof value.reason_code === "string" ? value.reason_code : undefined,
+          operatorDetail: typeof value.operator_detail === "string" ? value.operator_detail : undefined,
+          impact: typeof value.impact === "string" ? value.impact : undefined,
+        },
       );
       return;
     }

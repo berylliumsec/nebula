@@ -10,6 +10,7 @@ const socketSpies = vi.hoisted(() => ({
   connect: vi.fn(),
   constructed: vi.fn(),
   dispose: vi.fn(),
+  resize: vi.fn(),
 }));
 
 const terminalSpies = vi.hoisted(() => ({
@@ -31,7 +32,7 @@ vi.mock("../api/containerTerminal", () => ({
     };
     dispose = socketSpies.dispose;
     requestClose = () => this.options.onExit?.({ outcome: "closed" });
-    resize(): void {}
+    resize = socketSpies.resize;
     sendInput(): void {}
   },
 }));
@@ -109,8 +110,9 @@ const capacity = (activeSessions: number) => ({
   maxActiveSessions: 32,
 });
 
-function renderPanel(api: ApiClient, strict = false) {
+function renderPanel(api: ApiClient, strict = false, active = true) {
   const panel = <DialogProvider><ContainerTerminalPanel
+    active={active}
     api={api}
     engagementId="engagement-1"
     engagementName="Lab"
@@ -124,6 +126,7 @@ describe("ContainerTerminalPanel", () => {
     socketSpies.connect.mockClear();
     socketSpies.constructed.mockClear();
     socketSpies.dispose.mockClear();
+    socketSpies.resize.mockClear();
     terminalSpies.fit.mockClear();
     terminalSpies.focus.mockClear();
     terminalSpies.keyHandler = undefined;
@@ -338,6 +341,23 @@ describe("ContainerTerminalPanel", () => {
     expect(socketSpies.constructed.mock.calls.map(([value]) => (
       value as { websocketTicket: string }
     ).websocketTicket)).toEqual(["fresh-1", "fresh-2", "fresh-3", "fresh-4"]);
+  });
+
+  it("does not fit or resize a terminal while its workbench view is inactive", async () => {
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [
+        { session: session("terminal-hidden"), runtime },
+      ] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(1)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+    } as unknown as ApiClient;
+
+    renderPanel(api, false, false);
+    await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(1));
+    expect(terminalSpies.fit).not.toHaveBeenCalled();
+    expect(socketSpies.resize).not.toHaveBeenCalled();
   });
 
   it("confirms a running tab close and stops only that session", async () => {
