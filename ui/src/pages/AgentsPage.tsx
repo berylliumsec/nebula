@@ -2,6 +2,7 @@ import {
   Bot,
   CheckCircle2,
   CircleDashed,
+  CircleAlert,
   Clock3,
   DollarSign,
   FileCheck2,
@@ -115,6 +116,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           {visibleMissionCount < filteredRuns.length && <footer><button className="button quiet" type="button" onClick={() => setVisibleMissionCount((count) => count + 12)}>Show 12 more</button><small>Showing {visibleRuns.length} of {filteredRuns.length}</small></footer>}
           {!runs.length ? <p>No missions yet.</p> : !filteredRuns.length && <p>No missions match this search.</p>}
         </section>
+        {run?.status === "failed" && <div className="callout mission-failure-callout" role="alert"><CircleAlert size={19} /><div><strong>This mission failed</strong><p>Open Diagnostics to review the recorded cause, correlation details, and recovery guidance.</p></div><a className="button secondary" href="/settings#diagnostics-settings">View diagnostics</a></div>}
         {selectedApprovals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission paused for review</strong><p>{selectedApprovals.length} request{selectedApprovals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
         {run && <details className="mission-overview-disclosure" open={!terminal}><summary>Mission overview <span>{run.status.replaceAll("_", " ")}</span></summary><section className="mission-hero panel">
           <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replaceAll("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{run ? missionStatusCopy[run.status] : "Start a mission to begin recording work."}</p>{latestEvent && <div className="mission-now" aria-live="polite"><small>Latest update</small><AssistantMarkdown content={latestEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /><span>{formatEventKind(latestEvent.kind)} · {new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(latestEvent.occurredAt))}</span></div>}</div>
@@ -125,7 +127,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
         {resultEvent && <section className={`panel mission-result ${resultEvent.kind === "run.failed" ? "failed" : "complete"}`} aria-labelledby="mission-result-title">
           <header><span className="mission-result-icon"><FileCheck2 size={19} /></span><div><small>{resultEvent.kind === "run.failed" ? "Mission ended with errors" : "Completed mission"}</small><h2 id="mission-result-title">Mission result</h2></div><span className="mission-result-sequence">#{resultEvent.sequence}</span></header>
           <div className="mission-result-body"><AssistantMarkdown content={resultEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /></div>
-          <footer>{resultEvent.actor ?? "Nebula Core"} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resultEvent.occurredAt))}</footer>
+          <footer><span>{resultEvent.actor ?? "Nebula Core"} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resultEvent.occurredAt))}</span>{resultEvent.kind === "run.failed" && <a href="/settings#diagnostics-settings">View diagnostics</a>}</footer>
         </section>}
         <details className="panel data-panel mission-activity-disclosure"><summary><span><strong>Activity</strong><small>{events.length} event{events.length === 1 ? "" : "s"} · expand for technical timeline</small></span><GitBranch size={19} /></summary><section>
           <header className="panel-header compact"><div><h2>Activity</h2><p>{harnessEvents.length ? "Replayable harness timeline with newest updates first" : "Full loaded mission timeline with newest updates first"}</p></div><GitBranch size={19} /></header>

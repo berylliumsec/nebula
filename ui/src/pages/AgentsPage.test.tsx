@@ -120,4 +120,26 @@ describe("mission activity", () => {
     expect(within(history).getByRole("button", { name: /Mission 99/ })).toBeVisible();
     workspace.runs = [];
   });
+
+  it("links a failed mission and its final result to Diagnostics", () => {
+    const previousStatus = workspace.run.status;
+    const previousEvents = workspace.events;
+    (workspace.run as { status: string }).status = "failed";
+    workspace.events = [{
+      id: "event-failed",
+      sequence: 19,
+      kind: "run.failed",
+      actor: "Nebula Core",
+      occurredAt: "2026-07-14T12:05:00Z",
+      summary: "Mission failed during provider execution.",
+      payload: {},
+    }];
+    render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+
+    const links = screen.getAllByRole("link", { name: "View diagnostics" });
+    expect(links).toHaveLength(2);
+    links.forEach((link) => expect(link).toHaveAttribute("href", "/settings#diagnostics-settings"));
+    (workspace.run as { status: string }).status = previousStatus;
+    workspace.events = previousEvents;
+  });
 });
