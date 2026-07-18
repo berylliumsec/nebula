@@ -69,10 +69,13 @@ describe("PostToolAssistant", () => {
       suggestNextSteps: true,
     }));
     expect(suggestions).toBeChecked();
-    expect(await screen.findByRole("status")).toHaveTextContent("Next-step suggestions enabled.");
+    const feedback = await screen.findByRole("status");
+    expect(feedback).toHaveTextContent("Next-step suggestions enabled");
+    expect(feedback).not.toHaveTextContent("Analysis runtime required");
+    expect(screen.queryByRole("link", { name: "Open Settings" })).toBeNull();
   });
 
-  it("persists enablement before runtime setup and directs the user to Settings", async () => {
+  it("blocks enablement before runtime setup and explains how to resolve it", async () => {
     const user = userEvent.setup();
     const config: PostToolAssistantConfig = {
       suggestNextSteps: false,
@@ -87,13 +90,10 @@ describe("PostToolAssistant", () => {
     const notes = await screen.findByRole("checkbox", { name: "Take notes" });
     await user.click(notes);
 
-    expect(notes).toBeChecked();
-    await waitFor(() => expect(setPostToolAssistant).toHaveBeenCalledWith("project-1", {
-      ...config,
-      takeNotes: true,
-    }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Notes enabled");
-    expect(screen.getByRole("status")).toHaveTextContent("Complete the analysis runtime setup");
-    expect(screen.getByRole("link", { name: "Open tool follow-up settings" })).toHaveAttribute("href", "/settings#post-tool-assistant-settings");
+    expect(notes).not.toBeChecked();
+    expect(setPostToolAssistant).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Analysis runtime required");
+    expect(screen.getByRole("alert")).toHaveTextContent("Choose a model for Codex harness in Settings");
+    expect(screen.getByRole("link", { name: "Open Settings" })).toHaveAttribute("href", "/settings#post-tool-assistant-settings");
   });
 });

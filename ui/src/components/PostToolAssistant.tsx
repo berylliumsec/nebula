@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronUp, Clipboard, LoaderCircle, Play, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, CircleAlert, Clipboard, LoaderCircle, Play, Sparkles, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { GeneratedDraft, HarnessProfile, PostToolAssistantConfig, ProviderHealth } from "../api/types";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
-import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 interface Props {
   api: ApiClient;
@@ -16,7 +16,18 @@ interface Props {
 
 const EMPTY: PostToolAssistantConfig = { suggestNextSteps: false, takeNotes: false, backendKind: "provider", cloudConfirmed: false };
 
-function analysisRuntimeReady(config: PostToolAssistantConfig, providers: ProviderHealth[], harnesses: HarnessProfile[]): boolean {
+interface AnalysisRuntimeStatus {
+  ready: boolean;
+  message?: string;
+}
+
+interface ToolFeedback {
+  kind: "setup" | "success" | "error";
+  title: string;
+  message: string;
+}
+
+function analysisRuntimeStatus(config: PostToolAssistantConfig, providers: ProviderHealth[], harnesses: HarnessProfile[]): AnalysisRuntimeStatus {
   const harness = config.backendKind === "harness"
     ? harnesses.find((item) => item.id === config.harnessProfileId && item.enabled)
     : undefined;
@@ -26,7 +37,11 @@ function analysisRuntimeReady(config: PostToolAssistantConfig, providers: Provid
   const backend = harness ?? provider;
   const remote = harness ? !harness.localOnly : provider ? !provider.local : false;
   const permitsProjectData = harness?.permitsSensitiveData ?? provider?.permitsSensitiveData ?? true;
-  return Boolean(backend && config.model?.trim() && (!remote || (permitsProjectData && config.cloudConfirmed)));
+  if (!backend) return { ready: false, message: "Choose an enabled model provider or agent harness in Settings." };
+  if (!config.model?.trim()) return { ready: false, message: `Choose a model for ${backend.name} in Settings.` };
+  if (remote && !permitsProjectData) return { ready: false, message: `${backend.name} is not permitted to receive project data.` };
+  if (remote && !config.cloudConfirmed) return { ready: false, message: `Confirm project data use for ${backend.name} in Settings.` };
+  return { ready: true };
 }
 
 export function PostToolAssistant({ api, engagementId, providers, harnesses, onRun }: Props) {
@@ -36,10 +51,21 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [savingToggle, setSavingToggle] = useState(false);
-  const [error, setError] = useState<string>();
-  const [savedMessage, setSavedMessage] = useState<string>();
-  const [savedNeedsSettings, setSavedNeedsSettings] = useState(false);
-  const analysisReady = analysisRuntimeReady(config, providers, harnesses);
+  const [feedback, setFeedback] = useState<ToolFeedback>();
+  const [feedbackPosition, setFeedbackPosition] = useState({ top: 18, right: 18 });
+  const togglesRef = useRef<HTMLDivElement>(null);
+  const runtimeStatus = analysisRuntimeStatus(config, providers, harnesses);
+
+  const positionFeedback = useCallback(() => {
+    const anchor = togglesRef.current?.getBoundingClientRect();
+    if (!anchor) return;
+    const width = Math.min(380, globalThis.innerWidth - 24);
+    const maximumRight = Math.max(12, globalThis.innerWidth - width - 12);
+    setFeedbackPosition({
+      top: anchor.bottom + 9,
+      right: Math.min(Math.max(12, globalThis.innerWidth - anchor.right), maximumRight),
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     const [nextConfig, results] = await Promise.all([api.getPostToolAssistant(engagementId), api.listPostToolResults(engagementId)]);
@@ -49,11 +75,22 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     setCommand(latest?.content?.nextStep?.command ?? "");
   }, [api, engagementId]);
 
-  useEffect(() => { void refresh().catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load tool assistance.")); }, [refresh]);
+  useEffect(() => { void refresh().catch((caught) => setFeedback({ kind: "error", title: "Tool assistance unavailable", message: caught instanceof Error ? caught.message : "Could not load tool assistance." })); }, [refresh]);
+
+  useEffect(() => {
+    if (!feedback) return;
+    positionFeedback();
+    globalThis.addEventListener("resize", positionFeedback);
+    globalThis.addEventListener("scroll", positionFeedback, true);
+    return () => {
+      globalThis.removeEventListener("resize", positionFeedback);
+      globalThis.removeEventListener("scroll", positionFeedback, true);
+    };
+  }, [feedback, positionFeedback]);
 
   useEffect(() => {
     const backendId = config.backendKind === "harness" ? config.harnessProfileId : config.providerId;
-    if (savingToggle || (!config.suggestNextSteps && !config.takeNotes) || !analysisReady || !backendId || !config.model) return;
+    if (savingToggle || (!config.suggestNextSteps && !config.takeNotes) || !runtimeStatus.ready || !backendId || !config.model) return;
     let active = true;
     const tick = async () => {
       try {
@@ -71,18 +108,25 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
         if (active) await refresh();
       } catch (caught) {
         void logCaughtDiagnostic("interface.post_tool_assistant.analysis_failed", "Post-tool analysis failed.", caught, "post_tool_assistant");
-        if (active) setError(caught instanceof Error ? caught.message : "Post-tool analysis failed.");
+        if (active) setFeedback({ kind: "error", title: "Tool analysis stopped", message: caught instanceof Error ? caught.message : "Post-tool analysis failed." });
       } finally { if (active) setBusy(false); }
     };
     void tick();
     const timer = globalThis.setInterval(() => void tick(), 3000);
     return () => { active = false; globalThis.clearInterval(timer); };
-  }, [analysisReady, api, config, engagementId, refresh, savingToggle]);
+  }, [api, config, engagementId, refresh, runtimeStatus.ready, savingToggle]);
 
   const toggle = async (key: "suggestNextSteps" | "takeNotes") => {
     const enabled = !config[key];
-    setSavedMessage(undefined);
-    setSavedNeedsSettings(false);
+    setFeedback(undefined);
+    if (enabled && !runtimeStatus.ready) {
+      setFeedback({
+        kind: "setup",
+        title: "Analysis runtime required",
+        message: runtimeStatus.message ?? "Configure tool follow-up in Settings before enabling this control.",
+      });
+      return;
+    }
     const previous = config;
     const next = { ...config, [key]: enabled };
     setConfig(next);
@@ -90,17 +134,15 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     try {
       const saved = await api.setPostToolAssistant(engagementId, next);
       setConfig(saved);
-      setError(undefined);
-      const needsSettings = enabled && !analysisRuntimeReady(saved, providers, harnesses);
-      setSavedNeedsSettings(needsSettings);
-      setSavedMessage(
-        `${key === "suggestNextSteps" ? "Next-step suggestions" : "Notes"} ${enabled ? "enabled" : "disabled"}.`
-        + (needsSettings ? " Complete the analysis runtime setup before tool output is analyzed." : ""),
-      );
+      setFeedback({
+        kind: "success",
+        title: `${key === "suggestNextSteps" ? "Next-step suggestions" : "Notes"} ${enabled ? "enabled" : "disabled"}`,
+        message: enabled ? "New completed tool results will be analyzed." : "No new tool results will be analyzed for this feature.",
+      });
     }
     catch (caught) {
       setConfig(previous);
-      setError(caught instanceof Error ? caught.message : "Could not update tool assistance.");
+      setFeedback({ kind: "error", title: "Could not save this control", message: caught instanceof Error ? caught.message : "Could not update tool assistance." });
     }
     finally { setSavingToggle(false); }
   };
@@ -114,17 +156,20 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
   const dismiss = async () => {
     if (!result) return;
     try { await api.dismissPostToolSuggestion(result.id); setResult(undefined); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not dismiss the suggestion."); }
+    catch (caught) { setFeedback({ kind: "error", title: "Could not dismiss suggestion", message: caught instanceof Error ? caught.message : "Could not dismiss the suggestion." }); }
   };
 
   return <>
-    <div className="post-tool-toggles" aria-label="Post-tool assistance">
+    <div className="post-tool-toggles" aria-label="Post-tool assistance" ref={togglesRef}>
       <label title="Suggest next steps"><input aria-label="Suggest next steps" type="checkbox" checked={config.suggestNextSteps} disabled={savingToggle} onChange={() => void toggle("suggestNextSteps")} /><span>Suggest next steps</span></label>
       <label title="Take notes"><input aria-label="Take notes" type="checkbox" checked={config.takeNotes} disabled={savingToggle} onChange={() => void toggle("takeNotes")} /><span>Take notes</span></label>
       {busy && <LoaderCircle className="spin" size={13} aria-label="Analyzing tool result" />}
     </div>
-    {(error || savedMessage) && createPortal(<div className={`post-tool-feedback${error ? " error" : " success"}`} role={error ? undefined : "status"} aria-live={error ? undefined : "polite"}>
-      {error ? <><DiagnosticErrorNotice error={error} fallback="Post-tool assistance is unavailable." compact /><a className="button quiet" href="/settings#post-tool-assistant-settings">Open tool follow-up settings</a></> : <><span>{savedMessage}</span>{savedNeedsSettings && <a className="button quiet" href="/settings#post-tool-assistant-settings">Open tool follow-up settings</a>}</>}
+    {feedback && createPortal(<div className={`post-tool-feedback ${feedback.kind}`} style={feedbackPosition} role={feedback.kind === "success" ? "status" : "alert"} aria-live={feedback.kind === "success" ? "polite" : "assertive"}>
+      <span className="post-tool-feedback-icon" aria-hidden="true">{feedback.kind === "success" ? <Check size={15} /> : <CircleAlert size={15} />}</span>
+      <span className="post-tool-feedback-copy"><strong>{feedback.title}</strong><small>{feedback.message}</small></span>
+      {feedback.kind === "setup" && <a className="button quiet" href="/settings#post-tool-assistant-settings">Open Settings</a>}
+      <button className="icon-button subtle post-tool-feedback-close" type="button" aria-label="Dismiss tool assistance message" onClick={() => setFeedback(undefined)}><X size={13} /></button>
     </div>, document.body)}
     {config.suggestNextSteps && step && result && <aside className={`post-tool-suggestion${expanded ? " expanded" : ""}`} aria-label="Suggested next step">
       <header><Sparkles size={15} /><span><small>Suggested next step</small><strong>{step.title}</strong></span><button className="icon-button subtle" type="button" aria-label="Dismiss suggestion" onClick={() => void dismiss()}><X size={14} /></button></header>

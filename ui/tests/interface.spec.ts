@@ -1316,6 +1316,9 @@ test("tool follow-up runtime lives in Settings and its Workbench toggles persist
   await suggestions.click();
   await expect(suggestions).toBeChecked();
   await expect.poll(() => postToolConfig.suggest_next_steps).toBe(true);
+  const enabledFeedback = page.getByRole("status");
+  await expect(enabledFeedback).toContainText("Next-step suggestions enabled");
+  await expect(enabledFeedback.getByRole("link", { name: "Open Settings" })).toHaveCount(0);
   if (testInfo.project.name === "desktop") await expect(page.locator(".session-toolbar")).toHaveScreenshot("tool-follow-up-workbench-toolbar.png");
 
   await openWorkspace(page, "/settings#post-tool-assistant-settings", "Settings");
@@ -1327,7 +1330,7 @@ test("tool follow-up runtime lives in Settings and its Workbench toggles persist
   if (testInfo.project.name === "desktop") await expect(panel).toHaveScreenshot("tool-follow-up-settings.png");
 });
 
-test("tool follow-up toggles persist while runtime setup is pending", async ({ page }) => {
+test("tool follow-up toggles explain missing runtime setup", async ({ page }) => {
   let postToolConfig = {
     suggest_next_steps: false,
     take_notes: false,
@@ -1356,11 +1359,13 @@ test("tool follow-up toggles persist while runtime setup is pending", async ({ p
   const notes = page.getByRole("checkbox", { name: "Take notes" });
   await notes.click();
 
-  await expect(notes).toBeChecked();
-  await expect.poll(() => postToolConfig.take_notes).toBe(true);
-  const feedback = page.getByRole("status");
-  await expect(feedback).toContainText("Notes enabled");
-  await expect(feedback.getByRole("link", { name: "Open tool follow-up settings" })).toBeVisible();
+  await expect(notes).not.toBeChecked();
+  expect(postToolConfig.take_notes).toBe(false);
+  const feedback = page.getByRole("alert");
+  await expect(feedback).toContainText("Analysis runtime required");
+  await expect(feedback).toContainText("Choose an enabled model provider or agent harness in Settings");
+  await expect(feedback.getByRole("link", { name: "Open Settings" })).toBeVisible();
+  await expect(feedback).toHaveScreenshot("tool-follow-up-runtime-required.png");
 });
 
 test("appearance variants preserve each critical workspace hierarchy", async ({ page }) => {

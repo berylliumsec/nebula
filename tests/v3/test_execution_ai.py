@@ -227,12 +227,12 @@ async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path
     assert dismissed.metadata["dismissed"] is True
 
 
-def test_post_tool_config_can_be_enabled_before_runtime_setup(tmp_path):
+def test_post_tool_config_requires_runtime_before_enablement(tmp_path):
     _store, _artifacts, engagement, _execution, _profile, _evidence, _provider, service = _fixture(tmp_path)
-    config = service.set_config(engagement.id, PostToolAssistantConfig(suggest_next_steps=True))
-    assert config.suggest_next_steps is True
-    assert config.model is None
-    assert service.get_config(engagement.id) == config
+    with pytest.raises(ExecutionAIError) as refusal:
+        service.set_config(engagement.id, PostToolAssistantConfig(suggest_next_steps=True))
+    assert refusal.value.code == "configuration_invalid"
+    assert service.get_config(engagement.id).suggest_next_steps is False
 
 
 @async_test
