@@ -156,8 +156,11 @@ function LiveContainerTerminal({
         foreground: "#d9e5e9",
         cursor: "#b8ffe3",
         cursorAccent: "#071017",
-        selectionBackground: "#2f6f9f",
-        selectionInactiveBackground: "#285f88",
+        // Keep selection unmistakable against the terminal canvas. The inactive
+        // color remains high-contrast because the selection-actions toolbar can
+        // temporarily move focus away from xterm without clearing the selection.
+        selectionBackground: "#168bd2",
+        selectionInactiveBackground: "#126fa8",
         selectionForeground: "#ffffff",
         black: "#071017",
         brightBlack: "#53656d",

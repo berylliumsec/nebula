@@ -217,8 +217,8 @@ describe("ContainerTerminalPanel", () => {
       theme: expect.objectContaining({
         cursor: "#b8ffe3",
         cursorAccent: "#071017",
-        selectionBackground: "#2f6f9f",
-        selectionInactiveBackground: "#285f88",
+        selectionBackground: "#168bd2",
+        selectionInactiveBackground: "#126fa8",
         selectionForeground: "#ffffff",
       }),
     });

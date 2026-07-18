@@ -498,6 +498,35 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
   expect(dimensions.canvasHeight).toBeLessThanOrEqual(dimensions.viewportContentHeight + 1);
 });
 
+test("terminal drag selection has a visible high-contrast highlight", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Canvas selection rendering needs one desktop visual run.");
+  await openWorkspace(page, "/", "Workbench");
+  await page.getByRole("tab", { name: "Terminal", exact: true }).click();
+  const screen = page.locator(".xterm-screen").last();
+  await expect(screen).toBeVisible();
+  const box = await screen.boundingBox();
+  expect(box).toBeTruthy();
+  await page.mouse.move(box!.x + 12, box!.y + 14);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + 190, box!.y + 14, { steps: 12 });
+  await page.mouse.up();
+  await expect(page.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("terminal-visible-selection.png") });
+  const selectionRects = await screen.locator(".xterm-selection > div").evaluateAll((rectangles) =>
+    rectangles.map((rectangle) => {
+      const rect = rectangle.getBoundingClientRect();
+      return {
+        background: getComputedStyle(rectangle).backgroundColor,
+        width: rect.width,
+        height: rect.height,
+      };
+    }),
+  );
+  expect(selectionRects.length).toBeGreaterThan(0);
+  expect(selectionRects.some((rect) => rect.width > 20 && rect.height > 8)).toBe(true);
+  expect(selectionRects.every((rect) => ["rgb(22, 139, 210)", "rgb(18, 111, 168)"].includes(rect.background))).toBe(true);
+});
+
 test(firstRunThemeTest, async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
