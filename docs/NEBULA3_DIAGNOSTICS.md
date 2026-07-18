@@ -70,7 +70,7 @@ One file is maintained for each domain:
 | `providers.log` | Provider discovery, health, capabilities, adapters, credentials and consent |
 | `chat.log` | Conversation/message lifecycle, streaming, approvals and handoffs |
 | `knowledge.log` | Parsing, ingestion, indexing, retrieval, citations and compaction |
-| `harnesses.log` | Codex/Claude processes, protocols, sessions, MCP and cleanup |
+| `harnesses.log` | Codex processes, protocols, sessions, MCP and cleanup |
 | `missions.log` | Missions, tasks, attempts, budgets, approvals, retries and terminalization |
 | `runtime.log` | Kali preparation, inventory, sessions, commands, processes and policy grants |
 | `sandbox.log` | Runners, images, containers, DNS/egress policy, limits and cleanup |

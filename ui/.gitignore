@@ -1,6 +1,7 @@
 node_modules/
 dist/
 src-tauri/target/
+usage-videos/
 *.local
 *.tsbuildinfo
 .DS_Store

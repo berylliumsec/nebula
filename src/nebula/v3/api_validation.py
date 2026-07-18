@@ -36,6 +36,7 @@ from .domain import (
     OperatorExecution,
     OperatorProfile,
     ProviderProfile,
+    PROVIDED_HARNESS_KINDS,
     Remediation,
     Report,
     ReportRender,
@@ -201,11 +202,24 @@ class ApiEntityValidator:
         self.store = store
 
     def validate_create(self, entity: Entity) -> None:
+        if (
+            isinstance(entity, HarnessProfile)
+            and entity.kind not in PROVIDED_HARNESS_KINDS
+        ):
+            raise ApiEntityValidationError(
+                f"harness kind {entity.kind.value!r} is not provided"
+            )
         self._validate(entity)
 
     def validate_update(self, current: Entity, candidate: Entity) -> None:
         if type(current) is not type(candidate):
             raise ApiEntityValidationError("entity type cannot be changed")
+        if (
+            isinstance(current, HarnessProfile)
+            and isinstance(candidate, HarnessProfile)
+            and current.kind != candidate.kind
+        ):
+            raise ApiEntityValidationError("harness kind cannot be changed")
         current_owner = entity_engagement_id(current)
         candidate_owner = entity_engagement_id(candidate)
         if current_owner != candidate_owner:

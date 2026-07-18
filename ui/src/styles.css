@@ -465,14 +465,14 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .chat-approval-card pre { max-height: 224px; overflow: auto; white-space: pre-wrap; font-size: 11px; }
 .chat-approval-card > div { display: flex; justify-content: flex-end; gap: 8px; }
 .chat-error { margin: 0 12px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--red) 25%, var(--border)); border-radius: 6px; background: var(--red-muted); font-size: 11px; }
-.chat-harness-progress { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; gap: 9px; align-items: start; margin: 10px 12px 0; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
-.chat-harness-progress > .status-dot { margin-top: 4px; }
+.chat-harness-progress { display: flex; min-width: 0; min-height: 26px; flex: 0 0 auto; align-items: center; gap: 7px; margin: 0; padding: 3px 10px; overflow: hidden; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; background: var(--surface-muted); }
+.chat-harness-progress > .status-dot { flex: 0 0 auto; margin: 0; }
 .chat-harness-progress > .status-dot.pending { background: var(--blue); }
-.chat-harness-progress > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.chat-harness-progress strong { color: var(--text-strong); font-size: 11px; }
-.chat-harness-progress small { color: var(--muted); font-size: 11px; line-height: 1.4; }
-.chat-harness-progress code { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.chat-harness-progress > .harness-steer-button { min-width: max-content; align-self: center; white-space: nowrap; }
+.chat-harness-progress > div { display: flex; min-width: 0; flex: 1; align-items: baseline; gap: 6px; overflow: hidden; white-space: nowrap; }
+.chat-harness-progress strong { flex: 0 0 auto; color: var(--text-strong); font-size: 10px; }
+.chat-harness-progress small { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.chat-harness-progress code { flex: 0 1 auto; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.chat-harness-progress > .harness-steer-button { min-width: max-content; min-height: 20px; align-self: center; padding-inline: 6px; font-size: 9px; white-space: nowrap; }
 .chat-harness-progress.phase-parallel_session_created { border-color: color-mix(in srgb, var(--blue) 42%, var(--border)); background: color-mix(in srgb, var(--blue-muted) 45%, var(--surface-muted)); }
 .chat-harness-progress.phase-waiting_approval { border-color: color-mix(in srgb, var(--yellow) 42%, var(--border)); }
 .chat-harness-progress.phase-failed, .chat-harness-progress.phase-status_unavailable { border-color: color-mix(in srgb, var(--red) 38%, var(--border)); background: var(--red-muted); }

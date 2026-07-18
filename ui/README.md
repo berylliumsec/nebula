@@ -25,6 +25,17 @@ Nebula Core into the target-triple sidecar path, generates its build metadata
 and third-party notices, and then starts Vite. The first launch therefore takes
 longer than browser-only development with `npm run dev`.
 
+## Usage recordings
+
+Record the realistic Nebula 3 workflows described in
+[`docs/NEBULA3_USAGE_SCENARIOS.md`](../docs/NEBULA3_USAGE_SCENARIOS.md):
+
+```bash
+npm run record:usage
+```
+
+The named WebM files are saved under the gitignored `usage-videos/` directory.
+
 `nebula3 ui` launches the browser with a one-time token in the URL fragment. The runtime consumes `#token=…` into memory and immediately removes it with `history.replaceState`; it never stores the token in local or session storage.
 
 ## API boundaries

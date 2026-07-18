@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:update": "playwright test --update-snapshots",
+    "record:usage": "npm run build && playwright test --config playwright.usage.config.ts",
     "audit:diagnostics": "node ../scripts/audit_typescript_diagnostics.mjs",
     "tauri": "tauri"
   },

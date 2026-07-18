@@ -113,7 +113,11 @@ class ChatBackend(StringEnum):
 
 class HarnessKind(StringEnum):
     CODEX_APP_SERVER = "codex_app_server"
+    # Retained only so historical profiles and activity records remain readable.
     CLAUDE_AGENT_SDK = "claude_agent_sdk"
+
+
+PROVIDED_HARNESS_KINDS = frozenset({HarnessKind.CODEX_APP_SERVER})
 
 
 class HarnessConnectionMode(StringEnum):

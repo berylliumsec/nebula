@@ -1371,10 +1371,7 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
     with TestClient(app) as client:
         catalog = client.get("/api/v1/harness-catalog", headers=headers)
         assert catalog.status_code == 200
-        assert {item["kind"] for item in catalog.json()} == {
-            "codex_app_server",
-            "claude_agent_sdk",
-        }
+        assert [item["kind"] for item in catalog.json()] == ["codex_app_server"]
         health = client.post(f"/api/v1/harnesses/{profile.id}/health", headers=headers)
         assert health.status_code == 200
         assert health.json()["harness_version"] == "fixture-1"

@@ -15,6 +15,8 @@ from nebula.v3.domain import (
     Engagement,
     Evidence,
     Finding,
+    HarnessKind,
+    HarnessProfile,
     ProviderProfile,
     RiskClass,
     ScopePolicy,
@@ -161,6 +163,35 @@ def test_generic_create_rejects_server_managed_fields(api, field, value):
     assert response.status_code == 422
     assert "server-managed" in response.json()["detail"]
     assert store.count(Engagement) == 0
+
+
+def test_generic_harness_create_allows_only_provided_kinds(api):
+    client, store = api
+
+    unsupported = client.post(
+        "/api/v1/harnesses",
+        headers=_auth(),
+        json={"name": "Claude", "kind": "claude_agent_sdk"},
+    )
+
+    assert unsupported.status_code == 422
+    assert "harness kind 'claude_agent_sdk' is not provided" in unsupported.json()[
+        "detail"
+    ]
+    assert store.count(HarnessProfile) == 0
+
+    supported = client.post(
+        "/api/v1/harnesses",
+        headers=_auth(),
+        json={
+            "name": "Codex",
+            "kind": HarnessKind.CODEX_APP_SERVER.value,
+            "executable": "/usr/local/bin/codex",
+        },
+    )
+
+    assert supported.status_code == 201
+    assert supported.json()["kind"] == "codex_app_server"
 
 
 def test_patch_and_replace_preserve_ownership_and_revision_precedence(api):

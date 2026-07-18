@@ -1052,6 +1052,7 @@ export interface ChatSessionSummary {
 export interface HarnessProfile {
   id: Identifier;
   name: string;
+  // Claude remains a wire-compatible legacy value but is not a provided harness.
   kind: "codex_app_server" | "claude_agent_sdk";
   connectionMode: "spawn" | "endpoint";
   transport: "stdio" | "unix" | "websocket";

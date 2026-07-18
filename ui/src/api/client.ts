@@ -3183,7 +3183,9 @@ export class ApiClient {
 
   listHarnesses(signal?: AbortSignal): Promise<HarnessProfile[]> {
     return this.listAll<WireHarnessProfile>("harnesses", signal).then((items) =>
-      items.map(mapHarnessProfile),
+      items
+        .map(mapHarnessProfile)
+        .filter((profile) => profile.kind === "codex_app_server"),
     );
   }
 

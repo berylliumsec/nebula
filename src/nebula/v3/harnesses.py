@@ -737,20 +737,7 @@ def harness_catalog() -> list[HarnessCatalogItem]:
             installed=True,
             detail="Stable v2 threads/turns over stdio or Unix; loopback WebSocket is experimental.",
         ),
-        HarnessCatalogItem(
-            kind=HarnessKind.CLAUDE_AGENT_SDK,
-            display_name="Claude Agent SDK",
-            connection_modes=[HarnessConnectionMode.SPAWN],
-            transports=[HarnessTransport.STDIO],
-            mcp_transports=[McpTransport.STDIO, McpTransport.STREAMABLE_HTTP],
-            installed=_claude_sdk_installed(),
-            detail="Packaged Python Agent SDK with strict MCP configuration.",
-        ),
     ]
-
-
-def _claude_sdk_installed() -> bool:
-    return True
 
 
 def _bounded(value: Any, *, limit: int) -> Any:

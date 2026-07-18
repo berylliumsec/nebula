@@ -1397,6 +1397,26 @@ describe("ApiClient", () => {
     expect(missionBody).not.toHaveProperty("provider_id");
   });
 
+  it("omits legacy Claude profiles from the provided harnesses", async () => {
+    const entity = { created_at: "2026-07-14T10:00:00Z", updated_at: "2026-07-14T10:00:00Z", revision: 1 };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([{
+      ...entity,
+      id: "legacy-claude",
+      name: "Legacy Claude",
+      kind: "claude_agent_sdk",
+      connection_mode: "spawn",
+      transport: "stdio",
+      auth_mode: "existing_session",
+      enabled: true,
+      privacy: { local_only: false, permits_sensitive_data: false },
+      native_capabilities: { workspace_access: "none" },
+      capabilities: { checked_at: entity.updated_at, models: ["sonnet"] },
+    }]), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.listHarnesses()).resolves.toEqual([]);
+  });
+
   it("assembles every paginated terminal result byte and acknowledges raw access", async () => {
     const pages = [new Uint8Array([0, 1, 2]), new Uint8Array([3, 4])];
     const fetchMock = vi.fn<typeof fetch>()

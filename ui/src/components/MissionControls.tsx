@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { createPortal } from "react-dom";
 import { Play, ShieldCheck, Square, Trash2, Wrench, X } from "lucide-react";
 import { providerModelVerification } from "../api/providerCapabilities";
+import { defaultModelRuntime } from "../api/runtimeDefaults";
 import type { HarnessProfile, HarnessSessionSummary, McpServerProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useConfirmation } from "./DialogSystem";
@@ -47,6 +48,7 @@ export function NewMissionButton({ className = "button primary", children, showS
   const [toolPreparationDetail, setToolPreparationDetail] = useState<string>();
   const [toolVerificationBusy, setToolVerificationBusy] = useState(false);
   const attemptedToolVerificationRef = useRef(new Set<string>());
+  const runtimeDefaultAppliedRef = useRef(false);
   const selectedHarness = harnesses.find((item) => item.id === harnessId);
   const attachedHarnessSession = harnessSessions.find((item) => item.id === harnessSessionId);
   const modelOptions = [...new Set([
@@ -60,10 +62,12 @@ export function NewMissionButton({ className = "button primary", children, showS
 
   useEffect(() => {
     if (availableProviders.some((item) => item.id === providerId)) return;
-    const next = availableProviders[0];
+    const next = availableProviders.find(
+      (item) => item.state === "healthy" || item.state === "unchecked",
+    );
     setProviderId(next?.id ?? "");
-    setModel(next?.defaultModel ?? next?.models[0] ?? "");
-  }, [availableProviders, providerId]);
+    if (runtimeKind === "native") setModel(next?.models[0] ?? "");
+  }, [availableProviders, providerId, runtimeKind]);
 
   useEffect(() => {
     let active = true;
@@ -84,11 +88,22 @@ export function NewMissionButton({ className = "button primary", children, showS
   }, [api, coreState, engagement?.id]);
 
   useEffect(() => {
+    if (!harnessesLoaded || runtimeDefaultAppliedRef.current) return;
+    const selection = defaultModelRuntime(availableProviders, harnesses);
+    if (!selection) return;
+    runtimeDefaultAppliedRef.current = true;
+    setRuntimeKind(selection.kind === "harness" ? "harness" : "native");
+    setModel(selection.model);
+    if (selection.kind === "harness") setHarnessId(selection.id);
+    else setProviderId(selection.id);
+  }, [availableProviders, harnesses, harnessesLoaded]);
+
+  useEffect(() => {
     if (runtimeKind !== "harness") return;
     const attached = harnessSessions.find((item) => item.id === harnessSessionId);
     const harness = harnesses.find((item) => item.id === (attached?.harnessProfileId ?? harnessId));
     if (attached) setHarnessId(attached.harnessProfileId);
-    setModel(attached?.model ?? harness?.defaultModel ?? harness?.models[0] ?? "");
+    setModel(attached?.model ?? harness?.models[0] ?? "");
   }, [harnessId, harnessSessionId, harnessSessions, harnesses, runtimeKind]);
 
   useEffect(() => {
@@ -157,7 +172,7 @@ export function NewMissionButton({ className = "button primary", children, showS
   const selectProvider = (id: string) => {
     const next = availableProviders.find((item) => item.id === id);
     setProviderId(id);
-    setModel(next?.defaultModel ?? next?.models[0] ?? "");
+    setModel(next?.models[0] ?? "");
   };
 
   const openMission = () => {
@@ -303,7 +318,7 @@ export function NewMissionButton({ className = "button primary", children, showS
           <label>Objective<textarea required rows={5} value={objective} placeholder="Describe the outcome you want Nebula to produce…" onChange={(event) => { setObjective(event.target.value); setError(undefined); }} /></label>
           <details className="provider-advanced mission-advanced">
             <summary>Advanced</summary>
-            <label>Runtime<select aria-label="Mission runtime" value={runtimeKind} onChange={(event) => { const next = event.target.value as "native" | "harness"; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "native") selectProvider(providerId || availableProviders[0]?.id || ""); }}><option value="native">Native mission</option><option value="harness">Agent harness</option></select></label>
+            <label>Runtime<select aria-label="Mission runtime" value={runtimeKind} onChange={(event) => { const next = event.target.value as "native" | "harness"; runtimeDefaultAppliedRef.current = true; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "native") selectProvider(providerId || availableProviders[0]?.id || ""); }}><option value="native">Native mission</option><option value="harness">Agent harness</option></select></label>
             {runtimeKind === "native" ? <label>Provider<select value={providerId} onChange={(event) => { selectProvider(event.target.value); setError(undefined); }}>{availableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label> : <><label>Harness<select aria-label="Mission harness" value={harnessId} disabled={Boolean(harnessSessionId)} onChange={(event) => { setHarnessId(event.target.value); setError(undefined); }}>{harnesses.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Session<select aria-label="Harness session" value={harnessSessionId} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">Start a new session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.model} · {item.status}</option>)}</select></label></>}
             <label>Model<select required value={model} disabled={Boolean(harnessSessionId) || !modelOptions.length} onChange={(event) => { setModel(event.target.value); setError(undefined); }}><option value="">{modelOptions.length ? "Select model" : runtimeKind === "harness" ? "Run a harness check to discover models" : "Run provider health check to discover models"}</option>{modelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
             {(runtimeKind === "native" || !harnessSessionId) && <fieldset className="mission-tools"><legend>MCP servers · all agent runtimes</legend>{mcpServers.length ? mcpServers.map((server) => <label className="provider-consent" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span><strong>{server.name}</strong><small>{server.transport} · {server.tools.length} discovered tools · Core artifact capture</small></span></label>) : <p>No enabled MCP profiles. Add one in Settings if this mission needs external tools.</p>}</fieldset>}
