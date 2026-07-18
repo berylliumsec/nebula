@@ -7597,14 +7597,27 @@ class HarnessRuntimeService:
         elif turn.run_id:
             run = self.store.get(AgentRun, turn.run_id)
             if run.status not in {RunStatus.CANCELLED, RunStatus.INTERRUPTED}:
+                final_summary = (
+                    final_message.strip()
+                    or "Harness mission completed without a text response."
+                )[:20_000]
                 run, _ = self.store.update_with_event(
                     AgentRun,
                     run.id,
-                    {"status": RunStatus.COMPLETE, "completed_at": utc_now()},
+                    {
+                        "status": RunStatus.COMPLETE,
+                        "completed_at": utc_now(),
+                        "metadata": {
+                            **run.metadata,
+                            "final_summary": final_summary,
+                            "harness_turn_id": turn.id,
+                        },
+                    },
                     expected_revision=run.revision,
                     run_id=run.id,
                     event_type="run.completed",
                     event_payload={
+                        "summary": final_summary,
                         "harness_turn_id": turn.id,
                         "usage": usage.model_dump(mode="json"),
                     },
@@ -7614,8 +7627,7 @@ class HarnessRuntimeService:
                     self._append_chat_handoff(
                         chat,
                         role=ChatRole.ASSISTANT,
-                        content=final_message
-                        or "Harness mission completed without a text response.",
+                        content=final_summary,
                         run_id=run.id,
                         usage=usage,
                     )

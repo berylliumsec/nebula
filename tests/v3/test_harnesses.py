@@ -272,6 +272,17 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         finished = store.get(AgentRun, run.id)
         assert finished.status == RunStatus.COMPLETE
         assert finished.harness_session_id == session.id
+        assert finished.metadata["final_summary"] == (
+            "Harness answer for Continue autonomously"
+        )
+        completed_event = next(
+            event
+            for event in store.replay_events(run.id)
+            if event.event_type == "run.completed"
+        )
+        assert completed_event.payload["summary"] == (
+            "Harness answer for Continue autonomously"
+        )
         assert (
             finished.runtime_snapshot["mcp_snapshot"][0]["url"]
             == "https://mcp.invalid/api"
