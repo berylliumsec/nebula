@@ -53,7 +53,7 @@ export function OverviewPage() {
         description={run
             ? `${run.title} · ${run.status.replace("_", " ")}`
             : "Project status at a glance."}
-        actions={<NewMissionButton />}
+        actions={<NewMissionButton showSetupGuidance={false} />}
       />
 
       {approvals.length > 0 && (

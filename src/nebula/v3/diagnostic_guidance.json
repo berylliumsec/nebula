@@ -118,6 +118,32 @@
       "verification": "Confirm the source digest, signature, or revision matches a trusted expected value before continuing.",
       "retryable": false
     },
+    "workspace_busy": {
+      "title": "Workspace is in use",
+      "cause": "An active Project terminal or reviewed execution is still using the scratch workspace.",
+      "impact": "The reset was not performed and all workspace files remain unchanged.",
+      "confirmed_safe_state": "Nebula rejected the reset before removing any workspace entry.",
+      "steps": [
+        "Open Terminal and stop every active Project terminal.",
+        "Open Activity and wait for or cancel every queued, running, or cancelling reviewed execution.",
+        "Return to Files and run the reset readiness check again."
+      ],
+      "verification": "Confirm Files reports no active terminal or reviewed execution, then complete the reset and verify the removed-entry count.",
+      "retryable": true
+    },
+    "note_referenced_by_report": {
+      "title": "Note is retained by a report",
+      "cause": "A report references this note, so deleting it would break retained report lineage.",
+      "impact": "The note was not deleted and the referencing report remains unchanged.",
+      "confirmed_safe_state": "Nebula preserved both the note and every report that depends on it.",
+      "steps": [
+        "Open the named report in Reports.",
+        "For a draft or review report, remove the note from that report before trying again.",
+        "For a final report, retain the note because the signed report is immutable."
+      ],
+      "verification": "Confirm the note dependency view lists no editable report before deleting; notes retained by final reports remain intentionally unavailable for deletion.",
+      "retryable": false
+    },
     "stale_state": {
       "title": "Saved state changed",
       "cause": "The operation was based on a revision or runtime state that changed before it could finish.",

@@ -6,18 +6,21 @@ import type { HarnessProfile, HarnessSessionSummary, McpServerProfile } from "..
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { InlineValidationNotice } from "./InlineValidationNotice";
 
 interface NewMissionButtonProps {
   className?: string;
   children?: ReactNode;
+  showSetupGuidance?: boolean;
 }
 
-export function NewMissionButton({ className = "button primary", children }: NewMissionButtonProps) {
+export function NewMissionButton({ className = "button primary", children, showSetupGuidance = true }: NewMissionButtonProps) {
   const confirm = useConfirmation();
   const { api, coreState, engagement, previewMode, providers, reverifyProvider, startMission } = useWorkspace();
   const availableProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const [runtimeKind, setRuntimeKind] = useState<"native" | "harness">("native");
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
+  const [harnessesLoaded, setHarnessesLoaded] = useState(false);
   const [harnessSessions, setHarnessSessions] = useState<HarnessSessionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerProfile[]>([]);
   const [harnessId, setHarnessId] = useState("");
@@ -39,6 +42,7 @@ export function NewMissionButton({ className = "button primary", children }: New
   const [maxConcurrency, setMaxConcurrency] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [validationError, setValidationError] = useState<string>();
   const [toolPreparation, setToolPreparation] = useState<"idle" | "preparing" | "ready" | "unavailable">("idle");
   const [toolPreparationDetail, setToolPreparationDetail] = useState<string>();
   const [toolVerificationBusy, setToolVerificationBusy] = useState(false);
@@ -72,9 +76,10 @@ export function NewMissionButton({ className = "button primary", children }: New
         setMcpServers(nextServers.filter((item) => item.enabled));
         setHarnessSessions(nextSessions.filter((item) => item.status !== "closed"));
         setHarnessId((current) => enabled.some((item) => item.id === current) ? current : enabled[0]?.id ?? "");
+        setHarnessesLoaded(true);
       })
       .catch((caughtError) => {
-        void logCaughtDiagnostic("interface.mission_controls.caught_failure_01", "A handled interface operation failed.", caughtError, "mission_controls"); if (active) { setHarnesses([]); setMcpServers([]); setHarnessSessions([]); } });
+        void logCaughtDiagnostic("interface.mission_controls.caught_failure_01", "A handled interface operation failed.", caughtError, "mission_controls"); if (active) { setHarnesses([]); setMcpServers([]); setHarnessSessions([]); setHarnessesLoaded(true); } });
     return () => { active = false; };
   }, [api, coreState, engagement?.id]);
 
@@ -157,6 +162,7 @@ export function NewMissionButton({ className = "button primary", children }: New
 
   const openMission = () => {
     setError(undefined);
+    setValidationError(undefined);
     setMaxToolCalls(runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length ? 50 : 0);
     setMaxConcurrency(automaticTools.length ? 2 : 1);
     setOpen(true);
@@ -174,51 +180,51 @@ export function NewMissionButton({ className = "button primary", children }: New
     const cleanObjective = objective.trim();
     const cleanModel = model.trim();
     if (!engagement) {
-      setError("Select an engagement before starting a mission.");
+      setValidationError("Select a project before starting a mission.");
       return;
     }
     if (runtimeKind === "native" && !provider) {
-      setError("Select an enabled provider before starting a mission.");
+      setValidationError("Select an enabled provider before starting a mission.");
       return;
     }
     if (runtimeKind === "harness" && !selectedHarness) {
-      setError("Select an enabled agent harness before starting a mission.");
+      setValidationError("Select an enabled agent harness before starting a mission.");
       return;
     }
     if (!cleanName) {
-      setError("Enter a mission name so you can identify it later.");
+      setValidationError("Enter a mission name so you can identify it later.");
       return;
     }
     if (!cleanObjective) {
-      setError("Enter a mission objective.");
+      setValidationError("Enter a mission objective.");
       return;
     }
     if (!cleanModel) {
-      setError("Select a model for this mission.");
+      setValidationError("Select a model for this mission.");
       return;
     }
     if (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 60) {
-      setError("Duration must be a whole number from 1 to 60 minutes.");
+      setValidationError("Duration must be a whole number from 1 to 60 minutes.");
       return;
     }
     if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 200_000) {
-      setError("Token limit must be a whole number from 1 to 200,000.");
+      setValidationError("Token limit must be a whole number from 1 to 200,000.");
       return;
     }
     if (!Number.isFinite(maxCost) || maxCost < 0 || maxCost > 100) {
-      setError("Cost limit must be from $0 to $100.");
+      setValidationError("Cost limit must be from $0 to $100.");
       return;
     }
     if (!Number.isInteger(maxRetries) || maxRetries < 0 || maxRetries > 2) {
-      setError("Retries must be a whole number from 0 to 2.");
+      setValidationError("Retries must be a whole number from 0 to 2.");
       return;
     }
     if ((runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length) && (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 100)) {
-      setError("Maximum tool calls must be a whole number from 1 to 100.");
+      setValidationError("Maximum tool calls must be a whole number from 1 to 100.");
       return;
     }
     if ((automaticTools.length || selectedMcpIds.length) && (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 2)) {
-      setError("Maximum concurrency must be 1 or 2.");
+      setValidationError("Maximum concurrency must be 1 or 2.");
       return;
     }
     const selectedHarnessSession = harnessSessions.find((item) => item.id === harnessSessionId);
@@ -226,7 +232,7 @@ export function NewMissionButton({ className = "button primary", children }: New
       ? Boolean(harnessSessionId ? selectedHarnessSession?.mcpServerIds.length : selectedMcpIds.length)
       : selectedMcpIds.length > 0;
     if (runtimeKind === "native" && runtimeUsesMcp && !providerSupportsTools) {
-      setError(`Tool calling must be verified for ${cleanModel} before selecting MCP tools.`);
+      setValidationError(`Tool calling must be verified for ${cleanModel} before selecting MCP tools.`);
       return;
     }
     let allowCloudToolResults = false;
@@ -239,7 +245,7 @@ export function NewMissionButton({ className = "button primary", children }: New
       : provider?.permitsSensitiveData;
     if (runtimeUsesMcp && selectedRuntime && !runtimeIsLocal) {
       if (!runtimePermitsSensitive) {
-        setError("This runtime profile is text-only. Permit project/document data in Settings or remove MCP servers.");
+        setValidationError("This runtime profile is text-only. Permit project/document data in Settings or remove MCP servers.");
         return;
       }
       allowCloudToolResults = await confirm({
@@ -251,6 +257,7 @@ export function NewMissionButton({ className = "button primary", children }: New
     }
     setSaving(true);
     setError(undefined);
+    setValidationError(undefined);
     try {
       await startMission(runtimeKind === "harness" ? {
         engagementId: engagement.id,
@@ -284,6 +291,7 @@ export function NewMissionButton({ className = "button primary", children }: New
 
   return <>
     <button className={className} type="button" disabled={previewMode || !engagement || (availableProviders.length === 0 && harnesses.length === 0)} title={availableProviders.length || harnesses.length ? undefined : "Add an enabled provider or agent harness before automating a task"} onClick={openMission}>{children ?? <><Play size={16} /> Automate task</>}</button>
+    {showSetupGuidance && harnessesLoaded && availableProviders.length === 0 && harnesses.length === 0 && <span className="mission-runtime-setup" role="status"><span>Missions need an enabled model provider or agent harness with a verified model.</span><a href="/settings#models-settings">Configure runtime</a></span>}
     {open && createPortal(
       <div className="dialog-backdrop">
         <form noValidate className="provider-dialog resource-dialog mission-dialog" role="dialog" aria-modal="true" aria-labelledby="mission-dialog-title" onSubmit={(event) => void submit(event)}>
@@ -315,6 +323,7 @@ export function NewMissionButton({ className = "button primary", children }: New
             <p className="provider-dialog-note">{automaticTools.length || selectedMcpIds.length ? "Core applies scope, budgets, capture, and approvals." : "Analysis only · no execution tools"}</p>
           </details>
           {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
+          {validationError && <InlineValidationNotice message={validationError} />}
           <footer><button className="button secondary" type="button" onClick={() => setOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || toolPreparation === "preparing" || toolVerificationBusy}>{toolPreparation === "preparing" ? "Checking runtime…" : toolVerificationBusy ? "Checking model…" : saving ? "Starting…" : "Automate task"}</button></footer>
         </form>
       </div>,

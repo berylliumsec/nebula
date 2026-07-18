@@ -7,12 +7,20 @@ export interface ApiRuntime {
   mode: "browser" | "desktop";
   state: "ready" | "unavailable";
   message?: string;
+  reason?: "browser_session_token_missing";
 }
 
 interface BackendSession {
   endpoint: string;
   token: string;
   protocol: "nebula-sidecar-v1";
+}
+
+export function browserSessionRequiresRelaunch(
+  token: string | undefined,
+  development: boolean,
+): boolean {
+  return !token && !development;
 }
 
 let browserRuntimeToken: string | undefined;
@@ -78,6 +86,15 @@ export async function resolveApiRuntime(): Promise<ApiRuntime> {
   const token = consumeBrowserFragmentToken() ?? import.meta.env.VITE_NEBULA_API_TOKEN;
   const normalizedBase = (baseUrl?.trim() || globalThis.location?.origin || "http://127.0.0.1")
     .replace(/\/+$/, "");
+  if (browserSessionRequiresRelaunch(token, import.meta.env.DEV)) {
+    return {
+      baseUrl,
+      mode: "browser",
+      state: "unavailable",
+      reason: "browser_session_token_missing",
+      message: "This browser session no longer has its one-time Core token.",
+    };
+  }
   configureBrowserDiagnostics(
     normalizedBase.endsWith("/api/v1") ? normalizedBase : `${normalizedBase}/api/v1`,
     token,

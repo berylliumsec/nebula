@@ -35,6 +35,7 @@ import {
   diagnosticTechnicalDetails,
   humanizeDiagnosticValue,
   resolveDiagnosticIncidents,
+  rollupDiagnosticIncidents,
 } from "./presentation";
 import {
   diagnosticFeatures,
@@ -172,11 +173,11 @@ function FailureCard({
       <header>
         <span className={`diagnostic-level ${String(record.level).toLowerCase()}`}>{record.level}</span>
         <div>
-          <small>{presentation.operationLabel}</small>
+          <small>{presentation.operationLabel}{(incident.occurrence_count ?? 1) > 1 ? ` · ${incident.occurrence_count} occurrences` : ""}</small>
           <h4>{incident.guidance.title}</h4>
           <p>{record.message}</p>
         </div>
-        <time dateTime={record.timestamp}>{record.timestamp ? new Date(record.timestamp).toLocaleString() : "This session"}</time>
+        <time dateTime={incident.last_occurred_at ?? record.timestamp}>{incident.last_occurred_at ?? record.timestamp ? new Date(incident.last_occurred_at ?? record.timestamp ?? "").toLocaleString() : "This session"}</time>
       </header>
       <div className="diagnostic-failure-explanation">
         <span><small>Exact sanitized cause</small><p>{incident.guidance.cause}</p></span>
@@ -239,6 +240,7 @@ function FailureCard({
           {record.source && <div><dt>Source</dt><dd>{record.source}</dd></div>}
           {record.application_version && <div><dt>Application version</dt><dd>{record.application_version}</dd></div>}
           {incident.related_records.length > 0 && <div><dt>Correlated records</dt><dd>{incident.related_records.length + 1}</dd></div>}
+          {(incident.occurrence_count ?? 1) > 1 && <><div><dt>First occurrence</dt><dd>{incident.first_occurred_at ? new Date(incident.first_occurred_at).toLocaleString() : "This session"}</dd></div><div><dt>Last occurrence</dt><dd>{incident.last_occurred_at ? new Date(incident.last_occurred_at).toLocaleString() : "This session"}</dd></div><div><dt>Individual references</dt><dd>{incident.individual_references?.join(", ")}</dd></div></>}
         </dl>
         {record.stack_frames?.length ? (
           <div className="diagnostic-stack"><small>Sanitized stack</small><ol>{record.stack_frames.map((frame, index) => <li key={`${frame.module}-${frame.function}-${frame.line}-${index}`}><code>{frame.module}.{frame.function}:{frame.line}</code></li>)}</ol></div>
@@ -254,11 +256,13 @@ function FailureCard({
 
 export function DiagnosticsAvailabilityBanner() {
   const [available, setAvailable] = useState(isDiagnosticsAvailable);
+  const [reason, setReason] = useState<string>();
 
   useEffect(() => {
     const update = (event: Event) => {
-      const detail = (event as CustomEvent<{ available: boolean }>).detail;
+      const detail = (event as CustomEvent<{ available: boolean; reason?: string }>).detail;
       setAvailable(detail.available);
+      setReason(detail.reason);
     };
     window.addEventListener("nebula-diagnostics-health", update);
     return () => window.removeEventListener("nebula-diagnostics-health", update);
@@ -268,7 +272,7 @@ export function DiagnosticsAvailabilityBanner() {
   return (
     <div className="diagnostics-unavailable" role="status">
       <ShieldAlert size={16} />
-      <span><strong>Local diagnostics are unavailable.</strong> New failures are being retained in memory for this session.</span>
+      <span><strong>{reason?.startsWith("Browser event capture") ? "Browser event capture is unavailable." : "Local diagnostics are unavailable."}</strong> {reason ?? "New failures are being retained in memory for this session."}</span>
       <a href="/settings#diagnostics-settings">Diagnostics</a>
     </div>
   );
@@ -448,7 +452,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
   }, [api, errors]);
 
   const displayedIncidents = useMemo(
-    () => incidents.length ? incidents : resolveDiagnosticIncidents(errors),
+    () => rollupDiagnosticIncidents(incidents.length ? incidents : resolveDiagnosticIncidents(errors)),
     [errors, incidents],
   );
 
@@ -651,6 +655,9 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
     : status.writable && !status.degraded
       ? { tone: "healthy", title: "Local logging is healthy", detail: "Failure records can be written to local diagnostic storage." }
       : { tone: "attention", title: "Local logging needs attention", detail: typeof status.last_failure === "string" ? status.last_failure : status.last_failure?.message ?? "The local diagnostic sink is degraded." };
+  const browserIngressStatus: { tone: StatusTone; title: string; detail: string } = currentHealth?.browserDiagnosticIngress === "enabled"
+    ? { tone: "healthy", title: "Browser event capture is enabled", detail: "Authenticated interface failures can be written to Core diagnostic storage." }
+    : { tone: "attention", title: "Browser event capture is disabled", detail: "Core diagnostic storage is checked separately. This binding will retain interface failures only in bounded session memory." };
 
   return (
     <section className="settings-section diagnostics-panel" id="diagnostics-settings" hidden={hidden}>
@@ -669,6 +676,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
           <StatusCard label="Nebula Core" {...coreStatus} />
           <StatusCard label="Terminal runtime" {...runtimeStatus} />
           <StatusCard label="Diagnostic storage" {...loggerStatus} />
+          <StatusCard label="Browser event ingress" {...browserIngressStatus} />
         </div>
       </section>
 

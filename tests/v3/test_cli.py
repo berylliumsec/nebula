@@ -6,7 +6,7 @@ import httpx
 from typer.testing import CliRunner
 
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.cli import _is_loopback, app
+from nebula.v3.cli import _browser_diagnostic_ingress_allowed, _is_loopback, app
 from nebula.v3.domain import (
     AgentRun,
     Artifact,
@@ -48,6 +48,33 @@ def test_loopback_detection_supports_ipv6_and_rejects_mixed_dns(monkeypatch):
         ],
     )
     assert _is_loopback("mixed.example") is False
+
+
+def test_browser_diagnostic_ingress_is_loopback_only_unless_explicit():
+    assert _browser_diagnostic_ingress_allowed(
+        "127.0.0.1",
+        handshake_stdout=False,
+        allow_remote=False,
+        explicitly_enabled=False,
+    )
+    assert not _browser_diagnostic_ingress_allowed(
+        "127.0.0.1",
+        handshake_stdout=True,
+        allow_remote=False,
+        explicitly_enabled=True,
+    )
+    assert not _browser_diagnostic_ingress_allowed(
+        "192.0.2.10",
+        handshake_stdout=False,
+        allow_remote=True,
+        explicitly_enabled=False,
+    )
+    assert _browser_diagnostic_ingress_allowed(
+        "192.0.2.10",
+        handshake_stdout=False,
+        allow_remote=True,
+        explicitly_enabled=True,
+    )
 
 
 def test_hidden_mcp_gateway_command_uses_environment_token(tmp_path, monkeypatch):

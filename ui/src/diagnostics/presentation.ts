@@ -188,12 +188,50 @@ export function resolveDiagnosticIncidents(records: DiagnosticRecord[]): Diagnos
   return incidents.sort((left, right) => (right.primary.timestamp ?? "").localeCompare(left.primary.timestamp ?? ""));
 }
 
+function incidentSignature(incident: DiagnosticIncident): string {
+  const record = incident.primary;
+  return [record.feature, record.event_code, reasonForRecord(record), record.stage ?? "", record.exception_type ?? ""].join(":" );
+}
+
+function referencesForIncident(incident: DiagnosticIncident): string[] {
+  return [...new Set([incident.error_id, ...[incident.primary, ...incident.related_records].flatMap((record) => [
+    record.error_id,
+    record.request_id,
+    record.operation_id,
+    record.parent_operation_id,
+  ])].filter((value): value is string => Boolean(value)))];
+}
+
+/** Collapses repeated incidents while retaining every record and deep-link reference. */
+export function rollupDiagnosticIncidents(incidents: DiagnosticIncident[]): DiagnosticIncident[] {
+  const groups = new Map<string, DiagnosticIncident[]>();
+  for (const incident of incidents) {
+    const signature = incidentSignature(incident);
+    groups.set(signature, [...(groups.get(signature) ?? []), incident]);
+  }
+  return [...groups.values()].map((group) => {
+    const ordered = group.slice().sort((left, right) => (right.primary.timestamp ?? "").localeCompare(left.primary.timestamp ?? ""));
+    const latest = ordered[0];
+    const records = ordered.flatMap((incident) => [incident.primary, ...incident.related_records]);
+    const timestamps = records.map((record) => record.timestamp).filter((value): value is string => Boolean(value)).sort();
+    return {
+      ...latest,
+      related_records: records.filter((record) => record !== latest.primary),
+      occurrence_count: group.reduce((count, incident) => count + (incident.occurrence_count ?? 1), 0),
+      first_occurred_at: timestamps[0],
+      last_occurred_at: timestamps.at(-1),
+      individual_references: [...new Set(ordered.flatMap(referencesForIncident))],
+    };
+  }).sort((left, right) => (right.last_occurred_at ?? right.primary.timestamp ?? "").localeCompare(left.last_occurred_at ?? left.primary.timestamp ?? ""));
+}
+
 export function diagnosticRecordMatchesReference(record: DiagnosticRecord, reference: string): boolean {
   return [record.error_id, record.request_id, record.operation_id, record.parent_operation_id].includes(reference);
 }
 
 export function diagnosticIncidentMatchesReference(incident: DiagnosticIncident, reference: string): boolean {
   return incident.error_id === reference
+    || incident.individual_references?.includes(reference) === true
     || [incident.primary, ...incident.related_records]
       .some((record) => diagnosticRecordMatchesReference(record, reference));
 }

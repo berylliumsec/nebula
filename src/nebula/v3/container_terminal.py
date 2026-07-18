@@ -444,8 +444,11 @@ class ContainerTerminalService:
         return self._workspace_locks.setdefault(engagement_id, asyncio.Lock())
 
     async def engagement_active(self, engagement_id: str) -> bool:
+        return await self.engagement_active_count(engagement_id) > 0
+
+    async def engagement_active_count(self, engagement_id: str) -> int:
         async with self._lock:
-            return any(
+            return sum(
                 session.request.engagement_id == engagement_id
                 for session in (
                     *self._sessions.values(),

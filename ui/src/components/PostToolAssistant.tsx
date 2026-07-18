@@ -75,7 +75,10 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     setCommand(latest?.content?.nextStep?.command ?? "");
   }, [api, engagementId]);
 
-  useEffect(() => { void refresh().catch((caught) => setFeedback({ kind: "error", title: "Tool assistance unavailable", message: caught instanceof Error ? caught.message : "Could not load tool assistance." })); }, [refresh]);
+  useEffect(() => { void refresh().catch((caught) => {
+    void logCaughtDiagnostic("interface.post_tool_assistant.load_failed", "Post-tool assistance could not be loaded.", caught, "post_tool_assistant");
+    setFeedback({ kind: "error", title: "Tool assistance unavailable", message: caught instanceof Error ? caught.message : "Could not load tool assistance." });
+  }); }, [refresh]);
 
   useEffect(() => {
     if (!feedback) return;
@@ -157,6 +160,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
       });
     }
     catch (caught) {
+      void logCaughtDiagnostic("interface.post_tool_assistant.toggle_failed", "A post-tool assistance setting could not be saved.", caught, "post_tool_assistant");
       setConfig(previous);
       setFeedback({ kind: "error", title: "Could not save this control", message: caught instanceof Error ? caught.message : "Could not update tool assistance." });
     }
@@ -172,7 +176,10 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
   const dismiss = async () => {
     if (!result) return;
     try { await api.dismissPostToolSuggestion(result.id); setResult(undefined); }
-    catch (caught) { setFeedback({ kind: "error", title: "Could not dismiss suggestion", message: caught instanceof Error ? caught.message : "Could not dismiss the suggestion." }); }
+    catch (caught) {
+      void logCaughtDiagnostic("interface.post_tool_assistant.dismiss_failed", "A post-tool suggestion could not be dismissed.", caught, "post_tool_assistant");
+      setFeedback({ kind: "error", title: "Could not dismiss suggestion", message: caught instanceof Error ? caught.message : "Could not dismiss the suggestion." });
+    }
   };
 
   return <>

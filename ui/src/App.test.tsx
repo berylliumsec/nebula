@@ -664,7 +664,7 @@ describe("Nebula workspace", () => {
 
     expect(await screen.findByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("heading", { name: "Terminal" })).toBeVisible();
-    expect(screen.getByText("Root + network")).toBeVisible();
+    expect(screen.getByText("Root · bridge permitted")).toBeVisible();
     expect(screen.getAllByText("kali-linux-headless").length).toBeGreaterThan(0);
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/sessions") && request?.method === "POST")).toBe(true));
 

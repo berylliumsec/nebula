@@ -28,6 +28,27 @@ function renderPanel(api: Partial<ApiClient>, onAskNebula = vi.fn()) {
 }
 
 describe("NotesPanel", () => {
+  it("names a finalized report that retains a note and directs the user to Reports", async () => {
+    const user = userEvent.setup();
+    const deleteObservation = vi.fn();
+    renderPanel({
+      listObservations: vi.fn().mockResolvedValue({ items: [note], total: 1 }),
+      observationDependencies: vi.fn().mockResolvedValue({
+        observationId: note.id,
+        deletable: false,
+        reports: [{ id: "report-1", title: "Client Final", status: "final" }],
+      }),
+      deleteObservation,
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+
+    expect(await screen.findByText("This note is retained by a report")).toBeVisible();
+    expect(screen.getByText(/Final report “Client Final” is immutable/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open Reports" })).toHaveAttribute("href", "/reports");
+    expect(deleteObservation).not.toHaveBeenCalled();
+  });
+
   it("loads, revision-safely edits, and drafts note context without sending", async () => {
     const user = userEvent.setup();
     const updateObservation = vi.fn().mockResolvedValue({ ...note, body: "Changed", revision: 2 });

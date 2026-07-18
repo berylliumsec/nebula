@@ -7,10 +7,14 @@ from nebula.v3.domain import (
     Asset,
     ChatSession,
     Engagement,
+    Observation,
     ProviderProfile,
+    Report,
+    ReportStatus,
     RunStatus,
     Service,
     Task,
+    utc_now,
 )
 from nebula.v3.storage import NebulaStore, NotFoundError
 
@@ -157,3 +161,60 @@ def test_generic_delete_rejects_referenced_graph_nodes(tmp_path):
         client.delete(f"/api/v1/assets/{unreferenced.id}", headers=_auth()).status_code
         == 204
     )
+
+
+@pytest.mark.parametrize(
+    "report_status", [ReportStatus.DRAFT, ReportStatus.REVIEW, ReportStatus.FINAL]
+)
+def test_note_dependencies_name_the_referencing_report_and_protect_lineage(
+    tmp_path, report_status
+):
+    store = NebulaStore(tmp_path / f"note-{report_status}.db")
+    engagement = store.create(Engagement(name="Report lineage"))
+    note = store.create(
+        Observation(
+            engagement_id=engagement.id,
+            observation_type="note",
+            title="Retained source note",
+        )
+    )
+    report = store.create(
+        Report(
+            engagement_id=engagement.id,
+            title=(
+                "Immutable client report"
+                if report_status == ReportStatus.FINAL
+                else "Working client report"
+            ),
+            status=report_status,
+            observation_ids=[note.id],
+            signed_off_by="operator-1" if report_status == ReportStatus.FINAL else None,
+            signed_off_at=utc_now() if report_status == ReportStatus.FINAL else None,
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    dependencies = client.get(
+        f"/api/v1/observations/{note.id}/dependencies", headers=_auth()
+    )
+    assert dependencies.status_code == 200
+    assert dependencies.json() == {
+        "observation_id": note.id,
+        "deletable": False,
+        "reports": [
+            {"id": report.id, "title": report.title, "status": report_status.value}
+        ],
+    }
+
+    blocked = client.delete(
+        f"/api/v1/observations/{note.id}",
+        headers={**_auth(), "If-Match": str(note.revision)},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["code"] == "note_referenced_by_report"
+    assert blocked.json()["reason_code"] == "note_referenced_by_report"
+    assert report.title in blocked.json()["detail"]
+    if report_status == ReportStatus.FINAL:
+        assert "immutable" in blocked.json()["detail"].lower()
+    else:
+        assert "remove this note" in blocked.json()["detail"].lower()

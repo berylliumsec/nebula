@@ -63,6 +63,7 @@ import type {
   ObservationSummary,
   ObservationCreateRequest,
   ObservationUpdateRequest,
+  ObservationDependencies,
   OperatorProfile,
   OperatorProfileCreateRequest,
   OperatorProfileUpdateRequest,
@@ -91,6 +92,7 @@ import type {
   WorkspaceListing,
   WorkspacePreview,
   WorkspaceResetResult,
+  WorkspaceResetStatus,
   WorkspaceUploadResult,
   WritingTransformRequest,
   WritingTransformResponse,
@@ -2903,7 +2905,7 @@ export class ApiClient {
         api_version?: string;
         dialect?: string;
         container_terminal?: "configured" | "unavailable";
-        diagnostics?: { degraded?: boolean };
+        diagnostics?: { degraded?: boolean; browser_event_ingress?: "enabled" | "disabled" };
       }
     >("health", { signal }).then((health) => ({
       status: health.status === "degraded" ? "degraded" : "ok",
@@ -2914,6 +2916,7 @@ export class ApiClient {
       runner: health.runner ?? "unavailable",
       containerTerminal: health.container_terminal ?? "unavailable",
       diagnosticsDegraded: health.diagnostics?.degraded === true,
+      browserDiagnosticIngress: health.diagnostics?.browser_event_ingress ?? "disabled",
     }));
   }
 
@@ -4108,6 +4111,18 @@ export class ApiClient {
     });
   }
 
+  observationDependencies(id: string, signal?: AbortSignal): Promise<ObservationDependencies> {
+    return this.request<{
+      observation_id: string;
+      deletable: boolean;
+      reports: Array<{ id: string; title: string; status: "draft" | "review" | "final" }>;
+    }>(`observations/${encodeURIComponent(id)}/dependencies`, { signal }).then((value) => ({
+      observationId: value.observation_id,
+      deletable: value.deletable,
+      reports: value.reports,
+    }));
+  }
+
   transformWriting(
     body: WritingTransformRequest,
     signal?: AbortSignal,
@@ -5064,6 +5079,24 @@ export class ApiClient {
     ).then((value) => ({
       engagementId: value.engagement_id,
       removedEntries: value.removed_entries,
+    }));
+  }
+
+  workspaceResetStatus(engagementId: string, signal?: AbortSignal): Promise<WorkspaceResetStatus> {
+    return this.request<{
+      engagement_id: string;
+      can_reset: boolean;
+      active_terminal_count: number;
+      active_execution_count: number;
+      reason_code?: "workspace_busy";
+      detail: string;
+    }>(`engagements/${encodeURIComponent(engagementId)}/workspace/reset-status`, { signal }).then((value) => ({
+      engagementId: value.engagement_id,
+      canReset: value.can_reset,
+      activeTerminalCount: value.active_terminal_count,
+      activeExecutionCount: value.active_execution_count,
+      reasonCode: value.reason_code,
+      detail: value.detail,
     }));
   }
 

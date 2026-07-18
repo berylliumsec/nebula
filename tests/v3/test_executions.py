@@ -13,6 +13,7 @@ from nebula.v3.domain import (
     ChatRole,
     Engagement,
     ExecutionOrigin,
+    ExecutionNetworkMode,
     OperatorExecution,
     OperatorExecutionStatus,
     RunnerIsolation,
@@ -22,6 +23,7 @@ from nebula.v3.domain import (
     utc_now,
 )
 from nebula.v3.executions import (
+    ExecutionNetworkRequest,
     ExecutionPreflightRequest,
     ExecutionService,
     ExecutionServiceError,
@@ -186,6 +188,34 @@ def test_run_capability_is_hidden_until_offline_and_scoped_paths_are_ready(tmp_p
     assert any(runtime.offline for runtime in capabilities.runtimes)
     assert all(not runtime.scoped_network for runtime in capabilities.runtimes)
     assert capabilities.ready is False
+
+
+@async_test
+async def test_empty_starter_scope_allows_offline_review_but_denies_network(tmp_path):
+    _store, _artifacts, _engagement, policy, _runner, service, request = _fixture(
+        tmp_path
+    )
+    assert policy.allowed_cidrs == []
+    assert policy.allowed_domains == []
+    assert policy.allowed_urls == []
+    assert policy.allowed_ports == []
+
+    offline = await service.preflight(request)
+    networked = await service.preflight(
+        request.model_copy(
+            update={
+                "network": ExecutionNetworkRequest(
+                    mode=ExecutionNetworkMode.SCOPED,
+                    target="192.0.2.10",
+                    ports=[443],
+                )
+            }
+        )
+    )
+
+    assert offline.allowed is True
+    assert networked.allowed is False
+    assert networked.error_code == "policy_denied"
 
 
 async def _await_terminal(

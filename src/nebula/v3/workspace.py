@@ -88,6 +88,15 @@ class WorkspaceResetRequest(NebulaModel):
     engagement_name: str = Field(min_length=1, max_length=300)
 
 
+class WorkspaceResetStatus(NebulaModel):
+    engagement_id: str
+    can_reset: bool
+    active_terminal_count: int = Field(ge=0)
+    active_execution_count: int = Field(ge=0)
+    reason_code: Literal["workspace_busy"] | None = None
+    detail: str
+
+
 class WorkspaceRenameRequest(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
     new_name: str = Field(min_length=1, max_length=255)
@@ -574,6 +583,47 @@ class WorkspaceService:
             engagement_id=engagement.id, removed_entries=removed
         )
 
+    def reset_status(
+        self, engagement_id: str, *, active_terminal_count: int = 0
+    ) -> WorkspaceResetStatus:
+        self.store.get(Engagement, engagement_id)
+        active_execution_count = 0
+        offset = 0
+        while True:
+            executions = self.store.list_entities(
+                OperatorExecution,
+                engagement_id=engagement_id,
+                offset=offset,
+                limit=1_000,
+            )
+            active_execution_count += sum(
+                execution.status in _BUSY_STATUSES for execution in executions
+            )
+            if len(executions) < 1_000:
+                break
+            offset += len(executions)
+        can_reset = active_terminal_count == 0 and active_execution_count == 0
+        if active_terminal_count:
+            detail = (
+                f"Stop {active_terminal_count} active Project terminal"
+                f"{'s' if active_terminal_count != 1 else ''} before resetting the workspace."
+            )
+        elif active_execution_count:
+            detail = (
+                f"Wait for or cancel {active_execution_count} active reviewed execution"
+                f"{'s' if active_execution_count != 1 else ''} before resetting the workspace."
+            )
+        else:
+            detail = "No active terminal or reviewed execution is using the workspace."
+        return WorkspaceResetStatus(
+            engagement_id=engagement_id,
+            can_reset=can_reset,
+            active_terminal_count=active_terminal_count,
+            active_execution_count=active_execution_count,
+            reason_code=None if can_reset else "workspace_busy",
+            detail=detail,
+        )
+
     def rename(
         self, engagement_id: str, request: WorkspaceRenameRequest
     ) -> WorkspaceMutationResult:
@@ -588,7 +638,7 @@ class WorkspaceService:
             os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
             try:
                 os.stat(request.new_name, dir_fd=parent, follow_symlinks=False)
-            except FileNotFoundError:
+            except FileNotFoundError:  # diagnostic-expected: absence confirms the rename target is available
                 pass
             else:
                 raise ExecutionServiceError(
@@ -802,6 +852,7 @@ __all__ = [
     "WorkspaceRenameRequest",
     "WorkspaceResetRequest",
     "WorkspaceResetResult",
+    "WorkspaceResetStatus",
     "WorkspaceUploadResult",
     "WorkspaceService",
 ]

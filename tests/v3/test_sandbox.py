@@ -21,6 +21,7 @@ from nebula.v3.sandbox import (
     SandboxNetwork,
     SandboxRequest,
     SandboxRootFilesystem,
+    SandboxTerminalProcess,
     SandboxUnavailable,
     SandboxWorkspaceAccess,
     _read_limited_stream,
@@ -99,6 +100,49 @@ def test_stream_reader_can_capture_without_retaining_a_second_memory_copy():
         assert captured == len(payload)
 
     asyncio.run(scenario())
+
+
+def test_nonblocking_pty_backpressure_waits_without_recording_an_error(monkeypatch):
+    waits: list[bool] = []
+    diagnostics: list[BaseException] = []
+    reads = iter([BlockingIOError(), b"ready"])
+    writes = iter([BlockingIOError(), 5])
+
+    async def wait_for_fd(_descriptor: int, *, writable: bool) -> None:
+        waits.append(writable)
+
+    def read(_descriptor: int, _maximum: int) -> bytes:
+        result = next(reads)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    def write(_descriptor: int, _data) -> int:
+        result = next(writes)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr("nebula.v3.sandbox.os.set_blocking", lambda *_args: None)
+    monkeypatch.setattr("nebula.v3.sandbox.os.read", read)
+    monkeypatch.setattr("nebula.v3.sandbox.os.write", write)
+    monkeypatch.setattr("nebula.v3.sandbox._wait_for_fd", wait_for_fd)
+    monkeypatch.setattr(
+        "nebula.v3.sandbox.record_caught_exception",
+        lambda _feature, _event, _message, error, **_context: diagnostics.append(error),
+    )
+    terminal = SandboxTerminalProcess(
+        process=object(),  # type: ignore[arg-type]
+        master_fd=17,
+        container_name="nebula-terminal-backpressure",
+        runner=object(),  # type: ignore[arg-type]
+    )
+
+    assert asyncio.run(terminal.read()) == b"ready"
+    asyncio.run(terminal.write(b"ready"))
+
+    assert waits == [False, True]
+    assert diagnostics == []
 
 
 def test_sandbox_request_rejects_nul_and_unbounded_scoped_network(tmp_path):

@@ -24,6 +24,8 @@ REASON_CODES = frozenset(
         "permission_denied",
         "storage_write_failed",
         "integrity_failed",
+        "workspace_busy",
+        "note_referenced_by_report",
         "stale_state",
         "invalid_input",
         "cancelled",
@@ -144,6 +146,8 @@ def reason_code_for(
 ) -> str:
     if supplied in REASON_CODES:
         return supplied
+    if event_code in REASON_CODES:
+        return event_code
     name = type(exception).__name__.lower() if exception is not None else ""
     code = " ".join(filter(None, (event_code, name))).lower()
     if status_code == 429 or "rate" in code and "limit" in code:

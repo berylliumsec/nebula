@@ -16,6 +16,7 @@ from nebula.v3.domain import (
     Engagement,
     ProviderProfile,
     RiskClass,
+    ScopePolicy,
     ToolCallOrigin,
     utc_now,
 )
@@ -320,7 +321,7 @@ def test_tauri_cors_and_audit_resources_are_fail_closed_by_default(tmp_path):
 
 
 def test_typed_crud_revision_and_overview(api):
-    client, _, _ = api
+    client, store, _ = api
     created = client.post(
         "/api/v1/engagements", headers=_auth(), json={"name": "API engagement"}
     )
@@ -359,6 +360,7 @@ def test_typed_crud_revision_and_overview(api):
         client.get(f"/api/v1/engagements/{engagement_id}", headers=_auth()).status_code
         == 404
     )
+    assert store.count(ScopePolicy) == 0
     assert (
         client.get(
             f"/api/v1/engagements/{engagement_id}/overview",

@@ -230,6 +230,50 @@ def test_reset_refuses_a_queued_execution(tmp_path):
         raise AssertionError("queued execution should block workspace reset")
 
 
+def test_reset_status_reports_active_execution_and_stable_recovery_code(tmp_path):
+    store, _artifacts, _platform, _workspace, engagement, client = _services(tmp_path)
+    execution = OperatorExecution(
+        engagement_id=engagement.id,
+        operator_id="operator-1",
+        origin=ExecutionOrigin(kind="rerun", execution_id="parent"),
+        language="python",
+        source_sha256="a" * 64,
+        source_artifact_id="source",
+        runtime=ExecutionRuntimeSnapshot(
+            language="python", interpreter="/usr/bin/python3", arguments=["-I", "-B"],
+            runtime_digest="sha256:" + "b" * 64, image="sha256:" + "c" * 64,
+            runner_profile_id="runner", runner_profile_revision=1,
+            runner_runtime=RunnerRuntime.PODMAN, runner_isolation=RunnerIsolation.ROOTLESS,
+            runner_executable="/usr/bin/podman", runner_platform="linux/amd64",
+        ),
+        preview_fingerprint="d" * 64,
+        request_fingerprint="e" * 64,
+        client_idempotency_key="status",
+        status=OperatorExecutionStatus.RUNNING,
+    )
+    stored = store.create(execution)
+
+    blocked = client.get(
+        f"/api/v1/engagements/{engagement.id}/workspace/reset-status", headers=AUTH
+    )
+    assert blocked.status_code == 200
+    assert blocked.json()["can_reset"] is False
+    assert blocked.json()["active_execution_count"] == 1
+    assert blocked.json()["reason_code"] == "workspace_busy"
+
+    store.update(
+        OperatorExecution,
+        stored.id,
+        {"status": OperatorExecutionStatus.COMPLETED},
+        expected_revision=stored.revision,
+    )
+    ready = client.get(
+        f"/api/v1/engagements/{engagement.id}/workspace/reset-status", headers=AUTH
+    )
+    assert ready.json()["can_reset"] is True
+    assert ready.json()["reason_code"] is None
+
+
 def test_workspace_upload_is_atomic_bounded_and_requires_overwrite(tmp_path):
     _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
     root = platform.workspace_for(engagement.id)

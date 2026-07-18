@@ -114,6 +114,7 @@ interface BrowserSink {
 
 let settings = DEFAULT_SETTINGS;
 let browserSink: BrowserSink | undefined;
+let browserIngressEnabled = true;
 let fallback: DiagnosticRecord[] = [];
 let flushing = false;
 let globalHandlersInstalled = false;
@@ -359,7 +360,7 @@ async function sendBrowser(records: DiagnosticRecord[]): Promise<string[]> {
 }
 
 async function flushFallback(): Promise<void> {
-  if (flushing || fallback.length === 0) return;
+  if (flushing || fallback.length === 0 || (!isTauri() && !browserIngressEnabled)) return;
   flushing = true;
   const pending = fallback;
   fallback = [];
@@ -398,6 +399,10 @@ async function flushFallback(): Promise<void> {
 export async function logDiagnostic(input: DiagnosticInput): Promise<string | undefined> {
   if (!enabled(input.level)) return undefined;
   const record = wireRecord(input);
+  if (!isTauri() && !browserIngressEnabled) {
+    remember(record);
+    return undefined;
+  }
   try {
     const errorId = isTauri()
       ? await sendNative(
@@ -501,6 +506,12 @@ export function logCaughtDiagnostic(
 export function configureBrowserDiagnostics(baseUrl: string, token?: string): void {
   browserSink = { baseUrl, token };
   void flushFallback();
+}
+
+export function setBrowserDiagnosticIngress(enabled: boolean): void {
+  browserIngressEnabled = enabled;
+  if (enabled) void flushFallback();
+  else setAvailability(false, "Browser event capture is disabled for this Core binding; Core storage remains independently available.");
 }
 
 export function setDiagnosticSettings(next: DiagnosticSettings): void {

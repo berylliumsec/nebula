@@ -265,11 +265,18 @@ fn install_macos_browser_container<R: tauri::Runtime>(
                 child.setHidden(true);
                 Ok(())
             })();
-            let _ = callback_sender.send(result);
+            if callback_sender.send(result).is_err() {
+                // The caller already timed out and dropped its one-shot receiver.
+            }
         }) {
-            let _ = sender.send(Err(format!(
-                "cannot access the embedded macOS browser view: {error}"
-            )));
+            if sender
+                .send(Err(format!(
+                    "cannot access the embedded macOS browser view: {error}"
+                )))
+                .is_err()
+            {
+                // The caller already timed out and dropped its one-shot receiver.
+            }
         }
     })
     .map_err(|error| format!("cannot access the Nebula macOS webview: {error}"))?;
@@ -298,7 +305,9 @@ where
                     .ok_or_else(|| "The browser clipping container is unavailable.".to_string())?;
                 operation(&container, child)
             })();
-            let _ = sender.send(result);
+            if sender.send(result).is_err() {
+                // The caller already timed out and dropped its one-shot receiver.
+            }
         })
         .map_err(|error| format!("cannot access the embedded macOS browser view: {error}"))?;
     wait_for_native_browser_result(receiver)

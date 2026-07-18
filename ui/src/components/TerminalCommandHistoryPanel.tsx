@@ -5,6 +5,7 @@ import type { TerminalCommandHistoryStatus, TerminalCommandRecord, TerminalRecor
 import { useConfirmation } from "./DialogSystem";
 import "./TerminalCommandHistoryPanel.css";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { InlineValidationNotice } from "./InlineValidationNotice";
 
 interface TerminalCommandHistoryPanelProps {
   api: ApiClient;
@@ -51,6 +52,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
   const [newTool, setNewTool] = useState("");
   const [savingTools, setSavingTools] = useState(false);
   const [error, setError] = useState<string>();
+  const [validationError, setValidationError] = useState<string>();
 
   const applyTools = (next: TerminalRecordingTools) => {
     setTools(next);
@@ -112,13 +114,14 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
   const addCustomTool = () => {
     const normalized = newTool.trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._+@-]{0,127}$/.test(normalized)) {
-      setError("Custom tools must be executable basenames without spaces, paths, or shell syntax.");
+      setValidationError("Custom tools must be executable basenames without spaces, paths, or shell syntax.");
       return;
     }
     setCustomTools((current) => [...new Set([...current, normalized])].sort());
     setDisabledTools((current) => current.filter((item) => item !== normalized));
     setNewTool("");
     setError(undefined);
+    setValidationError(undefined);
   };
 
   const removeCustomTool = (tool: string) => {
@@ -232,6 +235,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
     </section>
     <form className="history-search" onSubmit={submitSearch}><label><History size={14} /><span className="sr-only">Search terminal audit commands</span><input type="search" value={query} placeholder="Search exact commands" onChange={(event) => setQuery(event.target.value)} /></label><button className="button secondary" type="submit" disabled={loading}>Search</button></form>
     {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
+    {validationError && <InlineValidationNotice message={validationError} />}
     {warningCount ? <p className="workspace-notice audit-warning" role="alert"><AlertTriangle size={14} /> One or more selected captures were interrupted, truncated, could not be classified, recovered after restart, or could not be durably persisted. Inspect the marked records before relying on the audit.</p> : null}
     <div className="terminal-command-list" aria-busy={loading}>
       {records.map((record, index) => <div className="terminal-audit-record" key={record.id}>

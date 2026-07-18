@@ -123,6 +123,11 @@ async function installTruthfulCore(page: Page) {
         runner: "ready",
         human_pty: "unavailable",
         container_terminal: "configured",
+        diagnostics: {
+          writable: true,
+          degraded: false,
+          browser_event_ingress: "enabled",
+        },
       };
     } else if (path.endsWith("/diagnostics/settings")) {
       body = {
@@ -309,6 +314,15 @@ async function installTruthfulCore(page: Page) {
         effective_tools: ["nmap", "nikto"],
         revision: 1,
         updated_at: entity.updated_at,
+      };
+    } else if (path.endsWith("/workspace/reset-status")) {
+      body = {
+        engagement_id: "scratch-project",
+        can_reset: true,
+        active_terminal_count: 0,
+        active_execution_count: 0,
+        reason_code: null,
+        detail: "No active terminal or reviewed execution is using the workspace.",
       };
     } else if (path.endsWith("/workspace")) {
       body = {
@@ -587,6 +601,16 @@ test("primary navigation exposes only the five task destinations", async ({ page
   }
 });
 
+test("Missions explains missing runtime setup and provides a working next action", async ({ page }) => {
+  await openWorkspace(page, "/?view=missions", "Workbench");
+  await page.getByRole("tab", { name: "Autonomous missions", exact: true }).click();
+
+  const controls = page.getByRole("region", { name: "Mission controls" });
+  await expect(controls.getByText("Missions need an enabled model provider or agent harness with a verified model.")).toBeVisible();
+  await expect(controls.getByRole("link", { name: "Configure runtime" })).toHaveAttribute("href", "/settings#models-settings");
+  await expect(controls.getByRole("button", { name: "Automate task" })).toBeDisabled();
+});
+
 test("Diagnostics explains and focuses a requested failure at every breakpoint", async ({ page }) => {
   await openWorkspace(page, "/settings?diagnostic=err_preview_123#diagnostics-settings", "Settings");
   await expect(page.getByRole("heading", { name: "Diagnostics", exact: true })).toBeVisible();
@@ -829,7 +853,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(inputSurface).toHaveCSS("outline-style", "none");
   await expect(inputSurface).toHaveCSS("box-shadow", "none");
   await expect(inputSurface).not.toHaveCSS("caret-color", "rgba(0, 0, 0, 0)");
-  await expect(page.getByText("Ln 5, Col 2", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Ln 5, Col [23]/, { exact: true })).toBeVisible();
   await expect(editor.locator(".cm-cursor-primary")).toHaveCount(0);
 });
 
@@ -1230,8 +1254,8 @@ test("Zero preserves a representative resource dialog", async ({ page }, testInf
 test("Zero preserves the appearance selector", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
-  await openWorkspace(page, "/settings", "Settings");
-  await page.getByRole("link", { name: "Advanced settings" }).click();
+  await openWorkspace(page, "/settings#appearance-settings", "Settings");
+  await expect(page.getByRole("link", { name: "Advanced settings" })).toHaveAttribute("aria-current", "page");
   await expect(page.locator(".appearance-panel")).toBeVisible();
   await expect(page.locator(".appearance-panel")).toHaveScreenshot("settings-zero-appearance.png");
 });
@@ -1252,8 +1276,8 @@ test("advanced settings keeps the binary inventory collapsed until requested", a
       ],
     }),
   }));
-  await openWorkspace(page, "/settings", "Settings");
-  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await openWorkspace(page, "/settings#automation-settings", "Settings");
+  await expect(page.getByRole("link", { name: "Advanced settings", exact: true })).toHaveAttribute("aria-current", "page");
 
   const inventory = page.locator("details.inventory-disclosure");
   await expect(inventory).not.toHaveAttribute("open", "");

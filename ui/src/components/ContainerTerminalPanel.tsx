@@ -134,9 +134,11 @@ function LiveContainerTerminal({
   const fitRef = useRef<FitAddon | undefined>(undefined);
   const activeRef = useRef(active);
   const socketRef = useRef<ContainerTerminalSocket | undefined>(undefined);
+  const networkOutputRef = useRef("");
   const [state, setState] = useState<ContainerTerminalSocketState>("connecting");
   const [error, setError] = useState<unknown>();
   const [exit, setExit] = useState<ContainerTerminalExit>();
+  const [networkWarning, setNetworkWarning] = useState<string>();
 
   useEffect(() => {
     const host = hostRef.current;
@@ -219,7 +221,13 @@ function LiveContainerTerminal({
       token: apiToken,
       session,
       onState: updateState,
-      onOutput: (data) => terminal.write(data),
+      onOutput: (data) => {
+        terminal.write(data);
+        networkOutputRef.current = `${networkOutputRef.current}${data}`.slice(-4_096);
+        if (/ipv[46] forwarding is disabled|bridge forwarding is disabled|network forwarding is disabled/i.test(networkOutputRef.current)) {
+          setNetworkWarning("The container runtime reports that host IP forwarding is disabled. Outbound IPv4 or IPv6 connections may fail even though the bridge is permitted. Enable forwarding for Docker or Podman and restart the runtime, or continue with offline work.");
+        }
+      },
       onReady: () => {
         setError(undefined);
         if (activeRef.current) terminal.focus();
@@ -315,7 +323,7 @@ function LiveContainerTerminal({
 
   return <div className="container-terminal-live">
     <header>
-      <div><span className={`status-dot ${failedExit || state === "error" ? "unavailable" : state === "ready" ? "healthy" : "warning"}`} /><span><strong>{statusLabel}</strong><small>Unrestricted outbound · root · writable · Kali headless <code title={`${runtime.image}\nOfficial base: ${runtime.baseImage}`}>{runtime.imageDigest.slice(0, 19)}…</code></small></span></div>
+      <div><span className={`status-dot ${failedExit || state === "error" ? "unavailable" : state === "ready" ? "healthy" : "warning"}`} /><span><strong>{statusLabel}</strong><small>Outbound bridge permitted · root · writable · Kali headless <code title={`${runtime.image}\nOfficial base: ${runtime.baseImage}`}>{runtime.imageDigest.slice(0, 19)}…</code></small></span></div>
       <div className="terminal-header-actions">
         <TerminalScreenshotAction
           capturedBy={capturedBy}
@@ -332,9 +340,10 @@ function LiveContainerTerminal({
       {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The terminal operation could not be completed." compact />}
       {managementError && <DiagnosticErrorNotice error={managementError} fallback="The terminal could not be stopped." compact />}
       {(auditWarningCount > 0 || auditHealthUnavailable) && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {auditHealthUnavailable ? "Terminal audit health is unavailable. Capture failures cannot be ruled out." : `${auditWarningCount} terminal audit warning${auditWarningCount === 1 ? "" : "s"} detected. Review Terminal Audit for classification, truncation, interruption, recovery, or persistence gaps.`}</p>}
+      {networkWarning && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {networkWarning}</p>}
       <p className="terminal-audit-active"><ShieldCheck size={14} /> Selective audit active</p>
       <p><code>kali-linux-headless</code> · <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code></p>
-      <p className="terminal-network-warning"><AlertTriangle size={14} /> Bridge networking can reach the public Internet and any host-addressable service. No ports, raw-packet capabilities, host shell, or runtime socket are granted.</p>
+      <p className="terminal-network-warning"><AlertTriangle size={14} /> Bridge networking is permitted, not guaranteed. Host IPv4 and IPv6 availability can differ. No inbound ports, raw-packet capabilities, host shell, or runtime socket are granted.</p>
     </div>
     <div className="xterm-shell" ref={hostRef} aria-label="Terminal output" />
     <footer><ShieldCheck size={14} /> Additional system changes and packages disappear when this content-pinned container closes; the Kali headless baseline and <code>/workspace</code> remain available in new sessions.{exit?.exitCode !== undefined ? ` Exit code ${exit.exitCode}.` : ""}</footer>
@@ -384,7 +393,7 @@ function StartingTerminalPanel({
     <section className="container-terminal-intro">
       <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
       <div><small>Kali shell · {engagementName}</small><h2>Terminal {tab.ordinal}</h2><p><code>kali-linux-headless</code> · disposable · shared <code>/workspace</code></p></div>
-      <span className="terminal-boundary"><AlertTriangle size={15} /> Root + network</span>
+      <span className="terminal-boundary"><AlertTriangle size={15} /> Root · bridge permitted</span>
     </section>
     <section className="terminal-auto-start" aria-live="polite">
       {tab.error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><DiagnosticErrorNotice error={tab.error} fallback="The terminal operation could not be completed." compact /><div className="terminal-start-actions"><button className="button secondary" type="button" onClick={onClose}>Close</button><button className="button primary" type="button" onClick={onRetry}><RotateCcw size={15} /> Retry</button></div></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><div
@@ -773,7 +782,7 @@ export function ContainerTerminalPanel({
       <section className="container-terminal-intro">
         <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
         <div><small>Kali shell</small><h2>Terminal</h2><p><code>kali-linux-headless</code> · disposable · shared <code>/workspace</code></p></div>
-        <span className="terminal-boundary"><AlertTriangle size={15} /> Root + network</span>
+        <span className="terminal-boundary"><AlertTriangle size={15} /> Root · bridge permitted</span>
       </section>
       <section className="terminal-auto-start" aria-live="polite">
         {initialError ? <><SquareTerminal size={27} /><strong>Terminals could not be restored</strong><DiagnosticErrorNotice error={initialError} fallback="The terminal operation could not be completed." compact /><button className="button primary" type="button" onClick={() => setBootstrapAttempt((value) => value + 1)}><RotateCcw size={15} /> Retry</button></> : <><LoaderCircle className="spin" size={27} /><strong>Restoring Project terminals…</strong><p>Nebula is reconnecting active containers before deciding whether to start a new terminal.</p></>}

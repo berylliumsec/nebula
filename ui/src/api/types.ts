@@ -488,6 +488,18 @@ export interface ObservationUpdateRequest {
   expectedRevision: number;
 }
 
+export interface ObservationReportDependency {
+  id: Identifier;
+  title: string;
+  status: "draft" | "review" | "final";
+}
+
+export interface ObservationDependencies {
+  observationId: Identifier;
+  deletable: boolean;
+  reports: ObservationReportDependency[];
+}
+
 export interface ReportRender {
   id: Identifier;
   engagementId: Identifier;
@@ -1224,6 +1236,7 @@ export interface HealthResponse {
   runner: "ready" | "unavailable" | "degraded";
   containerTerminal: "configured" | "unavailable";
   diagnosticsDegraded?: boolean;
+  browserDiagnosticIngress: "enabled" | "disabled";
 }
 
 export interface RunnerCandidate {
@@ -1673,6 +1686,15 @@ export interface WorkspacePreview {
 export interface WorkspaceResetResult {
   engagementId: Identifier;
   removedEntries: number;
+}
+
+export interface WorkspaceResetStatus {
+  engagementId: Identifier;
+  canReset: boolean;
+  activeTerminalCount: number;
+  activeExecutionCount: number;
+  reasonCode?: "workspace_busy";
+  detail: string;
 }
 
 export interface WorkspaceUploadResult {

@@ -5,6 +5,7 @@ import type { OperatorExecution, ProviderHealth } from "../api/types";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { ExecutionInsightDialog } from "./ExecutionInsightDialog";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { InlineValidationNotice } from "./InlineValidationNotice";
 
 interface ExecutionHistoryProps {
   api: ApiClient;
@@ -42,11 +43,22 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
   const [stdoutTotal, setStdoutTotal] = useState(0);
   const [stderrTotal, setStderrTotal] = useState(0);
   const [insightAction, setInsightAction] = useState<"draft" | "chat">();
+  const [pollingPaused, setPollingPaused] = useState(false);
+  const [validationError, setValidationError] = useState<string>();
+  const [, setClock] = useState(0);
   const selected = useMemo(() => items.find((item) => item.id === selectedId), [items, selectedId]);
+  const hasActive = items.some((item) => ACTIVE.has(item.status));
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    setError(undefined);
+  const load = useCallback(async (signal?: AbortSignal, background = false) => {
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      setValidationError("The Through date must be the same as or later than the From date.");
+      return;
+    }
+    setValidationError(undefined);
+    if (!background) {
+      setLoading(true);
+      setError(undefined);
+    }
     try {
       const exclusiveDateTo = dateTo
         ? new Date(new Date(`${dateTo}T00:00:00`).getTime() + 24 * 60 * 60 * 1000).toISOString()
@@ -61,11 +73,15 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
       }, signal);
       setItems(page.items.sort((left, right) => right.queuedAt.localeCompare(left.queuedAt)));
       setSelectedId((current) => current && !page.items.some((item) => item.id === current) ? "" : current);
+      setPollingPaused(false);
     } catch (loadError) {
       void logCaughtDiagnostic("interface.execution_history.caught_failure_01", "A handled interface operation failed.", loadError, "execution_history");
-      if (!signal?.aborted) setError(loadError instanceof Error ? loadError.message : "Could not load execution history.");
+      if (!signal?.aborted) {
+        if (background) setPollingPaused(true);
+        else setError(loadError instanceof Error ? loadError.message : "Could not load execution history.");
+      }
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (!signal?.aborted && !background) setLoading(false);
     }
   }, [api, dateFrom, dateTo, engagementId, language, operatorId, query, status]);
 
@@ -74,6 +90,22 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
     void load(controller.signal);
     return () => controller.abort();
   }, [load, refreshKey]);
+
+  useEffect(() => {
+    if (!hasActive || pollingPaused) return;
+    const controller = new AbortController();
+    const timer = window.setInterval(() => void load(controller.signal, true), 2_000);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+    };
+  }, [hasActive, load, pollingPaused]);
+
+  useEffect(() => {
+    if (!hasActive) return;
+    const timer = window.setInterval(() => setClock((value) => value + 1), 1_000);
+    return () => window.clearInterval(timer);
+  }, [hasActive]);
 
   useEffect(() => {
     setStdout("");
@@ -87,9 +119,15 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
     void Promise.allSettled([
       api.executionOutput(selected.id, "stdout", 0, controller.signal).then((page) => {
         setStdout(page.text); setStdoutNext(page.nextOffset); setStdoutTotal(page.totalBytes);
+      }).catch((outputError) => {
+        void logCaughtDiagnostic("interface.execution_history.stdout_load_failed", "Reviewed execution stdout could not be loaded.", outputError, "execution_history");
+        if (!controller.signal.aborted) setError(outputError instanceof Error ? outputError.message : "Could not load stdout.");
       }),
       api.executionOutput(selected.id, "stderr", 0, controller.signal).then((page) => {
         setStderr(page.text); setStderrNext(page.nextOffset); setStderrTotal(page.totalBytes);
+      }).catch((outputError) => {
+        void logCaughtDiagnostic("interface.execution_history.stderr_load_failed", "Reviewed execution stderr could not be loaded.", outputError, "execution_history");
+        if (!controller.signal.aborted) setError(outputError instanceof Error ? outputError.message : "Could not load stderr.");
       }),
     ]);
     return () => controller.abort();
@@ -161,6 +199,8 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
         <button className="button quiet" type="button" disabled={loading} onClick={() => void load()}><RefreshCw className={loading ? "spin" : undefined} size={14} /> Refresh</button>
       </header>
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
+      {validationError && <InlineValidationNotice message={validationError} />}
+      {pollingPaused && <div className="workspace-notice" role="status"><strong>Updates paused.</strong> Nebula could not refresh active executions. Existing records are still available. <button className="button quiet" type="button" onClick={() => void load()}>Retry updates</button></div>}
       <div className="execution-history-layout">
         <aside className={items.length ? undefined : "is-empty"} aria-label="Execution records">
           {loading && !items.length ? <div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading executions…</strong></div> : items.length ? items.map((execution) => (

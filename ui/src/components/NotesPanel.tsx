@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
+import { AlertTriangle, MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type {
   ObservationCreateRequest,
   ObservationSummary,
   ObservationUpdateRequest,
   ProviderHealth,
+  ObservationDependencies,
 } from "../api/types";
 import { useConfirmation } from "./DialogSystem";
 import { AIWritingDialog } from "./AIWritingDialog";
@@ -66,6 +67,7 @@ export function NotesPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [writingOpen, setWritingOpen] = useState(false);
+  const [deleteBlocker, setDeleteBlocker] = useState<ObservationDependencies>();
   const consumedInitialDraftRef = useRef<SelectionActionDraft | undefined>(undefined);
   const capturedNoteRef = useRef<ObservationSummary | undefined>(undefined);
   const createNote = useCallback(
@@ -85,6 +87,8 @@ export function NotesPanel({
     () => notes.find((note) => note.id === selectedId),
     [notes, selectedId],
   );
+
+  useEffect(() => setDeleteBlocker(undefined), [selectedId]);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -219,6 +223,19 @@ export function NotesPanel({
 
   const remove = async () => {
     if (!selected) return;
+    setError(undefined);
+    setDeleteBlocker(undefined);
+    try {
+      const dependencies = await api.observationDependencies(selected.id);
+      if (!dependencies.deletable) {
+        setDeleteBlocker(dependencies);
+        return;
+      }
+    } catch (dependencyError) {
+      void logCaughtDiagnostic("interface.notes_panel.dependencies_failed", "Note dependencies could not be checked.", dependencyError, "notes_panel");
+      setError(dependencyError instanceof Error ? dependencyError.message : "Could not check whether this note is used by a report.");
+      return;
+    }
     const approved = await confirm({
       title: "Delete this note?",
       message: "This removes the mutable note. Linked immutable evidence is retained.",
@@ -262,6 +279,7 @@ export function NotesPanel({
       </aside>
       <section className={`note-editor${creating || selected ? "" : " is-empty"}`} aria-label={creating ? "New note" : selected ? `Edit ${selected.title}` : "Note editor"}>
         {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
+        {deleteBlocker && <div className="callout note-dependency-blocker" role="alert"><AlertTriangle size={18} /><div><strong>This note is retained by {deleteBlocker.reports.length === 1 ? "a report" : "reports"}</strong><p>{deleteBlocker.reports.some((report) => report.status === "final") ? `Final report ${deleteBlocker.reports.filter((report) => report.status === "final").map((report) => `“${report.title}”`).join(", ")} is immutable, so Nebula retains this source note to protect its lineage.` : `Remove this note from ${deleteBlocker.reports.map((report) => `“${report.title}”`).join(", ")} before deleting it.`}</p></div><a className="button secondary" href="/reports">Open Reports</a></div>}
         {(creating || selected) ? <>
           <header>
             <input aria-label="Note title" value={draft.title} placeholder="Note title" maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />

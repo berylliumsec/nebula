@@ -36,6 +36,8 @@ export type DiagnosticReasonCode =
   | "permission_denied"
   | "storage_write_failed"
   | "integrity_failed"
+  | "workspace_busy"
+  | "note_referenced_by_report"
   | "stale_state"
   | "invalid_input"
   | "cancelled"
@@ -167,6 +169,10 @@ export interface DiagnosticIncident {
   facts: Record<string, string | number | boolean>;
   sensitive_detail_available: boolean;
   sensitive_detail_expires_at?: string | null;
+  occurrence_count?: number;
+  first_occurred_at?: string;
+  last_occurred_at?: string;
+  individual_references?: string[];
 }
 
 export interface DiagnosticActionResult {

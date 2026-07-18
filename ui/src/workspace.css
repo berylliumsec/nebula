@@ -496,6 +496,9 @@
   .release-panel { grid-column: span 2; }
   .chat-context-bar { grid-template-columns: 1fr 1fr; }
   .policy-editor-grid, .runner-layout { grid-template-columns: 1fr; }
+  .mission-commandbar { align-items: stretch; flex-direction: column; }
+  .mission-commandbar > div:last-child { flex-wrap: wrap; }
+  .mission-runtime-setup { max-width: 100%; }
 }
 
 @media (max-width: 760px) {

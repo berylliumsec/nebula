@@ -747,6 +747,13 @@ class ExecutionAIService:
                 )
             raise
         except Exception as exc:
+            record_caught_exception(
+                "executions",
+                "executions.execution_ai.harness_analysis_failed",
+                "Harness analysis for reviewed execution output failed.",
+                exc,
+                stage="harness-analysis",
+            )
             current = self.store.get(GeneratedDraft, draft_id)
             if current.status == GeneratedDraftStatus.GENERATING:
                 self.store.update(

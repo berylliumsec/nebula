@@ -7,7 +7,13 @@ import { WorkspacePanel } from "./WorkspacePanel";
 
 function renderPanel(api: Partial<ApiClient>) {
   return render(<DialogProvider><WorkspacePanel
-    api={api as ApiClient}
+    api={{
+      workspaceResetStatus: vi.fn().mockResolvedValue({
+        engagementId: "project-1", canReset: true, activeTerminalCount: 0,
+        activeExecutionCount: 0, detail: "No active work.",
+      }),
+      ...api,
+    } as ApiClient}
     engagementId="project-1"
     engagementName="Scratch Project"
   /></DialogProvider>);
@@ -24,6 +30,30 @@ function listing() {
 }
 
 describe("WorkspacePanel uploads", () => {
+  it("blocks reset while the workspace is in use and offers the relevant recovery view", async () => {
+    const user = userEvent.setup();
+    const onOpenTerminal = vi.fn();
+    render(<DialogProvider><WorkspacePanel
+      api={{
+        listWorkspace: vi.fn().mockResolvedValue(listing()),
+        workspaceResetStatus: vi.fn().mockResolvedValue({
+          engagementId: "project-1", canReset: false, activeTerminalCount: 2,
+          activeExecutionCount: 0, reasonCode: "workspace_busy",
+          detail: "Stop 2 active Project terminals before resetting the workspace.",
+        }),
+      } as unknown as ApiClient}
+      engagementId="project-1"
+      engagementName="Scratch Project"
+      onOpenTerminal={onOpenTerminal}
+    /></DialogProvider>);
+
+    expect(await screen.findByText("Workspace is in use")).toBeVisible();
+    expect(screen.getByText(/Stop 2 active Project terminals/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reset workspace" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Open Terminal" }));
+    expect(onOpenTerminal).toHaveBeenCalledOnce();
+  });
+
   it("offers right-click file actions and renames without overwriting", async () => {
     const user = userEvent.setup();
     const listWorkspace = vi.fn().mockResolvedValue({

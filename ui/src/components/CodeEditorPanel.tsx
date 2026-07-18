@@ -7,6 +7,7 @@ import { useWorkbenchEditor, type WorkbenchEditorBuffer } from "../state/Workben
 import { CodeMirrorSurface, languageLabelForPath } from "./CodeMirrorSurface";
 import { useConfirmation } from "./DialogSystem";
 import { WorkspaceEntryContextMenu, type WorkspaceEntryMenuState } from "./WorkspaceEntryContextMenu";
+import { InlineValidationNotice } from "./InlineValidationNotice";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
 
@@ -54,6 +55,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [validationError, setValidationError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [conflict, setConflict] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
@@ -64,6 +66,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
   const load = useCallback(async (offset = 0, signal?: AbortSignal) => {
     setLoading(true);
     setError(undefined);
+    setValidationError(undefined);
     try {
       const listing = await api.listWorkspace(engagementId, directory, offset, signal);
       setEntries((current) => offset ? [...current, ...listing.entries] : listing.entries);
@@ -152,16 +155,17 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
     if (!buffer || saving) return;
     const path = buffer.filePath.trim();
     if (!validWorkspacePath(path)) {
-      setError("Enter a workspace-relative file path without empty, . or .. segments.");
+      setValidationError("Enter a workspace-relative file path without empty, . or .. segments.");
       return;
     }
     const payload = new Blob([buffer.content], { type: "text/plain;charset=utf-8" });
     if (payload.size > MAX_EDITOR_BYTES) {
-      setError("Editor files may not exceed 1 MiB when encoded as UTF-8.");
+      setValidationError("Editor files may not exceed 1 MiB when encoded as UTF-8.");
       return;
     }
     setSaving(true);
     setError(undefined);
+    setValidationError(undefined);
     setNotice(undefined);
     setConflict(false);
     try {
@@ -229,6 +233,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
       await navigator.clipboard.writeText(`/workspace/${entry.path}`);
       setNotice(`Copied /workspace/${entry.path}.`);
     } catch (copyError) {
+      void logCaughtDiagnostic("interface.code_editor.copy_path_failed", "A workspace path could not be copied.", copyError, "code_editor");
       setError(copyError instanceof Error ? copyError.message : "Could not copy the file path.");
     }
   };
@@ -239,6 +244,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
       await navigator.clipboard.writeText(decoded.content);
       setNotice(`Copied the contents of ${entry.name}.`);
     } catch (copyError) {
+      void logCaughtDiagnostic("interface.code_editor.copy_contents_failed", "Workspace file contents could not be copied.", copyError, "code_editor");
       setError(copyError instanceof Error ? copyError.message : "Could not copy file contents.");
     }
   };
@@ -255,6 +261,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
       setNotice(`Renamed ${entry.name} to ${newName}.`);
       await load(0);
     } catch (renameError) {
+      void logCaughtDiagnostic("interface.code_editor.rename_failed", "A workspace entry could not be renamed.", renameError, "code_editor");
       setError(renameError instanceof Error ? renameError.message : "Could not rename the workspace entry.");
     }
   };
@@ -274,6 +281,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
       setNotice(`Deleted ${entry.name}.`);
       await load(0);
     } catch (deleteError) {
+      void logCaughtDiagnostic("interface.code_editor.delete_failed", "A workspace entry could not be deleted.", deleteError, "code_editor");
       setError(deleteError instanceof Error ? deleteError.message : "Could not delete the workspace entry.");
     }
   };
@@ -287,7 +295,7 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
     <section className={`code-editor-main${buffer ? "" : " is-empty"}`}>
       {buffer ? <>
         <header className="code-editor-toolbar"><label><span className="sr-only">File path</span><span aria-hidden="true">/workspace/</span><input aria-label="File path" value={buffer.filePath} readOnly={buffer.existing} spellCheck={false} onChange={(event) => updateBuffer({ filePath: event.target.value })} /></label><span className={`code-editor-dirty${dirty ? " dirty" : ""}`} aria-live="polite">{dirty ? "Unsaved" : "Saved"}</span><button className="button primary" type="button" disabled={saving || (!dirty && buffer.existing) || !validWorkspacePath(buffer.filePath.trim())} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />} {saving ? "Saving…" : "Save"}</button></header>
-        {error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}{notice && <p className="workspace-notice" role="status">{notice}</p>}
+        {error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}{validationError && <InlineValidationNotice message={validationError} />}{notice && <p className="workspace-notice" role="status">{notice}</p>}
         {conflict && <div className="code-editor-conflict" role="alert"><ShieldAlert size={17} /><span><strong>Newer workspace version detected</strong><small>Your draft is still open. Reload the Terminal version or overwrite it explicitly.</small></span><button className="button quiet" type="button" onClick={() => void reloadConflict()}><RotateCcw size={13} /> Reload</button><button className="button danger" type="button" onClick={() => void forceOverwrite()}>Force overwrite</button></div>}
         <CodeMirrorSurface active={active} filePath={buffer.filePath} value={buffer.content} onChange={(content) => updateBuffer({ content })} onCursorChange={(line, column) => setCursor({ line, column })} onSave={() => void save()} />
         <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span>UTF-8 · spaces: 2</span><span>/workspace · Terminal execution</span></footer>

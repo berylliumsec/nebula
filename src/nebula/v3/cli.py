@@ -213,6 +213,20 @@ def _is_loopback(host: str) -> bool:
     return bool(addresses) and all(address.is_loopback for address in addresses)
 
 
+def _browser_diagnostic_ingress_allowed(
+    host: str,
+    *,
+    handshake_stdout: bool,
+    allow_remote: bool,
+    explicitly_enabled: bool,
+) -> bool:
+    """Keep browser event ingestion local unless remote use is deliberate."""
+
+    return not handshake_stdout and (
+        _is_loopback(host) or (allow_remote and explicitly_enabled)
+    )
+
+
 @app.command()
 def serve(
     host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
@@ -225,6 +239,15 @@ def serve(
     allow_remote: Annotated[
         bool,
         typer.Option(help="Acknowledge binding beyond loopback."),
+    ] = False,
+    allow_browser_diagnostics: Annotated[
+        bool,
+        typer.Option(
+            help=(
+                "Accept authenticated browser diagnostic events on a remote binding. "
+                "Loopback browser workspaces enable this automatically."
+            )
+        ),
     ] = False,
     handshake_stdout: Annotated[
         bool,
@@ -296,7 +319,15 @@ def serve(
         tool_platform=tool_platform,
         execution_data_root=root,
         bootstrap_workspace=True,
-        allow_browser_diagnostic_events=(not handshake_stdout and static_dir is None),
+        # The authenticated browser workspace served by a loopback Core owns
+        # its interface diagnostics just like the native shell does. Remote
+        # bindings remain closed to browser diagnostic ingress by default.
+        allow_browser_diagnostic_events=_browser_diagnostic_ingress_allowed(
+            host,
+            handshake_stdout=handshake_stdout,
+            allow_remote=allow_remote,
+            explicitly_enabled=allow_browser_diagnostics,
+        ),
     )
     try:
         bind_address = ipaddress.ip_address(host)
@@ -429,6 +460,7 @@ def ui(
         token=token,
         data_dir=data_dir,
         allow_remote=False,
+        allow_browser_diagnostics=False,
         handshake_stdout=False,
         static_dir=frontend,
         open_browser=not no_browser,

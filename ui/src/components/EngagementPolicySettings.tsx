@@ -4,6 +4,7 @@ import type { AutomationProjectPolicy, EngagementScopePolicy } from "../api/type
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
+import { InlineValidationNotice } from "./InlineValidationNotice";
 
 function lines(value: string): string[] {
   return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
@@ -40,6 +41,7 @@ export function EngagementPolicySettings() {
   const [maxTimeoutMs, setMaxTimeoutMs] = useState(300_000);
   const [saving, setSaving] = useState<"scope" | "runtime">();
   const [error, setError] = useState<unknown>();
+  const [validationError, setValidationError] = useState<string>();
 
   const applyScope = (next: EngagementScopePolicy) => {
     setScope(next);
@@ -84,16 +86,20 @@ export function EngagementPolicySettings() {
     if (!api || !engagement || !scope) return;
     const ports = lines(allowedPorts).map(Number);
     if (ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65_535)) {
-      setError("Allowed ports must be integers from 1 through 65535.");
+      setValidationError("Allowed ports must be whole numbers from 1 through 65535. Correct the highlighted form and save again.");
       return;
     }
     const start = wireDate(notBefore);
     const end = wireDate(notAfter);
     if (start && end && start >= end) {
-      setError("The scope end time must be after its start time.");
+      setValidationError("The scope end time must be after its start time. Change one of the dates and save again.");
       return;
     }
-    setSaving("scope"); setError(undefined);
+    if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 256) {
+      setValidationError("Maximum concurrency must be a whole number from 1 through 256.");
+      return;
+    }
+    setSaving("scope"); setError(undefined); setValidationError(undefined);
     try {
       applyScope(await api.updateEngagementScope(engagement.id, {
         allowedCidrs: lines(allowedCidrs),
@@ -118,7 +124,11 @@ export function EngagementPolicySettings() {
   const saveRuntime = async (event: FormEvent) => {
     event.preventDefault();
     if (!api || !engagement || !policy) return;
-    setSaving("runtime"); setError(undefined);
+    if (!Number.isInteger(maxTimeoutMs) || maxTimeoutMs < 1_000 || maxTimeoutMs > 86_400_000) {
+      setValidationError("Maximum command timeout must be a whole number from 1000 through 86400000 milliseconds.");
+      return;
+    }
+    setSaving("runtime"); setError(undefined); setValidationError(undefined);
     try {
       applyPolicy(await api.updateAutomationPolicy(engagement.id, {
         approvalPolicy,
@@ -137,6 +147,7 @@ export function EngagementPolicySettings() {
   return <section className="settings-section" id="engagement-policy-settings">
     <div className="section-heading"><div><h2>Project execution policy</h2><p>Freeze the scope, approval behavior, and whole-project network boundary used by new agent sessions.</p></div><ShieldCheck size={20} /></div>
     {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The project policy could not be updated." compact />}
+    {validationError && <InlineValidationNotice message={validationError} />}
     <div className="runner-layout">
       <form className="panel policy-form" onSubmit={(event) => void saveRuntime(event)}>
         <header className="panel-header compact"><div><h3>Command runtime</h3><p>Workspace commands never need a target address.</p></div><TerminalSquare size={18} /></header>

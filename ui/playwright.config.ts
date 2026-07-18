@@ -20,9 +20,27 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
-    { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
-    { name: "compact", use: { ...devices["Desktop Chrome"], viewport: { width: 1024, height: 700 } } },
-    { name: "narrow", use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } } },
+    {
+      name: "desktop",
+      testIgnore: "**/real-core.spec.ts",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
+    {
+      name: "compact",
+      testIgnore: "**/real-core.spec.ts",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1024, height: 700 } },
+    },
+    {
+      name: "narrow",
+      testIgnore: "**/real-core.spec.ts",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } },
+    },
+    {
+      name: "real-core",
+      testMatch: "**/real-core.spec.ts",
+      dependencies: ["desktop", "compact", "narrow"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
   webServer: {
     command: "npm run dev -- --host 127.0.0.1",

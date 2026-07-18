@@ -12,7 +12,7 @@ import { ApiClient } from "../api/client";
 import { NebulaEventStream, type StreamState } from "../api/events";
 import { providerVerificationModel } from "../api/providerCapabilities";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
-import { setDiagnosticsAvailability } from "../diagnostics";
+import { setBrowserDiagnosticIngress, setDiagnosticsAvailability } from "../diagnostics";
 import type {
   AgentRunSummary,
   ApprovalDecisionRequest,
@@ -215,6 +215,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           nextHealth.diagnosticsDegraded !== true,
           nextHealth.diagnosticsDegraded ? "Nebula Core reported degraded local diagnostics." : undefined,
         );
+        setBrowserDiagnosticIngress(nextHealth.browserDiagnosticIngress === "enabled");
         setHealth(nextHealth);
         setWorkspaceState("bootstrapping");
 

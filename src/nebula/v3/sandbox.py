@@ -796,14 +796,9 @@ class SandboxTerminalProcess:
         while not self._closed:
             try:
                 return os.read(self.master_fd, maximum_bytes)
-            except BlockingIOError as caught_error:
-                record_caught_exception(
-                    "sandbox",
-                    "sandbox.sandbox.caught_failure_006",
-                    "A handled sandbox operation raised an exception.",
-                    caught_error,
-                    stage="sandbox",
-                )
+            except BlockingIOError:  # diagnostic-expected: normal nonblocking PTY readiness race
+                # Expected readiness race on a nonblocking PTY. Waiting for the
+                # descriptor is normal flow, not a diagnostic failure.
                 await _wait_for_fd(self.master_fd, writable=False)
             except OSError as exc:
                 record_caught_exception(
@@ -828,14 +823,8 @@ class SandboxTerminalProcess:
             try:
                 written = os.write(self.master_fd, view)
                 view = view[written:]
-            except BlockingIOError as caught_error:
-                record_caught_exception(
-                    "sandbox",
-                    "sandbox.sandbox.caught_failure_008",
-                    "A handled sandbox operation raised an exception.",
-                    caught_error,
-                    stage="sandbox",
-                )
+            except BlockingIOError:  # diagnostic-expected: normal nonblocking PTY backpressure
+                # Expected backpressure on a nonblocking PTY.
                 await _wait_for_fd(self.master_fd, writable=True)
             except OSError as exc:
                 record_caught_exception(

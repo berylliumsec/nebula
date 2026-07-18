@@ -280,7 +280,7 @@ export function SessionsPage() {
   const runtimePermitsKnowledge = runtimeKind === "harness"
     ? harnessIsLocal || selectedHarness?.permitsSensitiveData === true
     : providerIsLocal || selectedProvider?.permitsSensitiveData === true;
-  const canUseKnowledge = knowledgeSources.length > 0 && runtimePermitsKnowledge;
+  const canUseKnowledge = Boolean(knowledgeSources.length > 0 && runtimePermitsKnowledge);
   const modelVerification = providerModelVerification(selectedProvider, model);
   const modelVerified = modelVerification?.status === "verified";
   const commandRuntimeAvailable = Boolean(modelVerified && commandRuntimeReady && !toolRuntimeReason);
@@ -1158,6 +1158,11 @@ export function SessionsPage() {
       }));
     }
     if (streamEvent.type === "done") {
+      if (streamFrameRef.current !== undefined) {
+        cancelAnimationFrame(streamFrameRef.current);
+        streamFrameRef.current = undefined;
+      }
+      streamDeltaRef.current.delete(assistantId);
       if (streamEvent.harnessSessionId) setHarnessSessionId(streamEvent.harnessSessionId);
       if (request.backend === "harness") {
         setHarnessProgress((current) => ({
@@ -1734,7 +1739,7 @@ export function SessionsPage() {
         title="Workbench"
         description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
         showIntroduction={false}
-        actions={view === "chat" ? <button className="button primary" type="button" disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : view === "missions" ? <NewMissionButton /> : undefined}
+        actions={view === "chat" ? <button className="button primary" type="button" disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation}><Plus size={16} /> New chat</button> : view === "missions" ? <NewMissionButton showSetupGuidance={false} /> : undefined}
       />
 
       <div className="session-toolbar">
@@ -1794,7 +1799,7 @@ export function SessionsPage() {
               <TerminalCommandHistoryPanel api={api} engagementId={engagement.id} />
             </div>
           ) : view === "workspace" && api && engagement ? (
-            <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} onUseWithAssistant={requestNebulaDraft} />
+            <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} onUseWithAssistant={requestNebulaDraft} onOpenTerminal={() => setView("terminal")} onOpenActivity={() => setView("activity")} />
           ) : view === "notes" && api && engagement ? (
             <NotesPanel
               api={api}

@@ -68,6 +68,23 @@ class RuntimePlatformError(RuntimeError):
     """The local Kali runtime or its runner cannot satisfy a request."""
 
 
+def _runner_profile_fingerprint(profile: StoredRunnerProfile) -> str:
+    """Bind preparation to runner security configuration, not health telemetry."""
+
+    payload = {
+        "runtime": profile.runtime.value,
+        "executable": profile.executable,
+        "context": profile.context,
+        "socket": profile.socket,
+        "platform": profile.platform,
+        "isolation": profile.isolation.value,
+        "seccomp_profile": profile.seccomp_profile,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 @dataclass(frozen=True)
 class RuntimeToolComponents:
     broker: ToolBroker
@@ -276,6 +293,7 @@ class RuntimePlatform:
             "verified_at": utc_now().isoformat(),
             "runner_profile_id": profile.id,
             "runner_profile_revision": profile.revision,
+            "runner_profile_fingerprint": _runner_profile_fingerprint(profile),
             "source_reference": image.source_reference,
             "source_is_digest_pinned": "@sha256:" in image.source_reference,
             "base_resolved_reference": image.base_resolved_reference,
@@ -362,6 +380,7 @@ class RuntimePlatform:
         image_digest = payload.get("image_digest")
         runner_id = payload.get("runner_profile_id")
         runner_revision = payload.get("runner_profile_revision")
+        runner_fingerprint = payload.get("runner_profile_fingerprint")
         inventory = payload.get("binary_inventory")
         if (
             payload.get("schema") != KALI_RUNTIME_METADATA_SCHEMA
@@ -385,6 +404,12 @@ class RuntimePlatform:
             "digest": image_digest,
             "runner_profile_id": runner_id,
             "runner_profile_revision": runner_revision,
+            "runner_profile_fingerprint": (
+                runner_fingerprint
+                if isinstance(runner_fingerprint, str)
+                and re.fullmatch(r"[0-9a-f]{64}", runner_fingerprint)
+                else None
+            ),
             "inventory": inventory,
             "detail": "using the verified prepared Kali headless image",
         }
@@ -465,7 +490,13 @@ class RuntimePlatform:
         if metadata is None:
             raise RuntimePlatformError("prepare the Kali automation runtime first")
         profile = self.store.get(StoredRunnerProfile, metadata["runner_profile_id"])
-        if profile.revision != metadata["runner_profile_revision"]:
+        prepared_fingerprint = metadata.get("runner_profile_fingerprint")
+        runner_changed = (
+            _runner_profile_fingerprint(profile) != prepared_fingerprint
+            if prepared_fingerprint is not None
+            else profile.revision != metadata["runner_profile_revision"]
+        )
+        if runner_changed:
             raise RuntimePlatformError("the prepared Kali runtime runner has changed")
         if not profile.enabled or not profile.healthy:
             raise RuntimePlatformError("selected runner is not verified healthy")

@@ -164,6 +164,25 @@ class StoreTransaction:
             )
         return updated
 
+    def delete(
+        self,
+        model: type[Entity],
+        entity_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> None:
+        """Delete one revision-guarded entity inside the current unit of work."""
+
+        row = self.session.get(EntityRow, entity_id)
+        if row is None or row.kind != model.entity_kind:
+            raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
+        if expected_revision is not None and row.revision != expected_revision:
+            raise ConflictError(
+                f"revision conflict: expected {expected_revision}, found {row.revision}"
+            )
+        self.session.delete(row)
+        self.session.flush()
+
 
 class NebulaStore:
     """Persistence boundary for typed Nebula entities and run events."""
@@ -893,13 +912,20 @@ class NebulaStore:
             if result.rowcount != 1:
                 raise ConflictError("mission changed while it was being deleted")
 
-    def engagement_has_dependents(self, engagement_id: str) -> bool:
+    def engagement_has_dependents(
+        self,
+        engagement_id: str,
+        *,
+        exclude_entity_ids: Sequence[str] = (),
+    ) -> bool:
         """Return whether any persisted child is owned by this engagement."""
 
         predicate = and_(
             EntityRow.engagement_id == engagement_id,
             EntityRow.kind != "engagements",
         )
+        if exclude_entity_ids:
+            predicate = and_(predicate, EntityRow.id.not_in(exclude_entity_ids))
         with self.database.session() as session:
             return bool(session.scalar(select(exists().where(predicate))))
 

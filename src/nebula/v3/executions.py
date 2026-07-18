@@ -447,7 +447,10 @@ class ExecutionService:
             )
         )
         request_fingerprint = self.request_fingerprint(base)
-        async with self._start_lock:
+        # Serialize the durable queued transition with destructive workspace
+        # operations. A reset either sees this execution or completes before
+        # the execution can be queued; there is no check/use race.
+        async with self.engagement_lock(request.engagement_id), self._start_lock:
             existing = self._execution_for_idempotency(
                 request.engagement_id, request.client_idempotency_key
             )

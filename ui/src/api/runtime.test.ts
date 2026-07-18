@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { resolveApiRuntime } from "./runtime";
+import { browserSessionRequiresRelaunch, resolveApiRuntime } from "./runtime";
 
 describe("browser API runtime", () => {
   beforeEach(() => {
@@ -28,5 +28,11 @@ describe("browser API runtime", () => {
     expect(window.location.hash).toBe("");
     expect(localStorage.getItem("nebula.api.token")).toBeNull();
     expect(sessionStorage.getItem("nebula.api.token")).toBeNull();
+  });
+
+  it("requires relaunch after a production browser reload but not during development", () => {
+    expect(browserSessionRequiresRelaunch(undefined, false)).toBe(true);
+    expect(browserSessionRequiresRelaunch(undefined, true)).toBe(false);
+    expect(browserSessionRequiresRelaunch("one-time-secret", false)).toBe(false);
   });
 });

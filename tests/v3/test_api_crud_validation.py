@@ -17,6 +17,7 @@ from nebula.v3.domain import (
     Finding,
     ProviderProfile,
     RiskClass,
+    ScopePolicy,
 )
 from nebula.v3.storage import NebulaStore
 
@@ -118,6 +119,28 @@ def test_generic_create_rejects_orphans_and_cross_engagement_references(api):
     # Store/import transactions remain deliberately unchanged by API validation.
     direct_orphan = store.create(Asset(engagement_id="legacy", name="imported"))
     assert store.get(Asset, direct_orphan.id) == direct_orphan
+
+
+def test_project_create_atomically_attaches_a_deny_network_default_scope(api):
+    client, store = api
+
+    response = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={"name": "Fresh project"},
+    )
+
+    assert response.status_code == 201
+    project = response.json()
+    assert project["scope_policy_id"] == f"scope:{project['id']}"
+    scope = store.get(ScopePolicy, project["scope_policy_id"])
+    assert scope.engagement_id == project["id"]
+    assert scope.allowed_cidrs == []
+    assert scope.allowed_domains == []
+    assert scope.allowed_urls == []
+    assert scope.allowed_ports == []
+    assert scope.local_only is False
+    assert scope.max_concurrency == 1
 
 
 @pytest.mark.parametrize(

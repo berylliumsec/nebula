@@ -19,7 +19,7 @@ from sqlalchemy import create_engine
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.database import BootstrapStateRow, Database
-from nebula.v3.domain import Engagement, RunnerProfile
+from nebula.v3.domain import Engagement, RunnerProfile, ScopePolicy
 from nebula.v3.sandbox import ContainerSandboxRunner
 from nebula.v3.setup import (
     ImagePreparationCancellationRequest,
@@ -30,7 +30,12 @@ from nebula.v3.setup import (
     bootstrap_scratch_project,
 )
 from nebula.v3.storage import NebulaStore
-from nebula.v3.runtime_platform import RuntimePlatform, RuntimePlatformError
+from nebula.v3.runtime_platform import (
+    KALI_RUNTIME_METADATA_SCHEMA,
+    RuntimePlatform,
+    RuntimePlatformError,
+    _runner_profile_fingerprint,
+)
 
 TOKEN = "test-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -68,6 +73,15 @@ def test_fresh_database_creates_scratch_once_and_never_recreates_after_delete(
         "created_by": "system:bootstrap",
         "bootstrap_kind": "scratch_project_v1",
     }
+    assert scratch.scope_policy_id == "scope:scratch-project"
+    default_scope = store.get(ScopePolicy, scratch.scope_policy_id)
+    assert default_scope.engagement_id == scratch.id
+    assert default_scope.allowed_cidrs == []
+    assert default_scope.allowed_domains == []
+    assert default_scope.allowed_urls == []
+    assert default_scope.allowed_ports == []
+    assert default_scope.local_only is False
+    assert default_scope.max_concurrency == 1
     assert bootstrap_scratch_project(store) == scratch.id
     assert store.count(Engagement) == 1
 
@@ -277,6 +291,60 @@ def test_create_app_does_not_bootstrap_embedded_stores_unless_requested(tmp_path
     create_app(store, auth_token=TOKEN)
 
     assert store.count(Engagement) == 0
+
+
+def test_prepared_runtime_survives_health_refresh_but_not_runner_config_change(
+    tmp_path,
+):
+    store = NebulaStore(tmp_path / "runner-fingerprint.db")
+    engagement = store.create(Engagement(name="Runner fingerprint"))
+    profile = store.create(
+        RunnerProfile(
+            id="local",
+            name="Local Docker",
+            runtime="docker",
+            executable="/usr/bin/docker",
+            platform="linux/amd64",
+            isolation="rootless",
+            healthy=True,
+        )
+    )
+    platform = _platform(tmp_path, store)
+    platform.runtime_metadata_path.write_text(
+        json.dumps(
+            {
+                "schema": KALI_RUNTIME_METADATA_SCHEMA,
+                "image_digest": "sha256:" + "a" * 64,
+                "runner_profile_id": profile.id,
+                "runner_profile_revision": profile.revision,
+                "runner_profile_fingerprint": _runner_profile_fingerprint(profile),
+                "binary_inventory": [
+                    {"name": "bash", "path": "/usr/bin/bash", "version": "5"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    refreshed = store.update(
+        RunnerProfile,
+        profile.id,
+        {"last_health_at": "2026-07-18T12:00:00Z", "last_health_detail": "ready"},
+        expected_revision=profile.revision,
+    )
+
+    assert platform.resolve_operator_runtime(
+        engagement.id, "bash", network=False
+    ).profile.revision == refreshed.revision
+
+    changed = store.update(
+        RunnerProfile,
+        refreshed.id,
+        {"context": "alternate-rootless-context"},
+        expected_revision=refreshed.revision,
+    )
+    with pytest.raises(RuntimePlatformError, match="runner has changed"):
+        platform.resolve_operator_runtime(engagement.id, "bash", network=False)
+    assert changed.revision > profile.revision
 
 
 def test_exactly_one_verified_fixed_runtime_is_persisted_as_local(

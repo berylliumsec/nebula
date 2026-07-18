@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
-import { Download, File, FileCheck2, Folder, Link2, MessageSquareText, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { Activity, AlertTriangle, Download, File, FileCheck2, Folder, Link2, MessageSquareText, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
-import type { WorkspaceEntry, WorkspacePreview } from "../api/types";
+import type { WorkspaceEntry, WorkspacePreview, WorkspaceResetStatus } from "../api/types";
 import { useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { WorkspaceEntryContextMenu, type WorkspaceEntryMenuState } from "./WorkspaceEntryContextMenu";
@@ -17,6 +17,8 @@ interface WorkspacePanelProps {
     sourceLabel: string;
     truncated: boolean;
   }) => void;
+  onOpenTerminal?: () => void;
+  onOpenActivity?: () => void;
 }
 
 function sizeLabel(value: number): string {
@@ -25,7 +27,7 @@ function sizeLabel(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAssistant }: WorkspacePanelProps) {
+export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAssistant, onOpenTerminal, onOpenActivity }: WorkspacePanelProps) {
   const confirm = useConfirmation();
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
@@ -37,6 +39,8 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [resetName, setResetName] = useState("");
+  const [resetStatus, setResetStatus] = useState<WorkspaceResetStatus>();
+  const [resetStatusLoading, setResetStatusLoading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState<{ name: string; path: string }>();
   const [entryMenu, setEntryMenu] = useState<WorkspaceEntryMenuState>();
@@ -69,6 +73,31 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
   }, [load]);
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
+
+  const loadResetStatus = useCallback(async (signal?: AbortSignal) => {
+    setResetStatusLoading(true);
+    try {
+      setResetStatus(await api.workspaceResetStatus(engagementId, signal));
+    } catch (statusError) {
+      void logCaughtDiagnostic("interface.workspace_panel.reset_status_failed", "Workspace reset readiness could not be checked.", statusError, "workspace_panel");
+      if (!signal?.aborted) setError(statusError instanceof Error ? statusError.message : "Could not check whether the workspace can be reset.");
+    } finally {
+      if (!signal?.aborted) setResetStatusLoading(false);
+    }
+  }, [api, engagementId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadResetStatus(controller.signal);
+    return () => controller.abort();
+  }, [loadResetStatus]);
+
+  useEffect(() => {
+    if (!resetStatus || resetStatus.canReset) return;
+    const controller = new AbortController();
+    const timer = window.setInterval(() => void loadResetStatus(controller.signal), 2_000);
+    return () => { window.clearInterval(timer); controller.abort(); };
+  }, [loadResetStatus, resetStatus?.canReset]);
 
   const uploadFile = async (file: File) => {
     if (uploading || !file.name) return;
@@ -172,6 +201,15 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
 
   const reset = async () => {
     if (resetName !== engagementName) return;
+    try {
+      const latest = await api.workspaceResetStatus(engagementId);
+      setResetStatus(latest);
+      if (!latest.canReset) return;
+    } catch (statusError) {
+      void logCaughtDiagnostic("interface.workspace_panel.reset_preflight_failed", "Workspace reset readiness could not be confirmed.", statusError, "workspace_panel");
+      setError(statusError instanceof Error ? statusError.message : "Could not confirm that the workspace is ready to reset.");
+      return;
+    }
     const approved = await confirm({
       title: "Reset the project workspace?",
       message: <span>This removes scratch files without following symlinks. Promoted artifacts and evidence remain. You entered <strong>{engagementName}</strong>.</span>,
@@ -187,6 +225,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       setPreview(undefined);
       setNotice(`Removed ${result.removedEntries} workspace entr${result.removedEntries === 1 ? "y" : "ies"}. Promoted evidence was retained.`);
       await load(0);
+      await loadResetStatus();
     } catch (resetError) {
       void logCaughtDiagnostic("interface.workspace_panel.caught_failure_07", "A handled interface operation failed.", resetError, "workspace_panel");
       setError(resetError instanceof Error ? resetError.message : "Could not reset the workspace.");
@@ -200,6 +239,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       await navigator.clipboard.writeText(`/workspace/${entry.path}`);
       setNotice(`Copied /workspace/${entry.path}.`);
     } catch (copyError) {
+      void logCaughtDiagnostic("interface.workspace_panel.copy_path_failed", "A workspace path could not be copied.", copyError, "workspace_panel");
       setError(copyError instanceof Error ? copyError.message : "Could not copy the file path.");
     }
   };
@@ -214,6 +254,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       await navigator.clipboard.writeText(text);
       setNotice(`Copied the contents of ${entry.name}.`);
     } catch (copyError) {
+      void logCaughtDiagnostic("interface.workspace_panel.copy_contents_failed", "Workspace file contents could not be copied.", copyError, "workspace_panel");
       setError(copyError instanceof Error ? copyError.message : "Could not copy file contents.");
     }
   };
@@ -228,6 +269,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       setNotice(`Renamed ${entry.name} to ${newName}.`);
       await load(0);
     } catch (renameError) {
+      void logCaughtDiagnostic("interface.workspace_panel.rename_failed", "A workspace entry could not be renamed.", renameError, "workspace_panel");
       setError(renameError instanceof Error ? renameError.message : "Could not rename the workspace entry.");
     }
   };
@@ -246,6 +288,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       setNotice(`Deleted ${entry.name}.`);
       await load(0);
     } catch (deleteError) {
+      void logCaughtDiagnostic("interface.workspace_panel.delete_failed", "A workspace entry could not be deleted.", deleteError, "workspace_panel");
       setError(deleteError instanceof Error ? deleteError.message : "Could not delete the workspace entry.");
     }
   };
@@ -285,7 +328,8 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       <section className="workspace-reset panel">
         <div><Trash2 size={18} /><span><strong>Reset scratch workspace</strong><small>Application-enforced limits: 5 GiB allocated data, 50,000 entries, 1 GiB per file. Promoted artifacts survive reset.</small></span></div>
         <label>Type <strong>{engagementName}</strong><input value={resetName} onChange={(event) => setResetName(event.target.value)} /></label>
-        <button className="button danger" type="button" disabled={resetName !== engagementName} onClick={() => void reset()}>Reset workspace</button>
+        {resetStatus && !resetStatus.canReset && <div className="callout workspace-reset-blocker" role="status"><AlertTriangle size={18} /><div><strong>Workspace is in use</strong><p>{resetStatus.detail}</p></div>{resetStatus.activeTerminalCount > 0 && <button className="button secondary" type="button" onClick={onOpenTerminal}><SquareTerminal size={14} /> Open Terminal</button>}{resetStatus.activeExecutionCount > 0 && <button className="button secondary" type="button" onClick={onOpenActivity}><Activity size={14} /> View Activity</button>}</div>}
+        <button className="button danger" type="button" disabled={resetName !== engagementName || resetStatusLoading || resetStatus?.canReset !== true} onClick={() => void reset()}>{resetStatusLoading ? "Checking…" : "Reset workspace"}</button>
       </section>
       {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
     </div>

@@ -155,10 +155,12 @@ from .domain import (
     OperatorProfile,
     OperatorExecution,
     OperatorExecutionStatus,
+    Observation,
     ProviderCapabilityVerification,
     ProviderProfile,
     ProviderVerificationStatus,
     Report,
+    ReportStatus,
     Task,
     ReportRender,
     RunnerIsolation,
@@ -255,6 +257,7 @@ from .setup import (
     SetupServiceError,
     SetupStatus,
     bootstrap_scratch_project,
+    create_engagement_with_default_scope,
 )
 from .scope_import import (
     ScopeImportApplyRequest,
@@ -297,6 +300,7 @@ from .workspace import (
     WorkspaceRenameRequest,
     WorkspaceResetRequest,
     WorkspaceResetResult,
+    WorkspaceResetStatus,
     WorkspaceService,
     WorkspaceUploadResult,
 )
@@ -412,6 +416,57 @@ class HarnessInteractionDecisionRequest(NebulaModel):
 class PatchRequest(NebulaModel):
     changes: dict[str, Any]
     expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ObservationReportDependency(NebulaModel):
+    id: str
+    title: str
+    status: ReportStatus
+
+
+class ObservationDependencies(NebulaModel):
+    observation_id: str
+    deletable: bool
+    reports: list[ObservationReportDependency]
+
+
+class StructuredConflictError(ConflictError):
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+
+
+def _observation_dependencies(
+    store: NebulaStore, observation_id: str
+) -> ObservationDependencies:
+    observation = store.get(Observation, observation_id)
+    reports: list[ObservationReportDependency] = []
+    offset = 0
+    while True:
+        page = store.list_entities(
+            Report,
+            engagement_id=observation.engagement_id,
+            offset=offset,
+            limit=1_000,
+        )
+        reports.extend(
+            ObservationReportDependency(
+                id=report.id,
+                title=report.title,
+                status=report.status,
+            )
+            for report in page
+            if observation_id in report.observation_ids
+        )
+        if len(page) < 1_000:
+            break
+        offset += len(page)
+    reports.sort(key=lambda report: (report.status != ReportStatus.FINAL, report.title))
+    return ObservationDependencies(
+        observation_id=observation_id,
+        deletable=not reports,
+        reports=reports,
+    )
 
 
 class ChatSessionRenameRequest(NebulaModel):
@@ -1658,7 +1713,13 @@ def create_app(
 
     @app.exception_handler(ConflictError)
     async def conflict_handler(request: Request, exc: ConflictError) -> JSONResponse:
-        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=409,
+            detail=str(exc),
+            code=getattr(exc, "code", None),
+        )
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(
@@ -2247,7 +2308,12 @@ def create_app(
                 else "unavailable"
             ),
             "api_version": "v1",
-            "diagnostics": diagnostic_health,
+            "diagnostics": {
+                **diagnostic_health,
+                "browser_event_ingress": (
+                    "enabled" if allow_browser_diagnostic_events else "disabled"
+                ),
+            },
             **store.database.health(),
         }
 
@@ -4177,10 +4243,41 @@ def create_app(
         engagement_id: str, request: WorkspaceResetRequest
     ) -> WorkspaceResetResult:
         workspace = require_workspace_service()
-        if container_terminals is None:
-            return workspace.reset(engagement_id, request)
-        async with container_terminals.guard_workspace_operation(engagement_id):
-            return workspace.reset(engagement_id, request)
+        if container_terminals is not None:
+            async with container_terminals.guard_workspace_operation(engagement_id):
+                return workspace.reset(engagement_id, request)
+        if executions is not None:
+            async with executions.engagement_lock(engagement_id):
+                return workspace.reset(engagement_id, request)
+        return workspace.reset(engagement_id, request)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/reset-status",
+        response_model=WorkspaceResetStatus,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def workspace_reset_status(engagement_id: str) -> WorkspaceResetStatus:
+        workspace = require_workspace_service()
+        active_terminals = (
+            await container_terminals.engagement_active_count(engagement_id)
+            if container_terminals is not None
+            else 0
+        )
+        return workspace.reset_status(
+            engagement_id, active_terminal_count=active_terminals
+        )
+
+    @app.get(
+        f"{API_PREFIX}/observations/{{observation_id}}/dependencies",
+        response_model=ObservationDependencies,
+        tags=["observations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def observation_dependencies(
+        observation_id: str,
+    ) -> ObservationDependencies:
+        return _observation_dependencies(store, observation_id)
 
     @app.post(
         f"{API_PREFIX}/writing/transform",
@@ -6920,7 +7017,11 @@ def _register_crud_routes(
                     }
                 )
             entity_validator.validate_create(entity)
-            created = store.create(entity)
+            created = (
+                create_engagement_with_default_scope(store, entity)
+                if isinstance(entity, Engagement)
+                else store.create(entity)
+            )
             if after_create is not None:
                 after_create(created)
             return created
@@ -7055,16 +7156,63 @@ def _register_crud_routes(
                     f"revision conflict: expected {if_match}, found {current.revision}"
                 )
             if model is Engagement:
-                if store.engagement_has_dependents(entity_id):
+                owned_scope: ScopePolicy | None = None
+                if current.scope_policy_id:
+                    candidate = store.get(ScopePolicy, current.scope_policy_id)
+                    if candidate.engagement_id == current.id:
+                        owned_scope = candidate
+                if store.engagement_has_dependents(
+                    entity_id,
+                    exclude_entity_ids=(owned_scope.id,) if owned_scope else (),
+                ):
                     raise ConflictError(
                         "engagement cannot be deleted while owned entities exist; "
                         "archive it instead"
                     )
+                if owned_scope is not None:
+                    with store.transaction() as transaction:
+                        transaction.delete(
+                            ScopePolicy,
+                            owned_scope.id,
+                            expected_revision=owned_scope.revision,
+                        )
+                        transaction.delete(
+                            Engagement,
+                            current.id,
+                            expected_revision=current.revision,
+                        )
+                    return Response(status_code=204)
             if model is ProviderProfile:
                 if store.provider_has_history_references(entity_id):
                     raise ConflictError(
                         "provider profile cannot be deleted while durable chat or run "
                         "history references it"
+                    )
+            if model is Observation:
+                dependencies = _observation_dependencies(store, entity_id)
+                if dependencies.reports:
+                    final_reports = [
+                        report
+                        for report in dependencies.reports
+                        if report.status == ReportStatus.FINAL
+                    ]
+                    if final_reports:
+                        names = ", ".join(
+                            f'“{report.title}”' for report in final_reports[:3]
+                        )
+                        detail = (
+                            f"This note is retained because final report {names} includes it. "
+                            "Final reports are immutable."
+                        )
+                    else:
+                        names = ", ".join(
+                            f'“{report.title}”' for report in dependencies.reports[:3]
+                        )
+                        detail = (
+                            f"Remove this note from report {names} before deleting it."
+                        )
+                    raise StructuredConflictError(
+                        "note_referenced_by_report", detail
                     )
             entity_validator.validate_delete(current)
             # Always guard the final delete with the revision we validated so a

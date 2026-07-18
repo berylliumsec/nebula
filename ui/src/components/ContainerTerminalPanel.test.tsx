@@ -294,7 +294,7 @@ describe("ContainerTerminalPanel", () => {
     expect(api.prepareSetupImage).toHaveBeenCalledTimes(1);
     expect(api.startContainerTerminal).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("tab", { name: /Terminal 1/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText(/Unrestricted outbound · root · writable/)).toBeVisible();
+    expect(screen.getByText(/Outbound bridge permitted · root · writable/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Screenshot" })).toBeVisible();
   });
 

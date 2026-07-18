@@ -13,6 +13,7 @@ import { announceSettingsSaved, SettingsSaveFeedback } from "../components/Setti
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, DiagnosticsPanel, logCaughtDiagnostic } from "../diagnostics";
+import { InlineValidationNotice } from "../components/InlineValidationNotice";
 
 const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "System", icon: Contrast },
@@ -91,6 +92,7 @@ export function SettingsPage() {
   const [permitsSensitiveData, setPermitsSensitiveData] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string>();
+  const [formValidationError, setFormValidationError] = useState<string>();
   const [providerBusy, setProviderBusy] = useState<string>();
   const [providerActionError, setProviderActionError] = useState<string>();
   const [operatorDialog, setOperatorDialog] = useState(false);
@@ -134,6 +136,22 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
+    if (settingsSection !== "advanced-settings") return;
+    const frame = window.requestAnimationFrame(() => {
+      const hash = window.location.hash.slice(1);
+      const target = document.getElementById(hash === "advanced-settings" ? "models-settings" : hash);
+      const group = target?.matches("details") ? target as HTMLDetailsElement : target?.closest<HTMLDetailsElement>("details.settings-group");
+      if (!group) return;
+      group.open = true;
+      const focusTarget = target?.matches("details") ? group.querySelector<HTMLElement>("summary") : target?.querySelector<HTMLElement>("h2, h3") ?? group.querySelector<HTMLElement>("summary");
+      focusTarget?.setAttribute("tabindex", "-1");
+      focusTarget?.focus({ preventScroll: true });
+      group.scrollIntoView?.({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [settingsSection]);
+
+  useEffect(() => {
     if (!adding || !editingProvider) return;
     const current = providers.find((provider) => provider.id === editingProvider.id);
     if (!current) return;
@@ -167,6 +185,7 @@ export function SettingsPage() {
     setPermitsSensitiveData(false);
     setProviderActionError(undefined);
     setFormError(undefined);
+    setFormValidationError(undefined);
     setAdding(true);
   };
 
@@ -191,6 +210,7 @@ export function SettingsPage() {
     setPermitsSensitiveData(false);
     setProviderActionError(undefined);
     setFormError(undefined);
+    setFormValidationError(undefined);
     setAdding(true);
   };
 
@@ -219,6 +239,7 @@ export function SettingsPage() {
     setPermitsSensitiveData(provider.permitsSensitiveData);
     setProviderActionError(undefined);
     setFormError(undefined);
+    setFormValidationError(undefined);
     setAdding(true);
     void refreshProvider(provider.id);
   };
@@ -248,11 +269,11 @@ export function SettingsPage() {
     const providerType = editingProvider?.providerType ?? selected?.flavor;
     if (!providerType) return;
     if (!name.trim()) {
-      setFormError("A provider profile name is required.");
+      setFormValidationError("A provider profile name is required.");
       return;
     }
     if (providerType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim())) {
-      setFormError("Vertex profiles require a Google Cloud project and location.");
+      setFormValidationError("Vertex profiles require a Google Cloud project and location.");
       return;
     }
     const modelAllowlist = selectedModelIds;
@@ -261,11 +282,11 @@ export function SettingsPage() {
     const parsedMaxOutputTokens = maxOutputTokens ? Number(maxOutputTokens) : undefined;
     if ((parsedContextWindow !== undefined && (!Number.isInteger(parsedContextWindow) || parsedContextWindow < 1))
       || (parsedMaxOutputTokens !== undefined && (!Number.isInteger(parsedMaxOutputTokens) || parsedMaxOutputTokens < 1))) {
-      setFormError("Context window and maximum output tokens must be positive integers.");
+      setFormValidationError("Context window and maximum output tokens must be positive integers.");
       return;
     }
     if (parsedContextWindow !== undefined && parsedMaxOutputTokens !== undefined && parsedMaxOutputTokens >= parsedContextWindow) {
-      setFormError("Maximum output tokens must be smaller than the context window.");
+      setFormValidationError("Maximum output tokens must be smaller than the context window.");
       return;
     }
     if (parsedContextWindow !== undefined) options.context_window = parsedContextWindow;
@@ -282,6 +303,7 @@ export function SettingsPage() {
     }
     setSaving(true);
     setFormError(undefined);
+    setFormValidationError(undefined);
     let createdCredentialRef: string | undefined;
     try {
       if (credentialSecret) {
@@ -512,7 +534,7 @@ export function SettingsPage() {
             <p>{setupStatus?.assistant.detail ?? (providers.length ? `${providers.length} model provider${providers.length === 1 ? " is" : "s are"} configured.` : "You can use Terminal and Files now, then connect a model whenever you need the assistant.")}</p>
             {detectingLocalProviders && !detectedLocalProviders.length && <p className="setup-footnote"><RefreshCw className="spin" size={14} /> Checking Ollama, vLLM, and LM Studio…</p>}
             {unconfiguredDetectedProviders.length > 0 && <div className="setup-detected-providers" aria-label="Detected local model services">{unconfiguredDetectedProviders.map((detected) => <button className="button secondary" type="button" key={`${detected.flavor}-${detected.endpoint}`} onClick={() => openDetectedProvider(detected)}><Server size={14} /> Use {detected.displayName}{detected.models[0] ? ` · ${detected.models[0]}` : ""}</button>)}</div>}
-            <button className="button secondary" type="button" onClick={() => { window.history.replaceState(null, "", "#advanced-settings"); setSettingsSection("advanced-settings"); }}>{providers.length ? "Manage models" : unconfiguredDetectedProviders.length ? "More providers" : "Connect a model"}</button>
+            <button className="button secondary" type="button" onClick={() => { window.history.replaceState(null, "", "#models-settings"); setSettingsSection("advanced-settings"); }}>{providers.length ? "Manage models" : unconfiguredDetectedProviders.length ? "More providers" : "Connect a model"}</button>
           </article>
         </div>
         {setupStatus?.scratchProjectId && <p className="setup-footnote"><Check size={14} /> Scratch Project is ready.</p>}
@@ -520,6 +542,9 @@ export function SettingsPage() {
         {!setupStatus && workspaceState !== "starting" && <p className="setup-footnote">Setup details are unavailable. Core reports runner status: {health?.runner ?? "unknown"}.</p>}
       </section>
       <DiagnosticsPanel hidden={settingsSection !== "diagnostics-settings"} />
+      <details className="settings-group" id="models-settings" open>
+        <summary><span><strong>Models</strong><small>{providers.length ? `${providers.filter((provider) => provider.enabled).length} enabled provider${providers.filter((provider) => provider.enabled).length === 1 ? "" : "s"}` : "Optional · no provider configured"}</small></span></summary>
+        <div className="settings-group-body">
       <section className="settings-section" id="provider-settings">
         <div className="section-heading"><div><h2>Model providers</h2><p>Models and capabilities</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <DiagnosticErrorNotice error={providerActionError} fallback="The provider operation could not be completed." />}
@@ -529,11 +554,26 @@ export function SettingsPage() {
           <div className="empty-state compact"><Server size={23} /><strong>No provider profiles</strong><p>Add a provider profile in Core before assigning a model to a mission.</p></div>
         )}
       </section>
+        </div>
+      </details>
+      <details className="settings-group" id="automation-settings">
+        <summary><span><strong>Automation</strong><small>Harnesses, follow-up, and isolated runtimes</small></span></summary>
+        <div className="settings-group-body">
       <PostToolAssistantSettings api={api} engagementId={engagement?.id} providers={providers} previewMode={previewMode} />
       <HarnessSettings />
       <AutomationRuntimeSettings />
       <RunnerSettings />
+        </div>
+      </details>
+      <details className="settings-group" id="project-policy-settings">
+        <summary><span><strong>Project Policy</strong><small>{engagement ? `${engagement.name} · deny network unless scoped` : "Select a project"}</small></span></summary>
+        <div className="settings-group-body">
       <EngagementPolicySettings />
+        </div>
+      </details>
+      <details className="settings-group" id="identity-security-settings">
+        <summary><span><strong>Identity &amp; Security</strong><small>{operatorProfiles.find((profile) => profile.active)?.displayName ?? "Operator attribution and local credentials"}</small></span></summary>
+        <div className="settings-group-body">
       <section className="settings-section" id="operator-settings">
         <div className="section-heading"><div><h2>Operator profiles</h2><p>Local activity attribution</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openOperator()}><Plus size={16} /> Add operator</button></div>
         {operatorError && <DiagnosticErrorNotice error={operatorError} fallback="The operator profile operation could not be completed." />}
@@ -553,8 +593,13 @@ export function SettingsPage() {
           <header className="panel-header compact"><div><h2>Credential references</h2><p>Secrets never enter agent context</p></div><KeyRound size={19} /></header>
           <div className="empty-state compact"><KeyRound size={23} /><strong>Write-only</strong><p>Secrets stay in the system vault.</p></div>
         </section>
-        <ReleaseSettingsPanel />
       </div>
+        </div>
+      </details>
+      <details className="settings-group" id="release-settings-group">
+        <summary><span><strong>Release</strong><small>Version and update channel</small></span></summary>
+        <div className="settings-group-body settings-release-body"><ReleaseSettingsPanel /></div>
+      </details>
       </div>
       </div>
       {adding && (selected || editingProvider) && (
@@ -582,6 +627,7 @@ export function SettingsPage() {
             {selected?.notes && <p className="provider-dialog-note">{selected.notes}</p>}
             <p className="provider-dialog-note">Saving performs only liveness and model discovery. Tool calling is verified later, when you enable automation.</p>
             {formError && <DiagnosticErrorNotice error={formError} fallback="The form could not be saved." compact />}
+            {formValidationError && <InlineValidationNotice message={formValidationError} />}
             <footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim() || (dialogProviderType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim()))}>{saving ? "Saving…" : editingProvider ? "Save provider" : "Add provider"}</button></footer>
           </form>
         </div>

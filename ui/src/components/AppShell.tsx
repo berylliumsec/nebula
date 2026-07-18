@@ -29,6 +29,7 @@ export function AppShell() {
     coreError,
     reconnect,
     resourceStatus,
+    runtime,
     retryResource,
     setupStatus,
     workspaceState,
@@ -165,7 +166,7 @@ export function AppShell() {
                     <button className="button quiet" type="button" disabled={status.state === "loading"} onClick={() => void retryResource(resource as Parameters<typeof retryResource>[0]).catch((error: unknown) => logDiagnostic({ level: "error", eventCode: "interface.workspace.resource_retry_failed", message: "A workspace resource retry failed.", outcome: "failure", stage: "resource-retry", retryable: true, exception: error }))}>Retry {resourceLabels[resource] ?? resource}</button>
                   </div>)}
                 </section>}
-                {workspaceState === "failed" && <div className="workspace-state-banner failed"><DiagnosticErrorNotice error={coreError ?? "Check the local service and try again."} title="Nebula Core could not start." fallback="Check the local service and try again." compact /><button className="button primary" type="button" onClick={reconnect}>Try again</button></div>}
+                {workspaceState === "failed" && runtime?.reason === "browser_session_token_missing" ? <div className="workspace-state-banner failed expired-session-state" role="alert"><span><strong>Browser session expired</strong><small>Nebula keeps the Core token in memory only, so reloading this page intentionally clears access. Close this tab and relaunch the interface with <code>nebula-core ui</code>.</small></span></div> : workspaceState === "failed" ? <div className="workspace-state-banner failed"><DiagnosticErrorNotice error={coreError ?? "Check the local service and try again."} title="Nebula Core could not start." fallback="Check the local service and try again." compact /><button className="button primary" type="button" onClick={reconnect}>Try again</button></div> : null}
                 <UpdateBanner />
                 <Outlet />
               </main>

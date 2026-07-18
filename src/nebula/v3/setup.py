@@ -35,6 +35,7 @@ from .domain import (
     RunnerIsolation,
     RunnerProfile as StoredRunnerProfile,
     RunnerRuntime,
+    ScopePolicy,
     StringEnum,
     utc_now,
 )
@@ -252,6 +253,41 @@ class SetupServiceError(RuntimeError):
         self.status_code = status_code
 
 
+def default_scope_policy(engagement_id: str) -> ScopePolicy:
+    """Return the safe initial scope attached to every new Project.
+
+    An empty target set denies networked command execution while still giving
+    reviewed, offline workspace commands a durable policy to snapshot.  Model
+    privacy remains unchanged and continues to use explicit transfer consent.
+    """
+
+    return ScopePolicy(
+        id=f"scope:{engagement_id}",
+        engagement_id=engagement_id,
+        allowed_cidrs=[],
+        allowed_domains=[],
+        allowed_urls=[],
+        allowed_ports=[],
+        local_only=False,
+        max_concurrency=1,
+    )
+
+
+def create_engagement_with_default_scope(
+    store: NebulaStore, engagement: Engagement
+) -> Engagement:
+    """Atomically create one Project and its deny-network default scope."""
+
+    if engagement.scope_policy_id is not None:
+        raise ValueError("new Projects cannot supply a scope policy reference")
+    scope = default_scope_policy(engagement.id)
+    prepared = engagement.model_copy(update={"scope_policy_id": scope.id})
+    with store.transaction() as transaction:
+        transaction.add(scope)
+        transaction.add(prepared)
+    return prepared
+
+
 def bootstrap_scratch_project(store: NebulaStore) -> str | None:
     """Consume the durable first-run marker and optionally create Scratch.
 
@@ -309,15 +345,29 @@ def bootstrap_scratch_project(store: NebulaStore) -> str | None:
         entity_count = int(connection.scalar(select(func.count(EntityRow.id))) or 0)
         engagement_id: str | None = None
         if entity_count == 0:
+            scope = default_scope_policy(SCRATCH_PROJECT_ID)
             scratch = Engagement(
                 id=SCRATCH_PROJECT_ID,
                 name=SCRATCH_PROJECT_NAME,
                 description="A local workspace ready for terminal testing.",
                 status=EngagementStatus.ACTIVE,
+                scope_policy_id=scope.id,
                 metadata={
                     "created_by": "system:bootstrap",
                     "bootstrap_kind": SCRATCH_PROJECT_BOOTSTRAP_KEY,
                 },
+            )
+            scope_payload = scope.model_dump(mode="json")
+            connection.execute(
+                insert(EntityRow).values(
+                    id=scope.id,
+                    kind=scope.entity_kind,
+                    engagement_id=scope.engagement_id,
+                    revision=scope.revision,
+                    payload=scope_payload,
+                    created_at=scope.created_at,
+                    updated_at=scope.updated_at,
+                )
             )
             payload = scratch.model_dump(mode="json")
             connection.execute(
