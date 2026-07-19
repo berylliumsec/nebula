@@ -953,7 +953,7 @@ kbd { font-size: 11px; }
 .inventory-disclosure > .runtime-resource-list { max-height: min(520px, 55vh); overflow: auto; padding: 12px; }
 .code-editor-main > footer { display: flex; min-height: 29px; align-items: center; gap: 13px; padding: 5px 10px; color: var(--muted); border-top: 1px solid var(--border-soft); background: var(--surface-muted); font-size: 10px; }.code-editor-main > footer span:last-child { margin-left: auto; }
 .chat-composer { border-radius: 11px; }
-.chat-composer textarea { font-size: 13px; line-height: 1.45; }
+.chat-composer textarea { min-height: 44px; max-height: 160px; overflow-y: hidden; font-size: 13px; line-height: 1.45; }
 .chat-composer footer span { font-size: 11px; }
 .chat-context-attachment { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 9px 38px 9px 11px; border-bottom: 1px solid var(--border-soft); background: color-mix(in srgb, var(--blue-muted) 52%, var(--surface-muted)); }
 .chat-context-attachment > div { display: flex; min-width: 0; align-items: baseline; gap: 8px; }.chat-context-attachment strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.chat-context-attachment small { color: var(--muted); font-size: 10px; }

@@ -152,7 +152,7 @@ export function ExecutionReviewDialog({
       </div>
       <footer>
         <button className="button secondary" type="button" onClick={onClose}>Cancel</button>
-        {!preview?.allowed ? <button className="button primary" type="button" disabled={loading || starting} onClick={() => void review()}><RefreshCw className={loading ? "spin" : undefined} size={14} /> {loading ? "Checking…" : "Review request"}</button> : <button className="button danger" type="button" data-autofocus disabled={starting} onClick={() => void start()}><Play size={14} /> {starting ? "Starting…" : "Run reviewed source"}</button>}
+        {!preview?.allowed ? <button className="button primary" type="button" disabled={loading || starting} onClick={() => void review()}><RefreshCw className={loading ? "spin" : undefined} size={14} /> {loading ? "Checking…" : "Review request"}</button> : <button className="button danger" type="button" data-autofocus disabled={starting} onClick={() => void start()}><Play size={14} /> {starting ? "Starting…" : "Run"}</button>}
       </footer>
     </ModalSurface>
   );

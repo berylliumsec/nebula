@@ -106,6 +106,7 @@ interface HarnessProgress {
 
 const ContainerTerminalPanel = lazy(() => import("../components/ContainerTerminalPanel").then((module) => ({ default: module.ContainerTerminalPanel })));
 const CodeEditorPanel = lazy(() => import("../components/CodeEditorPanel").then((module) => ({ default: module.CodeEditorPanel })));
+const CHAT_COMPOSER_MAX_HEIGHT = 160;
 
 interface ConversationMessage extends ReconciledConversationMessage {}
 
@@ -353,6 +354,16 @@ export function SessionsPage() {
     setDraft((current) => current.trim() ? current : "");
     globalThis.requestAnimationFrame?.(() => composerRef.current?.focus());
   }, [assistantDraft]);
+
+  useLayoutEffect(() => {
+    if (view !== "chat") return;
+    const composer = composerRef.current;
+    if (!composer) return;
+    composer.style.height = "auto";
+    const nextHeight = Math.min(composer.scrollHeight, CHAT_COMPOSER_MAX_HEIGHT);
+    composer.style.height = `${nextHeight}px`;
+    composer.style.overflowY = composer.scrollHeight > CHAT_COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
+  }, [draft, view]);
 
   useEffect(() => {
     if (!executionDraft) return;
@@ -1927,7 +1938,7 @@ export function SessionsPage() {
                   <button className="icon-button subtle" type="button" aria-label="Remove selected context" onClick={clearAssistantDraft}><X size={14} /></button>
                 </div>}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
-                <textarea ref={composerRef} id="analyst-message" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={3} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
+                <textarea ref={composerRef} id="analyst-message" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onKeyDown={onComposerKeyDown} onChange={(event) => setDraft(event.target.value)} />
                 <footer><span>{runtimeKind === "harness" ? sending ? visibleHarnessProgress?.detail ?? "Harness is working" : harnessActivity?.busy ? "Active work detected · sending starts an independent session" : `${harnessSessionId ? "Resumed" : "New"} harness session · ${selectedMcpIds.length || harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length || 0} MCP` : canUseTools || selectedMcpIds.length ? `${canUseTools ? "Command runtime" : "No command runtime"} · ${selectedMcpIds.length} MCP` : includeKnowledge && canUseKnowledge ? providerIsLocal ? "Cited retrieval stays local" : "Cloud excerpts require confirmation" : "Text-only chat"}</span>{sending ? <button className="button secondary square" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button> : <button className="button primary square" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
               {runtimeKind === "harness" && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "complete" || visibleHarnessProgress.phase === "ready" ? "healthy" : visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? " · independent parallel session" : ""}</code>}</div>{sending && selectedHarness?.capabilities?.steering && <button className="button quiet harness-steer-button" type="button" disabled={harnessControlBusy} onClick={() => void steerCurrentHarness()}><Plus size={13} aria-hidden="true" /> Add guidance</button>}</div>}

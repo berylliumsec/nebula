@@ -707,6 +707,23 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   await startChat.click();
   const composer = page.locator(".chat-composer");
   await expect(composer).toBeVisible();
+  const messageInput = page.locator("#analyst-message");
+  const collapsedHeight = await messageInput.evaluate((element) => element.getBoundingClientRect().height);
+  expect(collapsedHeight).toBeLessThanOrEqual(48);
+
+  await messageInput.evaluate((element) => element.removeAttribute("disabled"));
+  await messageInput.fill(Array.from({ length: 12 }, (_, index) => `Line ${index + 1}`).join("\n"));
+  await expect.poll(() => messageInput.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(collapsedHeight);
+  const expandedInput = await messageInput.evaluate((element) => ({
+    height: element.getBoundingClientRect().height,
+    overflowY: getComputedStyle(element).overflowY,
+  }));
+  expect(expandedInput.height).toBeLessThanOrEqual(160);
+  expect(expandedInput.overflowY).toBe("auto");
+
+  await messageInput.evaluate((element) => element.removeAttribute("disabled"));
+  await messageInput.fill("");
+  await expect.poll(() => messageInput.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(collapsedHeight + 1);
   const composerBounds = await workspace.evaluate((element) => {
     const workspaceRect = element.getBoundingClientRect();
     const panel = element.querySelector<HTMLElement>(".chat-panel")!;
