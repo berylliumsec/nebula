@@ -785,6 +785,91 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   expect(composerBounds.workspaceScrollHeight).toBeLessThanOrEqual(composerBounds.clientHeight + 1);
 });
 
+test("an idle resumed harness uses one compact ready status", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Harness status placement needs one desktop interaction run.");
+  const harnessSessionId = "c9745e80-1111-4222-8333-444455556666";
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/harnesses")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "harness-ready",
+        name: "Codex harness",
+        kind: "codex_app_server",
+        connection_mode: "spawn",
+        transport: "stdio",
+        executable: "codex",
+        endpoint: null,
+        auth_mode: "existing_session",
+        secret_ref: null,
+        default_model: "gpt-5-codex",
+        enabled: true,
+        privacy: { local_only: true, permits_sensitive_data: true },
+        native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
+        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0" },
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/harness-sessions/${harnessSessionId}/activity`)) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session_id: harnessSessionId,
+        session_status: "idle",
+        busy: false,
+        live: true,
+        turn_id: null,
+        turn_status: null,
+        turn_origin: null,
+        started_at: null,
+        last_activity_at: entity.updated_at,
+        detail: "This harness session is ready for another turn.",
+      }) });
+      return;
+    }
+    if (path.endsWith("/harness-sessions")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: harnessSessionId,
+        engagement_id: "scratch-project",
+        harness_profile_id: "harness-ready",
+        model: "gpt-5-codex",
+        status: "idle",
+        mcp_server_ids: [],
+        last_activity_at: entity.updated_at,
+      }]) });
+      return;
+    }
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "chat-ready",
+        engagement_id: "scratch-project",
+        title: "Ready harness conversation",
+        backend: "harness",
+        harness_profile_id: "harness-ready",
+        harness_session_id: harnessSessionId,
+        model: "gpt-5-codex",
+        metadata: {},
+      }]) });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/chat-ready/messages")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/chat-ready/pending-turn")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.locator(".session-select").filter({ hasText: "Ready harness conversation" }).click();
+  await expect(page.locator(".chat-composer footer")).toContainText("Harness ready · Resumed session · 0 MCP");
+  await expect(page.locator(".chat-harness-progress")).toHaveCount(0);
+  await expect(page.locator(".session-inspector code").filter({ hasText: harnessSessionId })).toHaveText(harnessSessionId);
+});
+
 test("the workbench expands to the full viewport and restores in place", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/?view=chat", "Workbench");
