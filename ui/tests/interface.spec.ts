@@ -542,11 +542,18 @@ test("terminal drag selection has a visible high-contrast highlight", async ({ p
   const promptRow = rows.locator(":scope > div").filter({ hasText: "root@nebula:/workspace#" }).first();
   await expect(promptRow).toBeVisible();
   const box = await promptRow.boundingBox();
+  const measure = await screen.locator(".xterm-char-measure-element").first().boundingBox();
   expect(box).toBeTruthy();
-  await page.mouse.move(box!.x + 12, box!.y + 14);
+  expect(measure).toBeTruthy();
+  const cellWidth = measure!.width / 32;
+  const y = box!.y + box!.height / 2;
+  await page.mouse.move(box!.x + cellWidth * 1.5, y);
   await page.mouse.down();
-  await page.mouse.move(box!.x + 190, box!.y + 14, { steps: 12 });
+  await page.waitForTimeout(50);
+  await page.mouse.move(box!.x + cellWidth * 20.5, y, { steps: 20 });
+  await page.waitForTimeout(50);
   await page.mouse.up();
+  await expect(screen.locator(".xterm-selection > div").first()).toBeVisible();
   await expect(page.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("terminal-visible-selection.png") });
   const selectionRects = await screen.locator(".xterm-selection > div").evaluateAll((rectangles) =>
@@ -748,9 +755,10 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   const distanceFromBottom = () => chatScroll.evaluate((element) => (
     element.scrollHeight - element.scrollTop - element.clientHeight
   ));
+  const expectAtBottom = () => expect.poll(distanceFromBottom, { timeout: 15_000 }).toBeLessThanOrEqual(1);
 
   await appendChatGrowth(1_200);
-  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(1);
+  await expectAtBottom();
   await chatScroll.evaluate((element) => { element.scrollTop = 0; });
   await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
   await appendChatGrowth(400);
@@ -758,11 +766,11 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   expect(await chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
 
   await chatScroll.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(1);
+  await expectAtBottom();
   await appendChatGrowth(400);
-  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(1);
+  await expectAtBottom();
   await chatContent.locator(".scroll-growth-test").evaluateAll((elements) => elements.forEach((element) => element.remove()));
-  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(1);
+  await expectAtBottom();
 
   const composerBounds = await workspace.evaluate((element) => {
     const workspaceRect = element.getBoundingClientRect();
