@@ -164,6 +164,33 @@ fn child_size(bounds: &BrowserBounds) -> LogicalSize<f64> {
 }
 
 #[cfg(any(target_os = "macos", test))]
+fn logical_titlebar_inset(inner_y: i32, outer_y: i32, scale_factor: f64) -> f64 {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return 0.0;
+    }
+    (f64::from(inner_y.saturating_sub(outer_y)) / scale_factor).clamp(0.0, 96.0)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_container_bounds<R: tauri::Runtime>(
+    window: &tauri::Window<R>,
+    mut bounds: BrowserBounds,
+) -> BrowserBounds {
+    let inset = window
+        .inner_position()
+        .ok()
+        .zip(window.outer_position().ok())
+        .map(|(inner, outer)| {
+            logical_titlebar_inset(inner.y, outer.y, window.scale_factor().unwrap_or(1.0))
+        })
+        .unwrap_or(0.0)
+        .min((bounds.height - 1.0).max(0.0));
+    bounds.y += inset;
+    bounds.height -= inset;
+    bounds
+}
+
+#[cfg(any(target_os = "macos", test))]
 fn appkit_child_y(
     parent_origin_y: f64,
     parent_height: f64,
@@ -706,7 +733,9 @@ pub(crate) fn browser_create_tab(
         return Err(format!("cannot initialize browser tab visibility: {error}"));
     }
     #[cfg(target_os = "macos")]
-    if let Err(error) = install_macos_browser_container(&app, &webview, bounds) {
+    if let Err(error) =
+        install_macos_browser_container(&app, &webview, macos_container_bounds(&window, bounds))
+    {
         if webview.close().is_err() {
             record_browser_failure(
                 &app,
@@ -779,6 +808,7 @@ pub(crate) fn browser_set_bounds(
         .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
     #[cfg(target_os = "macos")]
     {
+        let bounds = macos_container_bounds(&webview.window(), bounds);
         resize_macos_browser_container(&webview, bounds)
             .map_err(|error| format!("cannot resize browser tab: {error}"))
     }
@@ -1167,6 +1197,14 @@ mod tests {
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, true), 120.0);
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, false), 180.0);
         assert_eq!(appkit_child_y(12.0, 900.0, 120.0, 600.0, false), 192.0);
+    }
+
+    #[test]
+    fn macos_titlebar_offset_is_converted_to_logical_pixels() {
+        assert_eq!(logical_titlebar_inset(152, 96, 2.0), 28.0);
+        assert_eq!(logical_titlebar_inset(96, 96, 2.0), 0.0);
+        assert_eq!(logical_titlebar_inset(400, 96, 2.0), 96.0);
+        assert_eq!(logical_titlebar_inset(152, 96, 0.0), 0.0);
     }
 
     #[test]
