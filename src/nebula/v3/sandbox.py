@@ -250,6 +250,13 @@ class SandboxLimits(BaseModel):
     output_bytes: int = Field(default=2_000_000, ge=1, le=100_000_000)
 
 
+class SandboxPublishedPort(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    port: int = Field(ge=1, le=65_535)
+    protocol: Literal["tcp", "udp"] = "tcp"
+
+
 class SandboxRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -268,6 +275,11 @@ class SandboxRequest(BaseModel):
     retain_output: bool = True
     environment: dict[str, str] = Field(default_factory=dict)
     network: SandboxNetwork = SandboxNetwork.NONE
+    # Human terminals may explicitly publish selected container TCP or UDP
+    # ports on host loopback. Other execution paths cannot expose listeners.
+    published_ports: list[SandboxPublishedPort] = Field(
+        default_factory=list, max_length=16
+    )
     execution_kind: SandboxExecutionKind | None = None
     container_user: SandboxContainerUser = SandboxContainerUser.NON_ROOT
     root_filesystem: SandboxRootFilesystem = SandboxRootFilesystem.READ_ONLY
@@ -292,6 +304,16 @@ class SandboxRequest(BaseModel):
         if any("\x00" in value for value in values):
             raise ValueError("command arguments cannot contain NUL bytes")
         return values
+
+    @field_validator("published_ports")
+    @classmethod
+    def valid_published_ports(
+        cls, values: list[SandboxPublishedPort]
+    ) -> list[SandboxPublishedPort]:
+        keys = [(item.port, item.protocol) for item in values]
+        if len(keys) != len(set(keys)):
+            raise ValueError("published port and protocol pairs must be unique")
+        return sorted(values, key=lambda item: (item.port, item.protocol))
 
     @field_validator("pinned_hosts")
     @classmethod
@@ -352,6 +374,8 @@ class SandboxRequest(BaseModel):
         elif self.network != SandboxNetwork.NONE:
             raise ValueError("local tools and parsers must use network=none")
         if self.execution_kind != SandboxExecutionKind.HUMAN_TERMINAL:
+            if self.published_ports:
+                raise ValueError("published ports are reserved for human terminals")
             if self.container_user != SandboxContainerUser.NON_ROOT:
                 raise ValueError("only human terminals may use the container root user")
             if self.root_filesystem != SandboxRootFilesystem.READ_ONLY:
@@ -1433,6 +1457,8 @@ class ContainerSandboxRunner(SandboxRunner):
                 f"--mount=type=bind,src={resolver},dst=/etc/resolv.conf,readonly=true"
             )
         if request.network == SandboxNetwork.NONE:
+            if request.published_ports:
+                raise SandboxError("published ports require bridge networking")
             argv.append("--network=none")
         elif request.network == SandboxNetwork.UNRESTRICTED:
             argv.append("--network=bridge")
@@ -1449,6 +1475,13 @@ class ContainerSandboxRunner(SandboxRunner):
             if network_mode is None:
                 for host, address in sorted(request.pinned_hosts.items()):
                     argv.append(f"--add-host={host}:{_bracket_ip(address)}")
+        if request.published_ports:
+            if request.execution_kind != SandboxExecutionKind.HUMAN_TERMINAL:
+                raise SandboxError("published ports are reserved for human terminals")
+            for publication in request.published_ports:
+                argv.append(
+                    f"--publish=127.0.0.1:{publication.port}:{publication.port}/{publication.protocol}"
+                )
         for name, value in sorted(request.environment.items()):
             argv.extend(["--env", f"{name}={value}"])
         argv.extend([request.image, *request.command])

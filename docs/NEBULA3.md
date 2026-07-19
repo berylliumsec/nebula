@@ -268,8 +268,10 @@ invent or claim a digest before that external artifact exists.
 The Kali container runs as root with a writable disposable container layer and
 ordinary unrestricted outbound bridge networking. This deliberate human-only
 exception can reach the public Internet and host-addressable services. It does
-not receive host networking, published ports, added Linux capabilities, a host
-shell, or a container-runtime socket. The runner itself must remain rootless or
+not receive host networking, added Linux capabilities, a host shell, or a
+container-runtime socket. Human-operated terminals may explicitly publish up to
+16 selected TCP or UDP port/protocol pairs on host loopback for that terminal
+session; the default remains no published ports. The runner itself must remain rootless or
 inside an approved desktop VM. Only the engagement workspace is mounted at
 `/workspace`; packages and system changes disappear when the session closes.
 The cached baseline supplies Kali's command-line default toolset and `ping`.

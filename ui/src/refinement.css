@@ -861,6 +861,9 @@ kbd { font-size: 11px; }
 .xterm-shell .xterm { height: 100%; }
 .xterm-shell .xterm-viewport { scrollbar-color: #40535d #071017; }
 .container-terminal-live > footer { display: flex; min-height: 32px; align-items: center; gap: 6px; padding: 6px 13px; border-top: 1px solid #20303a; color: #84979f; background: #0c171e; font-size: 11px; }
+.terminal-port-control { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.terminal-port-control input { width: 132px; min-height: 30px; padding: 5px 8px; border: 1px solid var(--border-soft); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; }
+.terminal-port-error { max-width: 220px; color: var(--danger); font-size: 11px; }
 .modal-surface.terminal-screenshot-dialog:not(.confirmation-dialog) { display: grid; width: min(1280px, calc(100vw - 48px)); height: min(840px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .terminal-screenshot-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--border-soft); background: color-mix(in srgb, var(--surface-raised) 94%, transparent); }
 .terminal-screenshot-dialog-header h2 { margin: 3px 0 5px; font-size: 17px; }

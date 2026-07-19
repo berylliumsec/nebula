@@ -24,7 +24,7 @@ from time import monotonic
 from typing import AsyncIterator, Callable, Literal
 from uuid import uuid4
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from .domain import (
     Engagement,
@@ -47,6 +47,7 @@ from .sandbox import (
     SandboxError,
     SandboxLimits,
     SandboxNetwork,
+    SandboxPublishedPort,
     SandboxRequest,
     SandboxRootFilesystem,
     SandboxTerminalProcess,
@@ -152,10 +153,28 @@ class ContainerTerminalError(RuntimeError):
         self.status_code = status_code
 
 
+class ContainerTerminalPublishedPort(NebulaModel):
+    port: int = Field(ge=1, le=65_535)
+    protocol: Literal["tcp", "udp"] = "tcp"
+
+
 class ContainerTerminalPreflightRequest(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
     columns: int = Field(default=100, ge=1, le=1_000)
     rows: int = Field(default=30, ge=1, le=1_000)
+    published_ports: list[ContainerTerminalPublishedPort] = Field(
+        default_factory=list, max_length=16
+    )
+
+    @field_validator("published_ports")
+    @classmethod
+    def valid_published_ports(
+        cls, values: list[ContainerTerminalPublishedPort]
+    ) -> list[ContainerTerminalPublishedPort]:
+        keys = [(item.port, item.protocol) for item in values]
+        if len(keys) != len(set(keys)):
+            raise ValueError("published port and protocol pairs must be unique")
+        return sorted(values, key=lambda item: (item.port, item.protocol))
 
 
 class ContainerTerminalStartRequest(ContainerTerminalPreflightRequest):
@@ -185,7 +204,9 @@ class ContainerTerminalRuntimeSnapshot(NebulaModel):
 class ContainerTerminalNetworkSnapshot(NebulaModel):
     mode: Literal["unrestricted"] = "unrestricted"
     runtime_network: Literal["bridge"] = "bridge"
-    published_ports: list[int] = Field(default_factory=list, max_length=0)
+    published_ports: list[ContainerTerminalPublishedPort] = Field(
+        default_factory=list, max_length=16
+    )
 
 
 class ContainerTerminalSecuritySnapshot(NebulaModel):
@@ -1823,7 +1844,9 @@ class ContainerTerminalService:
                 default_tools=resolution.image.security_tools,
             )
         runtime = _runtime_snapshot(resolution)
-        network = ContainerTerminalNetworkSnapshot()
+        network = ContainerTerminalNetworkSnapshot(
+            published_ports=request.published_ports
+        )
         security = ContainerTerminalSecuritySnapshot()
         sandbox_request = SandboxRequest(
             image=resolution.image.resolved_reference,
@@ -1838,6 +1861,10 @@ class ContainerTerminalService:
                 "TERM": "xterm-256color",
             },
             network=SandboxNetwork.UNRESTRICTED,
+            published_ports=[
+                SandboxPublishedPort.model_validate(item.model_dump(mode="json"))
+                for item in request.published_ports
+            ],
             execution_kind=SandboxExecutionKind.HUMAN_TERMINAL,
             container_user=SandboxContainerUser.ROOT,
             root_filesystem=SandboxRootFilesystem.WRITABLE,
@@ -1858,6 +1885,16 @@ class ContainerTerminalService:
             policy_rule="human_terminal_unrestricted",
             policy_detail=(
                 f"{resolution.image.detail}; human terminal has unrestricted outbound bridge networking"
+                + (
+                    "; inbound ports "
+                    + ", ".join(
+                        f"{item.port}/{item.protocol}"
+                        for item in request.published_ports
+                    )
+                    + " are published on host loopback"
+                    if request.published_ports
+                    else "; no inbound ports are published"
+                )
             ),
         )
 

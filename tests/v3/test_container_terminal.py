@@ -507,7 +507,13 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     assert capabilities.security.host_network is False
     assert capabilities.security.runtime_socket is False
 
-    request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+    request = ContainerTerminalPreflightRequest(
+        engagement_id=engagement.id,
+        published_ports=[
+            {"port": 8080, "protocol": "tcp"},
+            {"port": 5353, "protocol": "udp"},
+        ],
+    )
     preview = await service.preflight(request)
     assert preview.allowed is True
     assert preview.runtime is not None
@@ -520,7 +526,10 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     assert preview.runtime.interpreter == "/bin/bash"
     assert preview.runtime.arguments == ["--noprofile", "--norc", "-i"]
     assert preview.network.mode == "unrestricted"
-    assert preview.network.published_ports == []
+    assert [item.model_dump() for item in preview.network.published_ports] == [
+        {"port": 5353, "protocol": "udp"},
+        {"port": 8080, "protocol": "tcp"},
+    ]
     assert preview.security.root_filesystem == "writable"
     assert preview.security.no_new_privileges is True
     assert preview.security.host_shell is False
@@ -559,6 +568,10 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     assert sandbox_request.workspace_access == SandboxWorkspaceAccess.WRITE
     assert sandbox_request.image == platform.image.resolved_reference
     assert sandbox_request.network == SandboxNetwork.UNRESTRICTED
+    assert [item.model_dump() for item in sandbox_request.published_ports] == [
+        {"port": 5353, "protocol": "udp"},
+        {"port": 8080, "protocol": "tcp"},
+    ]
     assert sandbox_request.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL
     assert sandbox_request.container_user == SandboxContainerUser.ROOT
     assert sandbox_request.root_filesystem == SandboxRootFilesystem.WRITABLE
@@ -594,7 +607,10 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     ]
     assert pending["network"] == {
         "mode": "unrestricted",
-        "published_ports": [],
+        "published_ports": [
+            {"port": 5353, "protocol": "udp"},
+            {"port": 8080, "protocol": "tcp"},
+        ],
         "runtime_network": "bridge",
     }
     assert pending["security"]["container_user"] == "root"

@@ -250,6 +250,10 @@ def test_human_terminal_alone_can_be_root_writable_and_unrestricted(tmp_path):
         execution_kind=SandboxExecutionKind.HUMAN_TERMINAL,
         container_user=SandboxContainerUser.ROOT,
         root_filesystem=SandboxRootFilesystem.WRITABLE,
+        published_ports=[
+            {"port": 3000, "protocol": "tcp"},
+            {"port": 5353, "protocol": "udp"},
+        ],
     )
     argv = runner._argv(request, runner._validate(request), interactive=True, tty=True)
 
@@ -258,9 +262,15 @@ def test_human_terminal_alone_can_be_root_writable_and_unrestricted(tmp_path):
     assert "--read-only" not in argv
     assert "--cap-drop=ALL" in argv
     assert "--security-opt=no-new-privileges" in argv
-    assert not any(
-        value.startswith("--publish") or value == "--privileged" for value in argv
-    )
+    assert "--publish=127.0.0.1:3000:3000/tcp" in argv
+    assert "--publish=127.0.0.1:5353:5353/udp" in argv
+    assert "--privileged" not in argv
+
+    with pytest.raises(ValidationError, match="reserved for human terminals"):
+        _request(
+            tmp_path,
+            published_ports=[{"port": 8080, "protocol": "tcp"}],
+        )
 
     with pytest.raises(SandboxError, match="pinned by sha256 digest"):
         runner._validate(_request(tmp_path, image="sha256:" + "a" * 64))

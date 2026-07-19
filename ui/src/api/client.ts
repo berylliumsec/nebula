@@ -924,7 +924,7 @@ interface WireContainerTerminalRuntime extends JsonObject {
 interface WireContainerTerminalNetwork extends JsonObject {
   mode: "unrestricted";
   runtime_network: "bridge";
-  published_ports: number[];
+  published_ports: Array<{ port: number; protocol: "tcp" | "udp" }>;
 }
 
 interface WireContainerTerminalSecurity extends JsonObject {
@@ -1992,6 +1992,7 @@ function terminalBody(value: ContainerTerminalRequest): JsonObject {
     engagement_id: value.engagementId,
     columns: value.columns,
     rows: value.rows,
+    published_ports: value.publishedPorts ?? [],
   };
 }
 

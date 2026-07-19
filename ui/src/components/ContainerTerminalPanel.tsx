@@ -18,6 +18,7 @@ import { ContainerTerminalSocket, type ContainerTerminalErrorMetadata, type Cont
 import type {
   ContainerTerminalCapacity,
   ContainerTerminalRequest,
+  ContainerTerminalPublishedPort,
   ContainerTerminalRuntimeSnapshot,
   ContainerTerminalSession,
   EvidenceSummary,
@@ -56,6 +57,7 @@ interface StartingTerminalTab {
   phaseDetail?: string;
   imagePreparation?: SetupImagePreparation;
   error?: string;
+  publishedPorts: ContainerTerminalPublishedPort[];
 }
 
 interface LiveTerminalTab {
@@ -343,7 +345,7 @@ function LiveContainerTerminal({
       {networkWarning && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {networkWarning}</p>}
       <p className="terminal-audit-active"><ShieldCheck size={14} /> Selective audit active</p>
       <p><code>kali-linux-headless</code> · <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code></p>
-      <p className="terminal-network-warning"><AlertTriangle size={14} /> Bridge networking is permitted, not guaranteed. Host IPv4 and IPv6 availability can differ. No inbound ports, raw-packet capabilities, host shell, or runtime socket are granted.</p>
+      <p className="terminal-network-warning"><AlertTriangle size={14} /> Bridge networking is permitted, not guaranteed. Host IPv4 and IPv6 availability can differ. Inbound TCP or UDP ports are granted only when explicitly published on host loopback. No raw-packet capabilities, host shell, or runtime socket are granted.</p>
     </div>
     <div className="xterm-shell" ref={hostRef} aria-label="Terminal output" />
     <footer><ShieldCheck size={14} /> Additional system changes and packages disappear when this content-pinned container closes; the Kali headless baseline and <code>/workspace</code> remain available in new sessions.{exit?.exitCode !== undefined ? ` Exit code ${exit.exitCode}.` : ""}</footer>
@@ -449,6 +451,27 @@ export function ContainerTerminalPanel({
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [auditHealth, setAuditHealth] = useState<TerminalCommandHistoryStatus>();
   const [auditHealthUnavailable, setAuditHealthUnavailable] = useState(false);
+  const [publishedPortsInput, setPublishedPortsInput] = useState("");
+  const [publishedPortsError, setPublishedPortsError] = useState<string>();
+
+  const requestedPublishedPorts = () => {
+    const text = publishedPortsInput.trim();
+    if (!text) return [];
+    const ports = text.split(/[\s,]+/).map((item): ContainerTerminalPublishedPort => {
+      const match = /^(\d+)(?:\/(tcp|udp))?$/i.exec(item);
+      const port = Number(match?.[1]);
+      if (!match || !Number.isInteger(port) || port < 1 || port > 65_535) {
+        throw new Error("Use ports such as 8080, 8080/tcp, or 53/udp.");
+      }
+      return { port, protocol: (match[2]?.toLowerCase() as "tcp" | "udp" | undefined) ?? "tcp" };
+    });
+    const keys = ports.map((item) => `${item.port}/${item.protocol}`);
+    if (new Set(keys).size !== ports.length) {
+      throw new Error("Inbound port and protocol pairs must be unique.");
+    }
+    if (ports.length > 16) throw new Error("At most 16 inbound ports may be published.");
+    return ports.sort((left, right) => left.port - right.port || left.protocol.localeCompare(right.protocol));
+  };
 
   const updateStartingTab = (key: string, update: Partial<StartingTerminalTab>) => {
     setTabs((current) => current.map((tab) => tab.key === key && tab.kind === "starting"
@@ -515,7 +538,7 @@ export function ContainerTerminalPanel({
     setupReadyRef.current = true;
   };
 
-  const launchTab = async (key: string, ordinal: number, clientIdempotencyKey: string) => {
+  const launchTab = async (key: string, ordinal: number, clientIdempotencyKey: string, publishedPorts: ContainerTerminalPublishedPort[]) => {
     if (launchingKeyRef.current && launchingKeyRef.current !== key) return;
     const projectController = projectAbortRef.current;
     if (!projectController || projectController.signal.aborted) return;
@@ -554,7 +577,12 @@ export function ContainerTerminalPanel({
         throw new Error(capabilities.detail ?? "A verified local container runner is required to use Terminal.");
       }
 
-      const request: ContainerTerminalRequest = { engagementId, columns: 100, rows: 30 };
+      const request: ContainerTerminalRequest = {
+        engagementId,
+        columns: 100,
+        rows: 30,
+        publishedPorts,
+      };
       updateStartingTab(key, { phase: "preparing", phaseDetail: undefined });
       const preview = await api.preflightContainerTerminal(request, controller.signal);
       if (!preview.allowed || !preview.previewToken || !preview.previewFingerprint || !preview.runtime) {
@@ -597,6 +625,14 @@ export function ContainerTerminalPanel({
 
   const addTerminal = () => {
     if (launchingKeyRef.current || capacity.availableSessions <= 0) return;
+    let publishedPorts: ContainerTerminalPublishedPort[];
+    try {
+      publishedPorts = requestedPublishedPorts();
+    } catch (reason) {
+      setPublishedPortsError(reason instanceof Error ? reason.message : "Inbound ports are invalid.");
+      return;
+    }
+    setPublishedPortsError(undefined);
     const ordinal = nextOrdinalRef.current;
     nextOrdinalRef.current += 1;
     const key = terminalTabKey();
@@ -607,11 +643,12 @@ export function ContainerTerminalPanel({
       ordinal,
       phase: setupReadyRef.current ? "checking" : "detecting",
       phaseDetail: setupReadyRef.current ? undefined : setupTerminalDetail,
+      publishedPorts,
     };
     setTabs((current) => [...current, tab]);
     setActiveKey(key);
     setOverflowOpen(false);
-    void launchTab(key, ordinal, tab.clientIdempotencyKey);
+    void launchTab(key, ordinal, tab.clientIdempotencyKey, tab.publishedPorts);
   };
 
   useEffect(() => {
@@ -657,11 +694,12 @@ export function ContainerTerminalPanel({
           ordinal: 1,
           phase: setupTerminalStatus === "detecting_runner" ? "detecting" : setupTerminalStatus === "preparing_image" ? "preparing" : "checking",
           phaseDetail: setupTerminalDetail,
+          publishedPorts: [],
         };
         nextOrdinalRef.current = 2;
         setTabs([first]);
         setActiveKey(key);
-        await launchTab(key, 1, first.clientIdempotencyKey);
+        await launchTab(key, 1, first.clientIdempotencyKey, first.publishedPorts);
       } catch (reason) {
         void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_06", "A handled interface operation failed.", reason, "container_terminal_panel");
         if (!controller.signal.aborted) {
@@ -759,7 +797,7 @@ export function ContainerTerminalPanel({
 
   const retryTab = (tab: StartingTerminalTab) => {
     if (launchingKeyRef.current) return;
-    void launchTab(tab.key, tab.ordinal, tab.clientIdempotencyKey);
+    void launchTab(tab.key, tab.ordinal, tab.clientIdempotencyKey, tab.publishedPorts);
   };
 
   const activateByKeyboard = (event: ReactKeyboardEvent<HTMLButtonElement>, key: string) => {
@@ -813,6 +851,18 @@ export function ContainerTerminalPanel({
           </button>)}
       </div>
       <div className="terminal-tab-actions">
+        <label className="terminal-port-control" title="Publish selected container TCP ports on host loopback for the next terminal">
+          <span>Inbound</span>
+          <input
+            aria-label="Inbound ports for new terminals"
+            inputMode="numeric"
+            placeholder="8080/tcp, 53/udp"
+            value={publishedPortsInput}
+            onChange={(event) => { setPublishedPortsInput(event.target.value); setPublishedPortsError(undefined); }}
+            disabled={launchInProgress}
+          />
+        </label>
+        {publishedPortsError && <span className="terminal-port-error" role="alert">{publishedPortsError}</span>}
         <span className="terminal-capacity" title="Active terminal containers across all Projects">{capacity.activeSessions} / {capacity.maxActiveSessions}</span>
         {activeTab && <button className="icon-button subtle terminal-tab-close" type="button" aria-label={`Close Terminal ${activeTab.ordinal}`} onClick={() => void closeTab(activeTab)}><X size={14} /></button>}
         <button className="icon-button subtle terminal-add" type="button" aria-label="New terminal" title={canAdd ? "New terminal" : capacity.availableSessions <= 0 ? "Terminal capacity is full" : "Wait for the current terminal to finish starting"} disabled={!canAdd} onClick={addTerminal}><Plus size={16} /></button>

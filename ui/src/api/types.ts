@@ -1443,6 +1443,12 @@ export interface ContainerTerminalRequest {
   engagementId: Identifier;
   columns: number;
   rows: number;
+  publishedPorts?: ContainerTerminalPublishedPort[];
+}
+
+export interface ContainerTerminalPublishedPort {
+  port: number;
+  protocol: "tcp" | "udp";
 }
 
 export interface ContainerTerminalRuntimeSnapshot {
@@ -1466,7 +1472,7 @@ export interface ContainerTerminalRuntimeSnapshot {
 export interface ContainerTerminalNetworkSnapshot {
   mode: "unrestricted";
   runtimeNetwork: "bridge";
-  publishedPorts: number[];
+  publishedPorts: ContainerTerminalPublishedPort[];
 }
 
 export interface ContainerTerminalSecuritySnapshot {

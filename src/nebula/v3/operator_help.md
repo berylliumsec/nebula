@@ -141,7 +141,9 @@ any retained outputs are included in sensitive engagement exports.
 Only `/workspace` persists. Packages installed with `apt` and other system changes
 live in the disposable container layer and disappear when the terminal closes. The
 terminal is root and has ordinary bridge networking, but it receives no host
-network, published ports, added capabilities, host shell, or runtime socket. Tools
+network, added capabilities, host shell, or runtime socket. Terminal operators
+may explicitly publish selected TCP or UDP ports on host loopback for a terminal
+session; no ports are published by default. Tools
 requiring raw-packet or network-administration capabilities remain limited. Nmap is
 intended to use unprivileged connect-scan modes in this boundary.
 
