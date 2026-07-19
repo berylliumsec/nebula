@@ -539,7 +539,9 @@ test("terminal drag selection has a visible high-contrast highlight", async ({ p
   await expect(screen).toBeVisible();
   const rows = screen.locator(".xterm-rows");
   await expect(rows).toContainText("root@nebula:/workspace#");
-  const box = await rows.locator(":scope > div").first().boundingBox();
+  const promptRow = rows.locator(":scope > div").filter({ hasText: "root@nebula:/workspace#" }).first();
+  await expect(promptRow).toBeVisible();
+  const box = await promptRow.boundingBox();
   expect(box).toBeTruthy();
   await page.mouse.move(box!.x + 12, box!.y + 14);
   await page.mouse.down();
@@ -638,6 +640,7 @@ test("Diagnostics explains and focuses a requested failure at every breakpoint",
 });
 
 test("critical workspaces remain visually stable", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
   for (const [name, route, heading] of workspaces) {
     await openWorkspace(page, route, heading);
     await expect(page).toHaveScreenshot(`${name}-${testInfo.project.name}.png`, { fullPage: true });

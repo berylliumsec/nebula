@@ -328,7 +328,7 @@ jobs:
           test -x "$RUNNER_TEMP/deb-root/usr/bin/nebula-ui"
           cmp packaging/linux/nebula "$RUNNER_TEMP/deb-root/usr/bin/nebula"
           poetry run python scripts/package_audit.py --tree "$RUNNER_TEMP/deb-root"
-          xvfb-run -a "$RUNNER_TEMP/deb-root/usr/bin/nebula" --self-test
+          xvfb-run -a "$RUNNER_TEMP/deb-root/usr/bin/nebula-ui" --self-test
           xvfb-run -a poetry run python scripts/test_desktop_crash_cleanup.py "$RUNNER_TEMP/deb-root/usr/bin/nebula-ui"
           appimage_extract="$RUNNER_TEMP/appimage-extract"
           install -d -m 0755 "$appimage_extract"

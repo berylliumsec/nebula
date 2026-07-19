@@ -131,8 +131,8 @@ jobs:
       - run: npm run lint --if-present
       - run: npm run audit:diagnostics
       - run: npm test
-      - run: npm run test:e2e
       - run: npm run build
+      - run: npm run test:e2e
 
   desktop-macos:
     runs-on: macos-14
@@ -238,7 +238,7 @@ jobs:
           test -x "$RUNNER_TEMP/nebula-deb/usr/bin/nebula-core"
           test -x "$RUNNER_TEMP/nebula-deb/usr/bin/nebula-ui"
           poetry run python scripts/package_audit.py --tree "$RUNNER_TEMP/nebula-deb"
-          xvfb-run -a "$RUNNER_TEMP/nebula-deb/usr/bin/nebula" --self-test
+          xvfb-run -a "$RUNNER_TEMP/nebula-deb/usr/bin/nebula-ui" --self-test
           xvfb-run -a poetry run python scripts/test_desktop_crash_cleanup.py "$RUNNER_TEMP/nebula-deb/usr/bin/nebula-ui"
 
   container:
