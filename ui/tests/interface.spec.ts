@@ -470,6 +470,9 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
   expect(geometry.address.bottom).toBeLessThanOrEqual(geometry.toolbar.bottom);
   expect(geometry.surfaceTop).toBeGreaterThanOrEqual(geometry.toolbar.bottom);
   expect(geometry.bounds.y).toBeGreaterThanOrEqual(geometry.toolbar.bottom);
+  expect(geometry.bounds.y * geometry.devicePixelRatio).toBe(
+    Math.ceil(geometry.toolbar.bottom * geometry.devicePixelRatio),
+  );
   expect(geometry.bounds.y + geometry.bounds.height).toBeLessThanOrEqual(geometry.panelBottom + 1);
   expect(geometry.devicePixelRatio).toBe(2);
   await page.screenshot({ path: testInfo.outputPath("browser-address-bar-2x.png") });

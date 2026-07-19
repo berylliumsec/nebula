@@ -22,4 +22,20 @@ describe("DiagnosticsAvailabilityBanner", () => {
 
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
+
+  it("stays dismissed across health refreshes and returns for a new occurrence", async () => {
+    const user = userEvent.setup();
+    render(<DiagnosticsAvailabilityBanner />);
+    await user.click(screen.getByRole("button", { name: "Dismiss diagnostics notice" }));
+
+    window.dispatchEvent(new CustomEvent("nebula-diagnostics-health", {
+      detail: { available: false, reason: "The same failure." },
+    }));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    window.dispatchEvent(new CustomEvent("nebula-diagnostics-health", {
+      detail: { available: false, reason: "The same failure.", occurrence: true },
+    }));
+    expect(await screen.findByRole("status")).toBeVisible();
+  });
 });

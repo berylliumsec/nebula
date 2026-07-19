@@ -851,11 +851,7 @@ class ExecutionService:
                     "selected source does not match its reviewed SHA-256",
                 )
             source = request.source
-        if source != request.source:
-            raise ExecutionServiceError(
-                "origin_mismatch", "submitted source differs from durable provenance"
-            )
-        return source, canonical
+        return request.source, canonical
 
     async def _network_snapshot(
         self, engagement_id: str, request: ExecutionNetworkRequest

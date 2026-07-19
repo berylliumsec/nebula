@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   CircleDashed,
@@ -259,13 +259,16 @@ export function DiagnosticsAvailabilityBanner() {
   const [available, setAvailable] = useState(isDiagnosticsAvailable);
   const [reason, setReason] = useState<string>();
   const [dismissed, setDismissed] = useState(false);
+  const reasonRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const update = (event: Event) => {
-      const detail = (event as CustomEvent<{ available: boolean; reason?: string }>).detail;
+      const detail = (event as CustomEvent<{ available: boolean; reason?: string; occurrence?: boolean }>).detail;
+      const changedFailure = reasonRef.current !== undefined && detail.reason !== reasonRef.current;
       setAvailable(detail.available);
       setReason(detail.reason);
-      setDismissed(false);
+      reasonRef.current = detail.reason;
+      if (detail.available || detail.occurrence || changedFailure) setDismissed(false);
     };
     window.addEventListener("nebula-diagnostics-health", update);
     return () => window.removeEventListener("nebula-diagnostics-health", update);

@@ -261,11 +261,11 @@ export function normalizeDiagnosticSettings(value: unknown): DiagnosticSettings 
   };
 }
 
-function setAvailability(available: boolean, reason?: string): void {
+function setAvailability(available: boolean, reason?: string, occurrence = false): void {
   diagnosticsAvailable = available;
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("nebula-diagnostics-health", {
-      detail: { available, reason: reason ? safeText(reason, 256) : undefined },
+      detail: { available, reason: reason ? safeText(reason, 256) : undefined, occurrence },
     }));
   }
 }
@@ -297,7 +297,7 @@ function remember(record: DiagnosticRecord): void {
     }
   }
   fallback.push(record);
-  setAvailability(false, "The local diagnostics sink is temporarily unavailable.");
+  setAvailability(false, "The local diagnostics sink is temporarily unavailable.", true);
 }
 
 function wireRecord(input: DiagnosticInput): DiagnosticRecord {

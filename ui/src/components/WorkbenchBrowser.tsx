@@ -45,6 +45,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function snapInsideStart(value: number): number {
+  const scale = window.devicePixelRatio || 1;
+  return Math.ceil(value * scale) / scale;
+}
+
+function snapInsideEnd(value: number): number {
+  const scale = window.devicePixelRatio || 1;
+  return Math.floor(value * scale) / scale;
+}
+
 function visibleSurfaceRect(element: HTMLElement): DOMRect {
   const rect = element.getBoundingClientRect();
   let top = Math.max(0, rect.top);
@@ -91,11 +101,14 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
     const surface = surfaceRef.current;
     if (!surface) return undefined;
     const rect = visibleSurfaceRect(surface);
-    const x = rect.left;
+    // Native webviews and the DOM can round fractional high-DPI coordinates in opposite
+    // directions. Keep every native edge inside the CSS surface so the page can never bleed
+    // upward over the address bar (or outside another clipped ancestor) by a device pixel.
+    const x = snapInsideStart(rect.left);
     const toolbarBottom = toolbarRef.current?.getBoundingClientRect().bottom ?? rect.top;
-    const y = Math.max(0, rect.top, toolbarBottom);
-    const right = rect.right;
-    const bottom = rect.bottom;
+    const y = snapInsideStart(Math.max(0, rect.top, toolbarBottom));
+    const right = snapInsideEnd(rect.right);
+    const bottom = snapInsideEnd(rect.bottom);
     if (right - x < 1 || bottom - y < 1) return undefined;
     return { x, y, width: right - x, height: bottom - y };
   }, []);
