@@ -87,8 +87,7 @@ def test_mission_delete_requires_terminal_state_and_removes_execution_history(tm
         store.get(Task, task.id)
     assert len(store.replay_events(run.id)) == 1
     assert (
-        client.get(f"/api/v1/runs/{run.id}/events", headers=_auth()).status_code
-        == 404
+        client.get(f"/api/v1/runs/{run.id}/events", headers=_auth()).status_code == 404
     )
 
 

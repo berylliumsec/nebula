@@ -14,12 +14,12 @@ class ArtifactAuditError(RuntimeError):
 
 
 FORBIDDEN_MODULES = (
-    # Qt and alternate legacy GUI bindings.
+    # GUI bindings are never part of the headless Core sidecar.
     "PyQt5",
     "PyQt6",
     "PySide2",
     "PySide6",
-    # Heavy legacy model/document stacks.
+    # Heavy in-process model/document stacks are outside the Core boundary.
     "IPython",
     "accelerate",
     "chromadb",
@@ -74,29 +74,6 @@ FORBIDDEN_MODULES = (
     "ruff",
     "sphinx",
     "tkinter",
-    # Nebula 2 application modules.
-    "nebula.MainWindow",
-    "nebula.ai_notes_pop_up_window",
-    "nebula.central_display_area_in_main_window",
-    "nebula.chroma_manager",
-    "nebula.configuration_manager",
-    "nebula.conversation_memory",
-    "nebula.document_loader",
-    "nebula.help",
-    "nebula.image_command_window",
-    "nebula.image_display_label",
-    "nebula.initial_logic",
-    "nebula.nebula",
-    "nebula.run_python",
-    "nebula.search",
-    "nebula.search_replace_dialog",
-    "nebula.setup_nebula",
-    "nebula.status_update_feed_manager",
-    "nebula.suggestions_pop_out_window",
-    "nebula.terminal_emulator",
-    "nebula.tool_configuration",
-    "nebula.user_note_taking",
-    "nebula.utilities",
 )
 
 REQUIRED_MEMBERS = (

@@ -89,7 +89,11 @@ class EgressRule(BaseModel):
     @classmethod
     def valid_address(cls, value: str) -> str:
         network = ipaddress.ip_network(value, strict=False)
-        return str(network.network_address) if network.prefixlen == network.max_prefixlen else str(network)
+        return (
+            str(network.network_address)
+            if network.prefixlen == network.max_prefixlen
+            else str(network)
+        )
 
     @field_validator("ports")
     @classmethod
@@ -327,7 +331,11 @@ class SandboxRequest(BaseModel):
         if self.execution_kind == SandboxExecutionKind.NETWORK_TOOL:
             if self.network != SandboxNetwork.SCOPED:
                 raise ValueError("network tools require scoped network execution")
-            if not self.network_name and not self.egress_rules and not self.egress_domains:
+            if (
+                not self.network_name
+                and not self.egress_rules
+                and not self.egress_domains
+            ):
                 raise ValueError(
                     "scoped network execution requires a legacy network_name "
                     "or certified egress rules"
@@ -641,10 +649,7 @@ class ContainerEgressController(EgressController):
             ports: list[int | str] = [*rule.ports] if rule.ports else ["1:65535"]
             for port in ports:
                 network = ipaddress.ip_network(rule.address, strict=False)
-                if (
-                    network.prefixlen == network.max_prefixlen
-                    and isinstance(port, int)
-                ):
+                if network.prefixlen == network.max_prefixlen and isinstance(port, int):
                     argv.extend(
                         [
                             "--allow",
@@ -796,7 +801,9 @@ class SandboxTerminalProcess:
         while not self._closed:
             try:
                 return os.read(self.master_fd, maximum_bytes)
-            except BlockingIOError:  # diagnostic-expected: normal nonblocking PTY readiness race
+            except (
+                BlockingIOError
+            ):  # diagnostic-expected: normal nonblocking PTY readiness race
                 # Expected readiness race on a nonblocking PTY. Waiting for the
                 # descriptor is normal flow, not a diagnostic failure.
                 await _wait_for_fd(self.master_fd, writable=False)
@@ -823,7 +830,9 @@ class SandboxTerminalProcess:
             try:
                 written = os.write(self.master_fd, view)
                 view = view[written:]
-            except BlockingIOError:  # diagnostic-expected: normal nonblocking PTY backpressure
+            except (
+                BlockingIOError
+            ):  # diagnostic-expected: normal nonblocking PTY backpressure
                 # Expected backpressure on a nonblocking PTY.
                 await _wait_for_fd(self.master_fd, writable=True)
             except OSError as exc:
@@ -1321,7 +1330,9 @@ class ContainerSandboxRunner(SandboxRunner):
         if request.resolv_conf is not None:
             resolver = request.resolv_conf.expanduser().resolve(strict=True)
             if not resolver.is_file() or request.resolv_conf.is_symlink():
-                raise SandboxError("policy resolver configuration must be a regular file")
+                raise SandboxError(
+                    "policy resolver configuration must be a regular file"
+                )
             if any(character in str(resolver) for character in {",", "\n", "\r"}):
                 raise SandboxError("policy resolver path cannot be encoded safely")
         repository_digest = re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", request.image)

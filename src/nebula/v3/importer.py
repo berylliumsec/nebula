@@ -1,4 +1,4 @@
-"""Transactional, side-by-side importer for Nebula 2.x engagement folders."""
+"""Transactional, read-only importer for Nebula 2.x engagement folders."""
 
 from __future__ import annotations
 
@@ -306,7 +306,7 @@ class LegacyEngagementImporter:
                 name=str(
                     details.get("engagement_name") or source_path.name or "Imported"
                 ),
-                description="Imported side-by-side from a Nebula 2.x engagement.",
+                description="Imported read-only from a Nebula 2.x engagement.",
                 scope_policy_id=scope_id,
                 metadata={
                     "legacy": {

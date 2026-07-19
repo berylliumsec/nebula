@@ -717,8 +717,14 @@ class ChatService:
                     f"selected model {selected_model!r}"
                 )
             if request.tools_enabled and self.automation_tool_platform is None:
-                raise ChatConfigurationError("automation command runtime is unavailable")
-            if not request.tools_enabled and mcp_profiles and self.tool_platform is None:
+                raise ChatConfigurationError(
+                    "automation command runtime is unavailable"
+                )
+            if (
+                not request.tools_enabled
+                and mcp_profiles
+                and self.tool_platform is None
+            ):
                 raise ChatConfigurationError("MCP runtime is unavailable")
             if not provider.config.local:
                 if not profile.privacy.permits_sensitive_data:
@@ -754,7 +760,9 @@ class ChatService:
                 elif extra_components is not None:
                     tool_components = extra_components
                 else:
-                    raise ChatConfigurationError("no runtime capabilities were selected")
+                    raise ChatConfigurationError(
+                        "no runtime capabilities were selected"
+                    )
             except Exception as exc:
                 record_caught_exception(
                     "chat",

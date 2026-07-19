@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synchronize Nebula 3's release version without touching Nebula 2."""
+"""Synchronize every Nebula 3 release-version source."""
 
 from __future__ import annotations
 
@@ -108,6 +108,11 @@ def read_versions(root: Path) -> dict[str, str]:
         "NEBULA3_VERSION": _validate(
             _read_text(root / "NEBULA3_VERSION").strip()
         ),
+        "Poetry package": _match_version(
+            _read_text(root / "pyproject.toml"),
+            r'^\[tool\.poetry\]\s*$.*?^version\s*=\s*"(?P<version>[^"]+)"',
+            "Poetry package",
+        ),
         "python module": _match_version(
             _read_text(root / "src/nebula/v3/version.py"),
             r'^__version__\s*=\s*"(?P<version>[^"]+)"',
@@ -169,10 +174,16 @@ def set_version(root: Path, version: str) -> None:
         "cargo_lock": root / "ui/src-tauri/Cargo.lock",
         "package": root / "ui/package.json",
         "package_lock": root / "ui/package-lock.json",
+        "poetry": root / "pyproject.toml",
     }
     originals = {name: _read_text(path) for name, path in paths.items()}
     try:
         _write_text(paths["canonical"], f"{version}\n")
+        _replace_once(
+            paths["poetry"],
+            r'^(?P<head>\[tool\.poetry\]\s*$.*?^version\s*=\s*")[^"]+(?P<tail>")',
+            lambda match: f'{match.group("head")}{version}{match.group("tail")}',
+        )
         _replace_once(
             paths["python"],
             r'^(?P<prefix>__version__\s*=\s*")[^"]+(?P<suffix>")',

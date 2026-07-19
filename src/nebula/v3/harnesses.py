@@ -3695,16 +3695,16 @@ class HarnessRuntimeService:
             raise ValueError("harness runtime is already bound to a tool platform")
         self.tool_platform = platform
 
-    def bind_automation_tool_platform(
-        self, platform: AutomationToolPlatform
-    ) -> None:
+    def bind_automation_tool_platform(self, platform: AutomationToolPlatform) -> None:
         if platform.store is not self.store:
             raise ValueError("automation platform must use the harness runtime store")
         if (
             self.automation_tool_platform is not None
             and self.automation_tool_platform is not platform
         ):
-            raise ValueError("harness runtime is already bound to an automation platform")
+            raise ValueError(
+                "harness runtime is already bound to an automation platform"
+            )
         self.automation_tool_platform = platform
 
     @staticmethod
@@ -6377,9 +6377,13 @@ class HarnessRuntimeService:
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
         analysis_only = bool(session.metadata.get("analysis_only"))
         if analysis_only:
-            profile = profile.model_copy(update={
-                "native_capabilities": _session_native_capabilities(session, profile)
-            })
+            profile = profile.model_copy(
+                update={
+                    "native_capabilities": _session_native_capabilities(
+                        session, profile
+                    )
+                }
+            )
         self._ensure_oci_components(session)
 
         async def permission_handler(
@@ -6423,7 +6427,10 @@ class HarnessRuntimeService:
             if isinstance(raw_files, dict):
                 for name, content in raw_files.items():
                     if isinstance(content, str) and name in {
-                        "execution.json", "source.txt", "stdout.txt", "stderr.txt"
+                        "execution.json",
+                        "source.txt",
+                        "stdout.txt",
+                        "stderr.txt",
                     }:
                         (isolated_workspace / name).write_text(
                             content, encoding="utf-8", errors="replace"

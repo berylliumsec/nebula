@@ -4,13 +4,11 @@ Nebula 3 releases are tag-driven and never modify release source. Create a synch
 
 The installed command contract is release-blocking: `nebula` launches the
 native desktop, while `nebula-core` provides administration and diagnostics.
-The `nebula3` Poetry entry point is a source-checkout compatibility alias and is
-not an end-user launcher. Promotion smoke tests must exercise both installed
-commands.
+Promotion smoke tests must exercise both installed commands.
 
-Release builds install the locked Core boundary with `poetry install --without
-legacy,legacy-dev --with dev`; neither the PyQt application nor its pytest
-plugin is present in the freezer environment.
+Release builds install the locked Core boundary with `poetry install --with
+dev`; package and installer audits reject GUI bindings and heavy in-process
+model stacks from the freezer environment.
 
 The protected `desktop-release` GitHub environment must define:
 

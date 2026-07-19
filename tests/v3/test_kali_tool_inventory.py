@@ -73,9 +73,7 @@ Status: install ok installed
         "hashcat": ["hashcat"],
         "nmap": ["nmap"],
     }
-    runtime_binaries = {
-        item["name"]: item for item in manifest["runtime_binaries"]
-    }
+    runtime_binaries = {item["name"]: item for item in manifest["runtime_binaries"]}
     assert set(inventory.REQUIRED_AUTOMATION_BINARIES).issubset(runtime_binaries)
     assert runtime_binaries["rg"]["path"].endswith("/rg")
     assert runtime_binaries["python3"]["version"]

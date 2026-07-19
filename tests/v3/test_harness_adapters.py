@@ -259,7 +259,7 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
                             "risk_class": "workspace_write",
                             "network_access": False,
                         }
-                    }
+                    },
                 }
             },
         )

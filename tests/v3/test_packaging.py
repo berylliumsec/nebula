@@ -27,19 +27,14 @@ ROOT = Path(__file__).resolve().parents[2]
 CURRENT_VERSION = (ROOT / "NEBULA3_VERSION").read_text(encoding="utf-8").strip()
 
 
-def test_nebula3_version_is_synchronized_without_changing_legacy_version():
+def test_nebula3_version_is_synchronized_across_every_package():
     assert check_versions(ROOT, expected=CURRENT_VERSION) == CURRENT_VERSION
-    with (ROOT / "pyproject.toml").open("rb") as stream:
-        project = tomli.load(stream)
-    assert project["tool"]["poetry"]["version"].startswith("2.")
 
 
 def test_native_launcher_and_admin_command_contract():
     with (ROOT / "pyproject.toml").open("rb") as stream:
         scripts = tomli.load(stream)["tool"]["poetry"]["scripts"]
-    assert scripts["nebula"] == "nebula.nebula:main"
-    assert scripts["nebula-core"] == "nebula.v3.cli:main"
-    assert scripts["nebula3"] == scripts["nebula-core"]
+    assert scripts == {"nebula-core": "nebula.v3.cli:main"}
 
     linux_launcher = (ROOT / "packaging/linux/nebula").read_text(encoding="utf-8")
     assert 'exec /usr/bin/nebula-ui "$@"' in linux_launcher
@@ -48,6 +43,20 @@ def test_native_launcher_and_admin_command_contract():
     cask = (ROOT / "packaging/homebrew/nebula.rb.in").read_text(encoding="utf-8")
     assert 'Contents/MacOS/nebula-ui", target: "nebula"' in cask
     assert 'Contents/MacOS/nebula-core", target: "nebula-core"' in cask
+
+
+def test_python_source_tree_contains_only_core_namespace():
+    package_root = ROOT / "src/nebula"
+    unexpected = sorted(
+        path.name
+        for path in package_root.iterdir()
+        if path.name not in {"__init__.py", "__pycache__", "v3"}
+    )
+    assert unexpected == []
+
+
+def test_nebula2_publish_workflow_is_removed():
+    assert not (ROOT / ".github/workflows/publish.yml").exists()
 
 
 def test_version_cli_supports_release_check_contract():
@@ -93,6 +102,10 @@ def _version_fixture(root: Path) -> None:
     (root / "src/nebula/v3").mkdir(parents=True)
     (root / "ui/src-tauri").mkdir(parents=True)
     (root / "NEBULA3_VERSION").write_text("3.0.0-alpha.1\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text(
+        '[tool.poetry]\nname = "nebula-ai"\nversion = "3.0.0-alpha.1"\n',
+        encoding="utf-8",
+    )
     (root / "src/nebula/v3/version.py").write_text(
         '__version__ = "3.0.0-alpha.1"\n', encoding="utf-8"
     )
@@ -141,11 +154,10 @@ def test_version_check_reports_all_mismatched_sources(tmp_path):
         check_versions(tmp_path)
 
 
-def test_runtime_dependency_boundary_keeps_legacy_stacks_out_of_main():
+def test_runtime_dependency_boundary_rejects_removed_stacks():
     with (ROOT / "pyproject.toml").open("rb") as stream:
         project = tomli.load(stream)["tool"]["poetry"]
     runtime = {name.lower() for name in project["dependencies"]}
-    legacy = {name.lower() for name in project["group"]["legacy"]["dependencies"]}
     assert {
         "fastapi",
         "sqlalchemy",
@@ -156,12 +168,9 @@ def test_runtime_dependency_boundary_keeps_legacy_stacks_out_of_main():
         "reportlab",
         "pillow",
     } <= runtime
-    assert {"pyqt6", "torch", "transformers", "chromadb"} <= legacy
     assert not ({"pyqt6", "torch", "transformers", "chromadb"} & runtime)
-    assert project["group"]["legacy"]["optional"] is False
-    assert "pytest-qt" in {
-        name.lower() for name in project["group"]["legacy-dev"]["dependencies"]
-    }
+    assert "legacy" not in project.get("group", {})
+    assert "legacy-dev" not in project.get("group", {})
     assert "pytest-qt" not in {
         name.lower() for name in project["group"]["dev"]["dependencies"]
     }
@@ -282,9 +291,9 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
 
 
 @pytest.mark.parametrize(
-    "forbidden", ["PyQt6.QtCore", "torch", "_pytest.outcomes", "nebula.MainWindow"]
+    "forbidden", ["PyQt6.QtCore", "PySide6.QtCore", "torch", "_pytest.outcomes"]
 )
-def test_artifact_member_audit_rejects_legacy_or_heavy_payload(forbidden):
+def test_artifact_member_audit_rejects_gui_or_heavy_payload(forbidden):
     with pytest.raises(ArtifactAuditError, match="forbidden members"):
         validate_members(
             {

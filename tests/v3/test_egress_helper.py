@@ -5,7 +5,12 @@ from nebula.v3 import egress_helper
 
 
 def _dns_name(value: str) -> bytes:
-    return b"".join(bytes([len(label)]) + label.encode("ascii") for label in value.split(".")) + b"\0"
+    return (
+        b"".join(
+            bytes([len(label)]) + label.encode("ascii") for label in value.split(".")
+        )
+        + b"\0"
+    )
 
 
 def _query(name: str) -> bytes:
@@ -21,11 +26,7 @@ def _response(name: str, address: str, *, cname: str | None = None) -> bytes:
     answers = b""
     if cname is not None:
         encoded = _dns_name(cname)
-        answers += (
-            b"\xc0\x0c"
-            + struct.pack("!HHIH", 5, 1, 60, len(encoded))
-            + encoded
-        )
+        answers += b"\xc0\x0c" + struct.pack("!HHIH", 5, 1, 60, len(encoded)) + encoded
         owner = _dns_name(cname)
     else:
         owner = b"\xc0\x0c"
@@ -87,9 +88,7 @@ def test_policy_dns_opens_only_configured_ports_for_public_answers(monkeypatch):
 
 
 def test_policy_dns_blocks_private_rebinding_unless_cidr_is_explicit(monkeypatch):
-    private = _response(
-        "api.example.test", "10.20.30.40", cname="edge.cdn.example"
-    )
+    private = _response("api.example.test", "10.20.30.40", cname="edge.cdn.example")
     denied = _resolver(monkeypatch, domains=["api.example.test"])
     denied._forward = lambda _request: private  # type: ignore[method-assign]
     monkeypatch.setattr(egress_helper, "_install_rule", lambda *_args: None)
@@ -112,9 +111,7 @@ def test_policy_dns_blocks_private_rebinding_unless_cidr_is_explicit(monkeypatch
 
 
 def test_policy_dns_stays_closed_until_the_session_grant_is_enabled(monkeypatch):
-    resolver = _resolver(
-        monkeypatch, domains=["api.example.test"], enabled=False
-    )
+    resolver = _resolver(monkeypatch, domains=["api.example.test"], enabled=False)
     assert _rcode(resolver.resolve(_query("api.example.test"))) == 5
 
     resolver.enable()

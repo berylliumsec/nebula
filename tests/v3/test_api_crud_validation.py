@@ -175,9 +175,10 @@ def test_generic_harness_create_allows_only_provided_kinds(api):
     )
 
     assert unsupported.status_code == 422
-    assert "harness kind 'claude_agent_sdk' is not provided" in unsupported.json()[
-        "detail"
-    ]
+    assert (
+        "harness kind 'claude_agent_sdk' is not provided"
+        in unsupported.json()["detail"]
+    )
     assert store.count(HarnessProfile) == 0
 
     supported = client.post(

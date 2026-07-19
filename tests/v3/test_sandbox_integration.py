@@ -75,9 +75,7 @@ print('x' * 70000)
         assert all(0 < len(payload) <= 32 * 1024 for _, payload in chunks)
 
         followup = request.model_copy(
-            update={
-                "command": ["/bin/bash", "--noprofile", "--norc"]
-            }
+            update={"command": ["/bin/bash", "--noprofile", "--norc"]}
         )
         second = await runner.run_stream(
             followup,

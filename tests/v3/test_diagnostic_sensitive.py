@@ -39,7 +39,9 @@ def test_sensitive_detail_is_authenticated_encrypted_bounded_and_expires(
         trust_injected_backend=True,
         now=lambda: now[0],
     )
-    detail = "transport fd=9 Bearer top-secret-token-value password=canary-sensitive-detail"
+    detail = (
+        "transport fd=9 Bearer top-secret-token-value password=canary-sensitive-detail"
+    )
 
     capture = store.capture(
         "err_encrypted",

@@ -851,7 +851,7 @@ class ExecutionService:
                     "selected source does not match its reviewed SHA-256",
                 )
             source = request.source
-        return request.source, canonical
+        return source, canonical
 
     async def _network_snapshot(
         self, engagement_id: str, request: ExecutionNetworkRequest

@@ -197,8 +197,8 @@ def _answers(
 ) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
     if len(packet) < 12:
         raise ValueError("truncated DNS response")
-    _identifier, flags, questions, answer_count, _authority, _additional = struct.unpack(
-        "!HHHHHH", packet[:12]
+    _identifier, flags, questions, answer_count, _authority, _additional = (
+        struct.unpack("!HHHHHH", packet[:12])
     )
     if not flags & 0x8000 or questions != 1:
         raise ValueError("invalid DNS response")
@@ -228,7 +228,11 @@ def _answers(
     for _ in range(len(records) + 1):
         changed = False
         for owner, record_type, data in records:
-            if record_type == 5 and owner in permitted_names and data not in permitted_names:
+            if (
+                record_type == 5
+                and owner in permitted_names
+                and data not in permitted_names
+            ):
                 assert isinstance(data, str)
                 permitted_names.add(data)
                 changed = True
@@ -248,9 +252,10 @@ def _answers(
 def _error_response(request: bytes, question_end: int, code: int) -> bytes:
     identifier, flags = struct.unpack("!HH", request[:4])
     response_flags = 0x8000 | (flags & 0x0100) | 0x0080 | code
-    return struct.pack("!HHHHHH", identifier, response_flags, 1, 0, 0, 0) + request[
-        12:question_end
-    ]
+    return (
+        struct.pack("!HHHHHH", identifier, response_flags, 1, 0, 0, 0)
+        + request[12:question_end]
+    )
 
 
 def _upstream_resolvers() -> list[str]:
@@ -320,9 +325,13 @@ class PolicyResolver:
         last_error: OSError | None = None
         for upstream in self.upstream:
             family = socket.AF_INET6 if ":" in upstream else socket.AF_INET
-            destination = (upstream, DNS_PORT, 0, 0) if family == socket.AF_INET6 else (
-                upstream,
-                DNS_PORT,
+            destination = (
+                (upstream, DNS_PORT, 0, 0)
+                if family == socket.AF_INET6
+                else (
+                    upstream,
+                    DNS_PORT,
+                )
             )
             try:
                 with socket.socket(family, socket.SOCK_DGRAM) as client:

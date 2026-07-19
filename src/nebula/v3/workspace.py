@@ -104,7 +104,13 @@ class WorkspaceRenameRequest(NebulaModel):
     @field_validator("new_name")
     @classmethod
     def valid_name(cls, value: str) -> str:
-        if not value.strip() or "/" in value or "\\" in value or "\0" in value or value in {".", ".."}:
+        if (
+            not value.strip()
+            or "/" in value
+            or "\\" in value
+            or "\0" in value
+            or value in {".", ".."}
+        ):
             raise ValueError("new name must be one non-empty workspace path segment")
         return value
 
@@ -629,20 +635,30 @@ class WorkspaceService:
     ) -> WorkspaceMutationResult:
         self.store.get(Engagement, engagement_id)
         relative = _relative_parts(request.path)
-        if "/" in request.new_name or "\\" in request.new_name or request.new_name in {".", ".."}:
+        if (
+            "/" in request.new_name
+            or "\\" in request.new_name
+            or request.new_name in {".", ".."}
+        ):
             raise ExecutionServiceError(
-                "workspace_name_invalid", "new name must be one workspace path segment", status_code=422
+                "workspace_name_invalid",
+                "new name must be one workspace path segment",
+                status_code=422,
             )
         parent = self._open_directory(engagement_id, relative[:-1])
         try:
             os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
             try:
                 os.stat(request.new_name, dir_fd=parent, follow_symlinks=False)
-            except FileNotFoundError:  # diagnostic-expected: absence confirms the rename target is available
+            except (
+                FileNotFoundError
+            ):  # diagnostic-expected: absence confirms the rename target is available
                 pass
             else:
                 raise ExecutionServiceError(
-                    "workspace_file_exists", "a workspace entry already has that name", status_code=409
+                    "workspace_file_exists",
+                    "a workspace entry already has that name",
+                    status_code=409,
                 )
             os.rename(
                 relative[-1], request.new_name, src_dir_fd=parent, dst_dir_fd=parent
@@ -650,7 +666,9 @@ class WorkspaceService:
             os.fsync(parent)
         except FileNotFoundError as exc:
             raise ExecutionServiceError(
-                "workspace_path_missing", "workspace entry does not exist", status_code=404
+                "workspace_path_missing",
+                "workspace entry does not exist",
+                status_code=404,
             ) from exc
         finally:
             os.close(parent)
@@ -683,7 +701,9 @@ class WorkspaceService:
             os.fsync(parent)
         except FileNotFoundError as exc:
             raise ExecutionServiceError(
-                "workspace_path_missing", "workspace entry does not exist", status_code=404
+                "workspace_path_missing",
+                "workspace entry does not exist",
+                status_code=404,
             ) from exc
         finally:
             os.close(parent)

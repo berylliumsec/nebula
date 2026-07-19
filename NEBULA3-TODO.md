@@ -1,7 +1,7 @@
 # Nebula 3 release readiness and parity backlog
 
 This file tracks only work that remains release-gated after the zero-setup
-Workbench and Nebula 2 parity implementation. It replaces the obsolete phased
+Workbench parity implementation. It replaces the obsolete phased
 plan for code rendering, reviewed execution, notes, and PDF export; those
 capabilities already have implementation and tests and must not be rebuilt.
 
@@ -107,13 +107,12 @@ and deliver each as a separate, tested project:
 ## Version and command contract
 
 Nebula 3 version sources are synchronized through `NEBULA3_VERSION` and
-`python scripts/nebula3_version.py`; the Nebula 2 Python package retains its own
-2.x version. Native installers are the canonical user path:
+`python scripts/nebula3_version.py`, including the Core Poetry build manifest.
+Native installers are the canonical user path:
 
 - `nebula` opens the desktop application.
 - `nebula-core` provides doctor, migrate, import, export, headless serve, and
   other administration commands.
-- `poetry run nebula3` remains a source-checkout compatibility alias only.
 
 See [Nebula 3](docs/NEBULA3.md),
 [Migrating from Nebula 2](docs/MIGRATING-2-TO-3.md), and

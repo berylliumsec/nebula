@@ -66,7 +66,7 @@ from .terminal_history import TerminalCommandRow
 from .version import build_metadata
 
 app = typer.Typer(
-    name="nebula3",
+    name="nebula-core",
     help="Nebula 3 local-first security engagement control plane.",
     no_args_is_help=True,
 )
@@ -473,7 +473,6 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-
 @app.command("import-2x")
 def import_2x(
     source: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
@@ -485,7 +484,7 @@ def import_2x(
         ),
     ] = False,
 ) -> None:
-    """Import a Nebula 2.x engagement side-by-side without modifying it."""
+    """Import a Nebula 2.x engagement without modifying it."""
 
     _, store, artifacts = _services(data_dir)
     report = import_2x_engagement(

@@ -1,7 +1,7 @@
 # Nebula 3
 
-Nebula 3 is the native, local-first desktop workbench. The PyQt-based Nebula 2
-application remains a separately versioned maintenance distribution.
+Nebula 3 is the native, local-first desktop workbench and the only supported
+Nebula application.
 
 Structured Error-by-default logging, correlation IDs, the Diagnostics viewer,
 and redacted support bundles are documented in the
@@ -13,7 +13,7 @@ and redacted support bundles are documented in the
 - SQLite WAL locally and a PostgreSQL-compatible storage URL.
 - Append-only, monotonically sequenced run events with authenticated replay.
 - SHA-256 content-addressed artifacts and immutable execution evidence.
-- Side-by-side Nebula 2.x import with source manifests and rollback.
+- Read-only Nebula 2.x data import with source manifests and rollback.
 - Versioned REST/OpenAPI resources and authenticated WebSockets.
 - Provider-neutral OpenAI Responses, Anthropic, Gemini, Bedrock, and
   OpenAI-compatible adapters.
@@ -40,17 +40,16 @@ Nebula is packaged as one application and required imports fail immediately if
 the installation is incomplete.
 
 ```bash
-poetry install --without legacy,legacy-dev --with dev
+poetry install --with dev
 poetry run nebula-core doctor
 poetry run nebula-core migrate
 poetry run nebula-core serve --host 127.0.0.1 --port 8765
 ```
 
-Run the Nebula 3 test boundary without installing or importing the legacy Qt
-application:
+Run the Nebula 3 backend test boundary:
 
 ```bash
-poetry run python scripts/test_nebula3.py
+poetry run pytest -q tests/v3
 ```
 
 The server prints a generated bearer token. Remote binding requires an explicit
@@ -73,9 +72,9 @@ available loopback port, starts Core, serves the built workspace, and transfers
 the generated bearer token through the URL fragment. Running Vite alone starts
 only the frontend and leaves durable and command-runtime controls offline.
 
-`poetry run nebula3` remains a compatibility alias. Native-install users launch
-the desktop with `nebula`; `nebula-core` is reserved for diagnostics,
-migrations, headless serving, imports, exports, and other administration.
+Native-install users launch the desktop with `nebula`; `nebula-core` is reserved
+for diagnostics, migrations, headless serving, imports, exports, and other
+administration.
 
 The browser token is carried in the URL fragment, consumed into memory, and
 removed immediately. Tauri sends its 256-bit one-time token through the Core
@@ -86,8 +85,8 @@ process's stdin instead of a URL or process argument.
 End users install one native application; they do not install Python, Poetry,
 Node, npm, Rust, Cargo, or a compiler. The Tauri bundle contains the browser
 workspace and a sibling `nebula-core` one-file executable with Python 3.12,
-migrations, notices, and all mandatory Core dependencies. Nebula 2 and PyQt are
-structurally excluded from this build.
+migrations, notices, and all mandatory Core dependencies. Package audits reject
+GUI bindings and in-process model stacks from this build.
 
 Release tags use the form `nebula-v3.x.y`. The protected release workflow builds
 native macOS arm64/x64 DMGs and Linux x64 DEB/AppImage artifacts, audits their
@@ -396,8 +395,3 @@ legacy Chroma command search, and always-on AI suggestions remain deliberately
 out of the initial parity release. PostgreSQL team authorization, OIDC/RBAC,
 remote workers, A2A, signed third-party plugins, and advanced specialist
 environments remain separate projects.
-
-Nebula 2 remains a separately triggered legacy distribution. Its PyQt licensing
-review does not apply to Nebula 3 installers because the legacy dependency and
-test groups are absent from the freezer environment and a binary-content gate
-rejects legacy GUI modules.

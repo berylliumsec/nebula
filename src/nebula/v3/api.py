@@ -1399,9 +1399,7 @@ def create_app(
             return "harnesses"
         if isinstance(exc, RuntimePlatformError):
             return "sandbox"
-        if isinstance(
-            exc, (AutomationPolicyDenied, AutomationRuntimeUnavailable)
-        ):
+        if isinstance(exc, (AutomationPolicyDenied, AutomationRuntimeUnavailable)):
             return "runtime"
         if isinstance(exc, ContainerTerminalError):
             return "terminal"
@@ -4033,7 +4031,9 @@ def create_app(
         tags=["execution-ai"],
         dependencies=[Depends(require_auth)],
     )
-    async def put_post_tool_assistant(engagement_id: str, request: PostToolAssistantConfig) -> PostToolAssistantConfig:
+    async def put_post_tool_assistant(
+        engagement_id: str, request: PostToolAssistantConfig
+    ) -> PostToolAssistantConfig:
         return require_execution_ai_service().set_config(engagement_id, request)
 
     @app.get(
@@ -4783,13 +4783,19 @@ def create_app(
         engagement_id: str, request: ScopeImportCreateRequest
     ) -> ScopeImport:
         if request.engagement_id != engagement_id:
-            raise HTTPException(status_code=422, detail="engagement_id does not match route")
+            raise HTTPException(
+                status_code=422, detail="engagement_id does not match route"
+            )
         try:
             content = base64.b64decode(request.content_base64, validate=True)
         except (binascii.Error, ValueError) as exc:
-            raise HTTPException(status_code=422, detail="content_base64 must be valid base64") from exc
+            raise HTTPException(
+                status_code=422, detail="content_base64 must be valid base64"
+            ) from exc
         if len(content) > MAX_DOCUMENT_BYTES:
-            raise HTTPException(status_code=413, detail="document exceeds the 20 MiB limit")
+            raise HTTPException(
+                status_code=413, detail="document exceeds the 20 MiB limit"
+            )
         try:
             return await require_scope_import_service().create(
                 engagement_id=engagement_id,
@@ -4815,9 +4821,7 @@ def create_app(
     )
     async def list_scope_imports(engagement_id: str) -> list[ScopeImport]:
         store.get(Engagement, engagement_id)
-        return store.list_entities(
-            ScopeImport, engagement_id=engagement_id, limit=1000
-        )
+        return store.list_entities(ScopeImport, engagement_id=engagement_id, limit=1000)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope-imports/{{scope_import_id}}",
@@ -4825,9 +4829,7 @@ def create_app(
         tags=["engagements"],
         dependencies=[Depends(require_auth)],
     )
-    async def get_scope_import(
-        engagement_id: str, scope_import_id: str
-    ) -> ScopeImport:
+    async def get_scope_import(engagement_id: str, scope_import_id: str) -> ScopeImport:
         result = store.get(ScopeImport, scope_import_id)
         if result.engagement_id != engagement_id:
             raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
@@ -5161,9 +5163,7 @@ def create_app(
         operator_id = active_operator_id()
         budget = RunBudget(
             max_concurrency=request.max_concurrency,
-            max_delegation_depth=(
-                1 if command_tools or request.mcp_server_ids else 0
-            ),
+            max_delegation_depth=(1 if command_tools or request.mcp_server_ids else 0),
             max_duration_seconds=request.max_duration_seconds,
             max_tokens=request.max_tokens,
             max_cost_usd=request.max_cost_usd,
@@ -7156,6 +7156,7 @@ def _register_crud_routes(
                     f"revision conflict: expected {if_match}, found {current.revision}"
                 )
             if model is Engagement:
+                assert isinstance(current, Engagement)
                 owned_scope: ScopePolicy | None = None
                 if current.scope_policy_id:
                     candidate = store.get(ScopePolicy, current.scope_policy_id)
@@ -7198,7 +7199,7 @@ def _register_crud_routes(
                     ]
                     if final_reports:
                         names = ", ".join(
-                            f'“{report.title}”' for report in final_reports[:3]
+                            f"“{report.title}”" for report in final_reports[:3]
                         )
                         detail = (
                             f"This note is retained because final report {names} includes it. "
@@ -7206,14 +7207,12 @@ def _register_crud_routes(
                         )
                     else:
                         names = ", ".join(
-                            f'“{report.title}”' for report in dependencies.reports[:3]
+                            f"“{report.title}”" for report in dependencies.reports[:3]
                         )
                         detail = (
                             f"Remove this note from report {names} before deleting it."
                         )
-                    raise StructuredConflictError(
-                        "note_referenced_by_report", detail
-                    )
+                    raise StructuredConflictError("note_referenced_by_report", detail)
             entity_validator.validate_delete(current)
             # Always guard the final delete with the revision we validated so a
             # concurrent update cannot be removed using stale relationship data.

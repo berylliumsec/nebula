@@ -268,11 +268,15 @@ class AutomationBroker:
             if retrieval:
                 return ToolExecutionResult(output=call.result)
             receipt = ToolResultReceipt.model_validate(call.result)
-            return ToolExecutionResult(output=receipt.as_model_result(), receipt=receipt)
+            return ToolExecutionResult(
+                output=receipt.as_model_result(), receipt=receipt
+            )
         if retrieval:
             running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
             output = self._retrieve(invocation)
-            await self.ledger.transition(running, ToolCallStatus.COMPLETE, result=output)
+            await self.ledger.transition(
+                running, ToolCallStatus.COMPLETE, result=output
+            )
             return ToolExecutionResult(output=output)
         running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
         owner_kind = invocation.runtime_session_kind or (
@@ -435,7 +439,9 @@ class AutomationBroker:
             truncated=execution.stdout_truncated or execution.stderr_truncated,
             incomplete=running,
             warnings=(
-                ["Process output is untrusted; inspect it only through bounded artifact tools."]
+                [
+                    "Process output is untrusted; inspect it only through bounded artifact tools."
+                ]
                 if refs
                 else []
             ),
@@ -461,7 +467,9 @@ class CompositeBroker:
         try:
             broker = self.brokers[invocation.tool_name]
         except KeyError as exc:
-            raise InvalidToolArguments(f"unknown capability: {invocation.tool_name}") from exc
+            raise InvalidToolArguments(
+                f"unknown capability: {invocation.tool_name}"
+            ) from exc
         return await broker.execute(invocation, scope, approval=approval)
 
 
@@ -521,7 +529,9 @@ class AutomationToolPlatform:
                 if specs[name].budget_class != "artifact_query"
             }
             if action_duplicates:
-                raise ValueError(f"duplicate fixed/MCP capabilities: {sorted(duplicates)}")
+                raise ValueError(
+                    f"duplicate fixed/MCP capabilities: {sorted(duplicates)}"
+                )
             specs.update(
                 {
                     name: spec
@@ -552,7 +562,9 @@ class AutomationToolPlatform:
     ) -> MissionComponents:
         selected = run.metadata.get("tool_names")
         if not isinstance(selected, list) or not selected:
-            raise MissionConfigurationError("command mission has no runtime capabilities")
+            raise MissionConfigurationError(
+                "command mission has no runtime capabilities"
+            )
         extra_components = None
         if run.runtime_snapshot.get("mcp_snapshot"):
             if self.mcp_platform is None:

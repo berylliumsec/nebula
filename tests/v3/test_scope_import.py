@@ -256,9 +256,12 @@ def test_scope_import_api_create_list_and_apply(tmp_path):
     assert created_response.status_code == 201
     created = created_response.json()
     assert created["status"] == "ready"
-    assert client.get(
-        f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
-    ).json()[0]["id"] == created["id"]
+    assert (
+        client.get(
+            f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
+        ).json()[0]["id"]
+        == created["id"]
+    )
     selected = [
         item["id"]
         for item in created["candidates"]

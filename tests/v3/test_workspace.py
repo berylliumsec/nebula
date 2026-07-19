@@ -187,7 +187,10 @@ def test_workspace_entry_rename_and_delete_are_bounded_and_audited(tmp_path):
         assert not (root / "renamed.txt").exists()
 
     events = store.list_operation_events(engagement.id, limit=100)
-    assert {event.event_type for event in events} >= {"workspace.renamed", "workspace.deleted"}
+    assert {event.event_type for event in events} >= {
+        "workspace.renamed",
+        "workspace.deleted",
+    }
 
 
 def test_reset_refuses_a_queued_execution(tmp_path):
@@ -240,11 +243,17 @@ def test_reset_status_reports_active_execution_and_stable_recovery_code(tmp_path
         source_sha256="a" * 64,
         source_artifact_id="source",
         runtime=ExecutionRuntimeSnapshot(
-            language="python", interpreter="/usr/bin/python3", arguments=["-I", "-B"],
-            runtime_digest="sha256:" + "b" * 64, image="sha256:" + "c" * 64,
-            runner_profile_id="runner", runner_profile_revision=1,
-            runner_runtime=RunnerRuntime.PODMAN, runner_isolation=RunnerIsolation.ROOTLESS,
-            runner_executable="/usr/bin/podman", runner_platform="linux/amd64",
+            language="python",
+            interpreter="/usr/bin/python3",
+            arguments=["-I", "-B"],
+            runtime_digest="sha256:" + "b" * 64,
+            image="sha256:" + "c" * 64,
+            runner_profile_id="runner",
+            runner_profile_revision=1,
+            runner_runtime=RunnerRuntime.PODMAN,
+            runner_isolation=RunnerIsolation.ROOTLESS,
+            runner_executable="/usr/bin/podman",
+            runner_platform="linux/amd64",
         ),
         preview_fingerprint="d" * 64,
         request_fingerprint="e" * 64,

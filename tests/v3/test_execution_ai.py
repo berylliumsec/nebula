@@ -195,30 +195,46 @@ def _fixture(tmp_path, *, local: bool = True, strict: bool = True):
 
 @async_test
 async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path):
-    store, _artifacts, engagement, execution, profile, evidence, provider, service = _fixture(tmp_path)
-    config = service.set_config(engagement.id, PostToolAssistantConfig(
-        suggest_next_steps=True, take_notes=True, provider_id=profile.id, model="model-1"
-    ))
+    store, _artifacts, engagement, execution, profile, evidence, provider, service = (
+        _fixture(tmp_path)
+    )
+    config = service.set_config(
+        engagement.id,
+        PostToolAssistantConfig(
+            suggest_next_steps=True,
+            take_notes=True,
+            provider_id=profile.id,
+            model="model-1",
+        ),
+    )
     assert service.get_config(engagement.id) == config
-    provider.response_text = json.dumps({
-        "title": "AI-generated execution note",
-        "summary": "The command completed.",
-        "observations": ["stdout contained hello"],
-        "potential_findings": [],
-        "evidence_ids": [evidence.id],
-        "next_step": {
-            "title": "Inspect the service",
-            "rationale": "Confirm the observed response.",
-            "command": "curl -I https://example.test",
-            "language": "bash",
-            "network_target": "example.test",
-            "network_ports": [443],
-        },
-    })
-    draft = await service.generate(execution.id, DraftNoteRequest(
-        provider_id=profile.id, model="model-1", suggest_next_steps=True,
-        take_notes=True, automatic=True,
-    ))
+    provider.response_text = json.dumps(
+        {
+            "title": "AI-generated execution note",
+            "summary": "The command completed.",
+            "observations": ["stdout contained hello"],
+            "potential_findings": [],
+            "evidence_ids": [evidence.id],
+            "next_step": {
+                "title": "Inspect the service",
+                "rationale": "Confirm the observed response.",
+                "command": "curl -I https://example.test",
+                "language": "bash",
+                "network_target": "example.test",
+                "network_ports": [443],
+            },
+        }
+    )
+    draft = await service.generate(
+        execution.id,
+        DraftNoteRequest(
+            provider_id=profile.id,
+            model="model-1",
+            suggest_next_steps=True,
+            take_notes=True,
+            automatic=True,
+        ),
+    )
     await service._tasks[draft.id]
     result = store.get(GeneratedDraft, draft.id)
     assert result.status == GeneratedDraftStatus.ACCEPTED, result.error_detail
@@ -232,42 +248,67 @@ async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path
 
 
 def test_post_tool_config_requires_runtime_before_enablement(tmp_path):
-    _store, _artifacts, engagement, _execution, _profile, _evidence, _provider, service = _fixture(tmp_path)
+    (
+        _store,
+        _artifacts,
+        engagement,
+        _execution,
+        _profile,
+        _evidence,
+        _provider,
+        service,
+    ) = _fixture(tmp_path)
     with pytest.raises(ExecutionAIError) as refusal:
-        service.set_config(engagement.id, PostToolAssistantConfig(suggest_next_steps=True))
+        service.set_config(
+            engagement.id, PostToolAssistantConfig(suggest_next_steps=True)
+        )
     assert refusal.value.code == "configuration_invalid"
     assert service.get_config(engagement.id).suggest_next_steps is False
 
 
 @async_test
 async def test_post_tool_assistant_analyzes_completed_mission_output(tmp_path):
-    store, _artifacts, engagement, _execution, profile, _evidence, provider, service = _fixture(tmp_path)
-    run = store.create(AgentRun(
-        engagement_id=engagement.id,
-        objective="Review the target",
-        status=RunStatus.COMPLETE,
-        metadata={"final_summary": "Mission found an exposed service."},
-    ))
-    store.create(AgentAttempt(
-        engagement_id=engagement.id,
-        run_id=run.id,
-        task_id="task-1",
-        agent_role="researcher",
-        attempt_number=1,
-        status=TaskStatus.COMPLETE,
-        output={"summary": "Port 443 responded."},
-    ))
-    provider.response_text = json.dumps({
-        "title": "Mission note",
-        "summary": "The mission completed.",
-        "observations": ["Port 443 responded."],
-        "potential_findings": [],
-        "evidence_ids": [],
-        "next_step": None,
-    })
-    draft = await service.generate_mission(run.id, DraftNoteRequest(
-        provider_id=profile.id, model="model-1", take_notes=True, automatic=True,
-    ))
+    store, _artifacts, engagement, _execution, profile, _evidence, provider, service = (
+        _fixture(tmp_path)
+    )
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Review the target",
+            status=RunStatus.COMPLETE,
+            metadata={"final_summary": "Mission found an exposed service."},
+        )
+    )
+    store.create(
+        AgentAttempt(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            task_id="task-1",
+            agent_role="researcher",
+            attempt_number=1,
+            status=TaskStatus.COMPLETE,
+            output={"summary": "Port 443 responded."},
+        )
+    )
+    provider.response_text = json.dumps(
+        {
+            "title": "Mission note",
+            "summary": "The mission completed.",
+            "observations": ["Port 443 responded."],
+            "potential_findings": [],
+            "evidence_ids": [],
+            "next_step": None,
+        }
+    )
+    draft = await service.generate_mission(
+        run.id,
+        DraftNoteRequest(
+            provider_id=profile.id,
+            model="model-1",
+            take_notes=True,
+            automatic=True,
+        ),
+    )
     await service._tasks[draft.id]
     result = store.get(GeneratedDraft, draft.id)
     assert result.status == GeneratedDraftStatus.ACCEPTED, result.error_detail
@@ -281,55 +322,71 @@ async def test_post_tool_assistant_analyzes_completed_mission_output(tmp_path):
 
 @async_test
 async def test_post_tool_assistant_supports_tool_disabled_harness_analysis(tmp_path):
-    store, artifacts, engagement, execution, _profile, evidence, _provider, _service = _fixture(tmp_path)
-    harness = store.create(HarnessProfile(
-        name="Local Codex",
-        kind=HarnessKind.CODEX_APP_SERVER,
-        executable="/usr/bin/codex",
-        default_model="model-1",
-        privacy=ProviderPrivacy(local_only=True),
-    ))
-    runtime = StubHarnessRuntime(json.dumps({
-        "title": "Harness note",
-        "summary": "Execution completed.",
-        "observations": ["stdout contained hello"],
-        "potential_findings": [],
-        "evidence_ids": [evidence.id],
-        "next_step": {
-            "title": "Inspect output",
-            "rationale": "Confirm the result.",
-            "command": "printf '%s\\n' hello",
-            "language": "bash",
-            "network_ports": [],
-        },
-    }))
+    store, artifacts, engagement, execution, _profile, evidence, _provider, _service = (
+        _fixture(tmp_path)
+    )
+    harness = store.create(
+        HarnessProfile(
+            name="Local Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/usr/bin/codex",
+            default_model="model-1",
+            privacy=ProviderPrivacy(local_only=True),
+        )
+    )
+    runtime = StubHarnessRuntime(
+        json.dumps(
+            {
+                "title": "Harness note",
+                "summary": "Execution completed.",
+                "observations": ["stdout contained hello"],
+                "potential_findings": [],
+                "evidence_ids": [evidence.id],
+                "next_step": {
+                    "title": "Inspect output",
+                    "rationale": "Confirm the result.",
+                    "command": "printf '%s\\n' hello",
+                    "language": "bash",
+                    "network_ports": [],
+                },
+            }
+        )
+    )
     service = ExecutionAIService(
         store=store,
         artifact_store=artifacts,
         harness_runtime=runtime,  # type: ignore[arg-type]
     )
-    config = service.set_config(engagement.id, PostToolAssistantConfig(
-        suggest_next_steps=True,
-        backend_kind="harness",
-        harness_profile_id=harness.id,
-        model="model-1",
-    ))
+    config = service.set_config(
+        engagement.id,
+        PostToolAssistantConfig(
+            suggest_next_steps=True,
+            backend_kind="harness",
+            harness_profile_id=harness.id,
+            model="model-1",
+        ),
+    )
     assert config.backend_kind == "harness"
-    draft = await service.generate(execution.id, DraftNoteRequest(
-        backend_kind="harness",
-        harness_profile_id=harness.id,
-        model="model-1",
-        suggest_next_steps=True,
-        take_notes=False,
-        automatic=True,
-    ))
+    draft = await service.generate(
+        execution.id,
+        DraftNoteRequest(
+            backend_kind="harness",
+            harness_profile_id=harness.id,
+            model="model-1",
+            suggest_next_steps=True,
+            take_notes=False,
+            automatic=True,
+        ),
+    )
     await service._tasks[draft.id]
     result = store.get(GeneratedDraft, draft.id)
     assert result.status == GeneratedDraftStatus.READY
     assert result.content and result.content.next_step.command.startswith("printf")
     assert result.metadata["backend_kind"] == "harness"
     assert runtime.requests[0]["profile_id"] == harness.id
-    assert "normal project container tools are available" in runtime.requests[0]["prompt"]
+    assert (
+        "normal project container tools are available" in runtime.requests[0]["prompt"]
+    )
     assert "hello" in runtime.requests[0]["files"]["stdout.txt"]
     assert "anothersecret123" not in runtime.requests[0]["files"]["stdout.txt"]
 

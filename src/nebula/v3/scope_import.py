@@ -33,7 +33,13 @@ from .knowledge import (
     safe_filename,
 )
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
-from .providers import ModelMessage, ModelProvider, ModelRequest, ProviderError, provider_from_profile
+from .providers import (
+    ModelMessage,
+    ModelProvider,
+    ModelRequest,
+    ProviderError,
+    provider_from_profile,
+)
 from .storage import ConflictError, NebulaStore
 
 PROMPT_VERSION = "scope-import/v1"
@@ -56,7 +62,9 @@ class ScopeImportCreateRequest(NebulaModel):
     model: str = Field(min_length=1, max_length=500)
     filename: str = Field(min_length=1, max_length=1024)
     media_type: str | None = Field(default=None, max_length=200)
-    content_base64: str = Field(min_length=1, max_length=4 * ((MAX_DOCUMENT_BYTES + 2) // 3))
+    content_base64: str = Field(
+        min_length=1, max_length=4 * ((MAX_DOCUMENT_BYTES + 2) // 3)
+    )
     cloud_confirmed: bool = False
 
 
@@ -79,7 +87,9 @@ class _ProposedCandidate(NebulaModel):
 
 
 class _ExtractionOutput(NebulaModel):
-    candidates: list[_ProposedCandidate] = Field(default_factory=list, max_length=MAX_CANDIDATES)
+    candidates: list[_ProposedCandidate] = Field(
+        default_factory=list, max_length=MAX_CANDIDATES
+    )
     warnings: list[str] = Field(default_factory=list, max_length=200)
 
 
@@ -89,7 +99,9 @@ class ScopeImportService:
         *,
         store: NebulaStore,
         artifact_store: ArtifactStore,
-        provider_factory: Callable[[ProviderProfile], ModelProvider] = provider_from_profile,
+        provider_factory: Callable[
+            [ProviderProfile], ModelProvider
+        ] = provider_from_profile,
         operator_id: Callable[[], str] = lambda: "local-operator",
     ) -> None:
         self.store = store
@@ -252,7 +264,11 @@ class ScopeImportService:
     ) -> ScopeImportApplyResult:
         scope_import = self.store.get(ScopeImport, scope_import_id)
         if scope_import.status != ScopeImportStatus.READY:
-            raise ScopeImportError("import_not_ready", "scope import is not ready to apply", status_code=409)
+            raise ScopeImportError(
+                "import_not_ready",
+                "scope import is not ready to apply",
+                status_code=409,
+            )
         engagement = self.store.get(Engagement, scope_import.engagement_id)
         current_scope = (
             self.store.get(ScopePolicy, engagement.scope_policy_id)
@@ -271,9 +287,16 @@ class ScopeImportService:
         for candidate_id in request.candidate_ids:
             candidate = by_id.get(candidate_id)
             if candidate is None:
-                raise ScopeImportError("invalid_selection", f"unknown candidate ID: {candidate_id}")
-            if candidate.classification != ScopeImportClassification.ALLOWED or not candidate.normalized_value:
-                raise ScopeImportError("invalid_selection", "only valid allowed candidates may be applied")
+                raise ScopeImportError(
+                    "invalid_selection", f"unknown candidate ID: {candidate_id}"
+                )
+            if (
+                candidate.classification != ScopeImportClassification.ALLOWED
+                or not candidate.normalized_value
+            ):
+                raise ScopeImportError(
+                    "invalid_selection", "only valid allowed candidates may be applied"
+                )
             selected.append(candidate)
         cidrs = [
             item.normalized_value
@@ -360,7 +383,11 @@ class ScopeImportService:
     def discard(self, scope_import_id: str) -> ScopeImport:
         scope_import = self.store.get(ScopeImport, scope_import_id)
         if scope_import.status != ScopeImportStatus.READY:
-            raise ScopeImportError("import_not_ready", "only a ready scope import can be discarded", status_code=409)
+            raise ScopeImportError(
+                "import_not_ready",
+                "only a ready scope import can be discarded",
+                status_code=409,
+            )
         return self.store.update(
             ScopeImport,
             scope_import.id,
@@ -380,19 +407,32 @@ class ScopeImportService:
         cloud_confirmed: bool,
     ) -> None:
         if not profile.enabled:
-            raise ScopeImportError("provider_unavailable", "provider profile is disabled")
+            raise ScopeImportError(
+                "provider_unavailable", "provider profile is disabled"
+            )
         if not profile.capabilities.strict_structured_output:
             raise ScopeImportError(
                 "structured_output_required",
                 "scope import requires a provider with strict structured output",
             )
         if profile.model_allowlist and model not in profile.model_allowlist:
-            raise ScopeImportError("model_not_allowed", f"model {model!r} is outside the provider allowlist")
+            raise ScopeImportError(
+                "model_not_allowed",
+                f"model {model!r} is outside the provider allowlist",
+            )
         if not profile.is_local:
             if not profile.privacy.permits_sensitive_data:
-                raise ScopeImportError("privacy_denied", "provider profile does not permit engagement data transfer", status_code=409)
+                raise ScopeImportError(
+                    "privacy_denied",
+                    "provider profile does not permit engagement data transfer",
+                    status_code=409,
+                )
             if not cloud_confirmed:
-                raise ScopeImportError("cloud_confirmation_required", "explicit confirmation is required to send the scope document to a cloud provider", status_code=428)
+                raise ScopeImportError(
+                    "cloud_confirmation_required",
+                    "explicit confirmation is required to send the scope document to a cloud provider",
+                    status_code=428,
+                )
         try:
             validate_engagement_provider_privacy(
                 self.store, engagement, self.provider_factory(profile)
@@ -407,20 +447,29 @@ def _document_chunks(document: ExtractedDocument) -> list[str]:
     current_size = 2
     for index, section in enumerate(document.sections, start=1):
         item = {
-            "location": section.location or (f"page {section.page}" if section.page else f"section {index}"),
+            "location": section.location
+            or (f"page {section.page}" if section.page else f"section {index}"),
             "text": section.text,
         }
         encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
         if len(encoded) > MAX_CHUNK_CHARACTERS:
-            raise DocumentTooLargeError("one document section exceeds the 40,000 character AI chunk limit")
+            raise DocumentTooLargeError(
+                "one document section exceeds the 40,000 character AI chunk limit"
+            )
         if current and current_size + len(encoded) + 1 > MAX_CHUNK_CHARACTERS:
-            chunks.append(json.dumps({"sections": current}, ensure_ascii=False, separators=(",", ":")))
+            chunks.append(
+                json.dumps(
+                    {"sections": current}, ensure_ascii=False, separators=(",", ":")
+                )
+            )
             current = []
             current_size = 2
         current.append(item)
         current_size += len(encoded) + 1
     if current:
-        chunks.append(json.dumps({"sections": current}, ensure_ascii=False, separators=(",", ":")))
+        chunks.append(
+            json.dumps({"sections": current}, ensure_ascii=False, separators=(",", ":"))
+        )
     return chunks
 
 
@@ -453,7 +502,9 @@ def _normalize_candidates(
         classification = ScopeImportClassification(item.classification)
         if item.raw_value.casefold() not in source_folded:
             classification = ScopeImportClassification.AMBIGUOUS
-            item_warnings.append("proposed value was not found verbatim in the document")
+            item_warnings.append(
+                "proposed value was not found verbatim in the document"
+            )
             warnings.append(
                 f"{item.raw_value}: proposed value was not found verbatim in the document"
             )
@@ -478,12 +529,30 @@ def _normalize_candidates(
             candidate = existing.model_copy(
                 update={
                     "classification": ScopeImportClassification.AMBIGUOUS,
-                    "warnings": list(dict.fromkeys([*existing.warnings, "conflicting scope classifications in document"])),
+                    "warnings": list(
+                        dict.fromkeys(
+                            [
+                                *existing.warnings,
+                                "conflicting scope classifications in document",
+                            ]
+                        )
+                    ),
                 }
             )
             warnings.append(f"{identity_value}: conflicting scope classifications")
-        normalized[key] = candidate if existing is None or candidate.classification == ScopeImportClassification.AMBIGUOUS else existing
-    return sorted(normalized.values(), key=lambda item: (item.target_type.value, item.normalized_value or item.raw_value)), warnings
+        normalized[key] = (
+            candidate
+            if existing is None
+            or candidate.classification == ScopeImportClassification.AMBIGUOUS
+            else existing
+        )
+    return sorted(
+        normalized.values(),
+        key=lambda item: (
+            item.target_type.value,
+            item.normalized_value or item.raw_value,
+        ),
+    ), warnings
 
 
 __all__ = [

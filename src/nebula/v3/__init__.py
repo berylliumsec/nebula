@@ -1,7 +1,7 @@
 """Nebula 3 headless platform foundations.
 
-This package is deliberately independent from the legacy Qt application.  Importing
-it must never initialize a GUI or read legacy global configuration.
+Importing this package must never initialize a GUI or read ambient global
+configuration.
 """
 
 from .domain import (

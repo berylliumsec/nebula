@@ -460,7 +460,9 @@ def _safe_archive_xml(
             raise InvalidDocumentError(f"spreadsheet is missing {name}")
         return None
     if info.file_size > MAX_EXTRACTED_CHARACTERS * 4:
-        raise DocumentTooLargeError(f"spreadsheet part {name} exceeds the extraction limit")
+        raise DocumentTooLargeError(
+            f"spreadsheet part {name} exceeds the extraction limit"
+        )
     payload = archive.read(info)
     if re.search(rb"<!\s*(?:DOCTYPE|ENTITY)\b", payload, flags=re.IGNORECASE):
         raise InvalidDocumentError("spreadsheet XML declarations are not supported")
@@ -471,14 +473,14 @@ def _extract_xlsx(data: bytes) -> tuple[ExtractedSection, ...]:
     """Read cell text and formulas from XLSX XML without executing workbook content."""
 
     spreadsheet_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    office_rel_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    office_rel_ns = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
     package_rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
     try:
         with zipfile.ZipFile(BytesIO(data)) as archive:
             workbook_xml = _safe_archive_xml(archive, "xl/workbook.xml")
-            relationships_xml = _safe_archive_xml(
-                archive, "xl/_rels/workbook.xml.rels"
-            )
+            relationships_xml = _safe_archive_xml(archive, "xl/_rels/workbook.xml.rels")
             shared_xml = _safe_archive_xml(
                 archive, "xl/sharedStrings.xml", required=False
             )
@@ -487,7 +489,9 @@ def _extract_xlsx(data: bytes) -> tuple[ExtractedSection, ...]:
             relationships = ElementTree.fromstring(relationships_xml)
             targets = {
                 relation.attrib.get("Id", ""): relation.attrib.get("Target", "")
-                for relation in relationships.findall(f"{{{package_rel_ns}}}Relationship")
+                for relation in relationships.findall(
+                    f"{{{package_rel_ns}}}Relationship"
+                )
                 if relation.attrib.get("TargetMode") != "External"
             }
             shared: list[str] = []
@@ -533,7 +537,9 @@ def _extract_xlsx(data: bytes) -> tuple[ExtractedSection, ...]:
                             )
                         else:
                             value_node = cell.find(f"{{{spreadsheet_ns}}}v")
-                            value = value_node.text or "" if value_node is not None else ""
+                            value = (
+                                value_node.text or "" if value_node is not None else ""
+                            )
                             if cell.attrib.get("t") == "s" and value:
                                 try:
                                     value = shared[int(value)]
@@ -543,7 +549,9 @@ def _extract_xlsx(data: bytes) -> tuple[ExtractedSection, ...]:
                                     ) from exc
                         if value.strip():
                             reference = cell.attrib.get("r", "")
-                            values.append(f"{reference}: {value}" if reference else value)
+                            values.append(
+                                f"{reference}: {value}" if reference else value
+                            )
                     if values:
                         row_number = row.attrib.get("r", "?")
                         visibility = "" if state == "visible" else f" ({state})"

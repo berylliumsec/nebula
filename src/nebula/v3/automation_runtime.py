@@ -1042,13 +1042,33 @@ class AutomationRuntimeManager:
             workspace_before=workspace_before,
         )
         process.drain_tasks = (
-            create_diagnostic_task(process.stdout.drain(backend.stdout), feature="runtime", event_code="runtime.stdout_drain", failure_message="Command stdout capture stopped unexpectedly."),
-            create_diagnostic_task(process.stderr.drain(backend.stderr), feature="runtime", event_code="runtime.stderr_drain", failure_message="Command stderr capture stopped unexpectedly."),
+            create_diagnostic_task(
+                process.stdout.drain(backend.stdout),
+                feature="runtime",
+                event_code="runtime.stdout_drain",
+                failure_message="Command stdout capture stopped unexpectedly.",
+            ),
+            create_diagnostic_task(
+                process.stderr.drain(backend.stderr),
+                feature="runtime",
+                event_code="runtime.stderr_drain",
+                failure_message="Command stderr capture stopped unexpectedly.",
+            ),
         )
-        process.final_task = create_diagnostic_task(self._finalize_process(process), feature="runtime", event_code="runtime.process_finalize", failure_message="Command finalization stopped unexpectedly.")
+        process.final_task = create_diagnostic_task(
+            self._finalize_process(process),
+            feature="runtime",
+            event_code="runtime.process_finalize",
+            failure_message="Command finalization stopped unexpectedly.",
+        )
         managed.processes[process_id] = process
         self._processes[process_id] = process
-        create_diagnostic_task(self._timeout_process(process, timeout_ms / 1_000), feature="runtime", event_code="runtime.process_timeout", failure_message="Command timeout supervision stopped unexpectedly.")
+        create_diagnostic_task(
+            self._timeout_process(process, timeout_ms / 1_000),
+            feature="runtime",
+            event_code="runtime.process_timeout",
+            failure_message="Command timeout supervision stopped unexpectedly.",
+        )
         if request.background:
             return self._result(managed, process, stdout="", stderr="")
         await process.final_task

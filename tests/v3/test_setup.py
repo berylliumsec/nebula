@@ -332,9 +332,12 @@ def test_prepared_runtime_survives_health_refresh_but_not_runner_config_change(
         expected_revision=profile.revision,
     )
 
-    assert platform.resolve_operator_runtime(
-        engagement.id, "bash", network=False
-    ).profile.revision == refreshed.revision
+    assert (
+        platform.resolve_operator_runtime(
+            engagement.id, "bash", network=False
+        ).profile.revision
+        == refreshed.revision
+    )
 
     changed = store.update(
         RunnerProfile,

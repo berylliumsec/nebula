@@ -1,8 +1,9 @@
 # Migrating from Nebula 2 to Nebula 3
 
-Nebula 3 installs alongside Nebula 2 and does not modify a Nebula 2 engagement
-during import. Keep the original engagement directory until the imported
-Project and its evidence have been verified.
+Nebula 2 is discontinued, but its engagement data can be imported without
+installing or running the removed application. Import never modifies the source.
+Keep the original engagement directory until the imported Project and its
+evidence have been verified.
 
 ## Before upgrading Nebula 3
 

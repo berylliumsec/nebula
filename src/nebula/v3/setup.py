@@ -1349,25 +1349,43 @@ class SetupService:
         terminal = self._terminal
         if terminal.status == TerminalSetupState.DETECTING_RUNNER:
             application_stage = ApplicationSetupStage.DETECTING_RUNNER
-            stage_detail = terminal.detail or "Checking supported local container runtimes."
+            stage_detail = (
+                terminal.detail or "Checking supported local container runtimes."
+            )
         elif terminal.status == TerminalSetupState.PREPARING_IMAGE:
             application_stage = ApplicationSetupStage.PREPARING_IMAGE
-            stage_detail = terminal.detail or "Preparing the verified Kali workstation image."
-        elif terminal.status in {TerminalSetupState.ERROR, TerminalSetupState.NEEDS_RUNNER}:
+            stage_detail = (
+                terminal.detail or "Preparing the verified Kali workstation image."
+            )
+        elif terminal.status in {
+            TerminalSetupState.ERROR,
+            TerminalSetupState.NEEDS_RUNNER,
+        }:
             application_stage = ApplicationSetupStage.DEGRADED
-            stage_detail = terminal.detail or "Terminal setup needs attention; Files remain available."
+            stage_detail = (
+                terminal.detail
+                or "Terminal setup needs attention; Files remain available."
+            )
         else:
             application_stage = ApplicationSetupStage.READY
             stage_detail = "Nebula is ready."
         recovery_actions: list[SetupRecoveryAction] = []
         if terminal.status == TerminalSetupState.NEEDS_RUNNER:
-            recovery_actions.append(SetupRecoveryAction(
-                id="open_setup", label="Open Terminal setup", destination="/settings#setup-settings"
-            ))
+            recovery_actions.append(
+                SetupRecoveryAction(
+                    id="open_setup",
+                    label="Open Terminal setup",
+                    destination="/settings#setup-settings",
+                )
+            )
         elif terminal.image_preparation.can_retry:
-            recovery_actions.append(SetupRecoveryAction(
-                id="retry_image", label="Retry Kali preparation", destination="/settings#setup-settings"
-            ))
+            recovery_actions.append(
+                SetupRecoveryAction(
+                    id="retry_image",
+                    label="Retry Kali preparation",
+                    destination="/settings#setup-settings",
+                )
+            )
         return SetupStatus(
             application_stage=application_stage,
             stage_detail=stage_detail,

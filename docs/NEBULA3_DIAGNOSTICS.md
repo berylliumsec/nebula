@@ -2,7 +2,7 @@
 
 Nebula 3 writes privacy-preserving, structured diagnostics to local JSON-lines
 files. Diagnostics are independent of project data, evidence, terminal audit
-records, execution output, and the Nebula 2 PyQt logger.
+records, and execution output.
 
 ## Levels and preferences
 

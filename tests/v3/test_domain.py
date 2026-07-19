@@ -54,7 +54,10 @@ def test_scope_normalizes_targets_and_validates_window():
     assert scope.allowed_domains == ["*.api.example.com", "example.com"]
     assert scope.allowed_ports == [80, 443]
 
-    assert ScopePolicy(engagement_id="eng-1", allowed_ports=[0, 400]).allowed_ports == [0, 400]
+    assert ScopePolicy(engagement_id="eng-1", allowed_ports=[0, 400]).allowed_ports == [
+        0,
+        400,
+    ]
     with pytest.raises(ValidationError):
         ScopePolicy(engagement_id="eng-1", allowed_ports=[-1])
     with pytest.raises(ValidationError):

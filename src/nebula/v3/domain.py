@@ -1588,7 +1588,9 @@ class ScopeImport(Entity):
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     base_scope_revision: int = Field(default=0, ge=0)
     status: ScopeImportStatus = ScopeImportStatus.GENERATING
-    candidates: list[ScopeImportCandidate] = Field(default_factory=list, max_length=2000)
+    candidates: list[ScopeImportCandidate] = Field(
+        default_factory=list, max_length=2000
+    )
     warnings: list[str] = Field(default_factory=list, max_length=2000)
     provenance: ScopeImportProvenance | None = None
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
@@ -1722,12 +1724,16 @@ class HarnessTurn(Entity):
         if self.origin == HarnessTurnOrigin.CHAT:
             if not self.chat_session_id or not self.chat_turn_id or self.run_id:
                 raise ValueError("chat harness turns require chat bindings only")
-        elif self.origin == HarnessTurnOrigin.MISSION and (not self.run_id or self.chat_turn_id):
+        elif self.origin == HarnessTurnOrigin.MISSION and (
+            not self.run_id or self.chat_turn_id
+        ):
             raise ValueError("mission harness turns require run_id and no chat_turn_id")
         elif self.origin == HarnessTurnOrigin.ANALYSIS and (
             self.chat_session_id or self.chat_turn_id or self.run_id
         ):
-            raise ValueError("analysis harness turns cannot bind chat or mission owners")
+            raise ValueError(
+                "analysis harness turns cannot bind chat or mission owners"
+            )
         return self
 
 

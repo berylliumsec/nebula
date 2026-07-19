@@ -179,9 +179,7 @@ class RuntimePlatform:
         scope = (
             self.store.get(ScopePolicy, engagement.scope_policy_id)
             if engagement.scope_policy_id
-            else ScopePolicy(
-                id=f"scope:{engagement.id}", engagement_id=engagement.id
-            )
+            else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
         if not mcp_profiles and not allow_empty:
             raise RuntimePlatformError("no MCP server was selected")
@@ -441,7 +439,11 @@ class RuntimePlatform:
         seen: set[tuple[str, str | None, str, str, str | None]] = set()
         runners: list[ContainerSandboxRunner] = []
         for profile in profiles:
-            if not profile.enabled or not profile.healthy or profile.last_health_at is None:
+            if (
+                not profile.enabled
+                or not profile.healthy
+                or profile.last_health_at is None
+            ):
                 continue
             identity = (
                 profile.executable,
@@ -511,9 +513,7 @@ class RuntimePlatform:
                 "/bin/bash",
                 ["--noprofile", "--norc", "--posix", "-eu", "-o", "pipefail"],
             ),
-            "python": OperatorRuntimeCommand(
-                "/usr/bin/python3", ["-E", "-s", "-u"]
-            ),
+            "python": OperatorRuntimeCommand("/usr/bin/python3", ["-E", "-s", "-u"]),
         }
         runtime = runtimes.get(canonical)
         if runtime is None:
@@ -576,12 +576,18 @@ class RuntimePlatform:
 def default_runtime_platform(
     *, store: NebulaStore, artifact_store: ArtifactStore, data_root: Path
 ) -> RuntimePlatform:
-    source = os.getenv("NEBULA_KALI_SOURCE_IMAGE") or os.getenv(
-        "NEBULA_HUMAN_TERMINAL_SOURCE_IMAGE", DEFAULT_KALI_SOURCE_IMAGE
-    ) or DEFAULT_KALI_SOURCE_IMAGE
-    if source != DEFAULT_KALI_SOURCE_IMAGE and re.fullmatch(
-        re.escape(DEFAULT_KALI_REPOSITORY) + r"@sha256:[0-9a-f]{64}", source
-    ) is None:
+    source = (
+        os.getenv("NEBULA_KALI_SOURCE_IMAGE")
+        or os.getenv("NEBULA_HUMAN_TERMINAL_SOURCE_IMAGE", DEFAULT_KALI_SOURCE_IMAGE)
+        or DEFAULT_KALI_SOURCE_IMAGE
+    )
+    if (
+        source != DEFAULT_KALI_SOURCE_IMAGE
+        and re.fullmatch(
+            re.escape(DEFAULT_KALI_REPOSITORY) + r"@sha256:[0-9a-f]{64}", source
+        )
+        is None
+    ):
         raise RuntimePlatformError(
             "NEBULA_KALI_SOURCE_IMAGE must reference the official Kali repository "
             "and be pinned by digest"

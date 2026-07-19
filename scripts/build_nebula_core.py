@@ -191,9 +191,8 @@ def main() -> None:
         "--add-data",
         f"{egress_helper}:nebula/v3",
     ]
-    # Release environments omit the legacy dependency group. These exclusions
-    # are a second defense for developer/QA builds created in a full checkout;
-    # the mandatory post-build archive audit remains authoritative.
+    # Exclusions are defense in depth for developer/QA environments that may
+    # contain unrelated global packages. The post-build audit is authoritative.
     for module in FORBIDDEN_MODULES:
         arguments.extend(["--exclude-module", module])
     arguments.extend(

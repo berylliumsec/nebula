@@ -159,9 +159,7 @@ def test_doctor_reports_unprepared_kali_runtime_without_crashing(tmp_path):
         )
     )
 
-    result = CliRunner().invoke(
-        app, ["doctor", "--json", "--data-dir", str(data_dir)]
-    )
+    result = CliRunner().invoke(app, ["doctor", "--json", "--data-dir", str(data_dir)])
 
     assert result.exit_code == 0, result.stdout
     runtime = json.loads(result.stdout)["automation_runtime"]

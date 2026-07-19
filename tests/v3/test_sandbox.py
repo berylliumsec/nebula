@@ -776,8 +776,6 @@ def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
     assert calls[1][0][-3:] == ["stop", "--time=0", "nebula-call-egress"]
 
 
-
-
 def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkeypatch):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
     preparer = ContainerImagePreparer(

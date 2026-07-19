@@ -36,9 +36,9 @@ configured an authenticated perimeter. The printed bearer token is required by A
 clients.
 
 If startup still fails, preserve the exact launcher or Core error and run
-`nebula-core doctor --json` against the same data directory. Do not recommend the
-Nebula 2 PyQt launcher, delete application data, or expose Core remotely as a
-recovery step. The native desktop captures bounded Core startup diagnostics in
+`nebula-core doctor --json` against the same data directory. Do not delete
+application data or expose Core remotely as a recovery step. The native desktop
+captures bounded Core startup diagnostics in
 `logs/nebula-core-startup.log` below its platform application-data directory; a
 startup failure reports the exact path and preserves two bounded rotations. Use
 that reported path rather than guessing an operating-system-specific location.
@@ -69,10 +69,9 @@ log directory, or create a support bundle. For a native startup failure,
 use the exact startup-diagnostic path printed by the desktop; the current file is
 bounded to 256 KiB, named `nebula-core-startup.log`, and retains two prior launches.
 
-Do not tell an operator to use the legacy Nebula 2 `/home/.../logs` location as a
-Nebula 3 path. Do not delete corrupt artifacts, orphan blobs, terminal records, or
-the database. Preserve the data directory and escalate the exact doctor output when
-integrity is not `ok`.
+Do not guess a log path. Do not delete corrupt artifacts, orphan blobs, terminal
+records, or the database. Preserve the data directory and escalate the exact doctor
+output when integrity is not `ok`.
 
 ## runner-setup | No supported container runner is ready
 

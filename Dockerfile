@@ -1,5 +1,4 @@
-# Nebula 3 is the default container target. The PyQt/X11 maintenance image is
-# intentionally not shipped as a release container.
+# Nebula Core is the only container target.
 FROM python:3.12-slim-bookworm@sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -24,7 +23,6 @@ RUN python -m pip install --no-cache-dir \
     "boto3==1.36.11" \
     "httpx==0.28.1" \
     "typer==0.26.8" \
-    "filelock==3.20.3" \
     "langgraph==1.1.6" \
     "langgraph-checkpoint-sqlite==3.1.0" \
     "jsonschema==4.26.0" \

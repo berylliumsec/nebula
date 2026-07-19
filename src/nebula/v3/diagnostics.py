@@ -1,7 +1,6 @@
 """Structured, privacy-preserving local diagnostics for Nebula 3.
 
-This module deliberately does not use the Nebula 2/PyQt logging stack.  It is
-the canonical Core implementation of ``nebula.diagnostic/v1`` and owns only
+This module is the canonical Core implementation of ``nebula.diagnostic/v1`` and owns only
 diagnostic data.  Evidence, terminal output, prompts, documents, command text,
 and application records must remain in their purpose-built stores.
 """
@@ -854,9 +853,7 @@ class DiagnosticManager:
             and normalized_level in {"error", "critical"}
             and self._sensitive_detail_store is not None
         ):
-            detail = (
-                f"{type(exception).__name__}: {_safe_text(str(exception), limit=64 * 1024).strip()}"
-            )
+            detail = f"{type(exception).__name__}: {_safe_text(str(exception), limit=64 * 1024).strip()}"
             try:
                 capture = self._sensitive_detail_store.capture(
                     error_id,
