@@ -164,26 +164,9 @@ fn child_size(bounds: &BrowserBounds) -> LogicalSize<f64> {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn logical_titlebar_inset(inner_y: i32, outer_y: i32, scale_factor: f64) -> f64 {
-    if !scale_factor.is_finite() || scale_factor <= 0.0 {
-        return 0.0;
-    }
-    (f64::from(inner_y.saturating_sub(outer_y)) / scale_factor).clamp(0.0, 96.0)
-}
-
-#[cfg(target_os = "macos")]
-fn macos_container_bounds<R: tauri::Runtime>(
-    window: &tauri::Window<R>,
-    mut bounds: BrowserBounds,
-) -> BrowserBounds {
-    let inset = window
-        .inner_position()
-        .ok()
-        .zip(window.outer_position().ok())
-        .map(|(inner, outer)| {
-            logical_titlebar_inset(inner.y, outer.y, window.scale_factor().unwrap_or(1.0))
-        })
-        .unwrap_or(0.0)
+fn inset_browser_bounds(mut bounds: BrowserBounds, top_inset: f64) -> BrowserBounds {
+    let inset = top_inset
+        .clamp(0.0, 96.0)
         .min((bounds.height - 1.0).max(0.0));
     bounds.y += inset;
     bounds.height -= inset;
@@ -208,6 +191,10 @@ fn appkit_child_y(
 #[cfg(target_os = "macos")]
 fn appkit_browser_frame(parent: &NSView, bounds: &BrowserBounds) -> NSRect {
     let parent_bounds = parent.bounds();
+    // Full-size-content windows place the WKWebView beneath the title bar while WebKit's DOM
+    // viewport begins at the unobscured safe-area origin. Window inner/outer positions do not
+    // describe this offset and are commonly identical in Tauri.
+    let bounds = inset_browser_bounds(*bounds, parent.safeAreaInsets().top);
     NSRect::new(
         NSPoint::new(
             parent_bounds.origin.x + bounds.x,
@@ -733,9 +720,7 @@ pub(crate) fn browser_create_tab(
         return Err(format!("cannot initialize browser tab visibility: {error}"));
     }
     #[cfg(target_os = "macos")]
-    if let Err(error) =
-        install_macos_browser_container(&app, &webview, macos_container_bounds(&window, bounds))
-    {
+    if let Err(error) = install_macos_browser_container(&app, &webview, bounds) {
         if webview.close().is_err() {
             record_browser_failure(
                 &app,
@@ -808,7 +793,6 @@ pub(crate) fn browser_set_bounds(
         .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
     #[cfg(target_os = "macos")]
     {
-        let bounds = macos_container_bounds(&webview.window(), bounds);
         resize_macos_browser_container(&webview, bounds)
             .map_err(|error| format!("cannot resize browser tab: {error}"))
     }
@@ -1200,11 +1184,19 @@ mod tests {
     }
 
     #[test]
-    fn macos_titlebar_offset_is_converted_to_logical_pixels() {
-        assert_eq!(logical_titlebar_inset(152, 96, 2.0), 28.0);
-        assert_eq!(logical_titlebar_inset(96, 96, 2.0), 0.0);
-        assert_eq!(logical_titlebar_inset(400, 96, 2.0), 96.0);
-        assert_eq!(logical_titlebar_inset(152, 96, 0.0), 0.0);
+    fn macos_safe_area_offset_keeps_the_browser_bottom_fixed() {
+        let bounds = inset_browser_bounds(
+            BrowserBounds {
+                x: 20.0,
+                y: 100.0,
+                width: 900.0,
+                height: 600.0,
+            },
+            28.0,
+        );
+        assert_eq!(bounds.y, 128.0);
+        assert_eq!(bounds.height, 572.0);
+        assert_eq!(bounds.y + bounds.height, 700.0);
     }
 
     #[test]
