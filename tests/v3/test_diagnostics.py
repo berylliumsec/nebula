@@ -429,6 +429,7 @@ def test_queue_pressure_drops_only_lower_levels_and_synchronously_reports_it(
 def test_live_reload_applies_atomic_external_changes(tmp_path: Path) -> None:
     manager = DiagnosticManager(tmp_path, watch_settings=True)
     try:
+        original_mtime_ns = manager.settings_path.stat().st_mtime_ns
         replacement = manager.settings_path.with_suffix(".replacement")
         replacement.write_text(
             json.dumps(
@@ -441,6 +442,9 @@ def test_live_reload_applies_atomic_external_changes(tmp_path: Path) -> None:
             encoding="utf-8",
         )
         os.chmod(replacement, 0o600)
+        # Atomic writers can preserve a timestamp on coarse or heavily loaded
+        # filesystems. The replacement inode must still trigger a reload.
+        os.utime(replacement, ns=(original_mtime_ns, original_mtime_ns))
         os.replace(replacement, manager.settings_path)
         deadline = time.monotonic() + 3
         while (

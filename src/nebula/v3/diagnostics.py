@@ -431,7 +431,7 @@ class DiagnosticManager:
         self._last_drop_notice = 0.0
         self._last_sink_failure_notice = 0.0
         self._last_rotation: str | None = None
-        self._settings_mtime_ns: int | None = None
+        self._settings_stamp: tuple[int, int, int, int, int] | None = None
         self._settings_load_failed = False
         self._last_prune = 0.0
         self._writer_thread: threading.Thread | None = None
@@ -526,7 +526,7 @@ class DiagnosticManager:
             self._atomic_write_json(self.settings_path, DiagnosticSettings().as_dict())
         else:
             self._secure_permissions(self.settings_path)
-        self._remember_settings_mtime()
+        self._remember_settings_stamp()
         self._prune(force=True)
 
     def _configure_sensitive_detail_store(self) -> None:
@@ -596,15 +596,25 @@ class DiagnosticManager:
                 )
         else:
             self._settings_load_failed = False
-        self._remember_settings_mtime()
+        self._remember_settings_stamp()
         return settings
 
-    def _remember_settings_mtime(self) -> None:
+    @staticmethod
+    def _file_stamp(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+
+    def _remember_settings_stamp(self) -> None:
         try:
-            self._settings_mtime_ns = self.settings_path.stat().st_mtime_ns
+            self._settings_stamp = self._file_stamp(self.settings_path.stat())
         except OSError:
             # diagnostic-expected: the settings watcher records unavailability.
-            self._settings_mtime_ns = None
+            self._settings_stamp = None
 
     def _validate_overrides(self) -> None:
         try:
@@ -1199,10 +1209,10 @@ class DiagnosticManager:
                 if self._stop:
                     return
             try:
-                mtime = self.settings_path.stat().st_mtime_ns
+                stamp = self._file_stamp(self.settings_path.stat())
             except OSError as exc:
-                if self._settings_mtime_ns is not None:
-                    self._settings_mtime_ns = None
+                if self._settings_stamp is not None:
+                    self._settings_stamp = None
                     self.record(
                         "error",
                         "diagnostics",
@@ -1215,7 +1225,7 @@ class DiagnosticManager:
                     )
                     self._settings = DiagnosticSettings()
                 continue
-            if mtime == self._settings_mtime_ns:
+            if stamp == self._settings_stamp:
                 continue
             self._settings = self._load_settings()
             self.record(
@@ -1247,7 +1257,7 @@ class DiagnosticManager:
             ) from exc
         self._settings = settings
         self._configure_sensitive_detail_store()
-        self._remember_settings_mtime()
+        self._remember_settings_stamp()
         self.record(
             "info",
             "diagnostics",

@@ -498,7 +498,7 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
   await expect(dialog.getByRole("img", { name: /Editable image/ })).toBeVisible();
   await expect(dialog).toContainText("Original preserved");
 
-  const dimensions = await dialog.evaluate((element) => {
+  const readDimensions = () => dialog.evaluate((element) => {
     const editor = element.querySelector<HTMLElement>('[aria-label="Image editor"]');
     const viewport = editor?.querySelector<HTMLElement>("div[class*='viewport']");
     const canvas = viewport?.querySelector<HTMLCanvasElement>("canvas");
@@ -517,6 +517,12 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
       canvasHeight: canvas?.getBoundingClientRect().height ?? 0,
     };
   });
+  await expect.poll(async () => {
+    const dimensions = await readDimensions();
+    return dimensions.canvasWidth <= dimensions.viewportContentWidth + 1
+      && dimensions.canvasHeight <= dimensions.viewportContentHeight + 1;
+  }, { timeout: 15_000 }).toBe(true);
+  const dimensions = await readDimensions();
   const viewportHeight = page.viewportSize()?.height ?? 900;
   expect(dimensions.dialogHeight).toBeGreaterThan(Math.min(760, viewportHeight - 80));
   expect(dimensions.editorHeight).toBeGreaterThan(Math.min(650, viewportHeight - 160));
@@ -531,7 +537,9 @@ test("terminal drag selection has a visible high-contrast highlight", async ({ p
   await page.getByRole("tab", { name: "Terminal", exact: true }).click();
   const screen = page.locator(".xterm-screen").last();
   await expect(screen).toBeVisible();
-  const box = await screen.boundingBox();
+  const rows = screen.locator(".xterm-rows");
+  await expect(rows).toContainText("root@nebula:/workspace#");
+  const box = await rows.locator(":scope > div").first().boundingBox();
   expect(box).toBeTruthy();
   await page.mouse.move(box!.x + 12, box!.y + 14);
   await page.mouse.down();
@@ -1039,7 +1047,7 @@ test("terminal and notes keep a visible focused caret", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
 
   const terminalSurface = page.locator(".xterm-shell").first();
-  await terminalSurface.click();
+  await terminalSurface.click({ force: true });
   await expect(page.locator(".xterm").first()).toHaveCSS("cursor", "text");
   await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("Terminal input");
 
