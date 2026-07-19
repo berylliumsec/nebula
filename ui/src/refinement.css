@@ -1529,6 +1529,8 @@ kbd { font-size: 11px; }
   .terminal-tab-strip { padding-left: 3px; }
   .terminal-tab-item { min-width: 118px; }
   .terminal-tab-actions { padding-inline: 4px; }
+  .terminal-port-control > span { display: none; }
+  .terminal-port-control input { width: 86px; }
   .terminal-capacity { display: none; }
   .terminal-overflow-menu { position: fixed; top: auto; right: 12px; left: 12px; width: auto; }
   .container-terminal-intro { grid-template-columns: auto minmax(0, 1fr); padding: 15px; }

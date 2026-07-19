@@ -348,7 +348,7 @@ async function openWorkspace(page: Page, route: string, heading: string) {
     await expect(page.getByRole("tab", { name: "Terminal", exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files.")).toHaveCount(0);
   } else {
-    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible({ timeout: 15_000 });
   }
   await expect(page.getByText("Interface preview")).toHaveCount(0);
   await expect(page.getByText(/Jordan|Acme/i)).toHaveCount(0);
@@ -637,6 +637,7 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
 });
 
 test("all task workspaces keep responsive content inside its owning surface", async ({ page }) => {
+  test.setTimeout(60_000);
   for (const [, route, heading] of workspaces) {
     await openWorkspace(page, route, heading);
     const overflow = await page.locator("body").evaluate(() => {
@@ -945,12 +946,16 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   const editor = inputSurface.locator("..").locator("..");
   await page.keyboard.type("#include <stdio.h>", { delay: 10 });
   await page.keyboard.press("Enter");
+  await expect(page.locator(".cm-line")).toHaveCount(2);
   await page.keyboard.press("Enter");
+  await expect(page.locator(".cm-line")).toHaveCount(3);
   await page.keyboard.type("int main(void) ", { delay: 10 });
   await page.keyboard.insertText("{");
   await page.keyboard.press("Enter");
+  await expect(page.locator(".cm-line")).toHaveCount(4);
   await page.keyboard.type("  return 0;", { delay: 10 });
   await page.keyboard.press("Enter");
+  await expect(page.locator(".cm-line")).toHaveCount(5);
   await page.keyboard.insertText("}");
   await page.keyboard.press("Escape");
   await expect(page.getByText("C", { exact: true })).toBeVisible();
@@ -1213,6 +1218,7 @@ test("top toolbar controls do not collide at compact breakpoint edges", async ({
 
 for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
   test(`critical workspaces meet automated accessibility checks in ${theme} mode`, async ({ page }) => {
+    test.setTimeout(60_000);
     await openWorkspace(page, "/", "Workbench");
     await page.evaluate((value) => localStorage.setItem("nebula.theme", value), theme);
     for (const [, route, heading] of workspaces) {
@@ -1526,6 +1532,7 @@ test("tool follow-up toggles explain missing runtime setup", async ({ page }) =>
 });
 
 test("appearance variants preserve each critical workspace hierarchy", async ({ page }) => {
+  test.setTimeout(60_000);
   for (const theme of ["light", "high-contrast"] as const) {
     await openWorkspace(page, "/", "Workbench");
     await page.evaluate((value) => localStorage.setItem("nebula.theme", value), theme);

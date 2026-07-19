@@ -281,12 +281,16 @@ export function ImageEditor({
 
   const fitImageToViewport = useCallback(() => {
     const viewport = viewportRef.current;
-    if (!viewport || !dimensions || viewport.clientWidth < 1 || viewport.clientHeight < 1) return;
+    const canvas = canvasRef.current;
+    if (!viewport || !canvas || !dimensions || viewport.clientWidth < 1 || viewport.clientHeight < 1) return;
     const computed = globalThis.getComputedStyle(viewport);
+    const canvasStyle = globalThis.getComputedStyle(canvas);
     const horizontalPadding = (Number.parseFloat(computed.paddingLeft) || 0) + (Number.parseFloat(computed.paddingRight) || 0);
     const verticalPadding = (Number.parseFloat(computed.paddingTop) || 0) + (Number.parseFloat(computed.paddingBottom) || 0);
-    const availableWidth = Math.max(1, viewport.clientWidth - horizontalPadding);
-    const availableHeight = Math.max(1, viewport.clientHeight - verticalPadding);
+    const horizontalBorder = (Number.parseFloat(canvasStyle.borderLeftWidth) || 0) + (Number.parseFloat(canvasStyle.borderRightWidth) || 0);
+    const verticalBorder = (Number.parseFloat(canvasStyle.borderTopWidth) || 0) + (Number.parseFloat(canvasStyle.borderBottomWidth) || 0);
+    const availableWidth = Math.max(1, viewport.clientWidth - horizontalPadding - horizontalBorder);
+    const availableHeight = Math.max(1, viewport.clientHeight - verticalPadding - verticalBorder);
     const nextZoom = Math.min(1, availableWidth / dimensions.width, availableHeight / dimensions.height);
     setZoom(Math.max(MIN_EDITOR_ZOOM, nextZoom));
   }, [dimensions]);

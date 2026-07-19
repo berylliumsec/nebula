@@ -11,11 +11,30 @@ isolated human terminal, optional AI assistance, immutable evidence, reviewed
 execution, and reporting. Terminal use does not require a model provider, and
 human terminal work never falls back to a host shell.
 
+## Release status
+
+Nebula 3 is in preview. A build is available only when a `nebula-v3.*` entry and
+its native artifacts appear on the
+[GitHub Releases page](https://github.com/BerylliumSec/nebula/releases). If no
+Nebula 3 entry is listed, no Nebula 3 installer has been published yet; use a
+source checkout instead. Do not use `pip install nebula-ai` to install Nebula 3.
+
+Preview builds are intended for evaluation on authorized systems. Back up
+engagement data, review the release notes and checksums, and do not treat an
+alpha build as a stable production release. The first release line is
+[Nebula 3.0.0-alpha.1](docs/releases/3.0.0-alpha.1.md).
+
 ## Install and launch
 
-Install a signed macOS DMG/Homebrew cask or Linux DEB/AppImage from the
-[Nebula releases](https://github.com/BerylliumSec/nebula/releases). Docker or
-Podman must be installed separately for terminal and automation features.
+Published releases can contain:
+
+- macOS 13 or newer DMGs for Apple silicon and Intel;
+- a Linux x86_64 AppImage with direct updates; and
+- a Linux x86_64 DEB for managed installations.
+
+Windows installers are not part of the current release matrix. Docker or
+Podman must be installed separately for terminal and automation features; a
+model provider is optional.
 
 Launch the native desktop from the operating-system application menu or run:
 
@@ -46,21 +65,40 @@ external-knowledge, verification, and recovery procedures.
 
 ## Develop from source
 
+From an existing checkout, synchronize dependencies and launch the native
+desktop:
+
 ```console
+git pull --ff-only
 poetry install --with dev
-poetry run nebula-core doctor
-poetry run pytest -q tests/v3
 npm --prefix ui ci
+npm --prefix ui run tauri -- dev
+```
+
+For browser-only development, build the workspace and let Core choose an
+available loopback port:
+
+```console
 npm --prefix ui run build
 poetry run nebula-core ui
 ```
 
+Run the principal pre-merge checks with:
+
+```console
+python scripts/nebula3_version.py check
+poetry run pytest -q tests/v3
+npm --prefix ui test
+npm --prefix ui run build
+```
+
 The Poetry package is a build-time Core boundary and is not a replacement for
-the native desktop installer. End users should use the signed application.
+the native desktop installer. End users should use a published native package.
 
 ## Documentation
 
 - [Nebula 3 guide](docs/NEBULA3.md)
+- [Nebula 3.0.0-alpha.1 release notes](docs/releases/3.0.0-alpha.1.md)
 - [Automation runtime](docs/AUTOMATION-RUNTIME.md)
 - [Local diagnostics](docs/NEBULA3_DIAGNOSTICS.md)
 - [Usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md)

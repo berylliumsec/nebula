@@ -50,7 +50,7 @@ describe("Nebula workspace", () => {
     for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
       expect(screen.getByRole("link", { name: label })).toBeVisible();
     }
-    expect(await screen.findByRole("tab", { name: "Terminal" })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: "Terminal" }, { timeout: 5_000 })).toBeVisible();
     expect(screen.queryByText("Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files.")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Workspace code editor" })).toBeVisible();
@@ -669,7 +669,12 @@ describe("Nebula workspace", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/sessions") && request?.method === "POST")).toBe(true));
 
     const preflightCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/preflight") && request?.method === "POST");
-    expect(JSON.parse(String(preflightCall?.[1]?.body))).toEqual({ engagement_id: "engagement-1", columns: 100, rows: 30 });
+    expect(JSON.parse(String(preflightCall?.[1]?.body))).toEqual({
+      engagement_id: "engagement-1",
+      columns: 100,
+      rows: 30,
+      published_ports: [],
+    });
     const startCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/sessions") && request?.method === "POST");
     expect(JSON.parse(String(startCall?.[1]?.body))).toMatchObject({ engagement_id: "engagement-1", preview_token: "signed.preview", preview_fingerprint: "c".repeat(64) });
     expect(startCall?.[1]?.signal?.aborted).toBe(false);

@@ -20,6 +20,7 @@ import {
 test.describe.configure({ mode: "serial" });
 
 test("01 create an authorized security project", async ({ page, core }) => {
+  await installTerminalAdapter(page);
   await page.goto(`${core.origin}/#token=${encodeURIComponent(core.token)}`);
   await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
   await beat(page);
@@ -34,11 +35,13 @@ test("01 create an authorized security project", async ({ page, core }) => {
 
   await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Northstar Commerce API Review", { timeout: 15_000 });
   // Project creation switches WorkspaceContext through a fresh Core bootstrap.
-  // Wait for that authoritative reload before mounting the Overview route.
+  // Wait for that authoritative reload and terminal restoration before mounting
+  // the Overview route; both replace the Workbench subtree during bootstrap.
   await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
-  await beat(page);
+  await expect(page.getByText("Restoring Project terminals…", { exact: true })).toBeHidden({ timeout: 20_000 });
   await page.getByRole("link", { name: "Project" }).click();
-  await expect(page.getByRole("heading", { name: "Northstar Commerce API Review" })).toBeVisible();
+  await expect(page).toHaveURL(/\/project$/);
+  await expect(page.getByRole("heading", { name: "Northstar Commerce API Review" })).toBeVisible({ timeout: 15_000 });
   await beat(page, 1_200);
 });
 

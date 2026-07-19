@@ -629,6 +629,7 @@ export function ContainerTerminalPanel({
     try {
       publishedPorts = requestedPublishedPorts();
     } catch (reason) {
+      // diagnostic-expected: local operator input validation is presented inline.
       setPublishedPortsError(reason instanceof Error ? reason.message : "Inbound ports are invalid.");
       return;
     }
@@ -836,6 +837,7 @@ export function ContainerTerminalPanel({
     <header className="terminal-tab-bar">
       <div className="terminal-tab-strip" role="tablist" aria-label="Open terminals">
         {tabs.map((tab) => <button
+            key={tab.key}
             id={`terminal-tab-${tab.key}`}
             className={`terminal-tab-item terminal-tab-button${activeKey === tab.key ? " active" : ""}`}
             type="button"
@@ -851,12 +853,12 @@ export function ContainerTerminalPanel({
           </button>)}
       </div>
       <div className="terminal-tab-actions">
-        <label className="terminal-port-control" title="Publish selected container TCP ports on host loopback for the next terminal">
+        <label className="terminal-port-control" title="Publish selected container TCP or UDP ports on host loopback for the next terminal">
           <span>Inbound</span>
           <input
             aria-label="Inbound ports for new terminals"
             inputMode="numeric"
-            placeholder="8080/tcp, 53/udp"
+            placeholder="8080/tcp"
             value={publishedPortsInput}
             onChange={(event) => { setPublishedPortsInput(event.target.value); setPublishedPortsError(undefined); }}
             disabled={launchInProgress}

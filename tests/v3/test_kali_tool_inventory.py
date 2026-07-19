@@ -24,9 +24,15 @@ def test_inventory_uses_installed_security_dependencies_and_path_executables(
 ):
     bin_dir = tmp_path / "usr" / "bin"
     bin_dir.mkdir(parents=True)
-    for name in ("hashcat", "nmap", "git", "vim"):
+    fixture_binaries = {
+        "hashcat",
+        "nmap",
+        "vim",
+        *inventory.REQUIRED_AUTOMATION_BINARIES,
+    }
+    for name in fixture_binaries:
         path = bin_dir / name
-        path.write_text("#!/bin/sh\n", encoding="utf-8")
+        path.write_text("#!/bin/sh\nprintf 'fixture 1.0\\n'\n", encoding="utf-8")
         path.chmod(0o755)
     status = """
 Package: kali-linux-headless
@@ -60,6 +66,11 @@ Status: install ok installed
         "replacement": [str(tmp_path / "usr" / "share" / "replacement")],
     }
     monkeypatch.setattr(inventory, "PATH_DIRECTORIES", frozenset({str(bin_dir)}))
+    monkeypatch.setattr(
+        inventory.shutil,
+        "which",
+        lambda name: str(bin_dir / name),
+    )
 
     manifest = inventory.build_manifest(
         status,
