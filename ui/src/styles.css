@@ -430,7 +430,8 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .chat-harness-mcp { display: flex; min-width: 0; min-height: 30px; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--muted); font-size: 11px; }
 .chat-harness-mcp > span { color: var(--text); white-space: nowrap; }
 .chat-harness-mcp > small { color: var(--muted); font-size: 11px; }
-.chat-scroll { min-height: 0; flex: 1; padding: 25px 30px; overflow-y: auto; overflow-anchor: none; }
+.chat-scroll { min-height: 0; flex: 1; padding: 25px 30px; overflow-y: auto; }
+.chat-scroll-content { min-height: 100%; }
 .chat-message { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; max-width: 760px; margin-bottom: 22px; }
 .chat-avatar { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 7px; color: #07121d; background: var(--blue); font-size: 11px; font-weight: 800; }.chat-message.operator .chat-avatar { background: var(--violet); }
 .chat-message header { display: flex; gap: 8px; margin-bottom: 6px; }.chat-message header strong { font-size: 11px; }.chat-message header span { color: var(--muted); font-size: 11px; }.chat-message p { color: var(--text); font-size: 11px; line-height: 1.55; }

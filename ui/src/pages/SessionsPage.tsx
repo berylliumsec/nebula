@@ -267,6 +267,7 @@ export function SessionsPage() {
   const attemptedToolVerificationRef = useRef(new Set<string>());
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const streamDeltaRef = useRef(new Map<string, string>());
   const streamFrameRef = useRef<number | undefined>(undefined);
@@ -626,6 +627,23 @@ export function SessionsPage() {
     scroll.scrollTop = scroll.scrollHeight;
   }, [messages, sending]);
 
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    const content = scrollContentRef.current;
+    if (!scroll || !content || typeof ResizeObserver === "undefined") return;
+
+    // Messages are not the only things that change chat geometry. Restored
+    // harness timelines, approvals, fonts, and the growing composer can all
+    // move the bottom after the message render has committed. Keep following
+    // those layout changes only while the reader is already at the latest item.
+    const observer = new ResizeObserver(() => {
+      if (followLatestRef.current) scroll.scrollTop = scroll.scrollHeight;
+    });
+    observer.observe(scroll);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [conversationOpen, sessionId, view]);
+
   const refreshSessions = async (selectedId?: string) => {
     if (!api || !engagement) return;
     const page = await api.listChatSessions(engagement.id);
@@ -637,6 +655,7 @@ export function SessionsPage() {
     if (!detachActiveHarnessStream()) abortRef.current?.abort();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
+    followLatestRef.current = true;
     setSending(false);
     setSessionId("");
     setConversationOpen(open);
@@ -816,6 +835,7 @@ export function SessionsPage() {
     }
     if (!api) return;
     detachActiveHarnessStream();
+    followLatestRef.current = true;
     setSending(false);
     setConversationOpen(true);
     setLoadingHistory(true);
@@ -1021,6 +1041,7 @@ export function SessionsPage() {
 
   const openAttachedChat = async (id: string) => {
     if (!api || !engagement) return;
+    followLatestRef.current = true;
     setLoadingHistory(true);
     setChatError(undefined);
     setHarnessProgress(undefined);
@@ -1874,6 +1895,7 @@ export function SessionsPage() {
                 </div>
               </details>
               <div className="chat-scroll" ref={scrollRef} aria-live="polite" onScroll={trackChatScroll}>
+                <div className="chat-scroll-content" ref={scrollContentRef}>
                 {loadingHistory ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? messages.map((message) => (
                   <article
                     className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`}
@@ -1928,6 +1950,7 @@ export function SessionsPage() {
                     </div>
                   </article>
                 )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use the session-scoped command runtime when the exact model is verified.</p></div>}
+                </div>
               </div>
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />}

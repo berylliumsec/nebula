@@ -724,6 +724,34 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   await messageInput.evaluate((element) => element.removeAttribute("disabled"));
   await messageInput.fill("");
   await expect.poll(() => messageInput.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(collapsedHeight + 1);
+
+  const chatScroll = page.locator(".chat-scroll");
+  const chatContent = page.locator(".chat-scroll-content");
+  const appendChatGrowth = (height: number) => chatContent.evaluate((element, nextHeight) => {
+    const growth = document.createElement("div");
+    growth.className = "scroll-growth-test";
+    growth.style.height = `${nextHeight}px`;
+    element.append(growth);
+  }, height);
+  const distanceFromBottom = () => chatScroll.evaluate((element) => (
+    element.scrollHeight - element.scrollTop - element.clientHeight
+  ));
+
+  await appendChatGrowth(1_200);
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(1);
+  await chatScroll.evaluate((element) => { element.scrollTop = 0; });
+  await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+  await appendChatGrowth(400);
+  await page.waitForTimeout(100);
+  expect(await chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+
+  await chatScroll.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(1);
+  await appendChatGrowth(400);
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(1);
+  await chatContent.locator(".scroll-growth-test").evaluateAll((elements) => elements.forEach((element) => element.remove()));
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(1);
+
   const composerBounds = await workspace.evaluate((element) => {
     const workspaceRect = element.getBoundingClientRect();
     const panel = element.querySelector<HTMLElement>(".chat-panel")!;
