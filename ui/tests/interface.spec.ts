@@ -849,8 +849,19 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   const chatScroll = page.locator(".chat-scroll");
   await expect.poll(() => chatScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(500);
   await chatScroll.hover();
-  await page.mouse.wheel(0, 10_000);
+  let previousTrackpadPosition = await chatScroll.evaluate((element) => element.scrollTop);
+  for (let index = 0; index < 8; index += 1) {
+    await page.mouse.wheel(0, 180);
+    await page.waitForTimeout(25);
+    const currentTrackpadPosition = await chatScroll.evaluate((element) => element.scrollTop);
+    expect(currentTrackpadPosition).toBeGreaterThanOrEqual(previousTrackpadPosition - 2);
+    previousTrackpadPosition = currentTrackpadPosition;
+  }
   const distanceFromBottom = () => chatScroll.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight);
+  for (let index = 0; index < 40 && await distanceFromBottom() > 2; index += 1) {
+    await page.mouse.wheel(0, 1000);
+    await page.waitForTimeout(10);
+  }
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
   await page.waitForTimeout(300);
   expect(await distanceFromBottom()).toBeLessThanOrEqual(2);

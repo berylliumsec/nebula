@@ -268,6 +268,10 @@ export function SessionsPage() {
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
+  const scrollGestureTimerRef = useRef<number | undefined>(undefined);
+  const scrollGestureActiveRef = useRef(false);
+  const scrollGestureReachedBottomRef = useRef(false);
+  const scrollGestureLastTopRef = useRef(0);
   const streamDeltaRef = useRef(new Map<string, string>());
   const streamFrameRef = useRef<number | undefined>(undefined);
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
@@ -589,6 +593,7 @@ export function SessionsPage() {
 
   useEffect(() => () => {
     if (streamFrameRef.current !== undefined) cancelAnimationFrame(streamFrameRef.current);
+    if (scrollGestureTimerRef.current !== undefined) globalThis.clearTimeout(scrollGestureTimerRef.current);
   }, []);
 
   const flushStreamDeltas = () => {
@@ -612,11 +617,38 @@ export function SessionsPage() {
   const trackChatScroll = () => {
     const scroll = scrollRef.current;
     if (!scroll) return;
-    followLatestRef.current = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 2;
+    const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 2;
+    if (scrollGestureActiveRef.current) {
+      if (scroll.scrollTop < scrollGestureLastTopRef.current - 1) scrollGestureReachedBottomRef.current = false;
+      if (atBottom) scrollGestureReachedBottomRef.current = true;
+      scrollGestureLastTopRef.current = scroll.scrollTop;
+      return;
+    }
+    followLatestRef.current = atBottom;
   };
 
-  const pauseChatFollowing = () => {
+  const beginChatScrollGesture = () => {
+    const scroll = scrollRef.current;
+    if (!scrollGestureActiveRef.current) {
+      scrollGestureActiveRef.current = true;
+      scrollGestureReachedBottomRef.current = false;
+      scrollGestureLastTopRef.current = scroll?.scrollTop ?? 0;
+    }
     followLatestRef.current = false;
+  };
+
+  const settleChatFollowing = () => {
+    beginChatScrollGesture();
+    if (scrollGestureTimerRef.current !== undefined) globalThis.clearTimeout(scrollGestureTimerRef.current);
+    scrollGestureTimerRef.current = globalThis.setTimeout(() => {
+      scrollGestureTimerRef.current = undefined;
+      const scroll = scrollRef.current;
+      scrollGestureActiveRef.current = false;
+      if (!scroll) return;
+      followLatestRef.current = scrollGestureReachedBottomRef.current
+        || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 2;
+      if (followLatestRef.current) scroll.scrollTop = scroll.scrollHeight;
+    }, 250);
   };
 
   useLayoutEffect(() => {
@@ -1888,10 +1920,12 @@ export function SessionsPage() {
                 className="chat-scroll"
                 ref={scrollRef}
                 aria-live="polite"
-                onPointerDown={pauseChatFollowing}
+                onPointerDown={beginChatScrollGesture}
+                onPointerUp={settleChatFollowing}
                 onScroll={trackChatScroll}
-                onTouchStart={pauseChatFollowing}
-                onWheelCapture={(event) => { if (event.deltaY < 0) pauseChatFollowing(); }}
+                onTouchStart={beginChatScrollGesture}
+                onTouchEnd={settleChatFollowing}
+                onWheelCapture={settleChatFollowing}
               >
                 {loadingHistory ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? messages.map((message) => (
                   <article
