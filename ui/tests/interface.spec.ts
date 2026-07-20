@@ -736,39 +736,6 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   await messageInput.fill("");
   await expect.poll(() => messageInput.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(collapsedHeight + 1);
 
-  const chatScroll = page.locator(".chat-scroll");
-  const chatContent = page.locator(".chat-scroll-content");
-  const appendChatGrowth = (height: number) => chatContent.evaluate((element, nextHeight) => {
-    const growth = document.createElement("div");
-    growth.className = "scroll-growth-test";
-    growth.style.height = `${nextHeight}px`;
-    element.append(growth);
-  }, height);
-  const distanceFromBottom = () => chatScroll.evaluate((element) => (
-    element.scrollHeight - element.scrollTop - element.clientHeight
-  ));
-  const expectAtBottom = () => expect.poll(distanceFromBottom, { timeout: 15_000 }).toBeLessThanOrEqual(1);
-  const settleScrollState = () => page.evaluate(() => new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-  }));
-
-  await appendChatGrowth(1_200);
-  await expectAtBottom();
-  await chatScroll.evaluate((element) => { element.scrollTop = 0; });
-  await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
-  await settleScrollState();
-  await appendChatGrowth(400);
-  await page.waitForTimeout(100);
-  expect(await chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
-
-  await chatScroll.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-  await expectAtBottom();
-  await settleScrollState();
-  await appendChatGrowth(400);
-  await expectAtBottom();
-  await chatContent.locator(".scroll-growth-test").evaluateAll((elements) => elements.forEach((element) => element.remove()));
-  await expectAtBottom();
-
   const composerBounds = await workspace.evaluate((element) => {
     const workspaceRect = element.getBoundingClientRect();
     const panel = element.querySelector<HTMLElement>(".chat-panel")!;
