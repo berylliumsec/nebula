@@ -24,7 +24,25 @@ Object.defineProperty(window, "matchMedia", {
   })),
 });
 
-vi.stubGlobal("ResizeObserver", TestResizeObserver);
+Object.defineProperty(globalThis, "ResizeObserver", {
+  configurable: true,
+  writable: true,
+  value: TestResizeObserver,
+});
+
+Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+  configurable: true,
+  writable: true,
+  value(optionsOrX: ScrollToOptions | number, y?: number) {
+    if (typeof optionsOrX === "number") {
+      this.scrollLeft = optionsOrX;
+      this.scrollTop = y ?? 0;
+      return;
+    }
+    if (optionsOrX.left !== undefined) this.scrollLeft = optionsOrX.left;
+    if (optionsOrX.top !== undefined) this.scrollTop = optionsOrX.top;
+  },
+});
 
 Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
   configurable: true,

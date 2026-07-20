@@ -1,8 +1,15 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
+  AssistantRuntimeProvider,
+  ThreadPrimitive,
+  useExternalStoreRuntime,
+  type ThreadMessageLike,
+} from "@assistant-ui/react";
+import {
   Bot,
   Braces,
   Check,
+  ChevronDown,
   FileClock,
   FolderOpen,
   Globe2,
@@ -109,6 +116,38 @@ const CodeEditorPanel = lazy(() => import("../components/CodeEditorPanel").then(
 const CHAT_COMPOSER_MAX_HEIGHT = 160;
 
 interface ConversationMessage extends ReconciledConversationMessage {}
+
+function assistantMessageStatus(message: ConversationMessage): ThreadMessageLike["status"] {
+  switch (message.state) {
+    case "streaming":
+      return { type: "running" };
+    case "waiting_approval":
+      return { type: "requires-action", reason: "interrupt" };
+    case "cancelled":
+      return { type: "incomplete", reason: "cancelled" };
+    case "error":
+      return { type: "incomplete", reason: "error", error: message.detail ?? "Chat response failed." };
+    default:
+      return { type: "complete", reason: "stop" };
+  }
+}
+
+function convertConversationMessage(message: ConversationMessage): ThreadMessageLike {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: new Date(message.createdAt),
+    status: message.role === "assistant" ? assistantMessageStatus(message) : undefined,
+    metadata: {
+      custom: {
+        durable: message.durable,
+        sequence: message.sequence,
+        state: message.state,
+      },
+    },
+  };
+}
 
 function makeId(prefix: string): string {
   return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`;
@@ -266,14 +305,19 @@ export function SessionsPage() {
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const followLatestRef = useRef(true);
-  const scrollGestureTimerRef = useRef<number | undefined>(undefined);
-  const scrollGestureActiveRef = useRef(false);
-  const scrollGestureReachedBottomRef = useRef(false);
-  const scrollGestureLastTopRef = useRef(0);
   const streamDeltaRef = useRef(new Map<string, string>());
   const streamFrameRef = useRef<number | undefined>(undefined);
+  const chatRuntime = useExternalStoreRuntime({
+    messages,
+    convertMessage: convertConversationMessage,
+    isLoading: loadingHistory,
+    isRunning: sending,
+    onNew: async () => undefined,
+  });
+  const messagesById = useMemo(
+    () => new Map(messages.map((message) => [message.id, message])),
+    [messages],
+  );
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const selectedProvider = enabledProviders.find((provider) => provider.id === providerId);
   const selectedHarness = harnesses.find((harness) => harness.id === harnessId);
@@ -593,7 +637,6 @@ export function SessionsPage() {
 
   useEffect(() => () => {
     if (streamFrameRef.current !== undefined) cancelAnimationFrame(streamFrameRef.current);
-    if (scrollGestureTimerRef.current !== undefined) globalThis.clearTimeout(scrollGestureTimerRef.current);
   }, []);
 
   const flushStreamDeltas = () => {
@@ -614,48 +657,6 @@ export function SessionsPage() {
     }
   };
 
-  const trackChatScroll = () => {
-    const scroll = scrollRef.current;
-    if (!scroll) return;
-    const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 2;
-    if (scrollGestureActiveRef.current) {
-      if (scroll.scrollTop < scrollGestureLastTopRef.current - 1) scrollGestureReachedBottomRef.current = false;
-      if (atBottom) scrollGestureReachedBottomRef.current = true;
-      scrollGestureLastTopRef.current = scroll.scrollTop;
-      return;
-    }
-    followLatestRef.current = atBottom;
-  };
-
-  const beginChatScrollGesture = () => {
-    const scroll = scrollRef.current;
-    if (!scrollGestureActiveRef.current) {
-      scrollGestureActiveRef.current = true;
-      scrollGestureReachedBottomRef.current = false;
-      scrollGestureLastTopRef.current = scroll?.scrollTop ?? 0;
-    }
-    followLatestRef.current = false;
-  };
-
-  const settleChatFollowing = () => {
-    beginChatScrollGesture();
-    if (scrollGestureTimerRef.current !== undefined) globalThis.clearTimeout(scrollGestureTimerRef.current);
-    scrollGestureTimerRef.current = globalThis.setTimeout(() => {
-      scrollGestureTimerRef.current = undefined;
-      const scroll = scrollRef.current;
-      scrollGestureActiveRef.current = false;
-      if (!scroll) return;
-      followLatestRef.current = scrollGestureReachedBottomRef.current
-        || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 2;
-      if (followLatestRef.current) scroll.scrollTop = scroll.scrollHeight;
-    }, 250);
-  };
-
-  useLayoutEffect(() => {
-    const scroll = scrollRef.current;
-    if (scroll && followLatestRef.current) scroll.scrollTop = scroll.scrollHeight;
-  }, [activityItems, harnessInteractions, loadingHistory, messages, pendingResponse, toolCards]);
-
   const refreshSessions = async (selectedId?: string) => {
     if (!api || !engagement) return;
     const page = await api.listChatSessions(engagement.id);
@@ -667,7 +668,6 @@ export function SessionsPage() {
     if (!detachActiveHarnessStream()) abortRef.current?.abort();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
-    followLatestRef.current = true;
     setSending(false);
     setSessionId("");
     setConversationOpen(open);
@@ -847,7 +847,6 @@ export function SessionsPage() {
     }
     if (!api) return;
     detachActiveHarnessStream();
-    followLatestRef.current = true;
     setSending(false);
     setConversationOpen(true);
     setLoadingHistory(true);
@@ -1053,7 +1052,6 @@ export function SessionsPage() {
 
   const openAttachedChat = async (id: string) => {
     if (!api || !engagement) return;
-    followLatestRef.current = true;
     setLoadingHistory(true);
     setChatError(undefined);
     setHarnessProgress(undefined);
@@ -1366,7 +1364,6 @@ export function SessionsPage() {
       state: "streaming",
       durable: false,
     };
-    followLatestRef.current = true;
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setDraft("");
     clearAssistantDraft();
@@ -1916,18 +1913,21 @@ export function SessionsPage() {
                 {runtimeKind === "provider" ? <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><div className="chat-harness-mcp"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · Core-captured</small></span></label>) : <small>No enabled MCP profiles</small>}</div></> : <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} bounded source${knowledgeSources.length === 1 ? "" : "s"}` : "Harness is text-only" : "No sources loaded"}</small></span></label><div className="chat-harness-mcp"><span>MCP servers</span>{harnessSessionId ? <small>Frozen in selected session</small> : mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending || Boolean(sessionId)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div></>}
                 </div>
               </details>
-              <div
-                className="chat-scroll"
-                ref={scrollRef}
-                aria-live="polite"
-                onPointerDown={beginChatScrollGesture}
-                onPointerUp={settleChatFollowing}
-                onScroll={trackChatScroll}
-                onTouchStart={beginChatScrollGesture}
-                onTouchEnd={settleChatFollowing}
-                onWheelCapture={settleChatFollowing}
-              >
-                {loadingHistory ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? messages.map((message) => (
+              <AssistantRuntimeProvider runtime={chatRuntime} key={sessionId || "new-conversation"}>
+                <ThreadPrimitive.Root className="chat-thread">
+                  <ThreadPrimitive.Viewport
+                    className="chat-scroll"
+                    aria-live="polite"
+                    autoScroll
+                    scrollToBottomOnInitialize
+                    scrollToBottomOnRunStart
+                    scrollToBottomOnThreadSwitch
+                    turnAnchor="bottom"
+                  >
+                {loadingHistory ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <ThreadPrimitive.Messages>{({ message: threadMessage }) => {
+                  const message = messagesById.get(threadMessage.id);
+                  if (!message) return null;
+                  return (
                   <article
                     className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`}
                     data-sequence={message.sequence}
@@ -1980,8 +1980,14 @@ export function SessionsPage() {
                       {message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}
                     </div>
                   </article>
-                )) : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use the session-scoped command runtime when the exact model is verified.</p></div>}
-              </div>
+                  );
+                }}</ThreadPrimitive.Messages> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use the session-scoped command runtime when the exact model is verified.</p></div>}
+                    <ThreadPrimitive.ScrollToBottom className="chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message">
+                      <ChevronDown size={16} aria-hidden="true" />
+                    </ThreadPrimitive.ScrollToBottom>
+                  </ThreadPrimitive.Viewport>
+                </ThreadPrimitive.Root>
+              </AssistantRuntimeProvider>
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />}
               <form className="chat-composer" onSubmit={(event) => void submit(event)}>

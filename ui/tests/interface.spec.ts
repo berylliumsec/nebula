@@ -770,7 +770,7 @@ test("all assistant states remain fully visible inside the workbench viewport", 
 });
 
 test("streaming chat follows the bottom without overriding reader scroll intent", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Scroll intent needs one desktop interaction run.");
+  test.skip(!["desktop", "webkit"].includes(testInfo.project.name), "Scroll intent needs one desktop interaction run.");
   const provider = {
     ...entity,
     id: "provider-scroll-test",
