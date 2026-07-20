@@ -506,7 +506,7 @@ describe("Nebula workspace", () => {
       if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify(chatPresent ? [{ ...entity, revision: chatRevision, id: "session-1", engagement_id: "engagement-1", title: chatTitle, provider_profile_id: "provider-1", model: "model-1", metadata: { message_count: 2 } }] : []), { status: 200 });
       if (path.endsWith("/chat/sessions/session-1/messages")) return new Response(JSON.stringify([
         { ...entity, id: "message-1", engagement_id: "engagement-1", session_id: "session-1", sequence: 1, role: "user", content: "Use port 8443", citations: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
-        { ...entity, id: "message-2", engagement_id: "engagement-1", session_id: "session-1", sequence: 2, role: "assistant", content: "Port retained", citations: [], usage: { input_tokens: 2, output_tokens: 2, total_tokens: 4 } },
+        { ...entity, id: "message-2", engagement_id: "engagement-1", session_id: "session-1", sequence: 2, role: "assistant", content: "Port retained\n\nUse `nmap` for verification.", citations: [], usage: { input_tokens: 2, output_tokens: 2, total_tokens: 4 } },
       ]), { status: 200 });
       if (path.endsWith("/chat/sessions/session-1/context")) return new Response(JSON.stringify({
         owner_type: "chat_session",
@@ -547,6 +547,14 @@ describe("Nebula workspace", () => {
     expect(localStorage.getItem("nebula.conversations.expanded")).toBe("true");
     await user.click((await screen.findByText("Saved context")).closest("button")!);
     expect(await screen.findByText("Port retained")).toBeVisible();
+    const transcript = screen.getByText("Port retained").closest(".chat-scroll")!;
+    const transcriptMutations: MutationRecord[] = [];
+    const transcriptObserver = new MutationObserver((records) => transcriptMutations.push(...records));
+    transcriptObserver.observe(transcript, { childList: true, subtree: true });
+    await user.type(screen.getByRole("textbox", { name: "Message the analyst assistant" }), "draft");
+    transcriptMutations.push(...transcriptObserver.takeRecords());
+    transcriptObserver.disconnect();
+    expect(transcriptMutations.filter((record) => record.addedNodes.length || record.removedNodes.length)).toEqual([]);
     expect(screen.queryByText("The selected service uses port 8443.")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Working memory" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/sessions/session-1/context"))).toBe(false);

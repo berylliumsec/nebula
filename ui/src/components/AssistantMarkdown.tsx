@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type MouseEvent } from "react";
+import { memo, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Check, Copy, Play } from "lucide-react";
 import { Highlight, themes, type Language } from "prism-react-renderer";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -162,7 +162,7 @@ function FencedCode({
   );
 }
 
-export function AssistantMarkdown({
+export const AssistantMarkdown = memo(function AssistantMarkdown({
   content,
   messageId,
   durable,
@@ -214,4 +214,4 @@ export function AssistantMarkdown({
       {unmatched && <pre className="assistant-inert-fence">{unmatched}</pre>}
     </div>
   );
-}
+});
