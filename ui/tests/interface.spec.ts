@@ -736,6 +736,9 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   await messageInput.fill("");
   await expect.poll(() => messageInput.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(collapsedHeight + 1);
 
+  const chatScroll = page.locator(".chat-scroll");
+  expect(await chatScroll.evaluate((element) => getComputedStyle(element).overflowAnchor)).toBe("none");
+
   const composerBounds = await workspace.evaluate((element) => {
     const workspaceRect = element.getBoundingClientRect();
     const panel = element.querySelector<HTMLElement>(".chat-panel")!;
