@@ -95,6 +95,79 @@ interface ToolLifecycleCard {
   receipt?: Record<string, unknown>;
 }
 
+interface ChatScrollTraceWindow extends Window {
+  __NEBULA_CHAT_SCROLL_TRACE__?: () => string;
+}
+
+function attachChatScrollTrace(viewport: HTMLDivElement) {
+  const startedAt = performance.now();
+  const entries: Array<Record<string, unknown>> = [];
+  const traceWindow = window as ChatScrollTraceWindow;
+  const describeElement = (value: EventTarget | Element | null) => {
+    if (!(value instanceof Element)) return null;
+    const classes = [...value.classList].slice(0, 4).join(".");
+    return `${value.tagName.toLowerCase()}${value.id ? `#${value.id}` : ""}${classes ? `.${classes}` : ""}`;
+  };
+  const record = (kind: string, details: Record<string, unknown> = {}) => {
+    entries.push({
+      atMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      kind,
+      scrollTop: Math.round(viewport.scrollTop * 10) / 10,
+      scrollHeight: viewport.scrollHeight,
+      clientHeight: viewport.clientHeight,
+      maxScrollTop: Math.max(0, viewport.scrollHeight - viewport.clientHeight),
+      activeElement: describeElement(document.activeElement),
+      ...details,
+    });
+    if (entries.length > 2_000) entries.splice(0, entries.length - 2_000);
+  };
+  const onWheel = (event: WheelEvent) => record("wheel", {
+    deltaY: Math.round(event.deltaY * 10) / 10,
+    deltaMode: event.deltaMode,
+    target: describeElement(event.target),
+  });
+  const onScroll = () => record("scroll");
+  const onScrollEnd = () => record("scrollend");
+  const onFocus = (event: FocusEvent) => record("focusin", { target: describeElement(event.target) });
+  const resizeObserver = new ResizeObserver(() => record("resize"));
+  const mutationObserver = new MutationObserver((mutations) => record("mutation", {
+    addedNodes: mutations.reduce((count, mutation) => count + mutation.addedNodes.length, 0),
+    removedNodes: mutations.reduce((count, mutation) => count + mutation.removedNodes.length, 0),
+    attributes: mutations.filter((mutation) => mutation.type === "attributes").map((mutation) => mutation.attributeName),
+  }));
+  const nativeScrollTo = viewport.scrollTo.bind(viewport);
+  const instrumentedViewport = viewport as HTMLDivElement & {
+    scrollTo: (optionsOrX?: ScrollToOptions | number, y?: number) => void;
+  };
+  instrumentedViewport.scrollTo = (optionsOrX?: ScrollToOptions | number, y?: number) => {
+    record("scrollTo", { arguments: typeof optionsOrX === "number" ? [optionsOrX, y] : optionsOrX });
+    if (typeof optionsOrX === "number") nativeScrollTo(optionsOrX, y ?? 0);
+    else nativeScrollTo(optionsOrX);
+  };
+  viewport.addEventListener("wheel", onWheel, { capture: true, passive: true });
+  viewport.addEventListener("scroll", onScroll, { passive: true });
+  viewport.addEventListener("scrollend", onScrollEnd, { passive: true });
+  document.addEventListener("focusin", onFocus, true);
+  resizeObserver.observe(viewport);
+  mutationObserver.observe(viewport, { attributes: true, childList: true, subtree: true });
+  traceWindow.__NEBULA_CHAT_SCROLL_TRACE__ = () => JSON.stringify({
+    capturedAt: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    entries,
+  }, null, 2);
+  record("attached");
+  return () => {
+    viewport.removeEventListener("wheel", onWheel, true);
+    viewport.removeEventListener("scroll", onScroll);
+    viewport.removeEventListener("scrollend", onScrollEnd);
+    document.removeEventListener("focusin", onFocus, true);
+    resizeObserver.disconnect();
+    mutationObserver.disconnect();
+    Reflect.deleteProperty(viewport, "scrollTo");
+    delete traceWindow.__NEBULA_CHAT_SCROLL_TRACE__;
+  };
+}
+
 interface PendingChatResponse {
   turnId: string;
   assistantId: string;
@@ -316,6 +389,7 @@ export function SessionsPage() {
   const detachedHarnessStreamsRef = useRef(new WeakSet<AbortController>());
   const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const chatViewportRef = useRef<HTMLDivElement>(null);
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
@@ -328,6 +402,10 @@ export function SessionsPage() {
     isRunning: sending,
     onNew: async () => undefined,
   });
+  useEffect(() => {
+    if (!import.meta.env.DEV || view !== "chat" || !conversationOpen || !chatViewportRef.current) return;
+    return attachChatScrollTrace(chatViewportRef.current);
+  }, [conversationOpen, sessionId, view]);
   const messagesById = useMemo(
     () => new Map(messages.map((message) => [message.runtimeId ?? message.id, message])),
     [messages],
@@ -1930,6 +2008,7 @@ export function SessionsPage() {
               <AssistantRuntimeProvider runtime={chatRuntime} key={sessionId || "new-conversation"}>
                 <ThreadPrimitive.Root className="chat-thread">
                   <ThreadPrimitive.Viewport
+                    ref={chatViewportRef}
                     className="chat-scroll"
                     aria-live="polite"
                     autoScroll
