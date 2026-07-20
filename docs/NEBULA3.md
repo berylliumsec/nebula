@@ -291,10 +291,11 @@ WebSocket while sharing only the Project's `/workspace`. Core admits at most 32
 pending or running human terminals globally. Tabs survive Workbench mode changes
 and short webview reconnects; bulk recovery restores all active tabs in creation
 order. A terminal stops on explicit **Stop**, confirmed tab close, Core shutdown,
-or 30 minutes with no input and no output; a disconnected UI has a 10-minute
-reconnect grace. Core keeps at most 1 MiB of sequenced output per terminal for
-reconnect replay. Separately, mandatory shell framing records metadata for every
-completed command as a Project-lifetime audit. The derived image contains a verified,
+process exit, or a workspace-limit violation; inactivity alone does not stop it.
+A disconnected UI has a 10-minute reconnect grace. Core keeps at most 1 MiB of
+sequenced output per terminal for reconnect replay. Separately, mandatory shell
+framing records metadata for every completed command as a Project-lifetime audit.
+The derived image contains a verified,
 schema-versioned catalog of security executables from the installed Kali
 baseline. Image preparation resolves the installed direct dependencies of
 `kali-linux-headless`, removes Kali core plus the checked-in deployment/system

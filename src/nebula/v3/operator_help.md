@@ -124,8 +124,9 @@ Sources: docs/NEBULA3.md#workbench-terminal-reviewed-execution-and-workspace-lim
 
 The Workbench Terminal is a human-operated Kali container, not a host terminal. One
 active terminal is retained per Project across mode changes and short reconnects. It
-stops on explicit **Stop**, Core shutdown, 30 minutes without input or output, or
-after a disconnected UI exceeds its 10-minute reconnect grace. Core retains at most
+stops on explicit **Stop**, confirmed tab close, process exit, a workspace-limit
+violation, Core shutdown, or after a disconnected UI exceeds its 10-minute reconnect
+grace. Inactivity by itself does not stop a connected terminal. Core retains at most
 1 MiB of sequenced output for reconnect replay. Separately, mandatory audit capture
 persists metadata for every completed command for the Project lifetime. It retains
 the merged PTY result as raw and redacted content-addressed artifacts only when an

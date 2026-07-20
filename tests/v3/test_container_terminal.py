@@ -853,11 +853,30 @@ async def test_terminal_idle_timeout_is_based_on_input_and_output_activity(tmp_p
     assert event == ContainerTerminalExit(
         outcome="idle_timeout",
         error_code="idle_timeout",
-        detail="terminal closed after 30 minutes without input or output",
+        detail=(
+            "terminal closed after its configured inactivity limit "
+            "without input or output"
+        ),
     )
     await asyncio.sleep(0)
     assert runner.processes[0].closed == 1
     assert service.workspace_lock(engagement.id).locked() is False
+
+
+@async_test
+async def test_terminal_has_no_inactivity_timeout_by_default(tmp_path):
+    _store, engagement, runner, _platform, service = continuity_fixture(
+        tmp_path,
+        watchdog_interval_seconds=0.005,
+    )
+    _started, attachment = await start_controllable_terminal(service, engagement)
+
+    await asyncio.sleep(0.05)
+
+    assert service.idle_timeout_seconds == 0
+    assert runner.processes[0].closed == 0
+    assert await service.engagement_active(engagement.id) is True
+    await service.close_attachment(attachment)
 
 
 @async_test

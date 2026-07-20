@@ -74,10 +74,11 @@ TERMINAL_REPLAY_MAX_BYTES = 1024 * 1024
 MAX_TERMINAL_INPUT_BYTES = 1024 * 1024
 TERMINAL_OUTPUT_CHUNK_BYTES = 32_768
 # Interactive terminals have no application-level lifetime cutoff. The 24-hour
-# value is only the maximum representable sandbox safety limit; the watchdog
-# closes sessions based on inactivity, explicit stop, or Core shutdown.
+# value is only the maximum representable sandbox safety limit. Zero disables
+# the optional inactivity cutoff; connected sessions otherwise end on explicit
+# stop, process exit, a workspace-limit violation, or Core shutdown.
 TERMINAL_MAX_DURATION_SECONDS = 24 * 60 * 60
-TERMINAL_IDLE_TIMEOUT_SECONDS = 30 * 60
+TERMINAL_IDLE_TIMEOUT_SECONDS = 0
 TERMINAL_COMMAND = ("--noprofile", "--norc", "-i")
 LOGGER = logging.getLogger(__name__)
 
@@ -404,8 +405,8 @@ class ContainerTerminalService:
             raise ValueError("terminal concurrency must be between 1 and 32")
         if reconnect_grace_seconds <= 0:
             raise ValueError("terminal reconnect grace must be positive")
-        if idle_timeout_seconds <= 0:
-            raise ValueError("terminal idle timeout must be positive")
+        if idle_timeout_seconds < 0:
+            raise ValueError("terminal idle timeout must be non-negative")
         if watchdog_interval_seconds <= 0:
             raise ValueError("terminal watchdog interval must be positive")
         if not 1 <= replay_max_bytes <= TERMINAL_REPLAY_MAX_BYTES:
@@ -1640,12 +1641,18 @@ class ContainerTerminalService:
                         detail=exc.detail,
                     )
                     return
-                if await self.idle_seconds(session_id) >= self.idle_timeout_seconds:
+                if (
+                    self.idle_timeout_seconds > 0
+                    and await self.idle_seconds(session_id) >= self.idle_timeout_seconds
+                ):
                     await self.finish(
                         session_id,
                         outcome="idle_timeout",
                         error_code="idle_timeout",
-                        detail="terminal closed after 30 minutes without input or output",
+                        detail=(
+                            "terminal closed after its configured inactivity limit "
+                            "without input or output"
+                        ),
                     )
                     return
         except asyncio.CancelledError as caught_error:
