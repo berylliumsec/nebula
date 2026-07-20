@@ -1,15 +1,8 @@
 # Nebula – Security Testing Workbench
 
-> [!IMPORTANT]
-> **Nebula 2 has been discontinued and removed.** It is no longer maintained,
-> tested, packaged, distributed, or supported. Nebula 3 is the only supported
-> Nebula application. Historical `nebula-ai` releases remain on PyPI only for
-> reproducible exact-version installs and receive no fixes or security updates.
+Nebula is an operator first, AI powered penetration testing platform that seeks to simplify the process of network penetration testing by integrating AI Agents, Terminals, a code editor, a web browser, screenshots, note-taking, screenshots in one desktop application. 
 
-Nebula 3 is a native, local-first security testing workbench. It combines an
-isolated human terminal, optional AI assistance, immutable evidence, reviewed
-execution, and reporting. Terminal use does not require a model provider, and
-human terminal work never falls back to a host shell.
+At its core it is driven by the human operator and assisted by AI agents.
 
 ## Release status
 
