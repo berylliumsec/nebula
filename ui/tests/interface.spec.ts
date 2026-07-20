@@ -736,9 +736,6 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   await messageInput.fill("");
   await expect.poll(() => messageInput.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(collapsedHeight + 1);
 
-  const chatScroll = page.locator(".chat-scroll");
-  expect(await chatScroll.evaluate((element) => getComputedStyle(element).overflowAnchor)).toBe("none");
-
   const composerBounds = await workspace.evaluate((element) => {
     const workspaceRect = element.getBoundingClientRect();
     const panel = element.querySelector<HTMLElement>(".chat-panel")!;
@@ -770,6 +767,99 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   expect(composerBounds.composerBottom, geometry).toBeLessThanOrEqual(composerBounds.workspaceBottom + 1);
   expect(composerBounds.composerBottom).toBeLessThanOrEqual(composerBounds.viewportHeight + 1);
   expect(composerBounds.workspaceScrollHeight).toBeLessThanOrEqual(composerBounds.clientHeight + 1);
+});
+
+test("streaming chat follows the bottom without overriding reader scroll intent", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Scroll intent needs one desktop interaction run.");
+  const provider = {
+    ...entity,
+    id: "provider-scroll-test",
+    name: "Scroll test provider",
+    provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true,
+    is_local: true,
+    secret_ref: null,
+    model_allowlist: ["scroll-test-model"],
+    capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true },
+    metadata: { default_model: "scroll-test-model" },
+  };
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([provider]) });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const paragraph = "Streaming output keeps extending this response while the analyst reads the transcript. ";
+      const deltas = Array.from({ length: 120 }, (_, index) => `${index + 1}. ${paragraph.repeat(3)}\n\n`);
+      const content = deltas.join("");
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const frames: unknown[] = [
+            { type: "started", provider_id: "provider-scroll-test", model: "scroll-test-model", session_id: "scroll-session", turn_id: "scroll-turn" },
+            ...deltas.map((delta) => ({ type: "delta", provider_id: "provider-scroll-test", model: "scroll-test-model", delta })),
+            {
+              type: "done",
+              provider_id: "provider-scroll-test",
+              model: "scroll-test-model",
+              session_id: "scroll-session",
+              turn_id: "scroll-turn",
+              message: { id: "scroll-assistant", role: "assistant", content },
+              usage: { input_tokens: 4, output_tokens: 1200, total_tokens: 1204 },
+              finish_reason: "stop",
+              citations: [],
+            },
+          ];
+          let index = 0;
+          const timer = globalThis.setInterval(() => {
+            const frame = frames[index++];
+            if (frame) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+            if (index >= frames.length) {
+              globalThis.clearInterval(timer);
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            }
+          }, 20);
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await expect(composer).toBeEnabled();
+  await composer.fill("Stream a long response for scroll testing.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  const chatScroll = page.locator(".chat-scroll");
+  await expect.poll(() => chatScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(500);
+  await chatScroll.hover();
+  await page.mouse.wheel(0, 10_000);
+  const distanceFromBottom = () => chatScroll.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight);
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
+  await page.waitForTimeout(300);
+  expect(await distanceFromBottom()).toBeLessThanOrEqual(2);
+
+  await page.mouse.wheel(0, -500);
+  await expect.poll(distanceFromBottom).toBeGreaterThan(100);
+  const readerPosition = await chatScroll.evaluate((element) => element.scrollTop);
+  await page.waitForTimeout(300);
+  expect(await chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(readerPosition + 2);
 });
 
 test("an idle resumed harness uses one compact ready status", async ({ page }, testInfo) => {
