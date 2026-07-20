@@ -266,8 +266,6 @@ export function SessionsPage() {
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const followLatestRef = useRef(true);
   const streamDeltaRef = useRef(new Map<string, string>());
   const streamFrameRef = useRef<number | undefined>(undefined);
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
@@ -609,23 +607,6 @@ export function SessionsPage() {
     }
   };
 
-  const trackChatScroll = () => {
-    const scroll = scrollRef.current;
-    if (!scroll) return;
-    followLatestRef.current = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 72;
-  };
-
-  useLayoutEffect(() => {
-    const scroll = scrollRef.current;
-    if (!scroll || !followLatestRef.current) return;
-
-    // Assistant output can update several times per second. Starting a new
-    // smooth animation for every chunk leaves the browser chasing stale
-    // positions and can anchor the viewport at the start of a long response.
-    // Set the final position synchronously after each committed render instead.
-    scroll.scrollTop = scroll.scrollHeight;
-  }, [messages, sending]);
-
   const refreshSessions = async (selectedId?: string) => {
     if (!api || !engagement) return;
     const page = await api.listChatSessions(engagement.id);
@@ -637,7 +618,6 @@ export function SessionsPage() {
     if (!detachActiveHarnessStream()) abortRef.current?.abort();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
-    followLatestRef.current = true;
     setSending(false);
     setSessionId("");
     setConversationOpen(open);
@@ -817,7 +797,6 @@ export function SessionsPage() {
     }
     if (!api) return;
     detachActiveHarnessStream();
-    followLatestRef.current = true;
     setSending(false);
     setConversationOpen(true);
     setLoadingHistory(true);
@@ -1023,7 +1002,6 @@ export function SessionsPage() {
 
   const openAttachedChat = async (id: string) => {
     if (!api || !engagement) return;
-    followLatestRef.current = true;
     setLoadingHistory(true);
     setChatError(undefined);
     setHarnessProgress(undefined);
@@ -1336,7 +1314,6 @@ export function SessionsPage() {
       state: "streaming",
       durable: false,
     };
-    followLatestRef.current = true;
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setDraft("");
     clearAssistantDraft();
@@ -1886,7 +1863,7 @@ export function SessionsPage() {
                 {runtimeKind === "provider" ? <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} source${knowledgeSources.length === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><div className="chat-harness-mcp"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · Core-captured</small></span></label>) : <small>No enabled MCP profiles</small>}</div></> : <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeSources.length ? runtimePermitsKnowledge ? `${knowledgeSources.length} bounded source${knowledgeSources.length === 1 ? "" : "s"}` : "Harness is text-only" : "No sources loaded"}</small></span></label><div className="chat-harness-mcp"><span>MCP servers</span>{harnessSessionId ? <small>Frozen in selected session</small> : mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending || Boolean(sessionId)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div></>}
                 </div>
               </details>
-              <div className="chat-scroll" ref={scrollRef} aria-live="polite" onScroll={trackChatScroll}>
+              <div className="chat-scroll" aria-live="polite">
                 {loadingHistory ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? messages.map((message) => (
                   <article
                     className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`}
