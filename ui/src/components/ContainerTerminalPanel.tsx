@@ -326,7 +326,7 @@ function LiveContainerTerminal({
 
   return <div className="container-terminal-live">
     <header>
-      <div><span className={`status-dot ${failedExit || state === "error" ? "unavailable" : state === "ready" ? "healthy" : "warning"}`} /><span><strong>{statusLabel}</strong><small>Outbound bridge permitted · root · writable · Kali headless <code title={`${runtime.image}\nOfficial base: ${runtime.baseImage}`}>{runtime.imageDigest.slice(0, 19)}…</code></small></span></div>
+      <div><span className={`status-dot ${failedExit || state === "error" ? "unavailable" : state === "ready" ? "healthy" : "warning"}`} /><span><strong>{statusLabel}</strong></span></div>
       <div className="terminal-header-actions">
         <TerminalScreenshotAction
           capturedBy={capturedBy}
@@ -344,7 +344,6 @@ function LiveContainerTerminal({
       {managementError && <DiagnosticErrorNotice error={managementError} fallback="The terminal could not be stopped." compact />}
       {(auditWarningCount > 0 || auditHealthUnavailable) && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {auditHealthUnavailable ? "Terminal audit health is unavailable. Capture failures cannot be ruled out." : `${auditWarningCount} terminal audit warning${auditWarningCount === 1 ? "" : "s"} detected. Review Terminal Audit for classification, truncation, interruption, recovery, or persistence gaps.`}</p>}
       {networkWarning && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {networkWarning}</p>}
-      <p className="terminal-audit-active"><ShieldCheck size={14} /> Selective audit active</p>
       <p><code>kali-linux-headless</code> · <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code></p>
       {networkBoundaryVisible && <p className="terminal-network-warning"><AlertTriangle size={14} /><span>Bridge networking is permitted, not guaranteed. Host IPv4 and IPv6 availability can differ. Inbound TCP or UDP ports are granted only when explicitly published on host loopback. No raw-packet capabilities, host shell, or runtime socket are granted.</span><button className="icon-button subtle" type="button" aria-label="Dismiss network boundary notice" onClick={() => setNetworkBoundaryVisible(false)}><X size={14} /></button></p>}
     </div>

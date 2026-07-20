@@ -853,7 +853,6 @@ kbd { font-size: 11px; }
 .container-terminal-live .terminal-error { padding: 8px 14px; border-bottom: 1px solid #38242a; background: #24151a; }
 .terminal-live-notices:empty { display: none; }
 .terminal-live-notices > p:not(.terminal-network-warning) { margin: 0; padding: 7px 14px; border-bottom: 1px solid #20303a; color: #a9bbc2; background: #0c171e; font-size: 11px; line-height: 1.4; }
-.terminal-live-notices > .terminal-audit-active { display: flex; align-items: center; gap: 7px; color: #8fd7ad; background: #0d1d18; }
 .terminal-live-notices > .terminal-audit-warning { display: flex; align-items: center; gap: 7px; margin: 0; padding: 8px 14px; border-bottom: 1px solid #5a252b; color: #ff9da3; background: #2a151a; font-size: 11px; font-weight: 650; line-height: 1.4; }
 .terminal-network-warning { display: flex; align-items: center; gap: 7px; margin: 0; padding: 7px 14px; border-bottom: 1px solid #4b3d20; color: #e3c877; background: #211c10; font-size: 11px; line-height: 1.4; }
 .terminal-network-warning > span { flex: 1; }
