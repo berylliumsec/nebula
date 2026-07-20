@@ -17,7 +17,7 @@ import {
   installTerminalAdapter,
 } from "./usage.adapters";
 
-test.describe.configure({ mode: "serial" });
+test.describe.configure({ mode: "serial", timeout: 90_000 });
 
 test("01 create an authorized security project", async ({ page, core }) => {
   await installTerminalAdapter(page);

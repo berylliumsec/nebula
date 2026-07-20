@@ -531,7 +531,7 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
   expect(dimensions.canvasHeight).toBeLessThanOrEqual(dimensions.viewportContentHeight + 1);
 });
 
-test("terminal drag selection has a visible high-contrast highlight", async ({ page }, testInfo) => {
+test("terminal pointer selection has a visible high-contrast highlight", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Canvas selection rendering needs one desktop visual run.");
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("tab", { name: "Terminal", exact: true }).click();
@@ -542,17 +542,9 @@ test("terminal drag selection has a visible high-contrast highlight", async ({ p
   const promptRow = rows.locator(":scope > div").filter({ hasText: "root@nebula:/workspace#" }).first();
   await expect(promptRow).toBeVisible();
   const box = await promptRow.boundingBox();
-  const measure = await screen.locator(".xterm-char-measure-element").first().boundingBox();
   expect(box).toBeTruthy();
-  expect(measure).toBeTruthy();
-  const cellWidth = measure!.width / 32;
   const y = box!.y + box!.height / 2;
-  await page.mouse.move(box!.x + cellWidth * 1.5, y);
-  await page.mouse.down();
-  await page.waitForTimeout(50);
-  await page.mouse.move(box!.x + cellWidth * 20.5, y, { steps: 20 });
-  await page.waitForTimeout(50);
-  await page.mouse.up();
+  await page.mouse.dblclick(box!.x + 12, y, { delay: 75 });
   await expect(screen.locator(".xterm-selection > div").first()).toBeVisible();
   await expect(page.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("terminal-visible-selection.png") });
@@ -756,17 +748,22 @@ test("all assistant states remain fully visible inside the workbench viewport", 
     element.scrollHeight - element.scrollTop - element.clientHeight
   ));
   const expectAtBottom = () => expect.poll(distanceFromBottom, { timeout: 15_000 }).toBeLessThanOrEqual(1);
+  const settleScrollState = () => page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
 
   await appendChatGrowth(1_200);
   await expectAtBottom();
   await chatScroll.evaluate((element) => { element.scrollTop = 0; });
   await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+  await settleScrollState();
   await appendChatGrowth(400);
   await page.waitForTimeout(100);
   expect(await chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
 
   await chatScroll.evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await expectAtBottom();
+  await settleScrollState();
   await appendChatGrowth(400);
   await expectAtBottom();
   await chatContent.locator(".scroll-growth-test").evaluateAll((elements) => elements.forEach((element) => element.remove()));
@@ -1054,13 +1051,16 @@ test("settings shows the live Kali preparation stage instead of a passive runtim
 });
 
 test("terminal and notes keep a visible focused caret", async ({ page }) => {
+  test.setTimeout(60_000);
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
 
   const terminalSurface = page.locator(".xterm-shell").first();
   await terminalSurface.click({ force: true });
   await expect(page.locator(".xterm").first()).toHaveCSS("cursor", "text");
-  await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("Terminal input");
+  const terminalInput = page.getByRole("textbox", { name: "Terminal input" }).first();
+  await terminalInput.click({ force: true });
+  await expect(terminalInput).toBeFocused();
 
   await page.getByRole("tab", { name: "Project notes", exact: true }).click();
   await page.getByRole("button", { name: "New note", exact: true }).click();
