@@ -141,6 +141,7 @@ function LiveContainerTerminal({
   const [error, setError] = useState<unknown>();
   const [exit, setExit] = useState<ContainerTerminalExit>();
   const [networkWarning, setNetworkWarning] = useState<string>();
+  const [networkBoundaryVisible, setNetworkBoundaryVisible] = useState(true);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -345,7 +346,7 @@ function LiveContainerTerminal({
       {networkWarning && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {networkWarning}</p>}
       <p className="terminal-audit-active"><ShieldCheck size={14} /> Selective audit active</p>
       <p><code>kali-linux-headless</code> · <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code></p>
-      <p className="terminal-network-warning"><AlertTriangle size={14} /> Bridge networking is permitted, not guaranteed. Host IPv4 and IPv6 availability can differ. Inbound TCP or UDP ports are granted only when explicitly published on host loopback. No raw-packet capabilities, host shell, or runtime socket are granted.</p>
+      {networkBoundaryVisible && <p className="terminal-network-warning"><AlertTriangle size={14} /><span>Bridge networking is permitted, not guaranteed. Host IPv4 and IPv6 availability can differ. Inbound TCP or UDP ports are granted only when explicitly published on host loopback. No raw-packet capabilities, host shell, or runtime socket are granted.</span><button className="icon-button subtle" type="button" aria-label="Dismiss network boundary notice" onClick={() => setNetworkBoundaryVisible(false)}><X size={14} /></button></p>}
     </div>
     <div className="xterm-shell" ref={hostRef} aria-label="Terminal output" />
     <footer><ShieldCheck size={14} /> Additional system changes and packages disappear when this content-pinned container closes; the Kali headless baseline and <code>/workspace</code> remain available in new sessions.{exit?.exitCode !== undefined ? ` Exit code ${exit.exitCode}.` : ""}</footer>

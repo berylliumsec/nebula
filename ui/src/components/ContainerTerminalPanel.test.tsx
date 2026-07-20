@@ -230,6 +230,24 @@ describe("ContainerTerminalPanel", () => {
     expect(terminalSpies.focus).toHaveBeenCalledTimes(focusCalls + 1);
   });
 
+  it("allows the network boundary notice to be dismissed", async () => {
+    const user = userEvent.setup();
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [
+        { session: session("terminal-1"), runtime },
+      ] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(1)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+    expect(await screen.findByText(/Bridge networking is permitted, not guaranteed/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Dismiss network boundary notice" }));
+    expect(screen.queryByText(/Bridge networking is permitted, not guaranteed/)).not.toBeInTheDocument();
+  });
+
   it("prepares and starts exactly one initial terminal during the StrictMode probe", async () => {
     const api = {
       baseUrl: "http://127.0.0.1:8765/api/v1",
