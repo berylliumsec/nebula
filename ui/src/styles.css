@@ -457,7 +457,7 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .harness-reasoning-note { color: var(--muted); }
 .harness-output, .harness-structured { min-width: 0; }
 .harness-output > small { display: block; margin-bottom: 4px; color: var(--muted); text-transform: uppercase; }
-.harness-output pre, .harness-structured { max-height: 320px; margin: 0; padding: 9px; overflow: auto; overscroll-behavior: contain; border-radius: 7px; background: var(--bg); white-space: pre-wrap; word-break: break-word; font-size: 11px; }
+.harness-output pre, .harness-structured { max-height: none; margin: 0; padding: 9px; overflow-x: auto; overflow-y: visible; overscroll-behavior-x: contain; border-radius: 7px; background: var(--bg); white-space: pre-wrap; word-break: break-word; font-size: 11px; }
 .harness-structured-details > summary { width: fit-content; cursor: pointer; color: var(--muted); font-size: 10px; }
 .harness-structured-details[open] > summary { margin-bottom: 5px; }
 .harness-output.diff pre { color: var(--text); white-space: pre; }

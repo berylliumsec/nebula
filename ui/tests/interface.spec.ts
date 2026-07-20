@@ -962,7 +962,7 @@ test("an idle resumed harness uses one compact ready status", async ({ page }, t
   await expect(page.locator(".session-inspector code").filter({ hasText: harnessSessionId })).toHaveText(harnessSessionId);
 });
 
-test("a completed harness activity card does not collapse under the reader", async ({ page }, testInfo) => {
+test("completed harness output keeps one continuous transcript scroll", async ({ page }, testInfo) => {
   test.skip(!["desktop", "webkit"].includes(testInfo.project.name), "Harness completion needs one desktop interaction run.");
   const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";
   const harnessTurnId = "c9745e80-4444-4555-8666-777788889999";
@@ -1016,13 +1016,14 @@ test("a completed harness activity card does not collapse under the reader", asy
       if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
       const encoder = new TextEncoder();
       const output = "Completed command output remains expanded so the transcript cannot shrink beneath the reader.\n".repeat(80);
+      const answer = "Verification completed successfully. The operator remains in control of the next action.\n\n".repeat(30);
       const frames: unknown[] = [
         { type: "started", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", session_id: "chat-harness-completion", turn_id: "chat-turn-completion" },
         { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "running", title: "Run verification", artifact_ids: [], payload: { command: "npm test" } },
         { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "streaming", title: "Run verification", stream: "stdout", delta: output, artifact_ids: [], payload: {} },
         { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 3, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "completed", title: "Run verification", summary: "Verification passed.", artifact_ids: [], payload: { command: "npm test", exit_code: 0 } },
         { type: "completed", harness_session_id: session, harness_turn_id: turn, payload: {} },
-        { type: "done", session_id: "chat-harness-completion", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", message: { id: "assistant-harness-completion", role: "assistant", content: "Verification completed successfully." }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] },
+        { type: "done", session_id: "chat-harness-completion", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", message: { id: "assistant-harness-completion", role: "assistant", content: answer }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] },
       ];
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -1055,6 +1056,13 @@ test("a completed harness activity card does not collapse under the reader", asy
   await expect(activity.getByText("completed", { exact: true })).toBeVisible({ timeout: 5_000 });
   await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 5_000 });
   await expect(activity).toHaveAttribute("open", "");
+  const chatScroll = page.locator(".chat-scroll");
+  const commandOutput = activity.locator(".harness-output pre");
+  await expect.poll(() => commandOutput.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(2);
+  await commandOutput.hover();
+  const outerBefore = await chatScroll.evaluate((element) => element.scrollTop);
+  await page.mouse.wheel(0, 500);
+  await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(outerBefore + 2);
 });
 
 test("the workbench expands to the full viewport and restores in place", async ({ page }) => {
