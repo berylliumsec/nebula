@@ -669,7 +669,7 @@ kbd { font-size: 11px; }
 .chat-context-bar { grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto; gap: 10px; padding: 10px 12px; }
 .chat-context-bar > label, .chat-knowledge-toggle > span, .chat-knowledge-toggle small { font-size: 11px; }
 .chat-context-bar select, .chat-context-bar input:not([type="checkbox"]) { height: 34px; border-radius: 8px; font-size: 12px; }
-.chat-scroll { padding: 28px 30px; overscroll-behavior: contain; }
+.chat-scroll { padding: 28px 30px; overscroll-behavior-y: none; }
 .chat-panel > .chat-composer { flex: 0 0 auto; }
 
 /* The panoramic shell can leave a deliberately shallow chat surface on short

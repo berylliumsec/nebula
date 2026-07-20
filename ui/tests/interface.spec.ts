@@ -847,6 +847,7 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   await composer.fill("Stream a long response for scroll testing.");
   await page.getByRole("button", { name: "Send message" }).click();
   const chatScroll = page.locator(".chat-scroll");
+  await expect.poll(() => chatScroll.evaluate((element) => getComputedStyle(element).overscrollBehaviorY)).toBe("none");
   await expect.poll(() => chatScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(500);
   await chatScroll.hover();
   let previousTrackpadPosition = await chatScroll.evaluate((element) => element.scrollTop);
@@ -865,6 +866,9 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
   await page.waitForTimeout(300);
   expect(await distanceFromBottom()).toBeLessThanOrEqual(2);
+
+  await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 10_000 });
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
 
   await page.mouse.wheel(0, -500);
   await expect.poll(distanceFromBottom).toBeGreaterThan(100);
