@@ -33,10 +33,10 @@ repository policy. Define these environment secrets:
 - `NEBULA_UPDATER_PUBLIC_KEY`, embedded into direct builds and backed up with
   the private key offline.
 
-The release cannot be validated without this environment: credential checks run
-for validation-only dispatches as well as tag publication. Confirm the
+The release cannot be prepared without this environment. Confirm the
 `macos-15-intel` runner label is available to the repository before tagging.
-Never use placeholder credentials for a release candidate.
+Never use placeholder credentials for a release candidate. The preparation run
+and manual finalization must complete before a draft release exists.
 
 ## Candidate checklist
 
@@ -73,19 +73,37 @@ Never use placeholder credentials for a release candidate.
    git push origin nebula-v3.0.0-alpha.1
    ```
 
-The manual workflow can revalidate an existing immutable tag with
-`publish_draft=false`, for example after a transient runner failure. It is not a
-pre-tag build: the requested tag must already exist on the remote. Never move a
-published release tag.
+The tag push starts the preparation workflow. It builds direct and managed
+installers on native macOS arm64, macOS x64, and Ubuntu 22.04 x64 runners.
+macOS builds are signed and submitted to Apple with Tauri's `--skip-stapling`
+mode, so the runners do not wait for Apple to finish. Linux packages complete
+their final audits, SBOMs, checksums, and attestations during preparation.
 
-Tag pushes build direct and managed installers on native macOS arm64, macOS x64,
-and Ubuntu 22.04 x64 runners. Release builds install the locked Core boundary;
-package and installer audits reject GUI bindings and heavy in-process model
-stacks from the freezer environment.
+Record the successful preparation workflow run ID. After Apple has processed
+the submissions, manually run **Finalize Nebula 3 desktop release** with the
+immutable tag and preparation run ID:
+
+```console
+gh workflow run nebula3-release-finalize.yml \
+  -f release_tag=nebula-v3.0.0-alpha.1 \
+  -f preparation_run_id=123456789 \
+  -f create_draft=true
+```
+
+The finalizer verifies that the preparation run succeeded at the exact tagged
+commit and that all three private artifact sets still exist. If Apple is still
+processing either macOS architecture, stapling fails safely and no draft is
+created; rerun the finalizer later with the same inputs. Never resubmit or move
+the tag merely because Apple is still processing it.
 
 ## Draft review and publication
 
-The workflow always creates a draft GitHub Release. Before publishing it, a
+Only a successful finalization creates a draft GitHub Release. Finalization
+staples the submitted apps inside writable copies of the prepared DMGs, rebuilds
+and signs the final DMGs, creates and signs the updater archives from the stapled
+direct apps, repeats Gatekeeper and installed-layout checks, generates final
+macOS SBOMs and checksums, attests the final bytes, and combines them with the
+prepared Linux outputs. Before publishing the draft, a
 release manager must verify:
 
 - all three platform jobs and the clean Linux install matrix passed;
@@ -104,6 +122,8 @@ Publishing the draft triggers channel-specific updater manifest generation on
 GitHub Pages. Confirm that workflow succeeds and that the new manifest preserves
 the existing website before announcing the release.
 
-If any release gate fails, leave the draft unpublished, fix the problem on a new
-commit, advance the version, and create a new tag. Do not replace artifacts on an
-existing published release or repoint its tag.
+If a content or release gate fails, leave the draft unpublished, fix the problem
+on a new commit, advance the version, and create a new tag. An Apple
+`In Progress` result is not a content failure: wait and rerun finalization against
+the same preparation run. Do not replace artifacts on an existing published
+release or repoint its tag.

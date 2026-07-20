@@ -1,4 +1,4 @@
-name: Nebula 3 desktop release
+name: Prepare Nebula 3 desktop release
 
 on:
   push:
@@ -7,14 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing nebula-v3.* tag to validate
+        description: Existing nebula-v3.* tag to prepare
         required: true
         type: string
-      publish_draft:
-        description: Create a signed draft GitHub Release
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -31,7 +26,6 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       channel: ${{ steps.release.outputs.channel }}
       prerelease: ${{ steps.release.outputs.prerelease }}
-      publish: ${{ steps.release.outputs.publish }}
       commit: ${{ steps.release.outputs.commit }}
       build_timestamp: ${{ steps.release.outputs.build_timestamp }}
     steps:
@@ -43,9 +37,7 @@ jobs:
       - name: Validate tag, commit, and synchronized versions
         id: release
         env:
-          EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-          MANUAL_PUBLISH: ${{ inputs.publish_draft || false }}
         run: |
           case "$RELEASE_TAG" in
             nebula-v3.*) ;;
@@ -59,11 +51,6 @@ jobs:
             *-*) channel=prerelease; prerelease=true ;;
             *) channel=stable; prerelease=false ;;
           esac
-          if [ "$EVENT_NAME" = push ] || [ "$MANUAL_PUBLISH" = true ]; then
-            publish=true
-          else
-            publish=false
-          fi
           commit="$(git rev-parse HEAD)"
           build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
@@ -71,7 +58,6 @@ jobs:
             printf 'version=%s\n' "$version"
             printf 'channel=%s\n' "$channel"
             printf 'prerelease=%s\n' "$prerelease"
-            printf 'publish=%s\n' "$publish"
             printf 'commit=%s\n' "$commit"
             printf 'build_timestamp=%s\n' "$build_timestamp"
           } >> "$GITHUB_OUTPUT"
@@ -198,7 +184,7 @@ jobs:
           security import "$certificate" -k nebula-build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple: -s -k "$APPLE_KEYCHAIN_PASSWORD" nebula-build.keychain
           security list-keychains -d user -s nebula-build.keychain login.keychain-db
-      - name: Build signed direct and managed macOS DMGs
+      - name: Build signed macOS apps, submit notarization, and prepare DMGs
         if: matrix.platform == 'macOS'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -219,15 +205,10 @@ jobs:
           poetry run python scripts/package_audit.py "$sidecar"
           codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$sidecar"
           codesign --verify --strict --verbose=2 "$sidecar"
-          NEBULA_DISTRIBUTION=direct npm --prefix ui run tauri -- build --ci --target "${{ matrix.target }}" --features direct-updater --bundles dmg --config src-tauri/tauri.direct.conf.json --config "$RUNNER_TEMP/tauri-updater.conf.json"
+          NEBULA_DISTRIBUTION=direct npm --prefix ui run tauri -- build --ci --skip-stapling --target "${{ matrix.target }}" --features direct-updater --bundles dmg --config src-tauri/tauri.direct.conf.json --config "$RUNNER_TEMP/tauri-updater.conf.json"
           direct_dmg="$(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
-          updater="$(find "$bundle/macos" -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)"
           test -n "$direct_dmg"
-          test -n "$updater"
-          test -s "$updater.sig"
           install -m 0644 "$direct_dmg" "$stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}-direct.dmg"
-          install -m 0644 "$updater" "$stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}.updater.tar.gz"
-          install -m 0644 "$updater.sig" "$stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}.updater.tar.gz.sig"
 
           rm -rf "$bundle"
           NEBULA_DISTRIBUTION_CHANNEL=managed poetry run python -m scripts.build_nebula_core
@@ -237,7 +218,7 @@ jobs:
           poetry run python scripts/package_audit.py "$sidecar"
           codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$sidecar"
           codesign --verify --strict --verbose=2 "$sidecar"
-          NEBULA_DISTRIBUTION=managed npm --prefix ui run tauri -- build --ci --target "${{ matrix.target }}" --bundles dmg --config src-tauri/tauri.managed.conf.json
+          NEBULA_DISTRIBUTION=managed npm --prefix ui run tauri -- build --ci --skip-stapling --target "${{ matrix.target }}" --bundles dmg --config src-tauri/tauri.managed.conf.json
           managed_dmg="$(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
           test -n "$managed_dmg"
           install -m 0644 "$managed_dmg" "$stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}-managed.dmg"
@@ -278,14 +259,12 @@ jobs:
           test -n "$deb"
           poetry run python -m scripts.repack_deb "$deb" --version "$NEBULA_VERSION"
           install -m 0644 "$deb" "$stage/Nebula-$NEBULA_VERSION-linux-x86_64.deb"
-      - name: Inspect and self-test macOS installers
+      - name: Inspect prepared macOS installers
         if: matrix.platform == 'macOS'
         run: |
           for flavor in direct managed; do
             dmg="$RUNNER_TEMP/release-stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}-$flavor.dmg"
             codesign --verify --deep --strict --verbose=2 "$dmg"
-            spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
-            xcrun stapler validate "$dmg"
             mount="$RUNNER_TEMP/mount-$flavor"
             install -d -m 0755 "$mount"
             hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
@@ -294,24 +273,9 @@ jobs:
             test -x "$app/Contents/MacOS/nebula-core"
             poetry run python scripts/package_audit.py --tree "$app"
             codesign --verify --deep --strict --verbose=2 "$app"
-            spctl --assess --type execute --verbose=2 "$app"
-            xcrun stapler validate "$app"
             "$app/Contents/MacOS/nebula-ui" --self-test
             hdiutil detach "$mount"
           done
-          updater="$RUNNER_TEMP/release-stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}.updater.tar.gz"
-          cargo run --locked --quiet --manifest-path ui/src-tauri/Cargo.toml \
-            --example verify_update_signature -- \
-            "$updater" "$updater.sig" "$NEBULA_UPDATER_PUBLIC_KEY"
-          tampered="$RUNNER_TEMP/tampered-updater.tar.gz"
-          cp "$updater" "$tampered"
-          printf 'tampered' >> "$tampered"
-          if cargo run --locked --quiet --manifest-path ui/src-tauri/Cargo.toml \
-            --example verify_update_signature -- \
-            "$tampered" "$updater.sig" "$NEBULA_UPDATER_PUBLIC_KEY"; then
-            printf 'tampered updater unexpectedly passed signature verification\n' >&2
-            exit 1
-          fi
       - name: Inspect and self-test Linux installers
         if: matrix.platform == 'Linux'
         run: |
@@ -348,6 +312,7 @@ jobs:
             exit 1
           fi
       - name: Generate per-artifact SBOMs and checksums
+        if: matrix.platform == 'Linux'
         run: |
           stage="$RUNNER_TEMP/release-stage"
           for artifact in "$stage"/Nebula-*; do
@@ -369,6 +334,7 @@ jobs:
             shasum -a 256 Nebula-* > "SHA256SUMS-${{ matrix.id }}.txt"
           )
       - name: Attest release artifacts
+        if: matrix.platform == 'Linux'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: ${{ runner.temp }}/release-stage/*
@@ -422,72 +388,3 @@ jobs:
           test ! -e /usr/bin/nebula
           test ! -e /usr/bin/nebula-ui
           test ! -e /usr/bin/nebula-core
-
-  draft-release:
-    needs: [validate, build, linux-clean-smoke]
-    if: needs.validate.outputs.publish == 'true'
-    runs-on: ubuntu-22.04
-    environment: desktop-release
-    permissions:
-      contents: write
-    steps:
-      - name: Check out the validated release notes
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ needs.validate.outputs.tag }}
-      - name: Download all native outputs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: nebula3-*
-          path: release-assets
-          merge-multiple: true
-      - name: Verify the complete immutable artifact set
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          required="
-          Nebula-$VERSION-macOS-arm64-direct.dmg
-          Nebula-$VERSION-macOS-x64-direct.dmg
-          Nebula-$VERSION-macOS-arm64-managed.dmg
-          Nebula-$VERSION-macOS-x64-managed.dmg
-          Nebula-$VERSION-linux-x86_64.deb
-          Nebula-$VERSION-linux-x86_64.AppImage
-          Nebula-$VERSION-linux-x86_64.AppImage.sig
-          Nebula-$VERSION-macOS-arm64.updater.tar.gz
-          Nebula-$VERSION-macOS-arm64.updater.tar.gz.sig
-          Nebula-$VERSION-macOS-x64.updater.tar.gz
-          Nebula-$VERSION-macOS-x64.updater.tar.gz.sig
-          "
-          for name in $required; do
-            test -s "release-assets/$name"
-          done
-          test "$(find release-assets -maxdepth 1 -type f -name '*.cyclonedx.json' | wc -l)" -eq 8
-          test "$(find release-assets -maxdepth 1 -type f -name '*.spdx.json' | wc -l)" -eq 8
-          test "$(find release-assets -maxdepth 1 -type f -name 'SHA256SUMS-*' | wc -l)" -eq 3
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          for path in Path("release-assets").glob("*.cyclonedx.json"):
-              payload = json.loads(path.read_text())
-              assert payload.get("bomFormat") == "CycloneDX", path
-              assert len(payload.get("components", [])) >= 10, path
-          for path in Path("release-assets").glob("*.spdx.json"):
-              payload = json.loads(path.read_text())
-              assert payload.get("spdxVersion") == "SPDX-2.3", path
-              assert len(payload.get("packages", [])) >= 10, path
-          PY
-      - name: Create a manually reviewed draft GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-          VERSION: ${{ needs.validate.outputs.version }}
-          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
-        run: |
-          prerelease_flag=
-          if [ "$PRERELEASE" = true ]; then prerelease_flag=--prerelease; fi
-          gh release create "$RELEASE_TAG" release-assets/* \
-            --verify-tag \
-            --draft \
-            $prerelease_flag \
-            --notes-file "docs/releases/$VERSION.md" \
-            --title "Nebula $VERSION"
