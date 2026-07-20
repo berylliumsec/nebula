@@ -1,0 +1,68 @@
+name: Check Apple notarization status
+
+on:
+  workflow_dispatch:
+    inputs:
+      submission_id:
+        description: Apple notarytool submission UUID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    name: Query Apple notarization submission
+    runs-on: macos-15
+    environment: desktop-release
+    timeout-minutes: 10
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      SUBMISSION_ID: ${{ inputs.submission_id }}
+    steps:
+      - name: Validate submission ID
+        shell: bash
+        run: |
+          case "$SUBMISSION_ID" in
+            ????????-????-????-????-????????????) ;;
+            *) printf 'invalid notarization submission ID\n' >&2; exit 1 ;;
+          esac
+
+      - name: Query notarization status
+        shell: bash
+        run: |
+          response="$RUNNER_TEMP/notary-info.json"
+          xcrun notarytool info "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --output-format json \
+            > "$response"
+          NOTARY_RESPONSE="$response" python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["NOTARY_RESPONSE"], encoding="utf-8") as stream:
+              response = json.load(stream)
+          for field in ("id", "name", "createdDate", "status"):
+              print(f"{field}: {response.get(field, 'unavailable')}")
+          PY
+
+      - name: Download terminal submission log
+        if: success()
+        continue-on-error: true
+        shell: bash
+        run: |
+          xcrun notarytool log "$SUBMISSION_ID" \
+            "$RUNNER_TEMP/notary-log.json" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+      - name: Remove temporary responses
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/notary-info.json" "$RUNNER_TEMP/notary-log.json"
