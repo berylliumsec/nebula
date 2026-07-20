@@ -5,6 +5,8 @@ export type ConversationMessageState = "complete" | "streaming" | "waiting_appro
 
 export interface ReconciledConversationMessage extends ChatMessage {
   id: string;
+  /** Stable UI identity retained while a temporary message receives its durable Core ID. */
+  runtimeId?: string;
   createdAt: string;
   citations: ChatCitation[];
   usage?: ChatUsage;
@@ -45,6 +47,10 @@ export function reconcileCompletedAssistantMessage(
       durable: false,
     }),
     id: durableId,
+    runtimeId: existing?.runtimeId
+      ?? (existing?.id === completed.temporaryAssistantId && durableId !== completed.temporaryAssistantId
+        ? completed.temporaryAssistantId
+        : undefined),
     role: "assistant",
     content: finalAssistantContent(existing?.content ?? "", completed.content),
     citations: completed.citations,

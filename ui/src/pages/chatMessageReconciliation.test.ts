@@ -27,7 +27,7 @@ describe("reconcileCompletedAssistantMessage", () => {
     const result = reconcileCompletedAssistantMessage([user, temporary], completion);
     expect(result.map((message) => message.id)).toEqual(["user-1", "assistant-final"]);
     expect(result[0].durable).toBe(true);
-    expect(result[1]).toMatchObject({ content: "Final conclusion", state: "complete", durable: true });
+    expect(result[1]).toMatchObject({ content: "Final conclusion", state: "complete", durable: true, runtimeId: "assistant-temp" });
   });
 
   it("appends the durable response when chat switching removed the temporary message", () => {

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   AssistantRuntimeProvider,
   ThreadPrimitive,
@@ -117,6 +117,20 @@ const CHAT_COMPOSER_MAX_HEIGHT = 160;
 
 interface ConversationMessage extends ReconciledConversationMessage {}
 
+function HarnessActivityDisclosure({
+  children,
+  className,
+  initiallyOpen,
+}: {
+  children: ReactNode;
+  className: string;
+  initiallyOpen: boolean;
+}) {
+  // A completed activity must not force-close content the operator is reading.
+  const [open, setOpen] = useState(initiallyOpen);
+  return <details className={className} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>{children}</details>;
+}
+
 function assistantMessageStatus(message: ConversationMessage): ThreadMessageLike["status"] {
   switch (message.state) {
     case "streaming":
@@ -134,7 +148,7 @@ function assistantMessageStatus(message: ConversationMessage): ThreadMessageLike
 
 function convertConversationMessage(message: ConversationMessage): ThreadMessageLike {
   return {
-    id: message.id,
+    id: message.runtimeId ?? message.id,
     role: message.role,
     content: message.content,
     createdAt: new Date(message.createdAt),
@@ -315,7 +329,7 @@ export function SessionsPage() {
     onNew: async () => undefined,
   });
   const messagesById = useMemo(
-    () => new Map(messages.map((message) => [message.id, message])),
+    () => new Map(messages.map((message) => [message.runtimeId ?? message.id, message])),
     [messages],
   );
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
@@ -1934,7 +1948,7 @@ export function SessionsPage() {
                     data-selection-source-kind={message.role === "assistant" ? "assistant_message" : "chat_message"}
                     data-selection-source-id={message.id}
                     data-selection-source-label={message.role === "assistant" ? "Assistant response" : "Chat message"}
-                    key={message.id}
+                    key={message.runtimeId ?? message.id}
                     tabIndex={-1}
                   >
                     <span className="chat-avatar">{message.role === "user" ? "You" : "N"}</span>
@@ -1942,7 +1956,7 @@ export function SessionsPage() {
                       <header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>
                       {message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p className={message.role === "assistant" && message.state === "streaming" ? "assistant-streaming-text" : undefined}>{message.content}</p>)}
                       {activityItems.some((item) => item.assistantId === message.id && shouldShowActivityItem(item)) && <section className="harness-timeline" aria-label="Harness activity">
-                        {activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item)).map((item) => <details className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} open={["running", "streaming", "waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? "") || item.kind === "plan"} key={item.key}>
+                        {activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item)).map((item) => <HarnessActivityDisclosure className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} initiallyOpen={["running", "streaming", "waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? "") || item.kind === "plan"} key={item.key}>
                           <summary><span className={`status-dot ${["completed", "complete", "success"].includes(item.status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(item.status ?? "") ? "unavailable" : "pending"}`} /><strong>{item.title}</strong>{shouldShowActivityKind(item) && <code>{item.kind?.replaceAll("_", " ")}</code>}{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</summary>
                           <div className="harness-activity-body">
                             {item.summary && <p>{item.summary}</p>}
@@ -1960,7 +1974,7 @@ export function SessionsPage() {
                             {item.kind === "subagent" && item.status === "running" && selectedHarness?.capabilities?.subagentControl && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void stopSubagent(item)}>Stop subagent</button>}
                             {item.type === "checkpoint" && selectedHarness?.capabilities?.checkpointRewind && <button className="button quiet" type="button" disabled={harnessControlBusy || (item.sessionId === harnessSessionId && harnessActivity?.busy)} title={item.sessionId === harnessSessionId && harnessActivity?.busy ? "Checkpoint rewind is available while the session is idle" : undefined} onClick={() => void rewindCheckpoint(item)}>Rewind files here</button>}
                           </div>
-                        </details>)}
+                        </HarnessActivityDisclosure>)}
                       </section>}
                       {runtimeKind !== "harness" && toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}{card.status !== "running" && <button className="button quiet" type="button" onClick={() => void openArtifacts(card)}><Search size={13} /> Artifacts</button>}</div>)}
                       {harnessInteractions.filter((interaction) => interaction.harnessTurnId === message.harnessTurnId && interaction.status === "pending").map((interaction) => <div className="chat-approval-card harness-interaction" key={interaction.id}>

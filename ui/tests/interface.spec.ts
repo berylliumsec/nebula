@@ -962,6 +962,101 @@ test("an idle resumed harness uses one compact ready status", async ({ page }, t
   await expect(page.locator(".session-inspector code").filter({ hasText: harnessSessionId })).toHaveText(harnessSessionId);
 });
 
+test("a completed harness activity card does not collapse under the reader", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "webkit"].includes(testInfo.project.name), "Harness completion needs one desktop interaction run.");
+  const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";
+  const harnessTurnId = "c9745e80-4444-4555-8666-777788889999";
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/harnesses")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "harness-completion",
+        name: "Codex harness",
+        kind: "codex_app_server",
+        connection_mode: "spawn",
+        transport: "stdio",
+        executable: "codex",
+        endpoint: null,
+        auth_mode: "existing_session",
+        secret_ref: null,
+        default_model: "gpt-5-codex",
+        enabled: true,
+        privacy: { local_only: true, permits_sensitive_data: true },
+        native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
+        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0", live_command_output: true },
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/harness-sessions/${harnessSessionId}/activity`)) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session_id: harnessSessionId,
+        session_status: "running",
+        busy: true,
+        live: true,
+        turn_id: harnessTurnId,
+        turn_status: "running",
+        turn_origin: "chat",
+        started_at: entity.created_at,
+        last_activity_at: entity.updated_at,
+        detail: "A harness turn is currently running.",
+      }) });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(({ harnessSessionId: session, harnessTurnId: turn }) => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const output = "Completed command output remains expanded so the transcript cannot shrink beneath the reader.\n".repeat(80);
+      const frames: unknown[] = [
+        { type: "started", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", session_id: "chat-harness-completion", turn_id: "chat-turn-completion" },
+        { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "running", title: "Run verification", artifact_ids: [], payload: { command: "npm test" } },
+        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "streaming", title: "Run verification", stream: "stdout", delta: output, artifact_ids: [], payload: {} },
+        { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 3, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "completed", title: "Run verification", summary: "Verification passed.", artifact_ids: [], payload: { command: "npm test", exit_code: 0 } },
+        { type: "completed", harness_session_id: session, harness_turn_id: turn, payload: {} },
+        { type: "done", session_id: "chat-harness-completion", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", message: { id: "assistant-harness-completion", role: "assistant", content: "Verification completed successfully." }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] },
+      ];
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          let index = 0;
+          const enqueue = () => {
+            const frame = frames[index++];
+            if (frame) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+            if (index >= frames.length) {
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+              return;
+            }
+            globalThis.setTimeout(enqueue, index === 3 ? 800 : 80);
+          };
+          enqueue();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  }, { harnessSessionId, harnessTurnId });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await expect(composer).toBeEnabled();
+  await composer.fill("Run the verification.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  const activity = page.locator("details.harness-activity-card", { hasText: "Run verification" });
+  await expect(activity).toHaveAttribute("open", "");
+  await expect(activity.getByText("completed", { exact: true })).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 5_000 });
+  await expect(activity).toHaveAttribute("open", "");
+});
+
 test("the workbench expands to the full viewport and restores in place", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/?view=chat", "Workbench");
