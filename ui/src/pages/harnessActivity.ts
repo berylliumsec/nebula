@@ -2,9 +2,26 @@ import type {
   HarnessActivityEvent,
   HarnessActivityItemKind,
   HarnessDetailedUsage,
+  HarnessSessionActivity,
 } from "../api/types";
 
 export type ReasoningSummaryState = "pending" | "available" | "not_provided";
+
+export function isSameHarnessSessionActivity(
+  current: HarnessSessionActivity | undefined,
+  next: HarnessSessionActivity,
+): boolean {
+  return current?.sessionId === next.sessionId
+    && current.sessionStatus === next.sessionStatus
+    && current.busy === next.busy
+    && current.live === next.live
+    && current.turnId === next.turnId
+    && current.turnStatus === next.turnStatus
+    && current.turnOrigin === next.turnOrigin
+    && current.startedAt === next.startedAt
+    && current.lastActivityAt === next.lastActivityAt
+    && current.detail === next.detail;
+}
 
 export interface HarnessActivityItem {
   assistantId: string;

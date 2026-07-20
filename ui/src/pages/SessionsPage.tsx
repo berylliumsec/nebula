@@ -68,6 +68,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { AgentsPage } from "./AgentsPage";
 import {
   isTimelineActivity,
+  isSameHarnessSessionActivity,
   reasoningSummaryState,
   reasoningSummaryText,
   reduceHarnessActivity,
@@ -395,13 +396,14 @@ export function SessionsPage() {
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
   const streamDeltaRef = useRef(new Map<string, string>());
   const streamFrameRef = useRef<number | undefined>(undefined);
-  const chatRuntime = useExternalStoreRuntime({
+  const chatRuntimeStore = useMemo(() => ({
     messages,
     convertMessage: convertConversationMessage,
     isLoading: loadingHistory,
     isRunning: sending,
     onNew: async () => undefined,
-  });
+  }), [loadingHistory, messages, sending]);
+  const chatRuntime = useExternalStoreRuntime(chatRuntimeStore);
   useEffect(() => {
     if (!import.meta.env.DEV || view !== "chat" || !conversationOpen || !chatViewportRef.current) return;
     return attachChatScrollTrace(chatViewportRef.current);
@@ -559,7 +561,7 @@ export function SessionsPage() {
       try {
         const next = await api.getHarnessSessionActivity(harnessSessionId, controller.signal);
         if (!active) return;
-        setHarnessActivity(next);
+        setHarnessActivity((current) => isSameHarnessSessionActivity(current, next) ? current : next);
         setHarnessActivityError(undefined);
       } catch (error) {
         if (!active || controller.signal.aborted) return;

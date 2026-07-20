@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { HarnessActivityEvent } from "../api/types";
+import type { HarnessActivityEvent, HarnessSessionActivity } from "../api/types";
 import {
   finalAssistantContent,
+  isSameHarnessSessionActivity,
   isTimelineActivity,
   reasoningSummaryState,
   reasoningSummaryText,
@@ -23,6 +24,25 @@ function activity(
 }
 
 describe("harness activity presentation", () => {
+  it("recognizes unchanged authoritative activity polls", () => {
+    const activityState: HarnessSessionActivity = {
+      sessionId: "session-1",
+      sessionStatus: "idle",
+      busy: false,
+      live: true,
+      turnId: "turn-1",
+      turnStatus: "complete",
+      turnOrigin: "chat",
+      startedAt: "2026-07-20T20:00:00Z",
+      lastActivityAt: "2026-07-20T20:01:00Z",
+      detail: "Harness is ready.",
+    };
+
+    expect(isSameHarnessSessionActivity(activityState, { ...activityState })).toBe(true);
+    expect(isSameHarnessSessionActivity(activityState, { ...activityState, busy: true })).toBe(false);
+    expect(isSameHarnessSessionActivity(undefined, activityState)).toBe(false);
+  });
+
   it("keeps routine turn status out of the assistant timeline", () => {
     expect(isTimelineActivity(activity("turn_status"))).toBe(false);
     expect(isTimelineActivity(activity("status"))).toBe(false);
