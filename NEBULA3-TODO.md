@@ -15,7 +15,7 @@ provenance internals remain enforced and are progressively disclosed.
 The release is blocked until all of these gates pass:
 
 - [ ] A clean install with a cached workstation image reaches a focused prompt
-      within 10 seconds on supported macOS arm64/x64 and Linux x64 systems.
+      within 10 seconds on supported macOS arm64 and Linux x64 systems.
 - [ ] Cold image preparation reports progress immediately and supports cancel,
       retry, and restart; a cached launch performs no registry request.
 - [ ] The workstation image is release-pinned and signed, with verified digest,

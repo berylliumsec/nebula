@@ -43,6 +43,8 @@ def test_native_launcher_and_admin_command_contract():
     cask = (ROOT / "packaging/homebrew/nebula.rb.in").read_text(encoding="utf-8")
     assert 'Contents/MacOS/nebula-ui", target: "nebula"' in cask
     assert 'Contents/MacOS/nebula-core", target: "nebula-core"' in cask
+    assert "on_intel" not in cask
+    assert "macOS-x64" not in cask
 
 
 def test_python_source_tree_contains_only_core_namespace():

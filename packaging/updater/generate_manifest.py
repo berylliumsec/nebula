@@ -101,11 +101,9 @@ def generate_manifest(
         ) from exc
 
     mac_arm = f"Nebula-{version}-macOS-arm64.updater.tar.gz"
-    mac_x64 = f"Nebula-{version}-macOS-x64.updater.tar.gz"
     linux = f"Nebula-{version}-linux-x86_64.AppImage"
     files = {
         "darwin-aarch64": mac_arm,
-        "darwin-x86_64": mac_x64,
         "linux-x86_64": linux,
     }
     base_url = (

@@ -6,11 +6,6 @@ cask "nebula" do
     url "https://github.com/BerylliumSec/nebula/releases/download/nebula-v#{version}/Nebula-#{version}-macOS-arm64-managed.dmg"
   end
 
-  on_intel do
-    sha256 "@SHA256_X64@"
-    url "https://github.com/BerylliumSec/nebula/releases/download/nebula-v#{version}/Nebula-#{version}-macOS-x64-managed.dmg"
-  end
-
   name "Nebula"
   desc "Local-first security engagement workspace"
   homepage "https://github.com/BerylliumSec/nebula"
