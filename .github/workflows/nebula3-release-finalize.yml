@@ -172,6 +172,9 @@ jobs:
       - name: Staple accepted apps and rebuild signed installers
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
@@ -210,6 +213,40 @@ jobs:
             app="$mount/Nebula.app"
             test -x "$app/Contents/MacOS/nebula-ui"
             test -x "$app/Contents/MacOS/nebula-core"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            notarization="$RUNNER_TEMP/Nebula-$flavor-notarization.zip"
+            notarization_result="$RUNNER_TEMP/Nebula-$flavor-notarization.json"
+            ditto -c -k --keepParent "$app" "$notarization"
+            if ! xcrun notarytool submit "$notarization" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait \
+              --output-format json > "$notarization_result"; then
+              cat "$notarization_result" >&2
+              submission_id="$(jq -r '.id // empty' "$notarization_result")"
+              if [ -n "$submission_id" ]; then
+                xcrun notarytool log "$submission_id" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" >&2 || true
+              fi
+              exit 1
+            fi
+            cat "$notarization_result"
+            submission_id="$(jq -r '.id // empty' "$notarization_result")"
+            status="$(jq -r '.status // empty' "$notarization_result")"
+            if [ "$status" != Accepted ]; then
+              printf 'notarization %s completed with status %s\n' \
+                "$submission_id" "$status" >&2
+              if [ -n "$submission_id" ]; then
+                xcrun notarytool log "$submission_id" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" >&2 || true
+              fi
+              exit 1
+            fi
             xcrun stapler staple "$app"
             xcrun stapler validate "$app"
             poetry run python scripts/package_audit.py --tree "$app"
