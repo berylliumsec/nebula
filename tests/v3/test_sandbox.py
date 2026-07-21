@@ -786,7 +786,9 @@ def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
     assert calls[1][0][-3:] == ["stop", "--time=0", "nebula-call-egress"]
 
 
-def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkeypatch):
+def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request(
+    monkeypatch,
+):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
     preparer = ContainerImagePreparer(
         runner=runner,
@@ -812,7 +814,7 @@ def test_human_terminal_verified_cache_makes_no_registry_or_build_request(monkey
                 0,
             )
         return (
-            '{"Id":"sha256:'
+            '{"Id":"'
             + "d" * 64
             + '","Os":"linux","Architecture":"amd64","Config":{"Labels":{'
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'

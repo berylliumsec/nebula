@@ -2147,6 +2147,10 @@ class ContainerImagePreparer:
                 )
             return None
         image_id = str(_mapping_get(document, "Id", "ID", "id")).lower()
+        # Podman reports image IDs as a bare hexadecimal digest, while Docker
+        # prefixes the same value with ``sha256:``.
+        if re.fullmatch(r"[0-9a-f]{64}", image_id):
+            image_id = f"sha256:{image_id}"
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
             raise SandboxUnavailable(
                 "runtime returned an invalid human-workstation image ID"

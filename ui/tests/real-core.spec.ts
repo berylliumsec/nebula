@@ -83,7 +83,9 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     expect(setupResponse.ok()).toBe(true);
     let setup = await setupResponse.json() as any;
     if (!setup.terminal.runner_profile_id) {
-      const candidate = setup.terminal.candidates.find((item: any) => item.healthy && item.candidate_id);
+      const configuredRuntime = process.env.NEBULA_TEST_CONTAINER_RUNTIME;
+      const candidate = setup.terminal.candidates.find((item: any) =>
+        item.healthy && item.candidate_id && (!configuredRuntime || item.executable === configuredRuntime));
       expect(candidate, setup.terminal.detail).toBeTruthy();
       setupResponse = await api.post("setup/runtime/select", { data: { candidate_id: candidate.candidate_id } });
       expect(setupResponse.ok()).toBe(true);

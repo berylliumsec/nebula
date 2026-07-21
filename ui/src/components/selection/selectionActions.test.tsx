@@ -190,7 +190,12 @@ describe("selection actions", () => {
         source: { kind: "terminal", id: "terminal-1", label: "Terminal" },
       }));
     });
+    fireEvent.pointerUp(terminal.element);
+    await vi.waitFor(() => expect(present).toHaveBeenCalledTimes(2));
     binding.dispose();
     expect(dispose).toHaveBeenCalledOnce();
+    fireEvent.pointerUp(terminal.element);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(present).toHaveBeenCalledTimes(2);
   });
 });
