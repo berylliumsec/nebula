@@ -153,7 +153,7 @@ jobs:
             hdiutil convert "$dmg" -format UDRW -o "$writable"
             mount="$RUNNER_TEMP/mount-$flavor"
             install -d -m 0755 "$mount"
-            hdiutil attach "$writable" -mountpoint "$mount" -nobrowse
+            printf 'Y\n' | hdiutil attach "$writable" -mountpoint "$mount" -nobrowse
             app="$mount/Nebula.app"
             test -x "$app/Contents/MacOS/nebula-ui"
             test -x "$app/Contents/MacOS/nebula-core"
