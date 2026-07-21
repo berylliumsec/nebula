@@ -270,6 +270,28 @@ jobs:
       - name: Inspect prepared macOS installers
         if: matrix.platform == 'macOS'
         run: |
+          detach_volume() {
+            local mountpoint="$1"
+            local attempt output status=1
+            for attempt in {1..15}; do
+              if output="$(hdiutil detach "$mountpoint" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              printf 'DMG detach attempt %d/15 failed for %s: %s\n' \
+                "$attempt" "$mountpoint" "$output" >&2
+              if [ "$attempt" -lt 15 ]; then
+                sync
+                sleep 1
+              fi
+            done
+            printf 'mounted image state after detach retries:\n' >&2
+            hdiutil info >&2 || true
+            return "$status"
+          }
+
           for flavor in direct managed; do
             dmg="$RUNNER_TEMP/release-stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}-$flavor.dmg"
             codesign --verify --deep --strict --verbose=2 "$dmg"
@@ -286,7 +308,7 @@ jobs:
               exit 1
             fi
             "$app/Contents/MacOS/nebula-ui" --self-test
-            hdiutil detach "$mount"
+            detach_volume "$mount"
           done
       - name: Inspect and self-test Linux installers
         if: matrix.platform == 'Linux'
