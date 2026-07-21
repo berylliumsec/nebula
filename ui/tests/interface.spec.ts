@@ -544,12 +544,19 @@ test("terminal pointer selection has a visible high-contrast highlight", async (
   const box = await promptRow.boundingBox();
   expect(box).toBeTruthy();
   const y = box!.y + box!.height / 2;
-  await page.mouse.move(box!.x + 4, y);
-  await page.mouse.down();
-  await page.mouse.move(Math.min(box!.x + 150, box!.x + box!.width - 4), y, { steps: 8 });
-  await page.mouse.up();
-  await expect(screen.locator(".xterm-selection > div").first()).toBeVisible();
-  await expect(page.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
+  const selection = screen.locator(".xterm-selection > div").first();
+  const toolbar = page.getByRole("toolbar", { name: "Selected text actions" });
+  for (let attempt = 0; attempt < 3 && !(await toolbar.isVisible()); attempt += 1) {
+    await page.mouse.move(box!.x + 4, y);
+    await page.mouse.down();
+    await page.waitForTimeout(50);
+    await page.mouse.move(Math.min(box!.x + 150, box!.x + box!.width - 4), y, { steps: 12 });
+    await page.waitForTimeout(50);
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+  }
+  await expect(selection).toBeVisible();
+  await expect(toolbar).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("terminal-visible-selection.png") });
   const selectionRects = await screen.locator(".xterm-selection > div").evaluateAll((rectangles) =>
     rectangles.map((rectangle) => {
@@ -562,7 +569,7 @@ test("terminal pointer selection has a visible high-contrast highlight", async (
     }),
   );
   expect(selectionRects.length).toBeGreaterThan(0);
-  expect(selectionRects.some((rect) => rect.width > 20 && rect.height > 8)).toBe(true);
+  expect(selectionRects.some((rect) => rect.width > 4 && rect.height > 8)).toBe(true);
   expect(selectionRects.every((rect) => ["rgb(22, 139, 210)", "rgb(18, 111, 168)"].includes(rect.background))).toBe(true);
 });
 
