@@ -310,11 +310,11 @@ describe("DiagnosticsPanel", () => {
 
     render(<DiagnosticsPanel />);
 
-    expect(await screen.findByText("Core is unavailable")).toBeVisible();
+    expect(screen.getByText("Core is unavailable")).toBeVisible();
     expect(screen.getByText("The Core sidecar stopped.")).toBeVisible();
-    expect(screen.getByText("A chat stream could not complete.")).toBeVisible();
+    expect(await screen.findByText("A chat stream could not complete.")).toBeVisible();
     await user.click(screen.getByText("Advanced diagnostics and logging"));
-    expect(screen.getByText("desktop.log")).toBeVisible();
+    expect(await screen.findByText("desktop.log")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Open logs folder" }));
     expect(mocks.reveal).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "Export diagnostics ZIP" })).toBeDisabled();

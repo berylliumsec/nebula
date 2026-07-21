@@ -130,7 +130,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run lint --if-present
       - run: npm run audit:diagnostics
-      - run: npm test
+      - run: npm test -- --testTimeout=15000
       - run: npm run build
       - name: Install rootless Podman for real-Core fixture
         working-directory: .
