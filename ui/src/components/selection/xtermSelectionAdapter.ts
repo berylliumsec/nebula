@@ -50,9 +50,14 @@ export function bindXtermSelectionActions(
     else run();
   };
   const listener = terminal.onSelectionChange(readSelection);
+  // Some browser/xterm combinations paint a pointer selection without
+  // dispatching onSelectionChange. Pointer-up happens after xterm updates its
+  // buffer, so use it as a public-DOM fallback and keep the toolbar reliable.
+  terminal.element?.addEventListener("pointerup", readSelection);
   return {
     dispose() {
       if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame);
+      terminal.element?.removeEventListener("pointerup", readSelection);
       listener.dispose();
     },
   };
