@@ -132,6 +132,19 @@ jobs:
       - run: npm run audit:diagnostics
       - run: npm test
       - run: npm run build
+      - name: Prepare lightweight real-Core runtime fixture
+        working-directory: .
+        run: |
+          docker pull --platform=linux/amd64 docker.io/kalilinux/kali-rolling:latest
+          repository_digest="$(docker image inspect docker.io/kalilinux/kali-rolling:latest --format '{{index .RepoDigests 0}}')"
+          image_digest="${repository_digest##*@}"
+          source_reference="docker.io/kalilinux/kali-rolling@${image_digest}"
+          derived_tag="localhost/nebula-kali-headless:v4-${image_digest#sha256:}"
+          docker build \
+            --build-arg "KALI_SOURCE=${source_reference}" \
+            --file tests/v3/integration/Containerfile.real-core-runtime \
+            --tag "${derived_tag}" \
+            .
       - run: npm run test:e2e
 
   desktop-macos:

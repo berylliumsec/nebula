@@ -1,0 +1,21 @@
+{
+  "schema": "nebula.kali-security-tools/v1",
+  "tools": ["bash"],
+  "packages": ["bash"],
+  "provenance": {"bash": ["bash"]},
+  "binaries": [
+    {
+      "name": "bash",
+      "path": "/usr/bin/bash",
+      "packages": ["bash"],
+      "versions": {"bash": "ci-fixture"}
+    }
+  ],
+  "runtime_binaries": [
+    {"name": "bash", "path": "/usr/bin/bash", "version": "ci-fixture"},
+    {"name": "curl", "path": "/usr/bin/curl", "version": "ci-fixture"},
+    {"name": "git", "path": "/usr/bin/git", "version": "ci-fixture"},
+    {"name": "python3", "path": "/usr/bin/python3", "version": "ci-fixture"},
+    {"name": "rg", "path": "/usr/bin/rg", "version": "ci-fixture"}
+  ]
+}
