@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "nebula-ai"
-version = "3.0.0-alpha.2"
+version = "3.0.0-alpha.3"
 description = "Native local-first security testing workbench"
 readme = "README.md"
 authors = [ "David I <david@berylliumsec.com>",]

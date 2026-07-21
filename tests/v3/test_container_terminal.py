@@ -1172,8 +1172,15 @@ def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):
             assert base64.b64decode(displayed["data"]) == (
                 b"visible before navigation\r\n"
             )
+            socket.close()
+            detach_deadline = time.monotonic() + 2
+            while (
+                service._sessions[session["session_id"]].attachment is not None
+                and time.monotonic() < detach_deadline
+            ):
+                time.sleep(0.01)
+            assert service._sessions[session["session_id"]].attachment is None
 
-        time.sleep(0.05)
         assert len(runner.processes) == 1
         assert runner.processes[0].closed == 0
         unauthenticated = client.post(
