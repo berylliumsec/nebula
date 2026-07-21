@@ -63,7 +63,7 @@ jobs:
           test "$(jq -r .head_sha <<<"$run")" = "$commit"
           test "$(jq -r .path <<<"$run")" = .github/workflows/nebula3-release.yml
           artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREPARATION_RUN_ID/artifacts" --paginate --jq '.artifacts[].name')"
-          for name in nebula3-macos-arm64 nebula3-macos-x64 nebula3-linux-x64; do
+          for name in nebula3-macos-arm64 nebula3-linux-x64; do
             grep -Fx "$name" <<<"$artifacts" >/dev/null
           done
           case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
@@ -90,10 +90,6 @@ jobs:
             runner: macos-15
             target: aarch64-apple-darwin
             artifact_arch: arm64
-          - id: macos-x64
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            artifact_arch: x64
     runs-on: ${{ matrix.runner }}
     env:
       NEBULA_VERSION: ${{ needs.validate.outputs.version }}
@@ -259,21 +255,17 @@ jobs:
         run: |
           required="
           Nebula-$VERSION-macOS-arm64-direct.dmg
-          Nebula-$VERSION-macOS-x64-direct.dmg
           Nebula-$VERSION-macOS-arm64-managed.dmg
-          Nebula-$VERSION-macOS-x64-managed.dmg
           Nebula-$VERSION-linux-x86_64.deb
           Nebula-$VERSION-linux-x86_64.AppImage
           Nebula-$VERSION-linux-x86_64.AppImage.sig
           Nebula-$VERSION-macOS-arm64.updater.tar.gz
           Nebula-$VERSION-macOS-arm64.updater.tar.gz.sig
-          Nebula-$VERSION-macOS-x64.updater.tar.gz
-          Nebula-$VERSION-macOS-x64.updater.tar.gz.sig
           "
           for name in $required; do test -s "release-assets/$name"; done
-          test "$(find release-assets -maxdepth 1 -type f -name '*.cyclonedx.json' | wc -l)" -eq 8
-          test "$(find release-assets -maxdepth 1 -type f -name '*.spdx.json' | wc -l)" -eq 8
-          test "$(find release-assets -maxdepth 1 -type f -name 'SHA256SUMS-*' | wc -l)" -eq 3
+          test "$(find release-assets -maxdepth 1 -type f -name '*.cyclonedx.json' | wc -l)" -eq 5
+          test "$(find release-assets -maxdepth 1 -type f -name '*.spdx.json' | wc -l)" -eq 5
+          test "$(find release-assets -maxdepth 1 -type f -name 'SHA256SUMS-*' | wc -l)" -eq 2
           python - <<'PY'
           import json
           from pathlib import Path

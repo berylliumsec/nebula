@@ -12,7 +12,6 @@ The protected workflow produces these native packages:
 | Platform | Architecture | Direct distribution | Managed distribution |
 | --- | --- | --- | --- |
 | macOS 13+ | Apple silicon | signed and notarized DMG with updater | signed and notarized DMG without updater |
-| macOS 13+ | Intel | signed and notarized DMG with updater | signed and notarized DMG without updater |
 | Linux | x86_64 | AppImage with signed updater metadata | DEB without the direct updater |
 
 Windows, Linux arm64, RPM, Flatpak, Snap, and Homebrew artifacts are not built
@@ -33,10 +32,9 @@ repository policy. Define these environment secrets:
 - `NEBULA_UPDATER_PUBLIC_KEY`, embedded into direct builds and backed up with
   the private key offline.
 
-The release cannot be prepared without this environment. Confirm the
-`macos-15-intel` runner label is available to the repository before tagging.
-Never use placeholder credentials for a release candidate. The preparation run
-and manual finalization must complete before a draft release exists.
+The release cannot be prepared without this environment. Never use placeholder
+credentials for a release candidate. The preparation run and manual
+finalization must complete before a draft release exists.
 
 ## Candidate checklist
 
@@ -74,7 +72,7 @@ and manual finalization must complete before a draft release exists.
    ```
 
 The tag push starts the preparation workflow. It builds direct and managed
-installers on native macOS arm64, macOS x64, and Ubuntu 22.04 x64 runners.
+installers on native macOS arm64 and Ubuntu 22.04 x64 runners.
 macOS builds are signed and submitted to Apple with Tauri's `--skip-stapling`
 mode, so the runners do not wait for Apple to finish. Linux packages complete
 their final audits, SBOMs, checksums, and attestations during preparation.
@@ -91,10 +89,10 @@ gh workflow run nebula3-release-finalize.yml \
 ```
 
 The finalizer verifies that the preparation run succeeded at the exact tagged
-commit and that all three private artifact sets still exist. If Apple is still
-processing either macOS architecture, stapling fails safely and no draft is
-created; rerun the finalizer later with the same inputs. Never resubmit or move
-the tag merely because Apple is still processing it.
+commit and that both private artifact sets still exist. If Apple is still
+processing the macOS submission, stapling fails safely and no draft is created;
+rerun the finalizer later with the same inputs. Never resubmit or move the tag
+merely because Apple is still processing it.
 
 ## Draft review and publication
 
@@ -106,7 +104,7 @@ macOS SBOMs and checksums, attests the final bytes, and combines them with the
 prepared Linux outputs. Before publishing the draft, a
 release manager must verify:
 
-- all three platform jobs and the clean Linux install matrix passed;
+- both native platform jobs and the clean Linux install matrix passed;
 - the artifact names and counts match the workflow's immutable manifest;
 - macOS signing, Gatekeeper assessment, notarization, and stapling passed;
 - updater signatures accept the original artifact and reject the tampered test;

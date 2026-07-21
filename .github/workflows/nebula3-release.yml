@@ -78,11 +78,6 @@ jobs:
             target: aarch64-apple-darwin
             platform: macOS
             artifact_arch: arm64
-          - id: macos-x64
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            platform: macOS
-            artifact_arch: x64
           - id: linux-x64
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -117,6 +112,16 @@ jobs:
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
+      - name: Pin Apple system xattr
+        if: matrix.platform == 'macOS'
+        run: |
+          test -x /usr/bin/xattr
+          install -d -m 0755 "$RUNNER_TEMP/nebula-release-bin"
+          ln -sf /usr/bin/xattr "$RUNNER_TEMP/nebula-release-bin/xattr"
+          printf '%s\n' "$RUNNER_TEMP/nebula-release-bin" >> "$GITHUB_PATH"
+      - name: Verify Apple system xattr
+        if: matrix.platform == 'macOS'
+        run: test "$(command -v xattr)" = "$RUNNER_TEMP/nebula-release-bin/xattr"
       - name: Install Linux bundler libraries
         if: matrix.platform == 'Linux'
         run: |

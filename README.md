@@ -25,7 +25,7 @@ alpha build as a stable production release. The first release line is
 
 Published releases can contain:
 
-- macOS 13 or newer DMGs for Apple silicon and Intel;
+- macOS 13 or newer DMGs for Apple silicon;
 - a Linux x86_64 AppImage with direct updates; and
 - a Linux x86_64 DEB for managed installations.
 
