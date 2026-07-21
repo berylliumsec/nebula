@@ -19,6 +19,7 @@ const SIDECAR_PROTOCOL: &str = "nebula-sidecar-v1";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const HEALTH_IO_TIMEOUT: Duration = Duration::from_secs(2);
+const LIFETIME_PIPE_GRACE_PERIOD: Duration = Duration::from_secs(2);
 const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const MAX_HANDSHAKE_BYTES: u64 = 16 * 1024;
 const MAX_HEALTH_RESPONSE_BYTES: u64 = 64 * 1024;
@@ -224,7 +225,24 @@ fn process_group_exists(process_group: u32) -> Result<bool, String> {
 #[cfg(unix)]
 fn terminate(child: &mut Child) -> Result<(), String> {
     let process_group = child.id();
-    signal_process_group(process_group, libc::SIGTERM)?;
+    match child.try_wait() {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {}
+        Err(error) => {
+            return Err(format!(
+                "cannot inspect Nebula Core before terminating it: {error}"
+            ));
+        }
+    }
+    if let Err(signal_error) = signal_process_group(process_group, libc::SIGTERM) {
+        return match child.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(signal_error),
+            Err(error) => Err(format!(
+                "{signal_error}; cannot inspect Nebula Core after signaling it: {error}"
+            )),
+        };
+    }
     let deadline = Instant::now() + TERMINATION_GRACE_PERIOD;
 
     loop {
@@ -270,11 +288,37 @@ fn terminate(child: &mut Child) -> Result<(), String> {
         .map_err(|error| format!("cannot reap Nebula Core after termination: {error}"))
 }
 
+fn wait_for_child_exit(child: &mut Child, deadline: Instant) -> Result<bool, String> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(true),
+            Ok(None) => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect Nebula Core during graceful shutdown: {error}"
+                ));
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        std::thread::sleep(remaining.min(STARTUP_POLL_INTERVAL));
+    }
+}
+
 fn terminate_managed(managed: &mut ManagedBackend) -> Result<(), String> {
     // Closing the lifetime pipe asks Core to stop even if signal delivery is
     // delayed. The process-group signal remains the bounded fallback.
     managed.bootstrap_stdin.take();
-    let process_result = terminate(&mut managed.child);
+    let process_result = match wait_for_child_exit(
+        &mut managed.child,
+        Instant::now() + LIFETIME_PIPE_GRACE_PERIOD,
+    ) {
+        Ok(true) => Ok(()),
+        Ok(false) => terminate(&mut managed.child),
+        Err(error) => Err(error),
+    };
     let stdout_result = managed.stdout_thread.take().map_or(Ok(()), |thread| {
         thread
             .join()
@@ -1237,6 +1281,22 @@ mod tests {
             "nebula-core"
         };
         assert_eq!(Path::new(name).components().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lifetime_pipe_allows_graceful_shutdown_before_signaling() {
+        let mut child = Command::new("sh")
+            .args(["-c", "read -r _ || exit 0"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("test child should start");
+        child.stdin.take();
+
+        assert!(
+            wait_for_child_exit(&mut child, Instant::now() + Duration::from_secs(2))
+                .expect("graceful shutdown should be observable")
+        );
     }
 
     #[test]
