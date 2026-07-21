@@ -73,6 +73,17 @@ type EditorGesture = DrawGesture | PanGesture;
 const MIN_EDITOR_ZOOM = 0.1;
 const MAX_EDITOR_ZOOM = 4;
 
+export function calculateImageEditorFitZoom(
+  imageWidth: number,
+  imageHeight: number,
+  availableWidth: number,
+  availableHeight: number,
+): number {
+  const widthRatio = Math.max(1, availableWidth) / Math.max(1, imageWidth);
+  const heightRatio = Math.max(1, availableHeight) / Math.max(1, imageHeight);
+  return Math.min(1, widthRatio, heightRatio);
+}
+
 function operationId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `image-edit-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -291,8 +302,12 @@ export function ImageEditor({
     const verticalBorder = (Number.parseFloat(canvasStyle.borderTopWidth) || 0) + (Number.parseFloat(canvasStyle.borderBottomWidth) || 0);
     const availableWidth = Math.max(1, viewport.clientWidth - horizontalPadding - horizontalBorder);
     const availableHeight = Math.max(1, viewport.clientHeight - verticalPadding - verticalBorder);
-    const nextZoom = Math.min(1, availableWidth / dimensions.width, availableHeight / dimensions.height);
-    setZoom(Math.max(MIN_EDITOR_ZOOM, nextZoom));
+    setZoom(calculateImageEditorFitZoom(
+      dimensions.width,
+      dimensions.height,
+      availableWidth,
+      availableHeight,
+    ));
   }, [dimensions]);
 
   useEffect(() => {

@@ -234,10 +234,6 @@ jobs:
           managed_dmg="$(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
           test -n "$managed_dmg"
           install -m 0644 "$managed_dmg" "$stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}-managed.dmg"
-          if strings "$bundle/macos/Nebula.app/Contents/MacOS/nebula-ui" | grep -Fq 'berylliumsec.github.io/nebula/updates'; then
-            printf 'managed build unexpectedly contains the direct update endpoint\n' >&2
-            exit 1
-          fi
       - name: Build signed direct AppImage and managed DEB
         if: matrix.platform == 'Linux'
         env:
@@ -279,12 +275,16 @@ jobs:
             codesign --verify --deep --strict --verbose=2 "$dmg"
             mount="$RUNNER_TEMP/mount-$flavor"
             install -d -m 0755 "$mount"
-            hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
+            printf 'Y\n' | hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
             app="$mount/Nebula.app"
             test -x "$app/Contents/MacOS/nebula-ui"
             test -x "$app/Contents/MacOS/nebula-core"
             poetry run python scripts/package_audit.py --tree "$app"
             codesign --verify --deep --strict --verbose=2 "$app"
+            if [ "$flavor" = managed ] && strings "$app/Contents/MacOS/nebula-ui" | grep -Fq 'berylliumsec.github.io/nebula/updates'; then
+              printf 'managed build unexpectedly contains the direct update endpoint\n' >&2
+              exit 1
+            fi
             "$app/Contents/MacOS/nebula-ui" --self-test
             hdiutil detach "$mount"
           done
