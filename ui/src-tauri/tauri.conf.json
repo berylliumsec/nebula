@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nebula",
-  "version": "3.0.0-alpha.1",
+  "version": "3.0.0-alpha.2",
   "identifier": "io.nebula.security",
   "mainBinaryName": "nebula-ui",
   "build": {
@@ -32,10 +32,12 @@
   },
   "bundle": {
     "active": true,
-    "externalBin": ["binaries/nebula-core"],
+    "externalBin": [
+      "binaries/nebula-core"
+    ],
     "createUpdaterArtifacts": false,
     "category": "DeveloperTool",
-    "copyright": "Copyright © Nebula contributors",
+    "copyright": "Copyright \u00a9 Nebula contributors",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
