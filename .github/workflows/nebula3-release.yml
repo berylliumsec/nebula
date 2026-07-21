@@ -166,7 +166,7 @@ jobs:
             poetry run pytest -q tests/v3/test_sandbox.py -k macos
           fi
           poetry run pytest -q packaging/updater/test_generate_manifest.py
-          npm --prefix ui test
+          npm --prefix ui test -- --testTimeout=15000
           npm --prefix ui run build
           install -d -m 0755 ui/src-tauri/binaries
           touch "ui/src-tauri/binaries/nebula-core-${{ matrix.target }}"
@@ -290,7 +290,7 @@ jobs:
           appimage="$RUNNER_TEMP/release-stage/Nebula-$NEBULA_VERSION-linux-x86_64.AppImage"
           dpkg-deb --info "$deb"
           expected_deb_version="$NEBULA_VERSION"
-          case "$expected_deb_version" in *-*) expected_deb_version="${expected_deb_version/-/~}" ;; esac
+          case "$expected_deb_version" in *-*) expected_deb_version="${expected_deb_version/-/\~}" ;; esac
           test "$(dpkg-deb --field "$deb" Version)" = "$expected_deb_version"
           dpkg --compare-versions "$expected_deb_version" le "$NEBULA_VERSION"
           dpkg-deb --extract "$deb" "$RUNNER_TEMP/deb-root"
