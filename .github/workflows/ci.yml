@@ -141,6 +141,7 @@ jobs:
           source_reference="docker.io/kalilinux/kali-rolling@${image_digest}"
           derived_tag="localhost/nebula-kali-headless:v4-${image_digest#sha256:}"
           echo "NEBULA_KALI_SOURCE_IMAGE=${source_reference}" >> "${GITHUB_ENV}"
+          echo "NEBULA_TEST_CONTAINER_RUNTIME=/usr/bin/docker" >> "${GITHUB_ENV}"
           docker build \
             --build-arg "KALI_SOURCE=${source_reference}" \
             --file tests/v3/integration/Containerfile.real-core-runtime \
