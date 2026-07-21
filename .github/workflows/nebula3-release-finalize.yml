@@ -60,12 +60,43 @@ jobs:
           commit="$(git rev-parse HEAD)"
           run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREPARATION_RUN_ID")"
           test "$(jq -r .conclusion <<<"$run")" = success
-          test "$(jq -r .head_sha <<<"$run")" = "$commit"
           test "$(jq -r .path <<<"$run")" = .github/workflows/nebula3-release.yml
+          run_event="$(jq -r .event <<<"$run")"
+          run_head="$(jq -r .head_sha <<<"$run")"
+          case "$run_event" in
+            push)
+              test "$run_head" = "$commit"
+              ;;
+            workflow_dispatch)
+              git merge-base --is-ancestor "$commit" "$run_head"
+              ;;
+            *)
+              printf 'unsupported preparation run event: %s\n' "$run_event" >&2
+              exit 1
+              ;;
+          esac
           artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREPARATION_RUN_ID/artifacts" --paginate --jq '.artifacts[].name')"
           for name in nebula3-macos-arm64 nebula3-linux-x64; do
             grep -Fx "$name" <<<"$artifacts" >/dev/null
           done
+          provenance="$RUNNER_TEMP/preparation-provenance"
+          gh run download "$PREPARATION_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name nebula3-linux-x64 \
+            --dir "$provenance"
+          appimage="$(find "$provenance" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          extract="$RUNNER_TEMP/preparation-appimage"
+          install -d -m 0755 "$extract"
+          (cd "$extract" && "$appimage" --appimage-extract >/dev/null)
+          core="$extract/squashfs-root/usr/bin/nebula-core"
+          test -x "$core"
+          doctor="$RUNNER_TEMP/preparation-doctor.json"
+          "$core" doctor --data-dir "$RUNNER_TEMP/preparation-doctor-data" --json > "$doctor"
+          test "$(jq -r .commit "$doctor")" = "$commit"
+          test "$(jq -r .version "$doctor")" = "$version"
+          test "$(jq -r .target "$doctor")" = x86_64-unknown-linux-gnu
+          test "$(jq -r .distribution_channel "$doctor")" = direct
           case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
           {
             printf 'tag=%s\n' "$RELEASE_TAG"
