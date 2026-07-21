@@ -1,3 +1,7 @@
+# Acknowledgement
+
+First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.
+
 # Nebula – Security Testing Workbench
 
 Nebula is an operator first, AI powered penetration testing platform that seeks to simplify the process of network penetration testing by integrating AI Agents, Terminals, a code editor, a web browser, screenshots, note-taking, screenshots in one desktop application. 
