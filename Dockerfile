@@ -1,86 +1,41 @@
-# -----------------------------------------------------------------------------
-# Base Image and Environment Variables
-# -----------------------------------------------------------------------------
-FROM ubuntu:jammy
-ENV DEBIAN_FRONTEND=noninteractive
+# Nebula Core is the only container target.
+FROM python:3.12-slim-bookworm@sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b
 
-# -----------------------------------------------------------------------------
-# Install System Dependencies and Configure Timezone
-# -----------------------------------------------------------------------------
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libssl-dev \
-    zlib1g-dev \
-    libbz2-dev \
-    libreadline-dev \
-    libsqlite3-dev \
-    wget \
-    curl \
-    llvm \
-    libncurses5-dev \
-    libncursesw5-dev \
-    xz-utils \
-    tk-dev \
-    libffi-dev \
-    liblzma-dev \
-    python3-openssl \
-    git \
-    python3-opencv \
-    python3-pip \
-    python3-pyqt6* \
-    pyqt6* \
-    libxcb-cursor0 \
-    zip
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app/src \
+    NEBULA_V3_DATA_DIR=/data \
+    LANGGRAPH_STRICT_MSGPACK=true
 
-# -----------------------------------------------------------------------------
-# Install Miniconda and Configure Shell Environment
-# -----------------------------------------------------------------------------
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
-    bash /tmp/miniconda.sh -b -p /opt/conda && \
-    rm /tmp/miniconda.sh
+RUN groupadd --gid 10001 nebula \
+    && useradd --uid 10001 --gid nebula --home-dir /home/nebula --create-home nebula
 
-# Add conda to the PATH
-ENV PATH="/opt/conda/bin:${PATH}"
-
-# Set shell to bash with --login for proper Conda activation
-SHELL ["/bin/bash", "--login", "-c"]
-
-# -----------------------------------------------------------------------------
-# Install Conda Packages 
-# -----------------------------------------------------------------------------
-RUN conda install -c conda-forge cupy python=3.11.11 pybind11 -y
-
-# -----------------------------------------------------------------------------
-# Set Working Directory and Prepare Application Dependencies
-# -----------------------------------------------------------------------------
 WORKDIR /app
 
-# Upgrade pip and install Poetry
-RUN /opt/conda/bin/python3.11 -m pip install --upgrade pip && \
-    /opt/conda/bin/python3.11 -m pip install poetry --upgrade
+RUN python -m pip install --no-cache-dir \
+    "fastapi==0.135.3" \
+    "uvicorn[standard]==0.34.0" \
+    "pydantic==2.9.2" \
+    "sqlalchemy==2.0.37" \
+    "psycopg[binary]==3.3.4" \
+    "alembic==1.18.5" \
+    "boto3==1.36.11" \
+    "httpx==0.28.1" \
+    "typer==0.26.8" \
+    "langgraph==1.1.6" \
+    "langgraph-checkpoint-sqlite==3.1.0" \
+    "jsonschema==4.26.0" \
+    "semantic-version==2.10.0"
 
-# -----------------------------------------------------------------------------
-# Disable Poetry Virtual Environment Creation
-# -----------------------------------------------------------------------------
-RUN /opt/conda/bin/python3.11 -m poetry config virtualenvs.create false
+COPY --chown=nebula:nebula src /app/src
+RUN mkdir -p /data && chown nebula:nebula /data
 
-# -----------------------------------------------------------------------------
-# Copy Application Code
-# -----------------------------------------------------------------------------
-COPY . /app
+USER nebula
+EXPOSE 8000
 
-# -----------------------------------------------------------------------------
-# Build and Install Application Using Poetry
-# -----------------------------------------------------------------------------
-# First, lock and install dependencies along with the local project
-RUN /opt/conda/bin/python3.11 -m poetry lock && \
-    /opt/conda/bin/python3.11 -m poetry install
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
 
-# Build the project into a distributable wheel, then install that wheel
-RUN /opt/conda/bin/python3.11 -m poetry build && \
-    pip install dist/nebula_ai-*.whl
-
-# -----------------------------------------------------------------------------
-# Set Container Entrypoint
-# -----------------------------------------------------------------------------
-ENTRYPOINT ["nebula"]
+ENTRYPOINT ["python", "-m", "nebula.v3.cli"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8000", "--allow-remote"]

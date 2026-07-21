@@ -1,80 +1,77 @@
 [build-system]
 requires = [ "poetry-core>=1.0.0",]
 build-backend = "poetry.core.masonry.api"
-include = [ "src/nebula/images/*", "src/nebula/Images_readme/*", "src/nebula/command_search_index/*", "src/nebula/config/*",]
 
 [tool.poetry]
 name = "nebula-ai"
-version = "2.0.1b2"
-description = "AI-Powered Ethical Hacking Assistant"
+version = "3.0.0-alpha.1"
+description = "Native local-first security testing workbench"
 readme = "README.md"
 authors = [ "David I <david@berylliumsec.com>",]
 license = "BSD"
 homepage = "https://github.com/berylliumsec/nebula"
 keywords = [ "AI", "ethical hacking", "nmap", "zap", "crackmapexec",]
 classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Developers", "License :: OSI Approved :: BSD License", "Programming Language :: Python :: 3",]
-include = [ "src/nebula/images/*",]
+include = [ "src/nebula/v3/operator_help.md", "src/nebula/v3/diagnostic_guidance.json", "src/nebula/v3/report_assets/**/*",]
 [[tool.poetry.packages]]
 include = "nebula"
 from = "src"
 
 [tool.poetry.scripts]
-nebula = "nebula.nebula:main"
+nebula-core = "nebula.v3.cli:main"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<=3.13.9"
-Cython = "*"
-IPython = ">=8,<9"
-PyQt6 = "*"
+python = ">=3.11,<3.14"
 boto3 = "*"
-opencv-python = "*"
-Faker = "*"
-numpy = ">=2.1,<3"
-numba = ">=0.63,<1"
-prompt_toolkit = "*"
-psutil = "*"
-Pygments = "*"
-requests = "*"
-tiktoken = "*"
-torch = ">=2.8.0,<3"
-transformers = ">=4.53.0,<5"
 websockets = "*"
-Whoosh = "*"
 fastapi = ">=0.135.3,<1"
 uvicorn = "*"
 pydantic = "*"
-langchain = ">=1.2.15,<2"
-regex = "*"
-typing-extensions = "*"
-langchain-community = ">=0.4,<1"
-langchain-core = ">=1.2.22,<2"
-accelerate = "*"
-duckduckgo-search = "*"
-toml = "*"
-setuptools = ">=78.1.1"
-langchain-experimental = ">=0.4,<1"
-ollama = "*"
-langchain_ollama = ">=1.0.1,<2"
-langchain_openai = ">=1.1.12,<2"
-langchain-huggingface = ">=1.2.1,<2"
-sentence-transformers = "*"
-chromadb = "*"
-langchain_chroma = ">=1.1.0,<2"
-unstructured = ">=0.17,<0.21"
-jq = "*"
-qdarkstyle = "*"
-pexpect = "^4.9.0"
-langchain-classic = ">=1.0.3,<2"
-ddgs = ">=9.13.0,<10"
-h5py = ">=3.16.0,<4"
-spacy = ">=3.8.14,<4"
-thinc = ">=8.3.13,<9"
+SQLAlchemy = ">=2.0,<3"
+psycopg = { version = ">=3.2,<4", extras = ["binary"] }
+alembic = ">=1.14,<2"
+httpx = ">=0.28,<1"
+typer = ">=0.16,<1"
+langgraph = ">=1.1,<2"
+langgraph-checkpoint-sqlite = ">=3.1,<4"
+jsonschema = ">=4.23,<5"
+regex = ">=2024.11.6,<2027"
+PyYAML = ">=6.0.2,<7"
+cryptography = ">=44,<47"
+packaging = "*"
+semantic-version = "2.10.0"
+pypdf = ">=6,<7"
+claude-agent-sdk = ">=0.2.118,<0.3"
+
+reportlab = ">=5,<6"
+pillow = ">=11,<13"
+keyring = ">=25,<27"
 
 [tool.poetry.extras]
-flash = [ "flash-attn",]
+# Flash Attention is intentionally not installed by the core package.  Local
+# inference is provided by external runtimes (Ollama/vLLM/SGLang/llama.cpp),
+# which keeps the control plane small and avoids compiling GPU extensions at
+# install time.
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.3,<10"
+pytest-cov = ">=6,<8"
+ruff = ">=0.11,<1"
+mypy = ">=1.15,<2"
+types-jsonschema = ">=4.23,<5"
+types-PyYAML = ">=6.0,<7"
+types-regex = ">=2024.11,<2027"
+pyinstaller = ">=6.12,<7"
+tomli = ">=2.2,<3"
 
 [tool.pytest.ini_options]
-testpaths = [ "tests",]
+testpaths = [ "tests/v3",]
+addopts = "--import-mode=importlib"
+pythonpath = [ ".", "src" ]
+
+[[tool.mypy.overrides]]
+module = ["reportlab", "reportlab.*"]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 source = [ "src/nebula",]

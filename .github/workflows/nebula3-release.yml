@@ -1,0 +1,390 @@
+name: Prepare Nebula 3 desktop release
+
+on:
+  push:
+    tags:
+      - "nebula-v3.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing nebula-v3.* tag to prepare
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nebula3-release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      channel: ${{ steps.release.outputs.channel }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      commit: ${{ steps.release.outputs.commit }}
+      build_timestamp: ${{ steps.release.outputs.build_timestamp }}
+    steps:
+      - name: Check out the immutable release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref_name }}
+      - name: Validate tag, commit, and synchronized versions
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          case "$RELEASE_TAG" in
+            nebula-v3.*) ;;
+            *) printf 'invalid Nebula 3 release tag: %s\n' "$RELEASE_TAG" >&2; exit 1 ;;
+          esac
+          version="${RELEASE_TAG#nebula-v}"
+          python scripts/nebula3_version.py check --expected "$version"
+          test -s "docs/releases/$version.md"
+          test "$(git tag --points-at HEAD | grep -Fx "$RELEASE_TAG")" = "$RELEASE_TAG"
+          case "$version" in
+            *-*) channel=prerelease; prerelease=true ;;
+            *) channel=stable; prerelease=false ;;
+          esac
+          commit="$(git rev-parse HEAD)"
+          build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            printf 'tag=%s\n' "$RELEASE_TAG"
+            printf 'version=%s\n' "$version"
+            printf 'channel=%s\n' "$channel"
+            printf 'prerelease=%s\n' "$prerelease"
+            printf 'commit=%s\n' "$commit"
+            printf 'build_timestamp=%s\n' "$build_timestamp"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    environment: desktop-release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            platform: macOS
+            artifact_arch: arm64
+          - id: macos-x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            platform: macOS
+            artifact_arch: x64
+          - id: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: Linux
+            artifact_arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    env:
+      NEBULA_VERSION: ${{ needs.validate.outputs.version }}
+      NEBULA_RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      NEBULA_BUILD_TARGET: ${{ matrix.target }}
+      NEBULA_BUILD_COMMIT: ${{ needs.validate.outputs.commit }}
+      NEBULA_BUILD_TIMESTAMP: ${{ needs.validate.outputs.build_timestamp }}
+      NEBULA_UPDATE_CHANNEL: ${{ needs.validate.outputs.channel }}
+      NEBULA_UPDATE_ENDPOINT: https://berylliumsec.github.io/nebula/updates/${{ needs.validate.outputs.channel }}/latest.json
+      NEBULA_UPDATER_PUBLIC_KEY: ${{ secrets.NEBULA_UPDATER_PUBLIC_KEY }}
+    steps:
+      - name: Check out the validated tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - name: Install Linux bundler libraries
+        if: matrix.platform == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libfuse2 patchelf xvfb
+      - name: Validate protected release credentials
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          test -n "$NEBULA_UPDATER_PUBLIC_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          if [ "${{ matrix.platform }}" = macOS ]; then
+            test -n "$APPLE_CERTIFICATE"
+            test -n "$APPLE_CERTIFICATE_PASSWORD"
+            test -n "$APPLE_KEYCHAIN_PASSWORD"
+            test -n "$APPLE_SIGNING_IDENTITY"
+            test -n "$APPLE_ID"
+            test -n "$APPLE_PASSWORD"
+            test -n "$APPLE_TEAM_ID"
+          fi
+      - name: Install the locked Nebula 3 build boundary
+        run: |
+          python -m pip install "poetry==2.1.3"
+          poetry install --with dev --no-interaction
+          npm --prefix ui ci
+          python scripts/nebula3_version.py check --expected "$NEBULA_VERSION"
+      - name: Run platform release tests
+        env:
+          NEBULA_UPDATER_PUBLIC_KEY: ${{ secrets.NEBULA_UPDATER_PUBLIC_KEY }}
+        run: |
+          poetry run python -m scripts.generate_third_party_notices \
+            --root "$GITHUB_WORKSPACE" \
+            --target "${{ matrix.target }}" \
+            --output build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt
+          poetry run pytest -q tests/v3
+          poetry run pytest -q packaging/updater/test_generate_manifest.py
+          npm --prefix ui test
+          npm --prefix ui run build
+          cargo test --locked --manifest-path ui/src-tauri/Cargo.toml
+          cargo test --locked --features direct-updater --manifest-path ui/src-tauri/Cargo.toml
+      - name: Generate the direct-build updater configuration
+        run: python scripts/tauri_release_config.py "$RUNNER_TEMP/tauri-updater.conf.json"
+      - name: Import Apple Developer ID certificate
+        if: matrix.platform == 'macOS'
+        env:
+          CERTIFICATE_PATH: ${{ runner.temp }}/nebula-developer-id.p12
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          certificate="$RUNNER_TEMP/nebula-developer-id.p12"
+          python -c 'import base64,os,pathlib; pathlib.Path(os.environ["CERTIFICATE_PATH"]).write_bytes(base64.b64decode(os.environ["APPLE_CERTIFICATE"]))'
+          security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" nebula-build.keychain
+          security set-keychain-settings -lut 21600 nebula-build.keychain
+          security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" nebula-build.keychain
+          security import "$certificate" -k nebula-build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$APPLE_KEYCHAIN_PASSWORD" nebula-build.keychain
+          security list-keychains -d user -s nebula-build.keychain login.keychain-db
+      - name: Build signed macOS apps, submit notarization, and prepare DMGs
+        if: matrix.platform == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          stage="$RUNNER_TEMP/release-stage"
+          bundle="ui/src-tauri/target/${{ matrix.target }}/release/bundle"
+          install -d -m 0755 "$stage"
+
+          NEBULA_DISTRIBUTION_CHANNEL=direct poetry run python -m scripts.build_nebula_core
+          sidecar="$(find ui/src-tauri/binaries -maxdepth 1 -type f -name 'nebula-core-*' -print -quit)"
+          test -n "$sidecar"
+          "$sidecar" doctor --data-dir "$RUNNER_TEMP/nebula-core-direct" --json
+          poetry run python scripts/package_audit.py "$sidecar"
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$sidecar"
+          codesign --verify --strict --verbose=2 "$sidecar"
+          NEBULA_DISTRIBUTION=direct npm --prefix ui run tauri -- build --ci --skip-stapling --target "${{ matrix.target }}" --features direct-updater --bundles dmg --config src-tauri/tauri.direct.conf.json --config "$RUNNER_TEMP/tauri-updater.conf.json"
+          direct_dmg="$(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          test -n "$direct_dmg"
+          install -m 0644 "$direct_dmg" "$stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}-direct.dmg"
+
+          rm -rf "$bundle"
+          NEBULA_DISTRIBUTION_CHANNEL=managed poetry run python -m scripts.build_nebula_core
+          sidecar="$(find ui/src-tauri/binaries -maxdepth 1 -type f -name 'nebula-core-*' -print -quit)"
+          test -n "$sidecar"
+          "$sidecar" doctor --data-dir "$RUNNER_TEMP/nebula-core-managed" --json
+          poetry run python scripts/package_audit.py "$sidecar"
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$sidecar"
+          codesign --verify --strict --verbose=2 "$sidecar"
+          NEBULA_DISTRIBUTION=managed npm --prefix ui run tauri -- build --ci --skip-stapling --target "${{ matrix.target }}" --bundles dmg --config src-tauri/tauri.managed.conf.json
+          managed_dmg="$(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          test -n "$managed_dmg"
+          install -m 0644 "$managed_dmg" "$stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}-managed.dmg"
+          if strings "$bundle/macos/Nebula.app/Contents/MacOS/nebula-ui" | grep -Fq 'berylliumsec.github.io/nebula/updates'; then
+            printf 'managed build unexpectedly contains the direct update endpoint\n' >&2
+            exit 1
+          fi
+      - name: Build signed direct AppImage and managed DEB
+        if: matrix.platform == 'Linux'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          stage="$RUNNER_TEMP/release-stage"
+          bundle="ui/src-tauri/target/${{ matrix.target }}/release/bundle"
+          install -d -m 0755 "$stage"
+
+          NEBULA_DISTRIBUTION_CHANNEL=direct poetry run python -m scripts.build_nebula_core
+          sidecar="$(find ui/src-tauri/binaries -maxdepth 1 -type f -name 'nebula-core-*' -print -quit)"
+          test -n "$sidecar"
+          "$sidecar" doctor --data-dir "$RUNNER_TEMP/nebula-core-direct" --json
+          poetry run python scripts/package_audit.py "$sidecar"
+          NEBULA_DISTRIBUTION=direct npm --prefix ui run tauri -- build --ci --target "${{ matrix.target }}" --features direct-updater --bundles appimage --config src-tauri/tauri.direct.conf.json --config "$RUNNER_TEMP/tauri-updater.conf.json"
+          appimage="$(find "$bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          test -s "$appimage.sig"
+          install -m 0755 "$appimage" "$stage/Nebula-$NEBULA_VERSION-linux-x86_64.AppImage"
+          install -m 0644 "$appimage.sig" "$stage/Nebula-$NEBULA_VERSION-linux-x86_64.AppImage.sig"
+
+          rm -rf "$bundle"
+          NEBULA_DISTRIBUTION_CHANNEL=managed poetry run python -m scripts.build_nebula_core
+          sidecar="$(find ui/src-tauri/binaries -maxdepth 1 -type f -name 'nebula-core-*' -print -quit)"
+          test -n "$sidecar"
+          "$sidecar" doctor --data-dir "$RUNNER_TEMP/nebula-core-managed" --json
+          poetry run python scripts/package_audit.py "$sidecar"
+          NEBULA_DISTRIBUTION=managed npm --prefix ui run tauri -- build --ci --target "${{ matrix.target }}" --bundles deb --config src-tauri/tauri.managed.conf.json
+          deb="$(find "$bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$deb"
+          poetry run python -m scripts.repack_deb "$deb" --version "$NEBULA_VERSION"
+          install -m 0644 "$deb" "$stage/Nebula-$NEBULA_VERSION-linux-x86_64.deb"
+      - name: Inspect prepared macOS installers
+        if: matrix.platform == 'macOS'
+        run: |
+          for flavor in direct managed; do
+            dmg="$RUNNER_TEMP/release-stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}-$flavor.dmg"
+            codesign --verify --deep --strict --verbose=2 "$dmg"
+            mount="$RUNNER_TEMP/mount-$flavor"
+            install -d -m 0755 "$mount"
+            hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
+            app="$mount/Nebula.app"
+            test -x "$app/Contents/MacOS/nebula-ui"
+            test -x "$app/Contents/MacOS/nebula-core"
+            poetry run python scripts/package_audit.py --tree "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            "$app/Contents/MacOS/nebula-ui" --self-test
+            hdiutil detach "$mount"
+          done
+      - name: Inspect and self-test Linux installers
+        if: matrix.platform == 'Linux'
+        run: |
+          deb="$RUNNER_TEMP/release-stage/Nebula-$NEBULA_VERSION-linux-x86_64.deb"
+          appimage="$RUNNER_TEMP/release-stage/Nebula-$NEBULA_VERSION-linux-x86_64.AppImage"
+          dpkg-deb --info "$deb"
+          expected_deb_version="$NEBULA_VERSION"
+          case "$expected_deb_version" in *-*) expected_deb_version="${expected_deb_version/-/~}" ;; esac
+          test "$(dpkg-deb --field "$deb" Version)" = "$expected_deb_version"
+          dpkg --compare-versions "$expected_deb_version" le "$NEBULA_VERSION"
+          dpkg-deb --extract "$deb" "$RUNNER_TEMP/deb-root"
+          test -x "$RUNNER_TEMP/deb-root/usr/bin/nebula"
+          test -x "$RUNNER_TEMP/deb-root/usr/bin/nebula-core"
+          test -x "$RUNNER_TEMP/deb-root/usr/bin/nebula-ui"
+          cmp packaging/linux/nebula "$RUNNER_TEMP/deb-root/usr/bin/nebula"
+          poetry run python scripts/package_audit.py --tree "$RUNNER_TEMP/deb-root"
+          xvfb-run -a "$RUNNER_TEMP/deb-root/usr/bin/nebula-ui" --self-test
+          xvfb-run -a poetry run python scripts/test_desktop_crash_cleanup.py "$RUNNER_TEMP/deb-root/usr/bin/nebula-ui"
+          appimage_extract="$RUNNER_TEMP/appimage-extract"
+          install -d -m 0755 "$appimage_extract"
+          (cd "$appimage_extract" && "$appimage" --appimage-extract >/dev/null)
+          poetry run python scripts/package_audit.py --tree "$appimage_extract/squashfs-root"
+          xvfb-run -a "$appimage" --self-test
+          cargo run --locked --quiet --manifest-path ui/src-tauri/Cargo.toml \
+            --example verify_update_signature -- \
+            "$appimage" "$appimage.sig" "$NEBULA_UPDATER_PUBLIC_KEY"
+          tampered="$RUNNER_TEMP/tampered.AppImage"
+          cp "$appimage" "$tampered"
+          printf 'tampered' >> "$tampered"
+          if cargo run --locked --quiet --manifest-path ui/src-tauri/Cargo.toml \
+            --example verify_update_signature -- \
+            "$tampered" "$appimage.sig" "$NEBULA_UPDATER_PUBLIC_KEY"; then
+            printf 'tampered updater unexpectedly passed signature verification\n' >&2
+            exit 1
+          fi
+      - name: Generate per-artifact SBOMs and checksums
+        if: matrix.platform == 'Linux'
+        run: |
+          stage="$RUNNER_TEMP/release-stage"
+          for artifact in "$stage"/Nebula-*; do
+            case "$artifact" in
+              *.sig|*.json) continue ;;
+            esac
+            direct=
+            case "$artifact" in
+              *-direct.dmg|*.AppImage|*.updater.tar.gz) direct=--direct ;;
+            esac
+            poetry run python -m scripts.generate_release_sbom \
+              --artifact "$artifact" \
+              --root "$GITHUB_WORKSPACE" \
+              --target "${{ matrix.target }}" \
+              $direct
+          done
+          (
+            cd "$stage"
+            shasum -a 256 Nebula-* > "SHA256SUMS-${{ matrix.id }}.txt"
+          )
+      - name: Attest release artifacts
+        if: matrix.platform == 'Linux'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: ${{ runner.temp }}/release-stage/*
+      - name: Upload native release outputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nebula3-${{ matrix.id }}
+          path: ${{ runner.temp }}/release-stage/*
+          if-no-files-found: error
+      - name: Remove temporary Apple keychain
+        if: always() && matrix.platform == 'macOS'
+        run: security delete-keychain nebula-build.keychain || true
+
+  linux-clean-smoke:
+    needs: [validate, build]
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-24.04
+            image: ubuntu:24.04
+          - name: debian-12
+            image: debian:12-slim
+          - name: kali-current
+            image: kalilinux/kali-rolling:latest
+    container: ${{ matrix.image }}
+    steps:
+      - name: Download the native Linux installer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nebula3-linux-x64
+          path: release-assets
+      - name: Install, self-test, diagnose, and uninstall without a development stack
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          for command in node npm cargo rustc poetry; do
+            if command -v "$command" >/dev/null 2>&1; then
+              printf 'clean image unexpectedly contains %s\n' "$command" >&2
+              exit 1
+            fi
+          done
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y xauth xvfb "./release-assets/Nebula-$VERSION-linux-x86_64.deb"
+          xvfb-run -a /usr/bin/nebula --self-test
+          /usr/bin/nebula-core doctor --data-dir /tmp/nebula-clean-doctor --json > /tmp/doctor.json
+          grep -F '"mode": "analysis-only"' /tmp/doctor.json
+          grep -F '"host_fallback": false' /tmp/doctor.json
+          DEBIAN_FRONTEND=noninteractive apt-get remove -y nebula
+          test ! -e /usr/bin/nebula
+          test ! -e /usr/bin/nebula-ui
+          test ! -e /usr/bin/nebula-core

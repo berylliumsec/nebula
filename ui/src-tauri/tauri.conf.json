@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nebula",
+  "version": "3.0.0-alpha.1",
+  "identifier": "io.nebula.security",
+  "mainBinaryName": "nebula-ui",
+  "build": {
+    "beforeDevCommand": "npm run dev:desktop",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Nebula 3",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "backgroundColor": "#020203",
+        "resizable": true,
+        "fullscreen": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "externalBin": ["binaries/nebula-core"],
+    "createUpdaterArtifacts": false,
+    "category": "DeveloperTool",
+    "copyright": "Copyright © Nebula contributors",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "homepage": "https://github.com/BerylliumSec/nebula",
+    "licenseFile": "../../LICENSE.md",
+    "resources": {
+      "../../LICENSE.md": "licenses/LICENSE.md",
+      "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt"
+    },
+    "shortDescription": "Local-first security engagement workspace",
+    "longDescription": "Nebula provides a zero-setup security workbench with policy-controlled automation and evidence.",
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/nebula": "../../packaging/linux/nebula",
+          "/usr/share/doc/nebula/LICENSE": "../../LICENSE.md",
+          "/usr/share/doc/nebula/THIRD_PARTY_NOTICES.txt": "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt",
+          "/usr/share/icons/hicolor/128x128/apps/nebula-ui.png": "icons/128x128.png"
+        }
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "hardenedRuntime": true
+    }
+  }
+}

@@ -1,0 +1,27 @@
+services:
+  nebula:
+    build:
+      context: .
+      dockerfile: Dockerfile.v3
+    image: nebula-v3:dev
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,noexec,nosuid
+    volumes:
+      - nebula-data:/data
+    environment:
+      NEBULA_V3_DATABASE_URL: sqlite:////data/nebula.db
+      NEBULA_V3_ARTIFACT_DIR: /data/artifacts
+      NEBULA_V3_API_TOKEN: ${NEBULA_V3_API_TOKEN:?set NEBULA_V3_API_TOKEN}
+      # No container-runtime socket is mounted by default. Tool execution is
+      # therefore assist-only until an administrator configures a dedicated,
+      # isolated worker service.
+    ports:
+      - "127.0.0.1:8000:8000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  nebula-data:

@@ -1,133 +1,105 @@
-# Nebula – AI-Powered Penetration Testing Assistant
+# Acknowledgement
 
-Nebula is an advanced, AI-powered penetration testing open-source tool that revolutionizes penetration testing by integrating state-of-the-art AI models into your command-line interface. Designed for cybersecurity professionals, ethical hackers, and developers, Nebula automates vulnerability assessments and enhances security workflows with real-time insights and automated note-taking.
+First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.
 
-## Important upgrade notice
+# Nebula – Security Testing Workbench
 
-Nebula 2.0.0 is now available. Because earlier releases were published as beta versions, pip may have kept some existing installations on an older version even when `--upgrade` was used. Users running Python 3.10 through 3.13 should upgrade with:
+Nebula is an operator first, AI powered penetration testing platform that seeks to simplify the process of network penetration testing by integrating AI Agents, Terminals, a code editor, a web browser, screenshots, note-taking, screenshots in one desktop application. 
 
-```bash
-python -m pip install --upgrade nebula-ai
-```
+At its core it is driven by the human operator and assisted by AI agents.
 
-Verify the installed version with:
+## Release status
 
-```bash
-python -m pip show nebula-ai
-```
+Nebula 3 is in preview. A build is available only when a `nebula-v3.*` entry and
+its native artifacts appear on the
+[GitHub Releases page](https://github.com/BerylliumSec/nebula/releases). If no
+Nebula 3 entry is listed, no Nebula 3 installer has been published yet; use a
+source checkout instead. Do not use `pip install nebula-ai` to install Nebula 3.
 
-The output should show `Version: 2.0.0`. Python 3.14 is not currently supported; use Python 3.13 or earlier when installing Nebula 2.0.0.
+Preview builds are intended for evaluation on authorized systems. Back up
+engagement data, review the release notes and checksums, and do not treat an
+alpha build as a stable production release. The first release line is
+[Nebula 3.0.0-alpha.1](docs/releases/3.0.0-alpha.1.md).
 
+## Install and launch
 
-![Nebula AI-Powered Penetration Testing CLI Interface](/images/Nebula.png)
+Published releases can contain:
 
-## Acknowledgement
+- macOS 13 or newer DMGs for Apple silicon and Intel;
+- a Linux x86_64 AppImage with direct updates; and
+- a Linux x86_64 DEB for managed installations.
 
-**First i would like to thank the All-Mighty God who is the source of all knowledge, without Him, this would not be possible.**
+Windows installers are not part of the current release matrix. Docker or
+Podman must be installed separately for terminal and automation features; a
+model provider is optional.
 
-## News
+Launch the native desktop from the operating-system application menu or run:
 
-Introducing the Deep Application Profiler (DAP). DAP uses neural networks to analyze an executable's internal structure and intent, rather than relying on traditional virus signatures. This approach enables it to detect new, zero-day malware that conventional methods often miss. DAP also provides detailed breakdowns for rapid analyst review and is available as both a web service and an API. [Learn More Here](https://berylliumsec.com/malware-analysis)
-
-
-## Nebula: AI-Powered Penetration Testing Platform
-
-Nebula is a cutting-edge, AI-powered penetration testing tool designed for cybersecurity professionals and ethical hackers. It integrates both hosted models available through the OpenAI API and open-source models such as Meta's Llama-3.1-8B-Instruct, Mistral AI's Mistral-7B-Instruct-v0.2, and DeepSeek-R1-Distill-Llama-8B directly into the command line interface (CLI). By leveraging these state-of-the-art models, Nebula not only enhances vulnerability assessments and penetration testing workflows but also supports any tool that can be invoked from the CLI.
-
-
-## Installation
-
-**System Requirements:**
-
-For CPU-Based Inference(Ollama)(Note that Ollama Supports GPU too):
-- At least 16GB of RAM 
-- Python 3.10 – 3.13.9
-- [Ollama](https://ollama.com/)
-
-**Installation Command:**
-```bash
-python -m pip install nebula-ai --upgrade
-```
-
-
-## Running Nebula
-
-**Important:** 
-
-
-**Ollama Local Model Based Usage**
-
-[Install Ollama](https://ollama.com/download/mac) and download your preferred models for example
-
-```bash
- ollama pull mistral
-```
-Then enter the model's exact name as it appears in Ollama in the engagement settings.
-
-**OpenAI Models Usage**
-
-To use OpenAI models, add your API keys to your env like so
-
-```bash
-export OPENAI_API_KEY="sk-blah-blaj"
-```
-
-Then enter the OpenAI model's exact name in the engagement settings.
-
-
-Run nebula
-
-```
+```console
 nebula
 ```
 
-**Using docker**
+Administration and diagnostics use the bundled Core command:
 
-First allow local connections to your X server:
-
-```bash
-xhost +local:docker
+```console
+nebula-core doctor --json
+nebula-core migrate
 ```
 
-```bash
-docker run --rm -it   -e DISPLAY=$DISPLAY   -v /home/YOUR_HOST_NAME/.local/share/nebula/logs:/root/.local/share/nebula/logs -v YOUR_ENGAGEMENT_FOLDER_ON_HOST_MACHINE:/engagements -v /tmp/.X11-unix:/tmp/.X11-unix   berylliumsec/nebula:latest
+## Migrate existing Nebula 2 data
+
+The discontinued application is not required to migrate an existing engagement.
+Quit any running Nebula 2 process, preserve a backup of the engagement directory,
+and import it without modifying the source:
+
+```console
+nebula-core import-2x "/path/to/nebula-2-engagement"
 ```
-### Interacting with the models. 
 
-To interact with the models, begin your input with a `!` or use the AI/Terminal button to switch between modes. For example: `! write a python script to scan the ports of a remote system` the "!" is not needed if you use the context button
+Verify the imported Project and its evidence before deleting the original data.
+See [Migrating from Nebula 2](docs/MIGRATING-2-TO-3.md) for the integrity,
+external-knowledge, verification, and recovery procedures.
 
-## Key Features
+## Develop from source
 
-- **AI-Powered Internet Search via agents:**  
-  Enhance responses by integrating real-time, internet-sourced context to keep you updated on cybersecurity trends. "whats in the news on cybersecurity today"
-  
-- **AI-Assisted Note-Taking:**  
-  Automatically record and categorize security findings.
+From an existing checkout, synchronize dependencies and launch the native
+desktop:
 
-- **Real-Time AI-Driven Insights:**  
-  Get immediate suggestions for discovering and exploiting vulnerabilities based on terminal tool outputs.
+```console
+git pull --ff-only
+poetry install --with dev
+npm --prefix ui ci
+npm --prefix ui run tauri -- dev
+```
 
-- **Enhanced Tool Integration:**  
-  Seamlessly import data from external tools for AI-powered note-taking and advice.
+For browser-only development, build the workspace and let Core choose an
+available loopback port:
 
-- **Integrated Screenshot & Editing:**  
-  Capture and annotate images directly within Nebula for streamlined documentation.
+```console
+npm --prefix ui run build
+poetry run nebula-core ui
+```
 
-- **Manual Note-Taking & Automatic Command Logging:**  
-  Maintain a detailed log of your actions and findings with both automated and manual note-taking features.
-  
-- **Status feed:**  
-  This panel displays your most recent penetration testing activities, it refreshes every five minutes
+Run the principal pre-merge checks with:
 
+```console
+python scripts/nebula3_version.py check
+poetry run pytest -q tests/v3
+npm --prefix ui test
+npm --prefix ui run build
+```
 
-### Roadmap
+The Poetry package is a build-time Core boundary and is not a replacement for
+the native desktop installer. End users should use a published native package.
 
-- Create custom models that are more useful for penetration testing
+## Documentation
 
-### Troubleshooting
+- [Nebula 3 guide](docs/NEBULA3.md)
+- [Nebula 3.0.0-alpha.1 release notes](docs/releases/3.0.0-alpha.1.md)
+- [Automation runtime](docs/AUTOMATION-RUNTIME.md)
+- [Local diagnostics](docs/NEBULA3_DIAGNOSTICS.md)
+- [Usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md)
+- [Release process](packaging/RELEASING.md)
 
-Logs are located at `/home/[your_username]/.local/share/nebula/logs`. You would most likely find the reason for the error in one of those logs
-
-## Get More Support
-
-- Have questions or need help? [Open an Issue](https://github.com/berylliumsec/nebula/issues) on GitHub.
+Use Nebula only on systems and networks you own or are explicitly authorized to
+test.

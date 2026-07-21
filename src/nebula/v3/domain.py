@@ -1,0 +1,2288 @@
+"""Typed, UI-independent domain contracts for Nebula 3.
+
+The relational store is authoritative.  These models are the stable boundary used
+by the API, providers, policy engine, importers, and future GUI clients.
+"""
+
+from __future__ import annotations
+
+from .diagnostics import record_caught_exception
+
+import ipaddress
+import re
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, ClassVar
+from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def utc_now() -> datetime:
+    """Return a timezone-aware UTC timestamp."""
+
+    return datetime.now(timezone.utc)
+
+
+class StringEnum(str, Enum):
+    """A string-valued enum with stable JSON serialization."""
+
+
+class EngagementStatus(StringEnum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETE = "complete"
+    ARCHIVED = "archived"
+
+
+class ScopeImportStatus(StringEnum):
+    GENERATING = "generating"
+    READY = "ready"
+    APPLIED = "applied"
+    DISCARDED = "discarded"
+    FAILED = "failed"
+
+
+class ScopeImportClassification(StringEnum):
+    ALLOWED = "allowed"
+    EXCLUDED = "excluded"
+    AMBIGUOUS = "ambiguous"
+
+
+class ScopeImportTargetType(StringEnum):
+    CIDR = "cidr"
+    DOMAIN = "domain"
+    URL = "url"
+
+
+class RiskClass(StringEnum):
+    LOCAL_READ = "local_read"
+    PASSIVE = "passive"
+    ACTIVE_SCAN = "active_scan"
+    WORKSPACE_WRITE = "workspace_write"
+    CREDENTIAL_USE = "credential_use"
+    EXPLOITATION = "exploitation"
+    PERSISTENCE = "persistence"
+    DESTRUCTIVE = "destructive"
+    SCOPE_CHANGE = "scope_change"
+
+
+class FindingStatus(StringEnum):
+    CANDIDATE = "candidate"
+    VALIDATED = "validated"
+    CONFIRMED = "confirmed"
+    ACCEPTED_RISK = "accepted-risk"
+    FALSE_POSITIVE = "false-positive"
+    REMEDIATED = "remediated"
+    RETEST_PASSED = "retest-passed"
+    RETEST_FAILED = "retest-failed"
+
+
+class Severity(StringEnum):
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class RunStatus(StringEnum):
+    QUEUED = "queued"
+    PLANNING = "planning"
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    PAUSED = "paused"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+    COMPLETE = "complete"
+
+
+class RunBackend(StringEnum):
+    NATIVE = "native"
+    HARNESS = "harness"
+
+
+class ChatBackend(StringEnum):
+    PROVIDER = "provider"
+    HARNESS = "harness"
+
+
+class HarnessKind(StringEnum):
+    CODEX_APP_SERVER = "codex_app_server"
+    # Retained only so historical profiles and activity records remain readable.
+    CLAUDE_AGENT_SDK = "claude_agent_sdk"
+
+
+PROVIDED_HARNESS_KINDS = frozenset({HarnessKind.CODEX_APP_SERVER})
+
+
+class HarnessConnectionMode(StringEnum):
+    SPAWN = "spawn"
+    ENDPOINT = "endpoint"
+
+
+class HarnessTransport(StringEnum):
+    STDIO = "stdio"
+    UNIX = "unix"
+    WEBSOCKET = "websocket"
+
+
+class HarnessAuthMode(StringEnum):
+    EXISTING_SESSION = "existing_session"
+    SECRET_REF = "secret_ref"
+    ENDPOINT_BEARER = "endpoint_bearer"
+
+
+class HarnessWorkspaceAccess(StringEnum):
+    NONE = "none"
+    READ = "read"
+    WRITE = "write"
+
+
+class HarnessSessionStatus(StringEnum):
+    STARTING = "starting"
+    IDLE = "idle"
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    CLOSED = "closed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class HarnessTurnOrigin(StringEnum):
+    CHAT = "chat"
+    MISSION = "mission"
+    ANALYSIS = "analysis"
+
+
+class HarnessTurnStatus(StringEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+
+class HarnessInteractionKind(StringEnum):
+    USER_INPUT = "user_input"
+    MCP_ELICITATION = "mcp_elicitation"
+
+
+class HarnessInteractionStatus(StringEnum):
+    PENDING = "pending"
+    ANSWERED = "answered"
+    DECLINED = "declined"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class McpTransport(StringEnum):
+    STDIO = "stdio"
+    STREAMABLE_HTTP = "streamable_http"
+
+
+class McpAuthMode(StringEnum):
+    NONE = "none"
+    BEARER = "bearer"
+    HEADERS = "headers"
+
+
+class McpApprovalMode(StringEnum):
+    RISK_BASED = "risk_based"
+    ALLOW = "allow"
+    ASK = "ask"
+    DENY = "deny"
+
+
+class McpCwdPolicy(StringEnum):
+    WORKSPACE = "workspace"
+    FIXED = "fixed"
+
+
+class TaskStatus(StringEnum):
+    PENDING = "pending"
+    READY = "ready"
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    BLOCKED = "blocked"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    COMPLETE = "complete"
+
+
+class ToolCallStatus(StringEnum):
+    PROPOSED = "proposed"
+    WAITING_APPROVAL = "waiting_approval"
+    APPROVED = "approved"
+    RUNNING = "running"
+    DENIED = "denied"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    COMPLETE = "complete"
+
+
+class ToolCallOrigin(StringEnum):
+    MISSION = "mission"
+    CHAT = "chat"
+
+
+class ApprovalStatus(StringEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    EDITED = "edited"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+
+
+class ProviderVerificationStatus(StringEnum):
+    VERIFIED = "verified"
+    FAILED = "failed"
+
+
+class RunnerRuntime(StringEnum):
+    PODMAN = "podman"
+    DOCKER = "docker"
+
+
+class RunnerIsolation(StringEnum):
+    ROOTLESS = "rootless"
+    PODMAN_MACHINE = "podman_machine"
+    DOCKER_DESKTOP_VM = "docker_desktop_vm"
+
+
+class ReportStatus(StringEnum):
+    DRAFT = "draft"
+    REVIEW = "review"
+    FINAL = "final"
+
+
+class OperatorExecutionStatus(StringEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
+    COMPLETED = "completed"
+    DENIED = "denied"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class ExecutionNetworkMode(StringEnum):
+    NONE = "none"
+    SCOPED = "scoped"
+
+
+class AutomationApprovalPolicy(StringEnum):
+    """When a project command requires an operator decision."""
+
+    ALWAYS = "always"
+    ON_BOUNDARY = "on_boundary"
+    NEVER = "never"
+
+
+class AutomationNetworkMode(StringEnum):
+    """Network boundary requested by the general command primitive."""
+
+    NONE = "none"
+    PROJECT_SCOPE = "project_scope"
+
+
+class AutomationSessionStatus(StringEnum):
+    STARTING = "starting"
+    READY = "ready"
+    CLOSING = "closing"
+    CLOSED = "closed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class CommandExecutionStatus(StringEnum):
+    WAITING_APPROVAL = "waiting_approval"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+
+class ExecutionOriginKind(StringEnum):
+    ASSISTANT_MESSAGE = "assistant_message"
+    RERUN = "rerun"
+    SELECTION = "selection"
+
+
+class GeneratedDraftStatus(StringEnum):
+    GENERATING = "generating"
+    READY = "ready"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+class ReportRenderStatus(StringEnum):
+    QUEUED = "queued"
+    RENDERING = "rendering"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class CorrelationMethod(StringEnum):
+    PURL = "purl"
+    CPE = "cpe"
+    SCANNER_CVE = "scanner_cve"
+    FUZZY_BANNER = "fuzzy_banner"
+
+
+class CorrelationStatus(StringEnum):
+    CANDIDATE = "candidate"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    NOT_AFFECTED = "not_affected"
+
+
+class NebulaModel(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_assignment=True,
+        populate_by_name=True,
+        protected_namespaces=(),
+        str_strip_whitespace=True,
+    )
+
+
+class Entity(NebulaModel):
+    """Common persisted-entity fields with optimistic revision support."""
+
+    entity_kind: ClassVar[str]
+    id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=200)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    revision: int = Field(default=1, ge=1)
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def timestamps_must_be_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def updated_after_creation(self) -> "Entity":
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at cannot be earlier than created_at")
+        return self
+
+
+class MissionGrant(NebulaModel):
+    risk_classes: list[RiskClass]
+    tool_names: list[str] = Field(default_factory=list)
+    targets: list[str] = Field(default_factory=list)
+    granted_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+    granted_by: str = Field(min_length=1)
+
+    @field_validator("granted_at", "expires_at")
+    @classmethod
+    def expiry_must_be_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("grant timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def expiry_after_grant(self) -> "MissionGrant":
+        if self.expires_at <= self.granted_at:
+            raise ValueError("expires_at must be later than granted_at")
+        return self
+
+
+class ScopePolicy(Entity):
+    entity_kind: ClassVar[str] = "scope_policies"
+    engagement_id: str
+    allowed_cidrs: list[str] = Field(default_factory=list)
+    allowed_domains: list[str] = Field(default_factory=list)
+    allowed_urls: list[str] = Field(default_factory=list)
+    allowed_ports: list[int] = Field(default_factory=list)
+    not_before: datetime | None = None
+    not_after: datetime | None = None
+    prohibited_actions: list[str] = Field(default_factory=list)
+    local_only: bool = False
+    max_concurrency: int = Field(default=1, ge=1, le=256)
+    grants: list[MissionGrant] = Field(default_factory=list)
+
+    @field_validator("allowed_cidrs")
+    @classmethod
+    def normalize_cidrs(cls, values: list[str]) -> list[str]:
+        normalized = []
+        for value in values:
+            normalized.append(str(ipaddress.ip_network(value, strict=False)))
+        return sorted(set(normalized))
+
+    @field_validator("allowed_domains")
+    @classmethod
+    def normalize_domains(cls, values: list[str]) -> list[str]:
+        normalized = []
+        domain_pattern = re.compile(
+            r"^(?:\*\.)?(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        )
+        for value in values:
+            domain = value.rstrip(".").lower()
+            if not domain_pattern.fullmatch(domain):
+                raise ValueError(f"invalid domain: {value}")
+            normalized.append(domain)
+        return sorted(set(normalized))
+
+    @field_validator("allowed_ports")
+    @classmethod
+    def normalize_ports(cls, values: list[int]) -> list[int]:
+        for value in values:
+            if not 0 <= value <= 65535:
+                raise ValueError("ports must be between 0 and 65535")
+        return sorted(set(values))
+
+    @field_validator("allowed_urls")
+    @classmethod
+    def normalize_urls(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            try:
+                parsed = urlsplit(value)
+                port = parsed.port
+            except ValueError as exc:
+                record_caught_exception(
+                    "projects",
+                    "projects.domain.caught_failure_001",
+                    "A handled projects operation raised an exception.",
+                    exc,
+                    stage="domain",
+                )
+                raise ValueError(f"invalid scoped URL: {value}") from exc
+            if parsed.scheme.lower() not in {"http", "https"}:
+                raise ValueError("scoped URLs must use http or https")
+            if not parsed.hostname:
+                raise ValueError("scoped URLs require a hostname")
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError("scoped URLs cannot contain credentials")
+            if parsed.fragment:
+                raise ValueError("scoped URLs cannot contain fragments")
+            if any(ord(character) < 32 for character in value):
+                raise ValueError("scoped URLs cannot contain control characters")
+            try:
+                host = parsed.hostname.encode("idna").decode("ascii").lower()
+            except UnicodeError as exc:
+                record_caught_exception(
+                    "projects",
+                    "projects.domain.caught_failure_002",
+                    "A handled projects operation raised an exception.",
+                    exc,
+                    stage="domain",
+                )
+                raise ValueError(f"invalid scoped URL hostname: {value}") from exc
+            if ":" in host:
+                host = f"[{host}]"
+            netloc = f"{host}:{port}" if port is not None else host
+            normalized.append(
+                urlunsplit(
+                    (
+                        parsed.scheme.lower(),
+                        netloc,
+                        parsed.path or "/",
+                        parsed.query,
+                        "",
+                    )
+                )
+            )
+        return sorted(set(normalized))
+
+    @field_validator("not_before", "not_after")
+    @classmethod
+    def optional_times_must_be_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("scope timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def valid_window(self) -> "ScopePolicy":
+        if self.not_before and self.not_after and self.not_after <= self.not_before:
+            raise ValueError("not_after must be later than not_before")
+        return self
+
+
+class Engagement(Entity):
+    entity_kind: ClassVar[str] = "engagements"
+    name: str = Field(min_length=1, max_length=300)
+    description: str = ""
+    status: EngagementStatus = EngagementStatus.DRAFT
+    scope_policy_id: str | None = None
+    client_name: str | None = None
+    owner_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutomationProjectPolicy(Entity):
+    """Project-wide policy for the fixed automation command runtime."""
+
+    entity_kind: ClassVar[str] = "automation_policies"
+    engagement_id: str
+    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
+    network_enabled: bool = True
+    runner_profile_id: str | None = Field(default=None, max_length=200)
+    max_timeout_ms: int = Field(default=300_000, ge=1_000, le=86_400_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutomationSession(Entity):
+    """One isolated OCI environment owned by an agent session."""
+
+    entity_kind: ClassVar[str] = "automation_sessions"
+    engagement_id: str
+    owner_kind: str = Field(pattern=r"^(chat|mission|harness|api)$")
+    owner_id: str = Field(min_length=1, max_length=200)
+    runtime_image: str = Field(min_length=1, max_length=1_000)
+    runtime_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    runner_profile_id: str = Field(min_length=1, max_length=200)
+    runner_profile_revision: int = Field(ge=1)
+    policy_id: str = Field(min_length=1, max_length=200)
+    policy_revision: int = Field(ge=1)
+    scope_policy_id: str | None = Field(default=None, max_length=200)
+    scope_policy_revision: int | None = Field(default=None, ge=1)
+    status: AutomationSessionStatus = AutomationSessionStatus.STARTING
+    network_granted: bool = False
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    failure_detail: str | None = Field(default=None, max_length=4_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def scope_snapshot_is_complete(self) -> "AutomationSession":
+        if (self.scope_policy_id is None) != (self.scope_policy_revision is None):
+            raise ValueError("automation scope id and revision must be stored together")
+        return self
+
+
+class WorkspaceChange(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    change: str = Field(pattern=r"^(added|modified|deleted)$")
+    size: int | None = Field(default=None, ge=0)
+
+
+class CommandExecution(Entity):
+    """Durable receipt for one Bash process in an automation session."""
+
+    entity_kind: ClassVar[str] = "command_executions"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    process_id: str = Field(min_length=1, max_length=200)
+    command: str = Field(min_length=1, max_length=200_000)
+    command_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cwd: str = Field(default=".", min_length=1, max_length=4_096)
+    network: AutomationNetworkMode = AutomationNetworkMode.NONE
+    background: bool = False
+    status: CommandExecutionStatus = CommandExecutionStatus.RUNNING
+    runtime_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    policy_revision: int = Field(ge=1)
+    scope_policy_revision: int | None = Field(default=None, ge=1)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    exit_code: int | None = None
+    stdout_artifact_id: str | None = Field(default=None, max_length=200)
+    stderr_artifact_id: str | None = Field(default=None, max_length=200)
+    redacted_stdout_artifact_id: str | None = Field(default=None, max_length=200)
+    redacted_stderr_artifact_id: str | None = Field(default=None, max_length=200)
+    observed_stdout_bytes: int = Field(default=0, ge=0)
+    observed_stderr_bytes: int = Field(default=0, ge=0)
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    workspace_changes: list[WorkspaceChange] = Field(
+        default_factory=list, max_length=1_000
+    )
+    error: str | None = Field(default=None, max_length=4_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunnerProfile(Entity):
+    """Explicitly configured local OCI runtime; executables are never PATH-resolved."""
+
+    entity_kind: ClassVar[str] = "runner_profiles"
+    name: str = Field(min_length=1, max_length=200)
+    runtime: RunnerRuntime
+    executable: str
+    context: str | None = Field(default=None, max_length=500)
+    socket: str | None = Field(default=None, max_length=2048)
+    platform: str = Field(pattern=r"^linux/(amd64|arm64)$")
+    isolation: RunnerIsolation
+    seccomp_profile: str | None = None
+    enabled: bool = True
+    healthy: bool = False
+    last_health_at: datetime | None = None
+    last_health_detail: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("executable")
+    @classmethod
+    def runner_executable_is_absolute(cls, value: str) -> str:
+        if not value.startswith("/") or "\x00" in value:
+            raise ValueError("runner executable must be an absolute path")
+        return value
+
+    @field_validator("seccomp_profile")
+    @classmethod
+    def seccomp_path_is_absolute(cls, value: str | None) -> str | None:
+        if value is not None and (not value.startswith("/") or "\x00" in value):
+            raise ValueError("seccomp profile must be an absolute path")
+        return value
+
+    @field_validator("socket")
+    @classmethod
+    def runner_socket_is_local(cls, value: str | None) -> str | None:
+        if value is not None and not (
+            value.startswith("unix://") or value.startswith("/")
+        ):
+            raise ValueError("runner socket must be a local Unix socket")
+        return value
+
+    @field_validator("last_health_at")
+    @classmethod
+    def runner_health_time_must_be_aware(
+        cls, value: datetime | None
+    ) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("runner health timestamp must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def runtime_matches_executable(self) -> "RunnerProfile":
+        executable_name = self.executable.rsplit("/", 1)[-1]
+        if executable_name not in {"docker", "podman"}:
+            raise ValueError("runner executable must be docker or podman")
+        if executable_name != self.runtime.value:
+            raise ValueError("runner runtime must match its executable")
+        return self
+
+
+class Asset(Entity):
+    entity_kind: ClassVar[str] = "assets"
+    engagement_id: str
+    asset_type: str = "host"
+    name: str = Field(min_length=1, max_length=500)
+    address: str | None = None
+    hostname: str | None = None
+    criticality: Severity = Severity.MEDIUM
+    exposed: bool | None = None
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Service(Entity):
+    entity_kind: ClassVar[str] = "services"
+    engagement_id: str
+    asset_id: str
+    protocol: str = "tcp"
+    port: int | None = Field(default=None, ge=1, le=65535)
+    name: str | None = None
+    product: str | None = None
+    version: str | None = None
+    banner: str | None = None
+    cpes: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Identity(Entity):
+    entity_kind: ClassVar[str] = "identities"
+    engagement_id: str
+    principal: str
+    identity_type: str = "account"
+    realm: str | None = None
+    asset_ids: list[str] = Field(default_factory=list)
+    privileged: bool | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SoftwareComponent(Entity):
+    entity_kind: ClassVar[str] = "software_components"
+    engagement_id: str
+    asset_id: str | None = None
+    service_id: str | None = None
+    name: str
+    vendor: str | None = None
+    version: str | None = None
+    ecosystem: str | None = None
+    purl: str | None = None
+    cpes: list[str] = Field(default_factory=list)
+    source_evidence_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Observation(Entity):
+    entity_kind: ClassVar[str] = "observations"
+    engagement_id: str
+    observation_type: str
+    title: str
+    body: str = ""
+    asset_ids: list[str] = Field(default_factory=list)
+    service_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    source: str | None = None
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Evidence(Entity):
+    entity_kind: ClassVar[str] = "evidence"
+    engagement_id: str
+    evidence_type: str
+    title: str
+    description: str = ""
+    artifact_id: str | None = None
+    finding_id: str | None = None
+    asset_ids: list[str] = Field(default_factory=list)
+    tool_call_id: str | None = None
+    execution_id: str | None = None
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    captured_at: datetime = Field(default_factory=utc_now)
+    captured_by: str | None = None
+    source_version: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Artifact(Entity):
+    entity_kind: ClassVar[str] = "artifacts"
+    engagement_id: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: int = Field(ge=0)
+    filename: str | None = None
+    media_type: str = "application/octet-stream"
+    storage_path: str
+    source: str | None = None
+    parent_artifact_id: str | None = None
+    redacted: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Remediation(Entity):
+    entity_kind: ClassVar[str] = "remediations"
+    engagement_id: str
+    finding_id: str | None = None
+    summary: str
+    details: str = ""
+    references: list[str] = Field(default_factory=list)
+    owner: str | None = None
+    due_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Finding(Entity):
+    entity_kind: ClassVar[str] = "findings"
+    engagement_id: str
+    title: str = Field(min_length=1, max_length=500)
+    description: str = ""
+    status: FindingStatus = FindingStatus.CANDIDATE
+    severity: Severity = Severity.INFO
+    severity_rationale: str = ""
+    asset_ids: list[str] = Field(default_factory=list)
+    service_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    observation_ids: list[str] = Field(default_factory=list)
+    correlation_ids: list[str] = Field(default_factory=list)
+    remediation_id: str | None = None
+    cve_ids: list[str] = Field(default_factory=list)
+    cwe_ids: list[str] = Field(default_factory=list)
+    verifier_id: str | None = None
+    verified_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("cve_ids")
+    @classmethod
+    def normalize_cve_ids(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values]
+        if any(not re.fullmatch(r"CVE-\d{4}-\d{4,}", value) for value in normalized):
+            raise ValueError("CVE identifiers must use the CVE-YYYY-NNNN format")
+        return list(dict.fromkeys(normalized))
+
+    @field_validator("cwe_ids")
+    @classmethod
+    def normalize_cwe_ids(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values]
+        if any(not re.fullmatch(r"CWE-\d+", value) for value in normalized):
+            raise ValueError("CWE identifiers must use the CWE-NNN format")
+        return list(dict.fromkeys(normalized))
+
+    @model_validator(mode="after")
+    def confirmed_findings_are_evidence_backed(self) -> "Finding":
+        if self.status == FindingStatus.CONFIRMED:
+            if not self.evidence_ids:
+                raise ValueError("confirmed findings require evidence")
+            if not self.verifier_id or not self.verified_at:
+                raise ValueError("confirmed findings require verifier attribution")
+        return self
+
+
+class Advisory(Entity):
+    entity_kind: ClassVar[str] = "advisories"
+    advisory_id: str
+    source: str
+    title: str
+    description: str = ""
+    published_at: datetime | None = None
+    modified_at: datetime | None = None
+    cvss: dict[str, Any] = Field(default_factory=dict)
+    cwes: list[str] = Field(default_factory=list)
+    affected: list[dict[str, Any]] = Field(default_factory=list)
+    references: list[str] = Field(default_factory=list)
+    kev: bool = False
+    epss_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    epss_percentile: float | None = Field(default=None, ge=0.0, le=1.0)
+    source_snapshot_id: str | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class Correlation(Entity):
+    entity_kind: ClassVar[str] = "correlations"
+    engagement_id: str
+    component_id: str | None = None
+    service_id: str | None = None
+    advisory_id: str
+    method: CorrelationMethod
+    status: CorrelationStatus = CorrelationStatus.CANDIDATE
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str
+    matched_identifiers: dict[str, str] = Field(default_factory=dict)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    conflicting_evidence_ids: list[str] = Field(default_factory=list)
+    analyst_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def fuzzy_matches_are_not_auto_confirmed(self) -> "Correlation":
+        if (
+            self.method == CorrelationMethod.FUZZY_BANNER
+            and self.status == CorrelationStatus.CONFIRMED
+            and not self.analyst_id
+        ):
+            raise ValueError("fuzzy banner matches require analyst confirmation")
+        return self
+
+
+class RunBudget(NebulaModel):
+    max_concurrency: int = Field(default=1, ge=1, le=256)
+    max_delegation_depth: int = Field(default=3, ge=0, le=32)
+    max_duration_seconds: int = Field(default=3600, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1)
+    max_cost_usd: float | None = Field(default=None, ge=0)
+    max_tool_calls: int = Field(default=100, ge=0)
+    max_artifact_queries: int = Field(default=200, ge=0)
+    max_retries: int = Field(default=2, ge=0, le=100)
+    per_target_active_operations: int = Field(default=1, ge=1, le=64)
+
+
+class AgentRun(Entity):
+    entity_kind: ClassVar[str] = "runs"
+    engagement_id: str
+    objective: str
+    status: RunStatus = RunStatus.QUEUED
+    backend: RunBackend = RunBackend.NATIVE
+    supervisor_provider_id: str | None = None
+    supervisor_model: str | None = None
+    harness_profile_id: str | None = None
+    harness_session_id: str | None = None
+    runtime_snapshot: dict[str, Any] = Field(default_factory=dict)
+    budget: RunBudget = Field(default_factory=RunBudget)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    last_event_sequence: int = Field(default=0, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def runtime_binding_is_coherent(self) -> "AgentRun":
+        if self.backend == RunBackend.HARNESS and not self.harness_profile_id:
+            raise ValueError("harness runs require harness_profile_id")
+        if self.backend == RunBackend.NATIVE and any(
+            value is not None
+            for value in (self.harness_profile_id, self.harness_session_id)
+        ):
+            raise ValueError("native runs cannot reference a harness")
+        return self
+
+
+class Task(Entity):
+    entity_kind: ClassVar[str] = "tasks"
+    engagement_id: str
+    run_id: str
+    parent_task_id: str | None = None
+    specialist_role: str
+    title: str
+    instructions: str = ""
+    status: TaskStatus = TaskStatus.PENDING
+    depends_on: list[str] = Field(default_factory=list)
+    assigned_agent_id: str | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    risk_class: RiskClass = RiskClass.LOCAL_READ
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentAttempt(Entity):
+    entity_kind: ClassVar[str] = "agent_attempts"
+    engagement_id: str
+    run_id: str
+    task_id: str
+    agent_role: str
+    attempt_number: int = Field(ge=1)
+    provider_profile_id: str | None = None
+    model: str | None = None
+    status: TaskStatus = TaskStatus.PENDING
+    input: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] | None = None
+    tokens_used: int = Field(default=0, ge=0)
+    cost_usd: float = Field(default=0.0, ge=0)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = None
+
+
+class ToolCall(Entity):
+    entity_kind: ClassVar[str] = "tool_calls"
+    engagement_id: str
+    run_id: str
+    origin: ToolCallOrigin = ToolCallOrigin.MISSION
+    chat_session_id: str | None = None
+    chat_turn_id: str | None = None
+    task_id: str | None = None
+    tool_name: str
+    mcp_server_id: str | None = None
+    mcp_tool_name: str | None = None
+    vendor_tool_name: str | None = None
+    status: ToolCallStatus = ToolCallStatus.PROPOSED
+    risk_class: RiskClass
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | list[Any] | str | None = None
+    approval_id: str | None = None
+    idempotency_key: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+    result_artifact_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Approval(Entity):
+    entity_kind: ClassVar[str] = "approvals"
+    engagement_id: str
+    run_id: str
+    origin: ToolCallOrigin = ToolCallOrigin.MISSION
+    chat_session_id: str | None = None
+    chat_turn_id: str | None = None
+    task_id: str | None = None
+    tool_call_id: str | None = None
+    status: ApprovalStatus = ApprovalStatus.PENDING
+    risk_class: RiskClass
+    exact_request: dict[str, Any]
+    target: str | None = None
+    credential_class: str | None = None
+    expected_effects: list[str] = Field(default_factory=list)
+    policy_rationale: str
+    requested_by: str
+    decided_by: str | None = None
+    requested_at: datetime = Field(default_factory=utc_now)
+    decided_at: datetime | None = None
+    expires_at: datetime | None = None
+    decision_note: str | None = None
+
+
+class ModelCapabilities(NebulaModel):
+    streaming: bool = False
+    cancellation: bool = False
+    tool_calling: bool = False
+    strict_structured_output: bool = False
+    parallel_tool_calls: bool = False
+    vision: bool = False
+    documents: bool = False
+    audio: bool = False
+    embeddings: bool = False
+    reasoning_controls: bool = False
+
+
+class ProviderCapabilityVerification(NebulaModel):
+    """A strict tool-call contract result for one exact provider model."""
+
+    model: str = Field(min_length=1, max_length=500)
+    status: ProviderVerificationStatus
+    checked_at: datetime = Field(default_factory=utc_now)
+    contract_version: str = Field(default="required-tool-v1", min_length=1)
+    failure_detail: str | None = Field(default=None, max_length=1_000)
+
+    @field_validator("checked_at")
+    @classmethod
+    def checked_time_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("verification timestamp must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def result_is_coherent(self) -> "ProviderCapabilityVerification":
+        if (
+            self.status == ProviderVerificationStatus.VERIFIED
+            and self.failure_detail is not None
+        ):
+            raise ValueError("verified capability records cannot contain a failure")
+        if self.status == ProviderVerificationStatus.FAILED and not self.failure_detail:
+            raise ValueError("failed verification requires a failure detail")
+        return self
+
+
+class ProviderPrivacy(NebulaModel):
+    local_only: bool = False
+    retention: str | None = None
+    residency: list[str] = Field(default_factory=list)
+    permits_sensitive_data: bool = False
+
+
+class OperatorProfile(Entity):
+    """Durable local operator attribution, independent of authentication."""
+
+    entity_kind: ClassVar[str] = "operator_profiles"
+    display_name: str = Field(min_length=1, max_length=200)
+    email: str | None = Field(default=None, max_length=320)
+    role: str | None = Field(default=None, max_length=200)
+    active: bool = False
+    activated_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("display_name")
+    @classmethod
+    def normalize_display_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("display_name cannot be blank")
+        return normalized
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized):
+            raise ValueError("email must be a valid address")
+        return normalized
+
+    @field_validator("role")
+    @classmethod
+    def normalize_role(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        return normalized or None
+
+    @field_validator("activated_at")
+    @classmethod
+    def activation_time_must_be_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("activated_at must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class ProviderProfile(Entity):
+    entity_kind: ClassVar[str] = "providers"
+    name: str
+    provider_type: str
+    endpoint: str | None = None
+    enabled: bool = True
+    is_local: bool = False
+    secret_ref: str | None = None
+    model_allowlist: list[str] = Field(default_factory=list)
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+    capability_verifications: dict[str, ProviderCapabilityVerification] = Field(
+        default_factory=dict
+    )
+    privacy: ProviderPrivacy = Field(default_factory=ProviderPrivacy)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("secret_ref")
+    @classmethod
+    def secret_must_be_an_environment_reference(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(
+            r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
+            value,
+        ):
+            raise ValueError("secret_ref must use env:NAME, vault:ID, or session:ID")
+        return value
+
+    @field_validator("model_allowlist")
+    @classmethod
+    def normalize_model_allowlist(cls, values: list[str]) -> list[str]:
+        if any(not value for value in values):
+            raise ValueError("model allowlist entries cannot be empty")
+        return list(dict.fromkeys(values))
+
+    @model_validator(mode="after")
+    def provider_policy_is_coherent(self) -> "ProviderProfile":
+        if self.privacy.local_only and not self.is_local:
+            raise ValueError("a local-only provider profile must be marked local")
+        default_model = self.metadata.get("default_model")
+        if (
+            isinstance(default_model, str)
+            and self.model_allowlist
+            and default_model not in self.model_allowlist
+        ):
+            raise ValueError("default model must be present in model_allowlist")
+        options = self.metadata.get("options", {})
+        if isinstance(options, dict):
+            for key in ("context_window", "max_output_tokens"):
+                value = options.get(key)
+                if value is not None and (
+                    isinstance(value, bool) or not isinstance(value, int) or value < 1
+                ):
+                    raise ValueError(
+                        f"provider option {key} must be a positive integer"
+                    )
+        if any(
+            key != verification.model
+            for key, verification in self.capability_verifications.items()
+        ):
+            raise ValueError("capability verification keys must match exact model IDs")
+        has_verified_model = any(
+            verification.status == ProviderVerificationStatus.VERIFIED
+            and verification.contract_version == "required-tool-v1"
+            for verification in self.capability_verifications.values()
+        )
+        self.capabilities.tool_calling = has_verified_model
+        self.capabilities.parallel_tool_calls = False
+        return self
+
+    def tools_verified_for(self, model: str) -> bool:
+        verification = self.capability_verifications.get(model)
+        return bool(
+            verification
+            and verification.status == ProviderVerificationStatus.VERIFIED
+            and verification.contract_version == "required-tool-v1"
+        )
+
+
+class HarnessCapabilities(NebulaModel):
+    sessions: bool = True
+    resume: bool = True
+    steering: bool = False
+    interruption: bool = True
+    approvals: bool = True
+    streaming: bool = True
+    mcp: bool = True
+    activity_replay: bool = False
+    reasoning_summaries: bool = False
+    plans: bool = False
+    live_command_output: bool = False
+    file_diffs: bool = False
+    detailed_usage: bool = False
+    interactions: bool = False
+    hooks: bool = False
+    subagent_activity: bool = False
+    subagent_control: bool = False
+    checkpoint_rewind: bool = False
+    enforceable_cost_limit: bool = False
+    enforceable_token_limit: bool = False
+    supported_native_capabilities: list[str] = Field(
+        default_factory=list, max_length=64
+    )
+    models: list[str] = Field(default_factory=list, max_length=256)
+    harness_version: str | None = Field(default=None, max_length=200)
+    adapter_version: str | None = Field(default=None, max_length=200)
+    protocol_version: str | None = Field(default=None, max_length=200)
+    checked_at: datetime | None = None
+    detail: str | None = Field(default=None, max_length=1_000)
+
+
+class HarnessNativeCapabilities(NebulaModel):
+    """Explicit vendor-native capabilities available beside Nebula's gateway."""
+
+    workspace_access: HarnessWorkspaceAccess = HarnessWorkspaceAccess.NONE
+    shell: bool = False
+    web_search: bool = False
+    web_fetch: bool = False
+    browser: bool = False
+    computer_use: bool = False
+    image_generation: bool = False
+    skills: bool = False
+    subagents: bool = False
+
+
+class HarnessProfile(Entity):
+    entity_kind: ClassVar[str] = "harnesses"
+    name: str = Field(min_length=1, max_length=200)
+    kind: HarnessKind
+    connection_mode: HarnessConnectionMode = HarnessConnectionMode.SPAWN
+    transport: HarnessTransport = HarnessTransport.STDIO
+    executable: str | None = Field(default=None, max_length=4096)
+    endpoint: str | None = Field(default=None, max_length=4096)
+    auth_mode: HarnessAuthMode = HarnessAuthMode.EXISTING_SESSION
+    secret_ref: str | None = None
+    default_model: str | None = Field(default=None, max_length=500)
+    enabled: bool = True
+    privacy: ProviderPrivacy = Field(default_factory=ProviderPrivacy)
+    capabilities: HarnessCapabilities = Field(default_factory=HarnessCapabilities)
+    native_capabilities: HarnessNativeCapabilities = Field(
+        default_factory=HarnessNativeCapabilities
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("executable")
+    @classmethod
+    def executable_is_absolute(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("/"):
+            raise ValueError("harness executable must be an absolute path")
+        return value
+
+    @field_validator("secret_ref")
+    @classmethod
+    def secret_is_opaque(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(
+            r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
+            value,
+        ):
+            raise ValueError("secret_ref must use env:NAME, vault:ID, or session:ID")
+        return value
+
+    @model_validator(mode="after")
+    def connection_is_supported(self) -> "HarnessProfile":
+        native = self.native_capabilities
+        if self.kind == HarnessKind.CLAUDE_AGENT_SDK and (
+            native.browser or native.computer_use or native.image_generation
+        ):
+            raise ValueError(
+                "Claude Agent SDK profiles do not support browser, computer-use, "
+                "or image-generation capabilities"
+            )
+        if (
+            self.kind == HarnessKind.CLAUDE_AGENT_SDK
+            and native.shell
+            and self.auth_mode == HarnessAuthMode.SECRET_REF
+        ):
+            raise ValueError(
+                "Claude native shell requires existing-session authentication so "
+                "an API key is not present in the vendor process environment"
+            )
+        if self.kind == HarnessKind.CODEX_APP_SERVER and native.web_fetch:
+            raise ValueError(
+                "Codex uses web_search for both discovery and page retrieval; "
+                "web_fetch is Claude-only"
+            )
+        if self.auth_mode != HarnessAuthMode.EXISTING_SESSION and not self.secret_ref:
+            raise ValueError("selected harness authentication requires secret_ref")
+        if self.auth_mode == HarnessAuthMode.EXISTING_SESSION and self.secret_ref:
+            raise ValueError(
+                "existing-session authentication cannot store a secret_ref"
+            )
+        if self.connection_mode == HarnessConnectionMode.SPAWN:
+            if self.endpoint is not None:
+                raise ValueError("spawned harnesses cannot define endpoint")
+            if self.transport != HarnessTransport.STDIO:
+                raise ValueError("spawned harnesses must use stdio")
+            if self.kind == HarnessKind.CODEX_APP_SERVER and not self.executable:
+                raise ValueError("spawned Codex harnesses require executable")
+            if self.auth_mode == HarnessAuthMode.ENDPOINT_BEARER:
+                raise ValueError("spawned harnesses cannot use endpoint bearer auth")
+        else:
+            if self.kind != HarnessKind.CODEX_APP_SERVER:
+                raise ValueError("endpoint mode is currently supported only for Codex")
+            if self.executable is not None or not self.endpoint:
+                raise ValueError(
+                    "endpoint harnesses require endpoint and no executable"
+                )
+            if self.transport not in {
+                HarnessTransport.UNIX,
+                HarnessTransport.WEBSOCKET,
+            }:
+                raise ValueError("Codex endpoints must use unix or websocket")
+            if self.transport == HarnessTransport.UNIX:
+                if not self.endpoint.startswith("unix://"):
+                    raise ValueError("unix harness endpoints must use unix://")
+                parsed = urlsplit(self.endpoint)
+                if not parsed.path.startswith("/") or parsed.query or parsed.fragment:
+                    raise ValueError(
+                        "unix harness endpoints require an absolute socket path"
+                    )
+            else:
+                parsed = urlsplit(self.endpoint)
+                if parsed.scheme != "ws" or parsed.hostname not in {
+                    "127.0.0.1",
+                    "::1",
+                    "localhost",
+                }:
+                    raise ValueError(
+                        "websocket harness endpoints must be loopback ws://"
+                    )
+                if (
+                    parsed.username
+                    or parsed.password
+                    or parsed.query
+                    or parsed.fragment
+                ):
+                    raise ValueError(
+                        "websocket harness endpoints cannot embed credentials or query data"
+                    )
+            if self.auth_mode == HarnessAuthMode.SECRET_REF:
+                raise ValueError(
+                    "endpoint harnesses use endpoint_bearer authentication"
+                )
+        return self
+
+
+class McpToolSnapshot(NebulaModel):
+    name: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=10_000)
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    read_only: bool = False
+    destructive: bool = False
+    idempotent: bool = False
+    open_world: bool = True
+    credentialed: bool | None = None
+    annotations_complete: bool = False
+
+
+class McpCapabilitySnapshot(NebulaModel):
+    protocol_version: str | None = Field(default=None, max_length=100)
+    tools: list[McpToolSnapshot] = Field(default_factory=list, max_length=2_000)
+    resources: bool = False
+    prompts: bool = False
+    instructions: str | None = Field(default=None, max_length=10_000)
+    checked_at: datetime | None = None
+    detail: str | None = Field(default=None, max_length=1_000)
+
+
+class McpServerProfile(Entity):
+    entity_kind: ClassVar[str] = "mcp_servers"
+    name: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._-]+$")
+    transport: McpTransport
+    command: str | None = Field(default=None, max_length=4096)
+    arguments: list[str] = Field(default_factory=list, max_length=128)
+    url: str | None = Field(default=None, max_length=4096)
+    auth_mode: McpAuthMode = McpAuthMode.NONE
+    bearer_secret_ref: str | None = None
+    header_secret_refs: dict[str, str] = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    environment_secret_refs: dict[str, str] = Field(default_factory=dict)
+    cwd_policy: McpCwdPolicy = McpCwdPolicy.WORKSPACE
+    cwd: str | None = Field(default=None, max_length=4096)
+    enabled: bool = False
+    required: bool = False
+    trusted_stdio: bool = False
+    startup_timeout_seconds: float = Field(default=10, gt=0, le=120)
+    tool_timeout_seconds: float = Field(default=60, gt=0, le=900)
+    enabled_tools: list[str] = Field(default_factory=list, max_length=2_000)
+    disabled_tools: list[str] = Field(default_factory=list, max_length=2_000)
+    default_approval: McpApprovalMode = McpApprovalMode.RISK_BASED
+    tool_overrides: dict[str, McpApprovalMode] = Field(default_factory=dict)
+    capabilities: McpCapabilitySnapshot = Field(default_factory=McpCapabilitySnapshot)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("command", "cwd")
+    @classmethod
+    def local_paths_are_absolute(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("/"):
+            raise ValueError("MCP local paths must be absolute")
+        return value
+
+    @field_validator(
+        "bearer_secret_ref",
+        "header_secret_refs",
+        "environment_secret_refs",
+    )
+    @classmethod
+    def secrets_are_references(cls, value: Any) -> Any:
+        values = value.values() if isinstance(value, dict) else [value]
+        for item in values:
+            if item is not None and not re.fullmatch(
+                r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
+                item,
+            ):
+                raise ValueError(
+                    "MCP secrets must use env:, vault:, or session: references"
+                )
+        return value
+
+    @field_validator("arguments")
+    @classmethod
+    def literal_arguments_are_bounded(cls, value: list[str]) -> list[str]:
+        if any(len(item) > 8_192 for item in value):
+            raise ValueError("MCP arguments must be at most 8192 characters each")
+        return value
+
+    @field_validator("header_secret_refs")
+    @classmethod
+    def header_names_are_valid(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(
+            not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name) for name in value
+        ):
+            raise ValueError("MCP secret header names must be valid HTTP field names")
+        return value
+
+    @field_validator("environment_secret_refs")
+    @classmethod
+    def secret_environment_names_are_valid(
+        cls, value: dict[str, str]
+    ) -> dict[str, str]:
+        if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in value):
+            raise ValueError(
+                "MCP secret environment names must be portable identifiers"
+            )
+        return value
+
+    @field_validator("environment")
+    @classmethod
+    def literal_environment_is_nonsecret(cls, value: dict[str, str]) -> dict[str, str]:
+        for name, item in value.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError("MCP environment names must be portable identifiers")
+            if any(
+                token in name.lower()
+                for token in ("secret", "token", "password", "credential", "api_key")
+            ):
+                raise ValueError(
+                    "credential-like MCP environment values require environment_secret_refs"
+                )
+            if len(item) > 8_192:
+                raise ValueError(
+                    "MCP environment values must be at most 8192 characters"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def transport_is_coherent(self) -> "McpServerProfile":
+        if self.transport == McpTransport.STDIO:
+            if not self.command or self.url is not None:
+                raise ValueError("stdio MCP servers require command and no URL")
+            if self.auth_mode != McpAuthMode.NONE:
+                raise ValueError("stdio MCP authentication uses environment references")
+            if self.enabled and not self.trusted_stdio:
+                raise ValueError("enabled stdio MCP servers require trusted_stdio")
+            if self.cwd_policy == McpCwdPolicy.FIXED and not self.cwd:
+                raise ValueError("fixed MCP cwd policy requires cwd")
+            if self.cwd_policy == McpCwdPolicy.WORKSPACE and self.cwd is not None:
+                raise ValueError("workspace MCP cwd policy cannot define cwd")
+        else:
+            if self.command is not None or self.arguments or not self.url:
+                raise ValueError(
+                    "HTTP MCP servers require URL and no command arguments"
+                )
+            parsed = urlsplit(self.url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("MCP URL must use http or https")
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError(
+                    "MCP URLs cannot embed credentials, query data, or fragments"
+                )
+            if parsed.scheme == "http" and parsed.hostname not in {
+                "127.0.0.1",
+                "::1",
+                "localhost",
+            }:
+                raise ValueError("non-loopback MCP HTTP servers require HTTPS")
+            if self.cwd is not None or self.environment or self.environment_secret_refs:
+                raise ValueError("HTTP MCP servers cannot define process settings")
+        if self.auth_mode == McpAuthMode.BEARER and not self.bearer_secret_ref:
+            raise ValueError("bearer MCP authentication requires bearer_secret_ref")
+        if self.auth_mode == McpAuthMode.HEADERS and not self.header_secret_refs:
+            raise ValueError("header MCP authentication requires header_secret_refs")
+        if set(self.enabled_tools).intersection(self.disabled_tools):
+            raise ValueError("an MCP tool cannot be both enabled and disabled")
+        return self
+
+
+class HarnessSession(Entity):
+    entity_kind: ClassVar[str] = "harness_sessions"
+    engagement_id: str
+    harness_profile_id: str
+    external_session_id: str | None = Field(default=None, max_length=500)
+    model: str = Field(min_length=1, max_length=500)
+    status: HarnessSessionStatus = HarnessSessionStatus.STARTING
+    mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    mcp_snapshot: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
+    adapter_version: str | None = Field(default=None, max_length=200)
+    last_turn_id: str | None = Field(default=None, max_length=200)
+    last_activity_at: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SourceSnapshot(Entity):
+    entity_kind: ClassVar[str] = "source_snapshots"
+    source: str
+    fetched_at: datetime = Field(default_factory=utc_now)
+    source_updated_at: datetime | None = None
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    record_count: int = Field(default=0, ge=0)
+    artifact_id: str | None = None
+    cursor: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeSource(Entity):
+    entity_kind: ClassVar[str] = "knowledge"
+    engagement_id: str
+    name: str
+    source_type: str
+    artifact_id: str | None = None
+    status: str = "ready"
+    citation: str | None = None
+    document_count: int = Field(default=0, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatRole(StringEnum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class ChatCitation(NebulaModel):
+    source_id: str
+    name: str
+    citation: str | None = None
+    artifact_id: str | None = None
+    chunk_id: str
+    page: int | None = Field(default=None, ge=1)
+    excerpt: str = Field(max_length=320)
+
+
+class ChatTokenUsage(NebulaModel):
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
+class ScopeImportCandidate(NebulaModel):
+    id: str = Field(min_length=1, max_length=64)
+    target_type: ScopeImportTargetType
+    classification: ScopeImportClassification
+    raw_value: str = Field(min_length=1, max_length=2048)
+    normalized_value: str | None = Field(default=None, max_length=2048)
+    source_location: str = Field(default="document", max_length=500)
+    source_excerpt: str = Field(default="", max_length=1000)
+    warnings: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ScopeImportProvenance(NebulaModel):
+    provider_profile_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
+    prompt_version: str = Field(min_length=1, max_length=100)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    generated_at: datetime = Field(default_factory=utc_now)
+    provider_request_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ScopeImport(Entity):
+    entity_kind: ClassVar[str] = "scope_imports"
+    engagement_id: str
+    artifact_id: str
+    filename: str = Field(min_length=1, max_length=255)
+    source_type: str = Field(min_length=1, max_length=100)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    base_scope_revision: int = Field(default=0, ge=0)
+    status: ScopeImportStatus = ScopeImportStatus.GENERATING
+    candidates: list[ScopeImportCandidate] = Field(
+        default_factory=list, max_length=2000
+    )
+    warnings: list[str] = Field(default_factory=list, max_length=2000)
+    provenance: ScopeImportProvenance | None = None
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    error_detail: str | None = Field(default=None, max_length=4000)
+    applied_candidate_ids: list[str] = Field(default_factory=list, max_length=2000)
+    applied_scope_policy_id: str | None = Field(default=None, max_length=200)
+    applied_scope_revision: int | None = Field(default=None, ge=1)
+    applied_at: datetime | None = None
+    applied_by: str | None = Field(default=None, max_length=200)
+    discarded_at: datetime | None = None
+    discarded_by: str | None = Field(default=None, max_length=200)
+
+
+class HarnessDetailedUsage(NebulaModel):
+    """Provider-neutral usage and timing exposed by local harnesses."""
+
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+    cache_creation_input_tokens: int = Field(default=0, ge=0)
+    cache_read_input_tokens: int = Field(default=0, ge=0)
+    reasoning_output_tokens: int = Field(default=0, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    duration_api_ms: int | None = Field(default=None, ge=0)
+    num_turns: int | None = Field(default=None, ge=0)
+    context_window: int | None = Field(default=None, ge=0)
+    context_used: int | None = Field(default=None, ge=0)
+    model_usage: dict[str, Any] = Field(default_factory=dict)
+    rate_limit: dict[str, Any] = Field(default_factory=dict)
+
+    def basic(self) -> ChatTokenUsage:
+        return ChatTokenUsage(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            total_tokens=self.total_tokens,
+        )
+
+
+class ContextOwnerType(StringEnum):
+    CHAT_SESSION = "chat_session"
+    AGENT_RUN = "agent_run"
+
+
+class ContextSnapshotStatus(StringEnum):
+    READY = "ready"
+    FAILED = "failed"
+
+
+class ContextSourceReference(NebulaModel):
+    """A provenance pointer into an authoritative transcript or mission ledger."""
+
+    source_kind: str = Field(min_length=1, max_length=80)
+    source_id: str = Field(min_length=1, max_length=200)
+    sequence: int | None = Field(default=None, ge=1)
+
+
+class ContextMemoryItem(NebulaModel):
+    text: str = Field(min_length=1, max_length=4_000)
+    sources: list[ContextSourceReference] = Field(min_length=1, max_length=64)
+
+
+class ContextMemory(NebulaModel):
+    """Structured, derived working memory. It is never authoritative evidence."""
+
+    objective: str | None = Field(default=None, max_length=10_000)
+    summary: str = Field(min_length=1, max_length=20_000)
+    confirmed_facts: list[ContextMemoryItem] = Field(default_factory=list)
+    decisions: list[ContextMemoryItem] = Field(default_factory=list)
+    constraints: list[ContextMemoryItem] = Field(default_factory=list)
+    corrections: list[ContextMemoryItem] = Field(default_factory=list)
+    open_questions: list[ContextMemoryItem] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+
+
+class ContextSnapshot(Entity):
+    """Immutable derived context with complete canonical-source provenance."""
+
+    entity_kind: ClassVar[str] = "context_snapshots"
+    engagement_id: str
+    owner_type: ContextOwnerType
+    owner_id: str
+    version: int = Field(default=1, ge=1)
+    status: ContextSnapshotStatus
+    compacted_through: int = Field(default=0, ge=0)
+    memory: ContextMemory | None = None
+    source_references: list[ContextSourceReference] = Field(default_factory=list)
+    provider_profile_id: str
+    model: str
+    prompt_version: str = Field(min_length=1, max_length=100)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    cost_usd: float = Field(default=0.0, ge=0)
+    error: str | None = Field(default=None, max_length=1_000)
+
+    @model_validator(mode="after")
+    def result_is_coherent(self) -> "ContextSnapshot":
+        if self.status == ContextSnapshotStatus.READY:
+            if self.memory is None or not self.source_references:
+                raise ValueError("ready context snapshots require memory and sources")
+            if self.error is not None:
+                raise ValueError("ready context snapshots cannot contain an error")
+        elif not self.error:
+            raise ValueError("failed context snapshots require an error")
+        return self
+
+
+class HarnessTurn(Entity):
+    entity_kind: ClassVar[str] = "harness_turns"
+    engagement_id: str
+    harness_session_id: str
+    origin: HarnessTurnOrigin
+    chat_session_id: str | None = None
+    chat_turn_id: str | None = None
+    run_id: str | None = None
+    external_turn_id: str | None = Field(default=None, max_length=500)
+    status: HarnessTurnStatus = HarnessTurnStatus.QUEUED
+    prompt: str = Field(min_length=1, max_length=250_000)
+    response: str | None = Field(default=None, max_length=500_000)
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    tool_call_ids: list[str] = Field(default_factory=list)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = Field(default=None, max_length=1_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def origin_binding_is_coherent(self) -> "HarnessTurn":
+        if self.origin == HarnessTurnOrigin.CHAT:
+            if not self.chat_session_id or not self.chat_turn_id or self.run_id:
+                raise ValueError("chat harness turns require chat bindings only")
+        elif self.origin == HarnessTurnOrigin.MISSION and (
+            not self.run_id or self.chat_turn_id
+        ):
+            raise ValueError("mission harness turns require run_id and no chat_turn_id")
+        elif self.origin == HarnessTurnOrigin.ANALYSIS and (
+            self.chat_session_id or self.chat_turn_id or self.run_id
+        ):
+            raise ValueError(
+                "analysis harness turns cannot bind chat or mission owners"
+            )
+        return self
+
+
+class HarnessInteraction(Entity):
+    """A durable question or structured elicitation blocking a harness turn."""
+
+    entity_kind: ClassVar[str] = "harness_interactions"
+    engagement_id: str
+    harness_turn_id: str
+    harness_session_id: str
+    origin: HarnessTurnOrigin
+    kind: HarnessInteractionKind
+    status: HarnessInteractionStatus = HarnessInteractionStatus.PENDING
+    vendor_request_id: str = Field(min_length=1, max_length=500)
+    item_id: str | None = Field(default=None, max_length=500)
+    chat_session_id: str | None = Field(default=None, max_length=200)
+    run_id: str | None = Field(default=None, max_length=200)
+    prompt: str = Field(default="Input required", max_length=4_000)
+    questions: list[dict[str, Any]] = Field(default_factory=list, max_length=32)
+    response_schema: dict[str, Any] = Field(default_factory=dict)
+    response: dict[str, Any] | None = None
+    contains_secret: bool = False
+    auto_resolution_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+    resolved_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def owner_and_resolution_are_coherent(self) -> "HarnessInteraction":
+        if self.origin == HarnessTurnOrigin.CHAT:
+            if not self.chat_session_id or self.run_id is not None:
+                raise ValueError("chat interactions require only chat_session_id")
+        elif not self.run_id or self.chat_session_id is not None:
+            raise ValueError("mission interactions require only run_id")
+        terminal = self.status != HarnessInteractionStatus.PENDING
+        if terminal != (self.resolved_at is not None):
+            raise ValueError(
+                "resolved_at is required exactly when an interaction is terminal"
+            )
+        if self.contains_secret and self.response is not None:
+            raise ValueError("secret interaction answers cannot be persisted")
+        return self
+
+
+class ChatSession(Entity):
+    """A durable engagement-scoped analyst conversation."""
+
+    entity_kind: ClassVar[str] = "chat_sessions"
+    engagement_id: str
+    title: str = Field(min_length=1, max_length=300)
+    backend: ChatBackend = ChatBackend.PROVIDER
+    provider_profile_id: str | None = None
+    harness_profile_id: str | None = None
+    harness_session_id: str | None = None
+    model: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def backend_binding_is_coherent(self) -> "ChatSession":
+        if self.backend == ChatBackend.PROVIDER:
+            if not self.provider_profile_id or any(
+                value is not None
+                for value in (self.harness_profile_id, self.harness_session_id)
+            ):
+                raise ValueError(
+                    "provider chat sessions require only provider_profile_id"
+                )
+        elif (
+            not self.harness_profile_id
+            or not self.harness_session_id
+            or self.provider_profile_id is not None
+        ):
+            raise ValueError(
+                "harness chat sessions require harness profile and session"
+            )
+        return self
+
+
+class ChatTurnStatus(StringEnum):
+    ROUTING = "routing"
+    WAITING_APPROVAL = "waiting_approval"
+    FINALIZING = "finalizing"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+
+class ChatTurn(Entity):
+    """A durable, idempotently resumable chat tool loop."""
+
+    entity_kind: ClassVar[str] = "chat_turns"
+    engagement_id: str
+    session_id: str
+    backend: ChatBackend = ChatBackend.PROVIDER
+    provider_profile_id: str | None = None
+    harness_turn_id: str | None = None
+    model: str
+    status: ChatTurnStatus = ChatTurnStatus.ROUTING
+    tools_enabled: bool = False
+    max_tool_calls: int = Field(default=5, ge=0, le=5)
+    max_artifact_queries: int = Field(default=20, ge=0, le=200)
+    next_step: int = Field(default=0, ge=0, le=205)
+    execution_tool_calls: int = Field(default=0, ge=0, le=5)
+    artifact_queries: int = Field(default=0, ge=0, le=200)
+    tool_call_ids: list[str] = Field(default_factory=list)
+    tool_history: list[dict[str, Any]] = Field(default_factory=list)
+    approval_id: str | None = None
+    scope_policy_id: str | None = None
+    scope_revision: int | None = Field(default=None, ge=1)
+    request_snapshot: dict[str, Any] = Field(default_factory=dict)
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    final_message_id: str | None = None
+    error: str | None = Field(default=None, max_length=1_000)
+
+    @model_validator(mode="after")
+    def backend_binding_is_coherent(self) -> "ChatTurn":
+        if self.backend == ChatBackend.PROVIDER and not self.provider_profile_id:
+            raise ValueError("provider chat turns require provider_profile_id")
+        if self.backend == ChatBackend.HARNESS and self.provider_profile_id is not None:
+            raise ValueError("harness chat turns cannot reference a provider")
+        return self
+
+
+class ChatMessage(Entity):
+    """One immutable message in a durable analyst conversation."""
+
+    entity_kind: ClassVar[str] = "chat_messages"
+    engagement_id: str
+    session_id: str
+    sequence: int = Field(ge=1)
+    role: ChatRole
+    content: str = Field(min_length=1, max_length=200_000)
+    provider_profile_id: str | None = None
+    model: str | None = None
+    usage: ChatTokenUsage | None = None
+    finish_reason: str | None = None
+    provider_request_id: str | None = None
+    citations: list[ChatCitation] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExecutionOrigin(NebulaModel):
+    kind: ExecutionOriginKind
+    message_id: str | None = Field(default=None, max_length=200)
+    block_ordinal: int | None = Field(default=None, ge=0, le=10_000)
+    block_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    selection_start_byte: int | None = Field(default=None, ge=0, le=1_000_000)
+    selection_end_byte: int | None = Field(default=None, ge=0, le=1_000_000)
+    execution_id: str | None = Field(default=None, max_length=200)
+    source_kind: str | None = Field(default=None, pattern=r"^[a-z0-9._-]{1,100}$")
+    source_id: str | None = Field(default=None, max_length=200)
+    source_label: str | None = Field(default=None, min_length=1, max_length=500)
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def complete_origin(self) -> "ExecutionOrigin":
+        if self.kind == ExecutionOriginKind.ASSISTANT_MESSAGE:
+            required = (self.message_id, self.block_ordinal, self.block_sha256)
+            if any(value is None for value in required):
+                raise ValueError(
+                    "assistant-message origins require message, block, and hash"
+                )
+            if self.execution_id is not None:
+                raise ValueError(
+                    "assistant-message origins cannot reference an execution"
+                )
+            if (self.selection_start_byte is None) != (self.selection_end_byte is None):
+                raise ValueError("selection byte offsets must be supplied together")
+            if (
+                self.selection_start_byte is not None
+                and self.selection_end_byte is not None
+                and self.selection_end_byte <= self.selection_start_byte
+            ):
+                raise ValueError("selection end must be greater than selection start")
+            if any(
+                value is not None
+                for value in (
+                    self.source_kind,
+                    self.source_id,
+                    self.source_label,
+                    self.source_sha256,
+                )
+            ):
+                raise ValueError(
+                    "assistant-message origins cannot contain selection-source metadata"
+                )
+        elif self.kind == ExecutionOriginKind.RERUN:
+            if not self.execution_id:
+                raise ValueError("rerun origins require an execution_id")
+            if any(
+                value is not None
+                for value in (
+                    self.message_id,
+                    self.block_ordinal,
+                    self.block_sha256,
+                    self.selection_start_byte,
+                    self.selection_end_byte,
+                    self.source_kind,
+                    self.source_id,
+                    self.source_label,
+                    self.source_sha256,
+                )
+            ):
+                raise ValueError("rerun origins cannot contain other origin metadata")
+        else:
+            if not self.source_kind or not self.source_label or not self.source_sha256:
+                raise ValueError(
+                    "selection origins require source kind, label, and SHA-256"
+                )
+            if any(
+                value is not None
+                for value in (
+                    self.message_id,
+                    self.block_ordinal,
+                    self.block_sha256,
+                    self.selection_start_byte,
+                    self.selection_end_byte,
+                    self.execution_id,
+                )
+            ):
+                raise ValueError(
+                    "selection origins cannot contain message or execution coordinates"
+                )
+        return self
+
+
+class ExecutionLimitsSnapshot(NebulaModel):
+    cpu_count: float = Field(default=1.0, gt=0)
+    memory_mb: int = Field(default=512, ge=32)
+    pids: int = Field(default=128, ge=1)
+    timeout_seconds: int = Field(default=300, ge=1)
+    output_bytes_per_stream: int = Field(default=2_000_000, ge=1)
+
+
+class ExecutionRuntimeSnapshot(NebulaModel):
+    language: str = Field(pattern=r"^(bash|sh|python)$")
+    interpreter: str = Field(min_length=1, max_length=500)
+    arguments: list[str] = Field(default_factory=list, max_length=32)
+    runtime_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    image: str = Field(min_length=1, max_length=1000)
+    runner_profile_id: str = Field(min_length=1, max_length=200)
+    runner_profile_revision: int = Field(ge=1)
+    runner_runtime: RunnerRuntime
+    runner_isolation: RunnerIsolation
+    runner_executable: str = Field(min_length=1, max_length=2048)
+    runner_platform: str = Field(pattern=r"^linux/(amd64|arm64)$")
+    runner_context: str | None = Field(default=None, max_length=500)
+    runner_socket: str | None = Field(default=None, max_length=2048)
+
+
+class ExecutionNetworkSnapshot(NebulaModel):
+    mode: ExecutionNetworkMode = ExecutionNetworkMode.NONE
+    target: str | None = Field(default=None, max_length=2048)
+    ports: list[int] = Field(default_factory=list, max_length=1024)
+    resolved_addresses: list[str] = Field(default_factory=list, max_length=64)
+    scope_policy_id: str | None = Field(default=None, max_length=200)
+    scope_policy_revision: int | None = Field(default=None, ge=1)
+
+    @field_validator("ports")
+    @classmethod
+    def valid_network_ports(cls, values: list[int]) -> list[int]:
+        if any(
+            isinstance(value, bool) or value < 1 or value > 65_535 for value in values
+        ):
+            raise ValueError("network ports must be integers between 1 and 65535")
+        return sorted(set(values))
+
+    @model_validator(mode="after")
+    def network_fields_match_mode(self) -> "ExecutionNetworkSnapshot":
+        scoped = self.mode == ExecutionNetworkMode.SCOPED
+        if scoped and (
+            not self.target
+            or not self.ports
+            or not self.resolved_addresses
+            or not self.scope_policy_id
+            or self.scope_policy_revision is None
+        ):
+            raise ValueError("scoped network execution requires a pinned policy target")
+        if not scoped and any(
+            (self.target, self.ports, self.resolved_addresses, self.scope_policy_id)
+        ):
+            raise ValueError("offline execution cannot contain network scope")
+        return self
+
+
+class OperatorExecution(Entity):
+    """One operator-confirmed, container-isolated code execution."""
+
+    entity_kind: ClassVar[str] = "operator_executions"
+    engagement_id: str
+    operator_id: str
+    origin: ExecutionOrigin
+    language: str = Field(pattern=r"^(bash|sh|python)$")
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_artifact_id: str
+    source_preview: str = Field(default="", max_length=4096)
+    runtime: ExecutionRuntimeSnapshot
+    network: ExecutionNetworkSnapshot = Field(default_factory=ExecutionNetworkSnapshot)
+    limits: ExecutionLimitsSnapshot = Field(default_factory=ExecutionLimitsSnapshot)
+    workspace: str = Field(default="/workspace", pattern=r"^/workspace$")
+    policy_decision: str = Field(default="allowed", max_length=100)
+    preview_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    client_idempotency_key: str = Field(min_length=1, max_length=300)
+    status: OperatorExecutionStatus = OperatorExecutionStatus.QUEUED
+    error_code: str | None = Field(default=None, max_length=100)
+    error_detail: str | None = Field(default=None, max_length=4000)
+    queued_at: datetime = Field(default_factory=utc_now)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    exit_code: int | None = None
+    output_truncated: bool = False
+    stdout_artifact_id: str | None = None
+    stderr_artifact_id: str | None = None
+    redacted_stdout_artifact_id: str | None = None
+    redacted_stderr_artifact_id: str | None = None
+    manifest_artifact_id: str | None = None
+    evidence_id: str | None = None
+    workspace_changes: list[WorkspaceChange] = Field(
+        default_factory=list, max_length=1000
+    )
+
+    @field_validator("queued_at", "started_at", "completed_at")
+    @classmethod
+    def execution_times_are_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("execution timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class PotentialFindingDraft(NebulaModel):
+    title: str = Field(min_length=1, max_length=500)
+    rationale: str = Field(default="", max_length=20_000)
+
+
+class SuggestedCommand(NebulaModel):
+    title: str = Field(min_length=1, max_length=500)
+    rationale: str = Field(default="", max_length=20_000)
+    command: str = Field(min_length=1, max_length=50_000)
+    language: str = Field(default="bash", pattern=r"^(bash|sh|python)$")
+    network_target: str | None = Field(default=None, max_length=500)
+    network_ports: list[int] = Field(default_factory=list, max_length=100)
+
+
+class GeneratedDraftContent(NebulaModel):
+    title: str = Field(min_length=1, max_length=500)
+    summary: str = Field(default="", max_length=50_000)
+    observations: list[str] = Field(default_factory=list, max_length=100)
+    potential_findings: list[PotentialFindingDraft] = Field(
+        default_factory=list, max_length=100
+    )
+    evidence_ids: list[str] = Field(default_factory=list, max_length=500)
+    next_step: SuggestedCommand | None = None
+
+
+class GeneratedDraft(Entity):
+    entity_kind: ClassVar[str] = "generated_drafts"
+    engagement_id: str
+    execution_id: str
+    provider_profile_id: str
+    model: str = Field(min_length=1, max_length=500)
+    prompt_version: str = Field(min_length=1, max_length=100)
+    context_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: GeneratedDraftStatus = GeneratedDraftStatus.GENERATING
+    content: GeneratedDraftContent | None = None
+    observation_id: str | None = None
+    provider_request_id: str | None = Field(default=None, max_length=500)
+    usage: ChatTokenUsage | None = None
+    error_detail: str | None = Field(default=None, max_length=4000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AIWritingProvenance(NebulaModel):
+    """Review metadata for AI-assisted prose that an operator chose to keep."""
+
+    provider_profile_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
+    prompt_version: str = Field(min_length=1, max_length=100)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    instruction: str = Field(min_length=1, max_length=4000)
+    generated_at: datetime = Field(default_factory=utc_now)
+    provider_request_id: str | None = Field(default=None, max_length=500)
+
+    @field_validator("generated_at")
+    @classmethod
+    def writing_time_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("AI writing timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+
+class ReportNoteTransform(NebulaModel):
+    """An editable, report-local rendering of a linked project note."""
+
+    observation_id: str = Field(min_length=1, max_length=200)
+    source_revision: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(max_length=100_000)
+    provenance: AIWritingProvenance
+
+
+class Report(Entity):
+    entity_kind: ClassVar[str] = "reports"
+    engagement_id: str
+    title: str = Field(min_length=1, max_length=500)
+    status: ReportStatus = ReportStatus.DRAFT
+    executive_summary: str = ""
+    finding_ids: list[str] = Field(default_factory=list)
+    observation_ids: list[str] = Field(default_factory=list)
+    note_transforms: list[ReportNoteTransform] = Field(
+        default_factory=list, max_length=500
+    )
+    artifact_ids: list[str] = Field(default_factory=list)
+    executive_summary_provenance: AIWritingProvenance | None = None
+    signed_off_by: str | None = None
+    signed_off_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def final_reports_require_complete_signoff(self) -> "Report":
+        has_operator = self.signed_off_by is not None
+        has_time = self.signed_off_at is not None
+        if has_operator != has_time:
+            raise ValueError("report signoff requires both operator and timestamp")
+        if self.status == ReportStatus.FINAL and not has_operator:
+            raise ValueError("final reports require operator signoff")
+        if self.status != ReportStatus.FINAL and has_operator:
+            raise ValueError("only final reports may contain signoff fields")
+        transformed_ids = [item.observation_id for item in self.note_transforms]
+        if len(transformed_ids) != len(set(transformed_ids)):
+            raise ValueError(
+                "report note transforms must reference unique observations"
+            )
+        if any(item not in self.observation_ids for item in transformed_ids):
+            raise ValueError("report note transforms require a selected observation")
+        return self
+
+
+class ReportRender(Entity):
+    entity_kind: ClassVar[str] = "report_renders"
+    engagement_id: str
+    report_id: str
+    report_revision: int = Field(ge=1)
+    input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    template_version: str = Field(min_length=1, max_length=100)
+    renderer_version: str = Field(min_length=1, max_length=100)
+    font_hashes: dict[str, str] = Field(default_factory=dict)
+    status: ReportRenderStatus = ReportRenderStatus.QUEUED
+    snapshot_artifact_id: str | None = None
+    pdf_artifact_id: str | None = None
+    warnings: list[str] = Field(default_factory=list, max_length=1000)
+    generated_at: datetime | None = None
+    error_detail: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("generated_at")
+    @classmethod
+    def render_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("render timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class RunEvent(NebulaModel):
+    """An immutable, monotonically sequenced event in an agent run."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    run_id: str
+    sequence: int = Field(ge=1)
+    event_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    actor_id: str | None = None
+    occurred_at: datetime = Field(default_factory=utc_now)
+    idempotency_key: str | None = None
+
+
+class OperationEvent(NebulaModel):
+    """An immutable event for operator workflows outside an AgentRun."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    operation_id: str = Field(min_length=1, max_length=200)
+    operation_kind: str = Field(min_length=1, max_length=80)
+    engagement_id: str = Field(min_length=1, max_length=200)
+    sequence: int = Field(ge=1)
+    event_type: str = Field(min_length=1, max_length=200)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    actor_id: str | None = Field(default=None, max_length=200)
+    occurred_at: datetime = Field(default_factory=utc_now)
+    idempotency_key: str | None = Field(default=None, max_length=300)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def event_time_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("event timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+
+ENTITY_MODELS: tuple[type[Entity], ...] = (
+    Engagement,
+    ScopePolicy,
+    AutomationProjectPolicy,
+    AutomationSession,
+    CommandExecution,
+    RunnerProfile,
+    Asset,
+    Service,
+    Identity,
+    SoftwareComponent,
+    Observation,
+    Finding,
+    Evidence,
+    Artifact,
+    Advisory,
+    Correlation,
+    Remediation,
+    AgentRun,
+    Task,
+    AgentAttempt,
+    ToolCall,
+    Approval,
+    OperatorProfile,
+    ProviderProfile,
+    HarnessProfile,
+    McpServerProfile,
+    HarnessSession,
+    SourceSnapshot,
+    KnowledgeSource,
+    ScopeImport,
+    ChatSession,
+    ChatTurn,
+    ChatMessage,
+    HarnessTurn,
+    HarnessInteraction,
+    ContextSnapshot,
+    OperatorExecution,
+    GeneratedDraft,
+    Report,
+    ReportRender,
+)
+
+ENTITY_MODEL_BY_KIND: dict[str, type[Entity]] = {
+    model.entity_kind: model for model in ENTITY_MODELS
+}
+
+
+def entity_engagement_id(entity: Entity) -> str | None:
+    """Return an entity's owning engagement without importing storage concerns."""
+
+    if isinstance(entity, Engagement):
+        return entity.id
+    value = getattr(entity, "engagement_id", None)
+    return value if isinstance(value, str) else None

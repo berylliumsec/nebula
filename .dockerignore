@@ -1,7 +1,8 @@
 build
 dist
 .ruff_cache
-__pycache__
+**/__pycache__
+**/*.pyc
 engagement_details.json
 config.json
 suggestions_notes/1.html

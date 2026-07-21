@@ -1,0 +1,1 @@
+{"main-window":{"identifier":"main-window","description":"Minimal capability set for the Nebula desktop workspace.","local":true,"webviews":["main"],"permissions":["core:default"]}}

@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""Fail-closed inspection for the frozen Nebula 3 Core artifact."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Iterable
+
+
+class ArtifactAuditError(RuntimeError):
+    """The artifact could not be proven to satisfy its package boundary."""
+
+
+FORBIDDEN_MODULES = (
+    # GUI bindings are never part of the headless Core sidecar.
+    "PyQt5",
+    "PyQt6",
+    "PySide2",
+    "PySide6",
+    # Heavy in-process model/document stacks are outside the Core boundary.
+    "IPython",
+    "accelerate",
+    "chromadb",
+    "cloudpickle",
+    "cv2",
+    "dask",
+    "ddgs",
+    "distributed",
+    "duckduckgo_search",
+    "faker",
+    "filelock",
+    "h5py",
+    "jq",
+    "langchain",
+    "langchain_chroma",
+    "langchain_classic",
+    "langchain_community",
+    "langchain_experimental",
+    "langchain_huggingface",
+    "langchain_ollama",
+    "langchain_openai",
+    "matplotlib",
+    "nbclient",
+    "nbconvert",
+    "nbformat",
+    "nltk",
+    "notebook",
+    "numba",
+    "numpy",
+    "ollama",
+    "pandas",
+    "pexpect",
+    "prompt_toolkit",
+    "psutil",
+    "qdarkstyle",
+    "scipy",
+    "sentence_transformers",
+    "spacy",
+    "thinc",
+    "tiktoken",
+    "torch",
+    "transformers",
+    "unstructured",
+    "whoosh",
+    # Test and developer tooling.
+    "Cython",
+    "black",
+    "mypy",
+    "_pytest",
+    "pytest",
+    "pyi_rth_nltk",
+    "ruff",
+    "sphinx",
+    "tkinter",
+)
+
+REQUIRED_MEMBERS = (
+    ("nebula.v3.cli",),
+    ("nebula.v3.mcp_gateway",),
+    # Tool-output regex searches use the third-party timeout-capable engine.
+    # A frozen Core must not pass audit if that runtime dependency is absent.
+    ("regex",),
+    ("reportlab",),
+    ("PIL",),
+    ("nebula/v3/BUILD_INFO.json", "nebula.v3.BUILD_INFO.json"),
+    ("nebula/v3/migrations/script.py.mako",),
+    ("nebula/v3/kali_tool_inventory.py",),
+    ("nebula/v3/operator_help.md",),
+    ("nebula/v3/diagnostic_guidance.json",),
+    ("nebula/v3/report_assets/fonts/NotoSans-Regular.ttf",),
+    ("nebula/v3/report_assets/fonts/NotoSans-Bold.ttf",),
+    ("nebula/v3/report_assets/fonts/NotoSansMono-Regular.ttf",),
+    ("nebula/v3/report_assets/fonts/NotoSansMono-Bold.ttf",),
+    ("nebula/v3/report_assets/fonts/OFL.txt",),
+    ("ui/dist/index.html",),
+    ("licenses/LICENSE.md",),
+    ("licenses/THIRD_PARTY_NOTICES.txt",),
+)
+
+FORBIDDEN_INSTALLER_PATH_MARKERS = (
+    "/PyQt5/",
+    "/PyQt6/",
+    "/PySide2/",
+    "/PySide6/",
+    "/torch/",
+    "/transformers/",
+    "/tests/",
+    "/__pycache__/",
+)
+FORBIDDEN_INSTALLER_BINARIES = {
+    "cargo",
+    "node",
+    "npm",
+    "npx",
+    "poetry",
+    "pytest",
+    "python",
+    "python3",
+    "rustc",
+}
+
+FORBIDDEN_RESIDUE_SUFFIXES = (".pyc", ".pyo", ".js.map", ".css.map")
+
+
+def _normalized(member: str) -> str:
+    return member.replace("\\", "/").replace("/", ".")
+
+
+def _matches_module(member: str, module: str) -> bool:
+    normalized = _normalized(member)
+    return normalized == module or normalized.startswith(f"{module}.")
+
+
+def validate_members(members: Iterable[str]) -> dict[str, object]:
+    """Validate a freezer member list; useful for both builds and tests."""
+
+    member_set = {str(member) for member in members}
+    if not member_set:
+        raise ArtifactAuditError("artifact archive contained no inspectable members")
+    forbidden = sorted(
+        {
+            member
+            for member in member_set
+            for module in FORBIDDEN_MODULES
+            if _matches_module(member, module)
+        }
+    )
+    residue = sorted(
+        member
+        for member in member_set
+        if "__pycache__" in member.replace("\\", "/").split("/")
+        or member.replace("\\", "/").endswith(FORBIDDEN_RESIDUE_SUFFIXES)
+    )
+    missing = [
+        alternatives
+        for alternatives in REQUIRED_MEMBERS
+        if not any(candidate in member_set for candidate in alternatives)
+    ]
+    if forbidden or residue or missing:
+        problems = []
+        if forbidden:
+            problems.append(f"forbidden members: {', '.join(forbidden)}")
+        if residue:
+            problems.append(f"build residue: {', '.join(residue)}")
+        if missing:
+            labels = [" or ".join(group) for group in missing]
+            problems.append(f"required members absent: {', '.join(labels)}")
+        raise ArtifactAuditError("; ".join(problems))
+    return {
+        "status": "ok",
+        "member_count": len(member_set),
+        "forbidden_member_count": 0,
+    }
+
+
+def inspect_pyinstaller_binary(binary: Path) -> dict[str, object]:
+    """Inspect both the outer CArchive and embedded PYZ, failing if unreadable."""
+
+    binary = binary.resolve()
+    if not binary.is_file():
+        raise ArtifactAuditError(f"artifact does not exist: {binary}")
+    try:
+        from PyInstaller.archive.readers import CArchiveReader
+
+        archive = CArchiveReader(str(binary))
+        members = set(archive.toc)
+        embedded = [name for name in archive.toc if name.endswith(".pyz")]
+        if not embedded:
+            raise ArtifactAuditError("artifact has no embedded Python archive")
+        for name in embedded:
+            members.update(archive.open_embedded_archive(name).toc)
+    except ArtifactAuditError:
+        raise
+    except Exception as exc:
+        raise ArtifactAuditError(
+            f"cannot inspect PyInstaller artifact {binary}"
+        ) from exc
+    report = validate_members(members)
+    report["artifact"] = str(binary)
+    report["size_bytes"] = binary.stat().st_size
+    return report
+
+
+def inspect_installer_tree(root: Path) -> dict[str, object]:
+    """Audit an extracted native installer rather than trusting its container."""
+
+    root = root.resolve()
+    if not root.is_dir():
+        raise ArtifactAuditError(f"installer tree does not exist: {root}")
+    files = [path for path in root.rglob("*") if path.is_file()]
+    relative = [f"/{path.relative_to(root).as_posix()}" for path in files]
+    forbidden = sorted(
+        value
+        for path, value in zip(files, relative)
+        if path.name in FORBIDDEN_INSTALLER_BINARIES
+        or value.endswith((".pyc", ".pyo", ".js.map", ".css.map"))
+        or any(marker in value for marker in FORBIDDEN_INSTALLER_PATH_MARKERS)
+    )
+    if forbidden:
+        raise ArtifactAuditError(f"forbidden installer content: {', '.join(forbidden)}")
+
+    def has_suffix(*suffixes: str) -> bool:
+        return any(value.endswith(suffixes) for value in relative)
+
+    missing = []
+    if not has_suffix("/nebula-ui"):
+        missing.append("nebula-ui")
+    if not has_suffix("/nebula-core"):
+        missing.append("nebula-core")
+    if not has_suffix("/LICENSE", "/LICENSE.md"):
+        missing.append("LICENSE")
+    if not has_suffix("/THIRD_PARTY_NOTICES.txt"):
+        missing.append("THIRD_PARTY_NOTICES.txt")
+    if missing:
+        raise ArtifactAuditError(
+            f"required installer content absent: {', '.join(missing)}"
+        )
+    return {
+        "status": "ok",
+        "tree": str(root),
+        "file_count": len(files),
+        "forbidden_path_count": 0,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("artifact", type=Path, nargs="?")
+    parser.add_argument("--tree", type=Path)
+    arguments = parser.parse_args(argv)
+    try:
+        if (arguments.artifact is None) == (arguments.tree is None):
+            parser.error("pass exactly one Core artifact or --tree DIRECTORY")
+        report = (
+            inspect_installer_tree(arguments.tree)
+            if arguments.tree is not None
+            else inspect_pyinstaller_binary(arguments.artifact)
+        )
+    except ArtifactAuditError as exc:
+        parser.exit(1, f"error: {exc}\n")
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

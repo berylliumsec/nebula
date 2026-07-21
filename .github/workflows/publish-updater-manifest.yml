@@ -1,0 +1,137 @@
+name: Publish Nebula 3 updater manifest
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  attestations: read
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: nebula-pages
+  cancel-in-progress: false
+
+jobs:
+  manifest:
+    if: startsWith(github.event.release.tag_name, 'nebula-v3.')
+    runs-on: ubuntu-22.04
+    environment: desktop-release
+    outputs:
+      channel: ${{ steps.release.outputs.channel }}
+    steps:
+      - name: Check out the published release source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+      - name: Download immutable updater assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          install -d -m 0755 release-assets
+          gh release download "$RELEASE_TAG" --dir release-assets
+      - name: Validate checksums, provenance, signatures, and release channel
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEBULA_UPDATER_PUBLIC_KEY: ${{ secrets.NEBULA_UPDATER_PUBLIC_KEY }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          version="${RELEASE_TAG#nebula-v}"
+          python scripts/nebula3_version.py check --expected "$version"
+          case "$version" in *-*) channel=prerelease; expected_prerelease=true ;; *) channel=stable; expected_prerelease=false ;; esac
+          test "$PRERELEASE" = "$expected_prerelease"
+          (
+            cd release-assets
+            for checksum in SHA256SUMS-*.txt; do sha256sum --check "$checksum"; done
+          )
+          for artifact in release-assets/Nebula-*; do
+            case "$artifact" in *.sig|*.json) continue ;; esac
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+          done
+          for artifact in \
+            "release-assets/Nebula-$version-macOS-arm64.updater.tar.gz" \
+            "release-assets/Nebula-$version-macOS-x64.updater.tar.gz" \
+            "release-assets/Nebula-$version-linux-x86_64.AppImage"; do
+            cargo run --locked --quiet --manifest-path ui/src-tauri/Cargo.toml \
+              --example verify_update_signature -- \
+              "$artifact" "$artifact.sig" "$NEBULA_UPDATER_PUBLIC_KEY"
+          done
+          printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
+      - name: Update the durable Pages source
+        env:
+          CHANNEL: ${{ steps.release.outputs.channel }}
+        run: |
+          version="${{ github.event.release.tag_name }}"
+          version="${version#nebula-v}"
+          pages="$RUNNER_TEMP/gh-pages"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages:gh-pages
+            git worktree add "$pages" gh-pages
+          else
+            git worktree add --detach "$pages" HEAD
+            (
+              cd "$pages"
+              git checkout --orphan gh-pages
+              git rm -rf .
+            )
+          fi
+          python packaging/updater/generate_manifest.py \
+            --assets release-assets \
+            --version "$version" \
+            --tag "${{ github.event.release.tag_name }}" \
+            --repository "$GITHUB_REPOSITORY" \
+            --published-at "${{ github.event.release.published_at }}" \
+            --previous "$pages/updates/$CHANNEL/latest.json" \
+            --output "$RUNNER_TEMP/latest.json"
+          install -d -m 0755 "$pages/updates/$CHANNEL"
+          install -m 0644 "$RUNNER_TEMP/latest.json" "$pages/updates/$CHANNEL/latest.json"
+          touch "$pages/.nojekyll"
+          if [ ! -f "$pages/index.html" ] \
+            || grep -Fq 'Nebula signed release metadata.' "$pages/index.html" \
+            || grep -Fq 'Nebula signed update manifests.' "$pages/index.html"; then
+            install -m 0644 index.html "$pages/index.html"
+          fi
+          if [ ! -d "$pages/images" ]; then
+            cp -a images "$pages/images"
+          fi
+          (
+            cd "$pages"
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add .nojekyll index.html images "updates/$CHANNEL/latest.json"
+            if ! git diff --cached --quiet; then
+              git commit -m "Publish ${{ github.event.release.tag_name }} $CHANNEL updater manifest"
+              git push origin HEAD:gh-pages
+            fi
+          )
+          install -d -m 0755 "$RUNNER_TEMP/pages-upload"
+          rsync -a --exclude=.git "$pages/" "$RUNNER_TEMP/pages-upload/"
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Upload the complete Pages source
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/pages-upload
+
+  deploy:
+    needs: manifest
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy signed update manifests
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
