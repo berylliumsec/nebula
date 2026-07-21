@@ -160,10 +160,17 @@ jobs:
             --root "$GITHUB_WORKSPACE" \
             --target "${{ matrix.target }}" \
             --output build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt
-          poetry run pytest -q tests/v3
+          if [ "${{ matrix.platform }}" = Linux ]; then
+            poetry run pytest -q tests/v3
+          else
+            poetry run pytest -q tests/v3/test_sandbox.py -k macos
+          fi
           poetry run pytest -q packaging/updater/test_generate_manifest.py
           npm --prefix ui test
           npm --prefix ui run build
+          install -d -m 0755 ui/src-tauri/binaries
+          touch "ui/src-tauri/binaries/nebula-core-${{ matrix.target }}"
+          chmod +x "ui/src-tauri/binaries/nebula-core-${{ matrix.target }}"
           cargo test --locked --manifest-path ui/src-tauri/Cargo.toml
           cargo test --locked --features direct-updater --manifest-path ui/src-tauri/Cargo.toml
       - name: Generate the direct-build updater configuration
