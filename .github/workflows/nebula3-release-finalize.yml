@@ -145,6 +145,28 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           stage="$RUNNER_TEMP/release-stage"
+          detach_volume() {
+            local mountpoint="$1"
+            local attempt output status=1
+            for attempt in {1..15}; do
+              if output="$(hdiutil detach "$mountpoint" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              printf 'DMG detach attempt %d/15 failed for %s: %s\n' \
+                "$attempt" "$mountpoint" "$output" >&2
+              if [ "$attempt" -lt 15 ]; then
+                sync
+                sleep 1
+              fi
+            done
+            printf 'mounted image state after detach retries:\n' >&2
+            hdiutil info >&2 || true
+            return "$status"
+          }
+
           for flavor in direct managed; do
             dmg="$stage/Nebula-$NEBULA_VERSION-macOS-${{ matrix.artifact_arch }}-$flavor.dmg"
             test -s "$dmg"
@@ -168,7 +190,7 @@ jobs:
               COPYFILE_DISABLE=1 tar -czf "$updater" -C "$mount" Nebula.app
               npm --prefix ui run tauri -- signer sign "$updater"
             fi
-            hdiutil detach "$mount"
+            detach_volume "$mount"
             hdiutil convert "$writable" -format UDZO -o "$rebuilt"
             codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$rebuilt"
             mv "$rebuilt" "$dmg"
