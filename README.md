@@ -13,12 +13,10 @@
 
 <br />
 
-<details>
-<summary>Acknowledgement</summary>
+## Acknowledgement
 
 First, I would like to thank Almighty God, who is the source of all knowledge. Without Him, this would not be possible.
 
-</details>
 
 Nebula brings the working parts of a security engagement into one desktop surface: terminal, code, browser, assistant, files, notes, missions, findings, and reports.
 
