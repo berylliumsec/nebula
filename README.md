@@ -8,10 +8,10 @@ Nebula is an operator first, AI powered penetration testing platform that seeks 
 
 At its core it is driven by the human operator and assisted by AI agents.
 
-![Nebula 3.0 Workbench with a live contained terminal and operator safety controls](docs/images/nebula-3-workbench.png)
+![Nebula 3.0 Zero Layer Workbench with a live contained terminal and operator safety controls](docs/images/nebula-3-workbench.png)
 
-*Nebula 3.0 Workbench — a human-controlled security workspace with contained
-terminal access, evidence tools, reporting, and supervised automation.*
+*Nebula 3.0 Zero Layer Workbench — a human-controlled security workspace with
+contained terminal access, evidence tools, reporting, and supervised automation.*
 
 ## Release status
 
