@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HarnessActivityEvent, HarnessSessionActivity } from "../api/types";
 import {
   finalAssistantContent,
+  harnessCostLabel,
   isSameHarnessSessionActivity,
   isTimelineActivity,
   reasoningSummaryState,
@@ -207,5 +208,40 @@ describe("harness activity presentation", () => {
 
     expect(reasoningSummaryState(item)).toBe("available");
     expect(reasoningSummaryText(item)).toBe("Safe stream");
+  });
+
+  it("labels catalog-derived Codex cost as an API-equivalent estimate", () => {
+    const usage = {
+      inputTokens: 3,
+      outputTokens: 2,
+      totalTokens: 5,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      reasoningTokens: 0,
+      costUsd: 0.0000375,
+      turnCount: 0,
+      modelUsage: {},
+      rateLimit: {},
+    };
+    const base = {
+      assistantId: "assistant-1",
+      key: "turn-1:usage",
+      type: "usage",
+      title: "usage",
+      sequence: 1,
+      streams: {},
+      payload: {},
+      artifactIds: [],
+      usage,
+    };
+
+    expect(harnessCostLabel({ ...base, vendor: "codex_app_server" })).toBe(
+      "≈$0.000038 API equivalent",
+    );
+    expect(harnessCostLabel({ ...base, vendor: "claude_agent_sdk" })).toBe(
+      "$0.000038",
+    );
+    expect(harnessCostLabel({ ...base, usage: { ...usage, costUsd: 0 } })).toBeUndefined();
   });
 });

@@ -91,6 +91,7 @@ from .domain import (
     ToolCallStatus,
     utc_now,
 )
+from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
 from .redaction import redact_text, sanitize_display_text
 from .storage import NebulaStore, NotFoundError
 from .mcp import (
@@ -1735,7 +1736,7 @@ class CodexAppServerConnection(HarnessConnection):
                     type="usage",
                     vendor=HarnessKind.CODEX_APP_SERVER,
                     usage=usage,
-                    detailed_usage=_codex_detailed_usage(params),
+                    detailed_usage=_codex_detailed_usage(params, model=model),
                     payload={},
                 )
                 continue
@@ -1923,7 +1924,9 @@ def _codex_usage(params: dict[str, Any]) -> ChatTokenUsage:
     )
 
 
-def _codex_detailed_usage(params: dict[str, Any]) -> HarnessDetailedUsage:
+def _codex_detailed_usage(
+    params: dict[str, Any], *, model: str
+) -> HarnessDetailedUsage:
     raw_usage = params.get("tokenUsage") or params.get("usage") or {}
     usage = raw_usage if isinstance(raw_usage, dict) else {}
     raw_last = usage.get("last")
@@ -1941,12 +1944,23 @@ def _codex_detailed_usage(params: dict[str, Any]) -> HarnessDetailedUsage:
     total_tokens = count("totalTokens", "total_tokens") or (
         input_tokens + output_tokens
     )
+    cached_input_tokens = count("cachedInputTokens", "cached_input_tokens")
     context_window = usage.get("modelContextWindow")
+    pricing = codex_model_pricing(model)
+    cost_usd = (
+        pricing.estimate_cost_usd(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=cached_input_tokens,
+        )
+        if pricing is not None
+        else None
+    )
     return HarnessDetailedUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
-        cached_input_tokens=count("cachedInputTokens", "cached_input_tokens"),
+        cached_input_tokens=cached_input_tokens,
         reasoning_output_tokens=count(
             "reasoningOutputTokens", "reasoning_output_tokens"
         ),
@@ -1956,6 +1970,20 @@ def _codex_detailed_usage(params: dict[str, Any]) -> HarnessDetailedUsage:
             else None
         ),
         context_used=input_tokens,
+        cost_usd=cost_usd,
+        model_usage=(
+            {
+                model: {
+                    "cost_usd": cost_usd,
+                    "pricing_basis": "standard_api_equivalent",
+                    "pricing_model": pricing.model,
+                    "pricing_verified_on": CATALOG_VERIFIED_ON,
+                    "pricing_source": pricing.source_url,
+                }
+            }
+            if pricing is not None
+            else {}
+        ),
     )
 
 
