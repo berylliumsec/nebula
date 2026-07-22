@@ -179,6 +179,23 @@ as sensitive data. They are not described as backups because Nebula 3 does not
 yet provide a restore path. Scratch workspace files are excluded unless an
 operator promoted them to an artifact.
 
+## Project knowledge retrieval
+
+Project document uploads are extracted locally and split into bounded, overlapping
+chunks. The original artifact remains authoritative; Core stores only a rebuildable
+semantic index in ChromaDB under `<data-dir>/knowledge-index` (override with
+`NEBULA_V3_KNOWLEDGE_INDEX_DIR`). Existing inline chunk indexes are migrated when
+Core starts, and an individual source can always be rebuilt from its immutable
+artifact with the reindex action.
+
+Chroma's local `all-MiniLM-L6-v2` ONNX embedding model is used by default. The first
+index or query downloads and caches approximately 80 MiB; subsequent embedding and
+retrieval stay local. Chat asks the selected model for up to four bounded search
+queries, retrieves vector candidates only from the active Project, adds a small
+exact-term reranking bonus for security identifiers, and injects no more than eight
+cited chunks within the knowledge token budget. Cloud-provider privacy gates and
+secret redaction still apply after retrieval.
+
 ## Context compaction
 
 Analyst chats and model-facing mission dependency context are compacted

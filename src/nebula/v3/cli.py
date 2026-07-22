@@ -51,6 +51,7 @@ from .missions import MissionService
 from .mcp_gateway import serve as serve_mcp_gateway
 from .exporter import export_engagement
 from .importer import import_2x_engagement
+from .knowledge_index import ChromaKnowledgeIndex
 from .orchestration import (
     ModelSpecialist,
     SpecialistRole,
@@ -300,6 +301,9 @@ def serve(
     else:
         auth_token = token or secrets.token_urlsafe(32)
     root, store, artifacts = _services(data_dir, diagnostics_level=diagnostics_level)
+    knowledge_index = ChromaKnowledgeIndex(
+        Path(os.getenv("NEBULA_V3_KNOWLEDGE_INDEX_DIR", root / "knowledge-index"))
+    )
     record_diagnostic(
         "info",
         "api",
@@ -318,6 +322,7 @@ def serve(
         static_dir=static_dir,
         tool_platform=tool_platform,
         execution_data_root=root,
+        knowledge_index=knowledge_index,
         bootstrap_workspace=True,
         # The authenticated browser workspace served by a loopback Core owns
         # its interface diagnostics just like the native shell does. Remote

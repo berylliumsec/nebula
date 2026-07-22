@@ -19,10 +19,9 @@ FORBIDDEN_MODULES = (
     "PyQt6",
     "PySide2",
     "PySide6",
-    # Heavy in-process model/document stacks are outside the Core boundary.
+    # Unused heavy in-process model/document stacks are outside the Core boundary.
     "IPython",
     "accelerate",
-    "chromadb",
     "cloudpickle",
     "cv2",
     "dask",
@@ -30,7 +29,6 @@ FORBIDDEN_MODULES = (
     "distributed",
     "duckduckgo_search",
     "faker",
-    "filelock",
     "h5py",
     "jq",
     "langchain",
@@ -48,7 +46,6 @@ FORBIDDEN_MODULES = (
     "nltk",
     "notebook",
     "numba",
-    "numpy",
     "ollama",
     "pandas",
     "pexpect",

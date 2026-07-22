@@ -130,9 +130,7 @@ def main() -> None:
     operator_help = root / "src" / "nebula" / "v3" / "operator_help.md"
     if not operator_help.is_file():
         raise RuntimeError("the bundled Nebula 3 operator-help corpus is required")
-    diagnostic_guidance = (
-        root / "src" / "nebula" / "v3" / "diagnostic_guidance.json"
-    )
+    diagnostic_guidance = root / "src" / "nebula" / "v3" / "diagnostic_guidance.json"
     if not diagnostic_guidance.is_file():
         raise RuntimeError("the bundled diagnostic guidance catalog is required")
     kali_tool_inventory = root / "src" / "nebula" / "v3" / "kali_tool_inventory.py"
@@ -170,6 +168,20 @@ def main() -> None:
         "nebula.v3",
         "--collect-all",
         "regex",
+        "--collect-data",
+        "chromadb",
+        "--hidden-import",
+        "chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2",
+        "--hidden-import",
+        "chromadb.telemetry.product.posthog",
+        "--hidden-import",
+        "chromadb.api.rust",
+        "--hidden-import",
+        "onnxruntime",
+        "--hidden-import",
+        "tokenizers",
+        "--hidden-import",
+        "tqdm",
         "--add-data",
         f"{migrations}:nebula/v3/migrations",
         "--add-data",

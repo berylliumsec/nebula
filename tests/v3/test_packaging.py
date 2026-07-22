@@ -200,14 +200,30 @@ def test_runtime_dependency_boundary_rejects_removed_stacks():
         "pypdf",
         "reportlab",
         "pillow",
+        "chromadb",
     } <= runtime
-    assert not ({"pyqt6", "torch", "transformers", "chromadb"} & runtime)
+    assert not ({"pyqt6", "torch", "transformers"} & runtime)
     assert "legacy" not in project.get("group", {})
     assert "legacy-dev" not in project.get("group", {})
     assert "pytest-qt" not in {
         name.lower() for name in project["group"]["dev"]["dependencies"]
     }
     assert "regex" not in {name.lower() for name in FORBIDDEN_MODULES}
+
+
+def test_core_build_bundles_dynamic_chroma_runtime_modules():
+    build_script = (ROOT / "scripts" / "build_nebula_core.py").read_text(
+        encoding="utf-8"
+    )
+    for module in (
+        "chromadb.api.rust",
+        "chromadb.telemetry.product.posthog",
+        "chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2",
+        "onnxruntime",
+        "tokenizers",
+        "tqdm",
+    ):
+        assert module in build_script
 
 
 def test_core_archive_rejects_nltk_and_its_pyinstaller_runtime_hook():
