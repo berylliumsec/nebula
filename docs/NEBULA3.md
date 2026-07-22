@@ -89,8 +89,8 @@ migrations, notices, and all mandatory Core dependencies. Package audits reject
 GUI bindings and in-process model stacks from this build.
 
 Release tags use `nebula-v<semantic-version>`, for example
-`nebula-v3.0.0-alpha.1`. The protected release workflow builds native macOS
-arm64 DMGs and Linux x64 DEB/AppImage artifacts, audits their contents,
+`nebula-v3.0.0-alpha.1`. The protected release workflow builds Linux x64
+DEB/AppImage artifacts, audits their contents,
 exercises the installed `--self-test`, creates SBOMs and provenance, and stages
 a draft release with the checked-in notes for that exact version. See
 [the release runbook](../packaging/RELEASING.md).

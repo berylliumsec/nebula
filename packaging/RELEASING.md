@@ -7,34 +7,28 @@ tests exercise both installed commands.
 
 ## Supported release matrix
 
-The protected workflow produces these native packages:
+The protected workflow currently produces Linux x86_64 packages only:
 
 | Platform | Architecture | Direct distribution | Managed distribution |
 | --- | --- | --- | --- |
-| macOS 13+ | Apple silicon | signed and notarized DMG with updater | signed and notarized DMG without updater |
 | Linux | x86_64 | AppImage with signed updater metadata | DEB without the direct updater |
 
-Windows, Linux arm64, RPM, Flatpak, Snap, and Homebrew artifacts are not built
-by this workflow and must not be promised in release copy.
+macOS, Windows, Linux arm64, RPM, Flatpak, Snap, and Homebrew artifacts are not
+built by this workflow and must not be promised in release copy.
 
 ## One-time repository setup
 
 Create a protected GitHub environment named `desktop-release`. Require release
-manager approval and restrict deployment branches/tags according to the
+manager approval and restrict deployment branches and tags according to the
 repository policy. Define these environment secrets:
 
-- `APPLE_CERTIFICATE`: base64 PKCS#12 Developer ID Application certificate.
-- `APPLE_CERTIFICATE_PASSWORD` and `APPLE_KEYCHAIN_PASSWORD`.
-- `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`
-  for signing and notarization.
-- `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for
-  updater artifacts.
+- `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for the
+  AppImage updater signature.
 - `NEBULA_UPDATER_PUBLIC_KEY`, embedded into direct builds and backed up with
   the private key offline.
 
-The release cannot be prepared without this environment. Never use placeholder
-credentials for a release candidate. The preparation run and manual
-finalization must complete before a draft release exists.
+Never use placeholder credentials for a release candidate. Preparation and
+manual draft creation must complete before a GitHub Release exists.
 
 ## Candidate checklist
 
@@ -44,8 +38,8 @@ finalization must complete before a draft release exists.
 
    ```console
    git pull --ff-only origin main
-   python scripts/nebula3_version.py check --expected 3.0.0-alpha.1
-   test -s docs/releases/3.0.0-alpha.1.md
+   python scripts/nebula3_version.py check --expected 3.0.0-alpha.5
+   test -s docs/releases/3.0.0-alpha.5.md
    ```
 
 3. Review the checked-in notes. They are the exact GitHub Release body; do not
@@ -67,48 +61,38 @@ finalization must complete before a draft release exists.
 5. Create the immutable tag at the reviewed `main` commit and push it:
 
    ```console
-   git tag -a nebula-v3.0.0-alpha.1 -m "Nebula 3.0.0-alpha.1"
-   git push origin nebula-v3.0.0-alpha.1
+   git tag -a nebula-v3.0.0-alpha.5 -m "Nebula 3.0.0-alpha.5"
+   git push origin nebula-v3.0.0-alpha.5
    ```
 
-The tag push starts the preparation workflow. It builds direct and managed
-installers on native macOS arm64 and Ubuntu 22.04 x64 runners.
-macOS builds are signed and submitted to Apple with Tauri's `--skip-stapling`
-mode, so the runners do not wait for Apple to finish. Linux packages complete
-their final audits, SBOMs, checksums, and attestations during preparation.
+The tag push starts the preparation workflow on Ubuntu 22.04 x86_64. It builds
+the direct AppImage and managed DEB, audits and self-tests both packages,
+verifies the updater signature against a tampered copy, generates SBOMs and
+checksums, creates GitHub provenance attestations, and runs clean DEB install
+tests on Ubuntu 24.04, Debian 12, and Kali rolling containers.
 
-Record the successful preparation workflow run ID. After Apple has processed
-the submissions, manually run **Finalize Nebula 3 desktop release** with the
-immutable tag and preparation run ID:
+Record the successful preparation workflow run ID. Then manually run **Create
+Nebula 3 Linux release draft** with the immutable tag and preparation run ID:
 
 ```console
 gh workflow run nebula3-release-finalize.yml \
-  -f release_tag=nebula-v3.0.0-alpha.1 \
+  -f release_tag=nebula-v3.0.0-alpha.5 \
   -f preparation_run_id=123456789 \
   -f create_draft=true
 ```
 
-The finalizer verifies that the preparation run succeeded at the exact tagged
-commit and that both private artifact sets still exist. If Apple is still
-processing the macOS submission, stapling fails safely and no draft is created;
-rerun the finalizer later with the same inputs. Never resubmit or move the tag
-merely because Apple is still processing it.
+The draft workflow verifies that the preparation run succeeded, that its
+artifacts contain the exact tagged commit and version, and that the complete
+Linux artifact, signature, SBOM, and checksum set still exists.
 
 ## Draft review and publication
 
-Only a successful finalization creates a draft GitHub Release. Finalization
-staples the submitted apps inside writable copies of the prepared DMGs, rebuilds
-and signs the final DMGs, creates and signs the updater archives from the stapled
-direct apps, repeats Gatekeeper and installed-layout checks, generates final
-macOS SBOMs and checksums, attests the final bytes, and combines them with the
-prepared Linux outputs. Before publishing the draft, a
-release manager must verify:
+Before publishing the draft, a release manager must verify:
 
-- both native platform jobs and the clean Linux install matrix passed;
+- the Linux build and clean-install matrix passed;
 - the artifact names and counts match the workflow's immutable manifest;
-- macOS signing, Gatekeeper assessment, notarization, and stapling passed;
-- updater signatures accept the original artifact and reject the tampered test;
-- both direct and managed installed layouts pass `nebula --self-test` and
+- updater signatures accept the original AppImage and reject the tampered test;
+- the AppImage and DEB layouts pass `nebula --self-test` and
   `nebula-core doctor --json`;
 - CycloneDX and SPDX SBOMs, SHA-256 sums, and GitHub provenance attestations are
   present for every required deliverable;
@@ -116,12 +100,10 @@ release manager must verify:
   prerelease suffix; and
 - the checked-in release notes remain accurate after inspecting the artifacts.
 
-Publishing the draft triggers channel-specific updater manifest generation on
-GitHub Pages. Confirm that workflow succeeds and that the new manifest preserves
-the existing website before announcing the release.
+Publishing the draft triggers channel-specific Linux updater manifest
+generation on GitHub Pages. Confirm that workflow succeeds and preserves the
+existing website before announcing the release.
 
 If a content or release gate fails, leave the draft unpublished, fix the problem
-on a new commit, advance the version, and create a new tag. An Apple
-`In Progress` result is not a content failure: wait and rerun finalization against
-the same preparation run. Do not replace artifacts on an existing published
-release or repoint its tag.
+on a new commit, advance the version, and create a new tag. Do not replace
+artifacts on an existing published release or repoint its tag.

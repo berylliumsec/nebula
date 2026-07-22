@@ -40,11 +40,26 @@ def test_native_launcher_and_admin_command_contract():
     assert 'exec /usr/bin/nebula-ui "$@"' in linux_launcher
     assert "exec /usr/bin/nebula-core" not in linux_launcher
 
-    cask = (ROOT / "packaging/homebrew/nebula.rb.in").read_text(encoding="utf-8")
-    assert 'Contents/MacOS/nebula-ui", target: "nebula"' in cask
-    assert 'Contents/MacOS/nebula-core", target: "nebula-core"' in cask
-    assert "on_intel" not in cask
-    assert "macOS-x64" not in cask
+    assert not (ROOT / "packaging/homebrew/nebula.rb.in").exists()
+
+
+def test_protected_release_distribution_is_linux_x86_64_only():
+    paths = [
+        ROOT / ".github/workflows/nebula3-release.yml",
+        ROOT / ".github/workflows/nebula3-release-finalize.yml",
+        ROOT / ".github/workflows/publish-updater-manifest.yml",
+    ]
+    workflows = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+    assert "Nebula-$VERSION-linux-x86_64.AppImage" in workflows
+    assert "Nebula-$VERSION-linux-x86_64.deb" in workflows
+    for unsupported in (
+        "APPLE_",
+        "darwin-aarch64",
+        "macOS-arm64",
+        "macos-15",
+        "notarytool",
+    ):
+        assert unsupported not in workflows
 
 
 def test_python_source_tree_contains_only_core_namespace():

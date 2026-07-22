@@ -100,10 +100,8 @@ def generate_manifest(
             f"invalid RFC 3339 publication date: {published_at!r}"
         ) from exc
 
-    mac_arm = f"Nebula-{version}-macOS-arm64.updater.tar.gz"
     linux = f"Nebula-{version}-linux-x86_64.AppImage"
     files = {
-        "darwin-aarch64": mac_arm,
         "linux-x86_64": linux,
     }
     base_url = (
