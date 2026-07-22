@@ -73,6 +73,8 @@ After launch, inspect the bundled Core and local runtime boundary:
 nebula-core doctor --json
 ```
 
+> **First launch:** Nebula may need to download, prepare, and verify the official Kali image before terminal and automation features are ready. This can take several minutes depending on your connection and container runtime.
+
 > **About preview builds**
 >
 > A build exists only when a `nebula-v3.*` entry and its native artifacts appear on [GitHub Releases](https://github.com/BerylliumSec/nebula/releases). Back up engagement data and review the release notes and checksums before use. Do not use `pip install nebula-ai` to install Nebula 3.
