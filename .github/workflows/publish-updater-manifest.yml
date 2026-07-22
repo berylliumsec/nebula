@@ -3,6 +3,12 @@ name: Publish Nebula 3 updater manifest
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published immutable Nebula 3 release tag to recover
+        required: true
+        type: string
 
 permissions:
   attestations: read
@@ -16,9 +22,11 @@ concurrency:
 
 jobs:
   manifest:
-    if: startsWith(github.event.release.tag_name, 'nebula-v3.')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'nebula-v3.')
     runs-on: ubuntu-22.04
     environment: desktop-release
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
     outputs:
       channel: ${{ steps.release.outputs.channel }}
     steps:
@@ -26,17 +34,33 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: stable
+      - name: Install Linux signature-verifier libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+      - name: Resolve published release metadata
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$RELEASE_TAG" in nebula-v3.*) ;; *) printf 'invalid Nebula 3 release tag: %s\n' "$RELEASE_TAG" >&2; exit 1 ;; esac
+          release_json="$(gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease,publishedAt)"
+          test "$(jq -r '.tagName' <<<"$release_json")" = "$RELEASE_TAG"
+          test "$(jq -r '.isDraft' <<<"$release_json")" = false
+          published_at="$(jq -r '.publishedAt // empty' <<<"$release_json")"
+          test -n "$published_at"
+          printf 'prerelease=%s\n' "$(jq -r '.isPrerelease' <<<"$release_json")" >> "$GITHUB_OUTPUT"
+          printf 'published_at=%s\n' "$published_at" >> "$GITHUB_OUTPUT"
       - name: Download immutable updater assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           install -d -m 0755 release-assets
           gh release download "$RELEASE_TAG" --dir release-assets
@@ -45,8 +69,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NEBULA_UPDATER_PUBLIC_KEY: ${{ secrets.NEBULA_UPDATER_PUBLIC_KEY }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          PRERELEASE: ${{ github.event.release.prerelease }}
+          PRERELEASE: ${{ steps.metadata.outputs.prerelease }}
         run: |
           version="${RELEASE_TAG#nebula-v}"
           python scripts/nebula3_version.py check --expected "$version"
@@ -68,8 +91,9 @@ jobs:
       - name: Update the durable Pages source
         env:
           CHANNEL: ${{ steps.release.outputs.channel }}
+          PUBLISHED_AT: ${{ steps.metadata.outputs.published_at }}
         run: |
-          version="${{ github.event.release.tag_name }}"
+          version="$RELEASE_TAG"
           version="${version#nebula-v}"
           pages="$RUNNER_TEMP/gh-pages"
           if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
@@ -86,9 +110,9 @@ jobs:
           python packaging/updater/generate_manifest.py \
             --assets release-assets \
             --version "$version" \
-            --tag "${{ github.event.release.tag_name }}" \
+            --tag "$RELEASE_TAG" \
             --repository "$GITHUB_REPOSITORY" \
-            --published-at "${{ github.event.release.published_at }}" \
+            --published-at "$PUBLISHED_AT" \
             --previous "$pages/updates/$CHANNEL/latest.json" \
             --output "$RUNNER_TEMP/latest.json"
           install -d -m 0755 "$pages/updates/$CHANNEL"
@@ -108,7 +132,7 @@ jobs:
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add .nojekyll index.html images "updates/$CHANNEL/latest.json"
             if ! git diff --cached --quiet; then
-              git commit -m "Publish ${{ github.event.release.tag_name }} $CHANNEL updater manifest"
+              git commit -m "Publish $RELEASE_TAG $CHANNEL updater manifest"
               git push origin HEAD:gh-pages
             fi
           )

@@ -104,6 +104,18 @@ Publishing the draft triggers channel-specific Linux updater manifest
 generation on GitHub Pages. Confirm that workflow succeeds and preserves the
 existing website before announcing the release.
 
+If the updater-manifest workflow itself needs a post-publication repair, merge
+the workflow fix to `main` and recover the same immutable published release with:
+
+```bash
+gh workflow run publish-updater-manifest.yml \
+  --ref main \
+  -f release_tag=nebula-v3.0.0-alpha.5
+```
+
+The recovery path rejects drafts, reloads the published timestamp and channel
+from GitHub, and revalidates checksums, attestations, and the updater signature.
+
 If a content or release gate fails, leave the draft unpublished, fix the problem
 on a new commit, advance the version, and create a new tag. Do not replace
 artifacts on an existing published release or repoint its tag.

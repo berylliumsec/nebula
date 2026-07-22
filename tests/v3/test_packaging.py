@@ -62,6 +62,19 @@ def test_protected_release_distribution_is_linux_x86_64_only():
         assert unsupported not in workflows
 
 
+def test_updater_manifest_supports_validated_recovery_with_native_libraries():
+    workflow = (ROOT / ".github/workflows/publish-updater-manifest.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "workflow_dispatch:" in workflow
+    assert "release_tag:" in workflow
+    assert "Resolve published release metadata" in workflow
+    assert "test \"$(jq -r '.isDraft'" in workflow
+    assert "libwebkit2gtk-4.1-dev" in workflow
+    assert "libappindicator3-dev" in workflow
+    assert "librsvg2-dev" in workflow
+
+
 def test_python_source_tree_contains_only_core_namespace():
     package_root = ROOT / "src/nebula"
     unexpected = sorted(
