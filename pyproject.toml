@@ -40,7 +40,7 @@ PyYAML = ">=6.0.2,<7"
 cryptography = ">=44,<47"
 packaging = "*"
 semantic-version = "2.10.0"
-pypdf = ">=6,<7"
+pypdf = ">=6.13.3,<7"
 claude-agent-sdk = ">=0.2.118,<0.3"
 
 reportlab = ">=5,<6"
