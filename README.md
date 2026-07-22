@@ -1,7 +1,7 @@
 <div align="center">
   <br />
   <h1>Nebula</h1>
-  <p>AI Powered Penetration Testing</p>
+  <p>AI Powered Pentesting</p>
   <br />
 </div>
 
