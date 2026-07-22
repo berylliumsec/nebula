@@ -45,6 +45,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+      - name: Prepare compile-time sidecar boundary
+        run: |
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          install -d -m 0755 ui/src-tauri/binaries
+          install -d -m 0755 build/nebula-core-metadata
+          printf 'Generated CI fixture for updater signature verification.\n' > build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt
+          touch "ui/src-tauri/binaries/nebula-core-$target"
+          chmod +x "ui/src-tauri/binaries/nebula-core-$target"
       - name: Resolve published release metadata
         id: metadata
         env:

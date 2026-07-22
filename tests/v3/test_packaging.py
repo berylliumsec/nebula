@@ -73,6 +73,9 @@ def test_updater_manifest_supports_validated_recovery_with_native_libraries():
     assert "libwebkit2gtk-4.1-dev" in workflow
     assert "libappindicator3-dev" in workflow
     assert "librsvg2-dev" in workflow
+    assert "Prepare compile-time sidecar boundary" in workflow
+    assert "build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt" in workflow
+    assert 'touch "ui/src-tauri/binaries/nebula-core-$target"' in workflow
 
 
 def test_python_source_tree_contains_only_core_namespace():
