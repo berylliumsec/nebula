@@ -8,6 +8,11 @@ Nebula is an operator first, AI powered penetration testing platform that seeks 
 
 At its core it is driven by the human operator and assisted by AI agents.
 
+![Nebula 3.0 Workbench with a live contained terminal and operator safety controls](docs/images/nebula-3-workbench.png)
+
+*Nebula 3.0 Workbench — a human-controlled security workspace with contained
+terminal access, evidence tools, reporting, and supervised automation.*
+
 ## Release status
 
 Nebula 3 is in preview. A build is available only when a `nebula-v3.*` entry and
@@ -18,22 +23,52 @@ source checkout instead. Do not use `pip install nebula-ai` to install Nebula 3.
 
 Preview builds are intended for evaluation on authorized systems. Back up
 engagement data, review the release notes and checksums, and do not treat an
-alpha build as a stable production release. The first release line is
-[Nebula 3.0.0-alpha.1](docs/releases/3.0.0-alpha.1.md).
+alpha build as a stable production release. The current release candidate is
+[Nebula 3.0.0-alpha.5](docs/releases/3.0.0-alpha.5.md).
 
 ## Install and launch
 
 Published releases can contain:
 
-- macOS 13 or newer DMGs for Apple silicon;
 - a Linux x86_64 AppImage with direct updates; and
 - a Linux x86_64 DEB for managed installations.
 
-Windows installers are not part of the current release matrix. Docker or
-Podman must be installed separately for terminal and automation features; a
-model provider is optional.
+macOS, Windows, and Linux arm64 installers are not part of the current release
+matrix. Docker or Podman must be installed separately for terminal and
+automation features; a model provider is optional.
 
-Launch the native desktop from the operating-system application menu or run:
+Download the desired asset and `SHA256SUMS-linux-x64.txt` from the
+[GitHub Releases page](https://github.com/BerylliumSec/nebula/releases). Verify
+the downloaded file before installing it:
+
+```console
+sha256sum --check --ignore-missing SHA256SUMS-linux-x64.txt
+```
+
+### Install the DEB
+
+On Debian, Ubuntu, Kali, or another compatible Debian-based system, install the
+managed package and its dependencies with APT:
+
+```console
+sudo apt install ./Nebula-3.0.0-alpha.5-linux-x86_64.deb
+nebula
+```
+
+The DEB installs `nebula`, `nebula-ui`, and `nebula-core` system-wide and leaves
+updates under administrator control.
+
+### Run the AppImage
+
+The direct AppImage does not require system-wide installation:
+
+```console
+chmod +x Nebula-3.0.0-alpha.5-linux-x86_64.AppImage
+./Nebula-3.0.0-alpha.5-linux-x86_64.AppImage
+```
+
+The AppImage uses Nebula's signed direct-update channel. After installing the
+DEB, launch the native desktop from the application menu or run:
 
 ```console
 nebula
@@ -60,17 +95,25 @@ Verify the imported Project and its evidence before deleting the original data.
 See [Migrating from Nebula 2](docs/MIGRATING-2-TO-3.md) for the integrity,
 external-knowledge, verification, and recovery procedures.
 
-## Develop from source
+## Run Nebula 3 directly from source
 
-From an existing checkout, synchronize dependencies and launch the native
-desktop:
+You do not need the DEB or AppImage to launch Nebula 3. Install Python
+3.11-3.13, Poetry 2.1.3, Node.js 20 with npm, the stable Rust toolchain, and the
+[Tauri prerequisites for your operating system](https://v2.tauri.app/start/prerequisites/).
+Then clone the repository, install its locked dependencies, and start the native
+desktop in development mode:
 
 ```console
-git pull --ff-only
+git clone https://github.com/BerylliumSec/nebula.git
+cd nebula
 poetry install --with dev
 npm --prefix ui ci
 npm --prefix ui run tauri -- dev
 ```
+
+The final command builds the local Nebula Core sidecar, starts the UI development
+server, and opens the Nebula 3 desktop application. It runs entirely from the
+checkout and does not install Nebula system-wide.
 
 For browser-only development, build the workspace and let Core choose an
 available loopback port:
@@ -89,13 +132,13 @@ npm --prefix ui test
 npm --prefix ui run build
 ```
 
-The Poetry package is a build-time Core boundary and is not a replacement for
-the native desktop installer. End users should use a published native package.
+The Poetry package provides Nebula Core to the source build; it is not a separate
+Nebula desktop installer.
 
 ## Documentation
 
 - [Nebula 3 guide](docs/NEBULA3.md)
-- [Nebula 3.0.0-alpha.1 release notes](docs/releases/3.0.0-alpha.1.md)
+- [Nebula 3.0.0-alpha.5 release notes](docs/releases/3.0.0-alpha.5.md)
 - [Automation runtime](docs/AUTOMATION-RUNTIME.md)
 - [Local diagnostics](docs/NEBULA3_DIAGNOSTICS.md)
 - [Usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md)

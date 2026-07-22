@@ -60,13 +60,10 @@ jobs:
             case "$artifact" in *.sig|*.json) continue ;; esac
             gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
           done
-          for artifact in \
-            "release-assets/Nebula-$version-macOS-arm64.updater.tar.gz" \
-            "release-assets/Nebula-$version-linux-x86_64.AppImage"; do
-            cargo run --locked --quiet --manifest-path ui/src-tauri/Cargo.toml \
-              --example verify_update_signature -- \
-              "$artifact" "$artifact.sig" "$NEBULA_UPDATER_PUBLIC_KEY"
-          done
+          artifact="release-assets/Nebula-$version-linux-x86_64.AppImage"
+          cargo run --locked --quiet --manifest-path ui/src-tauri/Cargo.toml \
+            --example verify_update_signature -- \
+            "$artifact" "$artifact.sig" "$NEBULA_UPDATER_PUBLIC_KEY"
           printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
       - name: Update the durable Pages source
         env:
