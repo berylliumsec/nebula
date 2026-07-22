@@ -28,6 +28,7 @@ from nebula.v3.domain import (
     ChatTurn,
     Engagement,
     HarnessCapabilities,
+    HarnessDetailedUsage,
     HarnessKind,
     HarnessInteraction,
     HarnessInteractionKind,
@@ -102,9 +103,26 @@ class FakeConnection(HarnessConnection):
         answer = f"Harness answer for {prompt}"
         yield HarnessEvent(type="message_delta", delta=answer[:8])
         yield HarnessEvent(type="message_delta", delta=answer[8:])
+        if prompt == "Continue autonomously":
+            yield HarnessEvent(
+                type="usage",
+                usage=ChatTokenUsage(input_tokens=3, output_tokens=4, total_tokens=7),
+                detailed_usage=HarnessDetailedUsage(
+                    input_tokens=3,
+                    output_tokens=4,
+                    total_tokens=7,
+                    cost_usd=0.1,
+                ),
+            )
         yield HarnessEvent(
             type="usage",
             usage=ChatTokenUsage(input_tokens=4, output_tokens=5, total_tokens=9),
+            detailed_usage=HarnessDetailedUsage(
+                input_tokens=4,
+                output_tokens=5,
+                total_tokens=9,
+                cost_usd=0.125,
+            ),
         )
         yield HarnessEvent(type="completed", message=answer)
 
@@ -275,6 +293,18 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         assert finished.metadata["final_summary"] == (
             "Harness answer for Continue autonomously"
         )
+        assert finished.metadata["spent_usd"] == pytest.approx(0.125)
+        assert finished.metadata["input_tokens"] == 4
+        assert finished.metadata["output_tokens"] == 5
+        usage_events = [
+            event
+            for event in store.replay_events(run.id)
+            if event.event_type == "harness.usage"
+        ]
+        assert [event.payload["run_cost_usd"] for event in usage_events] == [
+            pytest.approx(0.1),
+            pytest.approx(0.125),
+        ]
         completed_event = next(
             event
             for event in store.replay_events(run.id)
@@ -283,6 +313,7 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         assert completed_event.payload["summary"] == (
             "Harness answer for Continue autonomously"
         )
+        assert completed_event.payload["cost_usd"] == pytest.approx(0.125)
         assert (
             finished.runtime_snapshot["mcp_snapshot"][0]["url"]
             == "https://mcp.invalid/api"

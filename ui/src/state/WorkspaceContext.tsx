@@ -72,6 +72,14 @@ export function evolveRunFromEvent(current: AgentRunSummary, event: RunEvent): A
   }
   if (event.kind === "run.waiting_approval") return { ...base, status: "waiting_approval" };
   if (event.kind === "run.stop_requested") return { ...base, status: "cancelling" };
+  if (event.kind === "harness.usage") {
+    return {
+      ...base,
+      spentUsd: typeof event.payload.run_cost_usd === "number"
+        ? event.payload.run_cost_usd
+        : current.spentUsd,
+    };
+  }
   if (event.kind === "run.completed") {
     return {
       ...base,

@@ -22,6 +22,13 @@ type EventStepState = "complete" | "running" | "waiting" | "failed" | "stopped" 
 
 const noRunnableLanguages = new Set<ExecutionLanguage>();
 
+export function formatProjectModelCost(cost: number | undefined): string {
+  if (cost === undefined) return "—";
+  const precision = cost > 0 && cost < 0.0001 ? 6 : cost > 0 && cost < 0.01 ? 4 : 2;
+  const scale = 10 ** precision;
+  return `$${(Math.round(cost * scale) / scale).toFixed(precision)}`;
+}
+
 function eventStepState(kind: string): EventStepState {
   if (kind.includes("failed") || kind.includes("blocked")) return "failed";
   if (kind.includes("cancelled") || kind === "run.stop_requested") return "stopped";
@@ -79,7 +86,7 @@ export function OverviewPage() {
         </article>
         <article className="metric-card accent-green">
           <span className="metric-icon"><DollarSign size={19} /></span>
-          <div><small>Model cost</small><strong>{run?.spentUsd === undefined ? "—" : `$${run.spentUsd.toFixed(2)}`}</strong><span>Recorded for this mission</span></div>
+          <div><small>Model cost</small><strong>{formatProjectModelCost(run?.spentUsd)}</strong><span>Recorded for this mission</span></div>
         </article>
       </section>
 

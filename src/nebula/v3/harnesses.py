@@ -7325,6 +7325,17 @@ class HarnessRuntimeService:
         if event.vendor is None:
             profile = self.store.get(HarnessProfile, session.harness_profile_id)
             event = event.model_copy(update={"vendor": profile.kind})
+        if event.type == "usage" and turn.run_id:
+            run_cost_usd = self._record_harness_run_usage(turn, event)
+            if run_cost_usd is not None:
+                event = event.model_copy(
+                    update={
+                        "payload": {
+                            **event.payload,
+                            "run_cost_usd": run_cost_usd,
+                        }
+                    }
+                )
         if event.item_kind == "file_change" and event.payload.get("attribution"):
             concurrent = 0
             for active in self._active.values():
@@ -7452,6 +7463,53 @@ class HarnessRuntimeService:
             }
         )
 
+    def _record_harness_run_usage(
+        self, turn: HarnessTurn, event: HarnessEvent
+    ) -> float | None:
+        detailed = event.detailed_usage
+        if detailed is None or detailed.cost_usd is None or not turn.run_id:
+            return None
+        run = self.store.get(AgentRun, turn.run_id)
+        raw_usage = run.metadata.get("harness_turn_usage")
+        turn_usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
+        turn_usage[turn.id] = {
+            "input_tokens": detailed.input_tokens,
+            "output_tokens": detailed.output_tokens,
+            "total_tokens": detailed.total_tokens,
+            "cost_usd": detailed.cost_usd,
+        }
+        entries = [item for item in turn_usage.values() if isinstance(item, dict)]
+        spent_usd = sum(
+            float(item.get("cost_usd", 0))
+            for item in entries
+            if isinstance(item.get("cost_usd"), (int, float))
+        )
+        input_tokens = sum(
+            int(item.get("input_tokens", 0))
+            for item in entries
+            if isinstance(item.get("input_tokens"), (int, float))
+        )
+        output_tokens = sum(
+            int(item.get("output_tokens", 0))
+            for item in entries
+            if isinstance(item.get("output_tokens"), (int, float))
+        )
+        self.store.update(
+            AgentRun,
+            run.id,
+            {
+                "metadata": {
+                    **run.metadata,
+                    "harness_turn_usage": turn_usage,
+                    "spent_usd": spent_usd,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                }
+            },
+            expected_revision=run.revision,
+        )
+        return spent_usd
+
     def activity_events(
         self, turn_id: str, *, after_sequence: int = 0, limit: int = 1_000
     ) -> HarnessActivityEventList:
@@ -7526,6 +7584,9 @@ class HarnessRuntimeService:
                 "harness_turn_id": turn.id,
             }
         )
+        run_cost_usd = event.payload.get("run_cost_usd")
+        if isinstance(run_cost_usd, (int, float)):
+            payload["run_cost_usd"] = run_cost_usd
         return payload
 
     def _start_owner(self, turn: HarnessTurn) -> None:
@@ -7644,6 +7705,9 @@ class HarnessRuntimeService:
                         "summary": final_summary,
                         "harness_turn_id": turn.id,
                         "usage": usage.model_dump(mode="json"),
+                        "input_tokens": run.metadata.get("input_tokens", 0),
+                        "output_tokens": run.metadata.get("output_tokens", 0),
+                        "cost_usd": run.metadata.get("spent_usd", 0.0),
                     },
                     idempotency_key="run:completed",
                 )
