@@ -17,6 +17,7 @@ from chromadb.api.types import DefaultEmbeddingFunction, Documents, Embeddings
 from chromadb.config import Settings
 from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
+from .diagnostics import record_caught_exception
 from .domain import KnowledgeSource, NebulaModel
 
 
@@ -315,8 +316,14 @@ class ChromaKnowledgeIndex:
             try:
                 if self._collection.count() == 0:
                     return []
-            except Exception:
-                pass
+            except Exception as count_error:
+                record_caught_exception(
+                    "knowledge",
+                    "knowledge.knowledge_index.caught_failure_001",
+                    "The Chroma collection size could not be checked after retrieval failed.",
+                    count_error,
+                    stage="knowledge",
+                )
             raise KnowledgeIndexError("Chroma knowledge retrieval failed") from exc
 
         candidates: dict[str, IndexedKnowledgeChunk] = {}
