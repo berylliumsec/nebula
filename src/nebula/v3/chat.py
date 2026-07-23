@@ -61,6 +61,7 @@ from .context import (
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
 from .mcp import McpProbeError, resolve_mcp_profiles
 from .operator_help import CORPUS_ID, search_operator_help
+from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
 from .providers import (
     ModelMessage,
     ModelProvider,
@@ -212,7 +213,7 @@ class _RetrievedChunk:
     citation: ChatCitation
     text: str
     local_only: bool
-    score: int
+    score: float
     ordinal: int
 
 
@@ -467,12 +468,14 @@ class ChatService:
         automation_tool_platform: AutomationToolPlatform | None = None,
         provider_factory: Callable[[ProviderProfile], ModelProvider] | None = None,
         operator_id: Callable[[], str] | None = None,
+        knowledge_index: KnowledgeIndex | None = None,
     ) -> None:
         self.store = store
         self.tool_platform = tool_platform
         self.automation_tool_platform = automation_tool_platform
         self.provider_factory = provider_factory or provider_from_profile
         self.operator_id = operator_id or (lambda: "system")
+        self.knowledge_index = knowledge_index
 
     def prepare(self, request: ChatCompletionRequest) -> PreparedChat:
         """Synchronous compatibility wrapper for non-ASGI callers and tests."""
@@ -2113,6 +2116,131 @@ class ChatService:
         ]
         all_terms = set().union(*query_terms) if query_terms else set()
         candidates: list[_RetrievedChunk] = []
+        if (
+            self.knowledge_index is not None
+            and self.knowledge_index.status.state == "ready"
+        ):
+            try:
+                candidates = self._retrieve_vector_candidates(
+                    engagement_id,
+                    queries,
+                    query_terms=query_terms,
+                    redact=redact,
+                )
+            except KnowledgeIndexError as exc:
+                record_diagnostic(
+                    "warning",
+                    "chat",
+                    "chat.retrieval.vector_fallback",
+                    "Vector retrieval failed; legacy lexical retrieval will be used.",
+                    outcome="fallback",
+                    stage="knowledge-retrieval",
+                    retryable=True,
+                    safe_failure_cause="The local Chroma knowledge index was unavailable.",
+                    exception=exc,
+                )
+        # Inline chunks are retained only for pre-Chroma sources and library
+        # embedders without an index. Merge them during a gradual migration so
+        # adding a newly indexed source never hides an older source.
+        legacy_candidates = self._retrieve_legacy_candidates(
+            engagement_id,
+            query_terms=query_terms,
+            redact=redact,
+        )
+        known_chunks = {item.citation.chunk_id for item in candidates}
+        candidates.extend(
+            item
+            for item in legacy_candidates
+            if item.citation.chunk_id not in known_chunks
+        )
+        candidates.sort(key=lambda item: (-item.score, item.ordinal))
+        selected: list[_RetrievedChunk] = []
+        tokens = 0
+        for candidate in candidates:
+            if all_terms and candidate.score <= 0:
+                continue
+            candidate_tokens = estimate_tokens(candidate.text, message_count=1)
+            if len(selected) >= 8 or tokens + candidate_tokens > token_budget:
+                continue
+            selected.append(candidate)
+            tokens += candidate_tokens
+        return selected
+
+    def _retrieve_vector_candidates(
+        self,
+        engagement_id: str,
+        queries: list[str],
+        *,
+        query_terms: list[set[str]],
+        redact: bool,
+    ) -> list[_RetrievedChunk]:
+        assert self.knowledge_index is not None
+        ready_sources: dict[str, KnowledgeSource] = {}
+        offset = 0
+        while True:
+            sources = self.store.list_entities(
+                KnowledgeSource,
+                engagement_id=engagement_id,
+                offset=offset,
+                limit=1_000,
+            )
+            ready_sources.update(
+                (source.id, source)
+                for source in sources
+                if source.status.casefold() == "ready"
+            )
+            if len(sources) < 1_000:
+                break
+            offset += len(sources)
+        matches = self.knowledge_index.query(
+            engagement_id,
+            queries,
+            limit=min(64, max(16, len(queries) * 8)),
+        )
+        candidates: list[_RetrievedChunk] = []
+        for match in matches:
+            source = ready_sources.get(match.source_id)
+            if source is None:
+                continue
+            text = match.text.strip()[:4000]
+            if not text:
+                continue
+            if redact:
+                text = self._redact_secrets(text)
+            folded = text.casefold()
+            lexical_bonus = sum(
+                sum(folded.count(term) for term in terms) for terms in query_terms
+            )
+            # Chroma supplies the candidate set. A small lexical bonus preserves
+            # exact hostnames, paths, hashes, and CVE identifiers during reranking.
+            semantic_score = 100.0 / (1.0 + max(0.0, match.distance))
+            candidates.append(
+                _RetrievedChunk(
+                    citation=ChatCitation(
+                        source_id=source.id,
+                        name=source.name,
+                        citation=source.citation,
+                        artifact_id=match.artifact_id or source.artifact_id,
+                        chunk_id=match.id,
+                        page=match.page,
+                        excerpt=re.sub(r"\s+", " ", text)[:320],
+                    ),
+                    text=text,
+                    local_only=self._source_is_local_only(source),
+                    score=semantic_score + lexical_bonus,
+                    ordinal=match.rank,
+                )
+            )
+        return candidates
+
+    def _retrieve_legacy_candidates(
+        self,
+        engagement_id: str,
+        *,
+        query_terms: list[set[str]],
+        redact: bool,
+    ) -> list[_RetrievedChunk]:
+        candidates: list[_RetrievedChunk] = []
         ordinal = 0
         offset = 0
         while len(candidates) < 5_000:
@@ -2181,18 +2309,7 @@ class ChatService:
             if len(sources) < 1_000:
                 break
             offset += len(sources)
-        candidates.sort(key=lambda item: (-item.score, item.ordinal))
-        selected: list[_RetrievedChunk] = []
-        tokens = 0
-        for candidate in candidates:
-            if all_terms and candidate.score <= 0:
-                continue
-            candidate_tokens = estimate_tokens(candidate.text, message_count=1)
-            if len(selected) >= 8 or tokens + candidate_tokens > token_budget:
-                continue
-            selected.append(candidate)
-            tokens += candidate_tokens
-        return selected
+        return candidates
 
     @staticmethod
     def _retrieve_operator_help(

@@ -91,6 +91,14 @@
 .knowledge-status { display: flex; min-height: 38px; align-items: center; gap: 7px; margin: -8px 0 13px; padding: 8px 11px; border: 1px solid color-mix(in srgb, var(--green) 25%, var(--border)); border-radius: 7px; color: var(--green); background: var(--green-muted); font-size: 11px; }
 .knowledge-status.error { color: var(--red); border-color: color-mix(in srgb, var(--red) 25%, var(--border)); background: var(--red-muted); }
 .knowledge-status.warning { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 30%, var(--border)); background: color-mix(in srgb, var(--yellow) 8%, var(--surface)); }
+.knowledge-model-status { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; margin: -8px 0 13px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--blue) 25%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--blue) 7%, var(--surface)); }
+.knowledge-model-status .metric-icon { width: 30px; height: 30px; color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, var(--surface)); }
+.knowledge-model-status strong { display: block; color: var(--text); font-size: 12px; }
+.knowledge-model-status p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.knowledge-model-status.error { border-color: color-mix(in srgb, var(--red) 28%, var(--border)); background: var(--red-muted); }
+.knowledge-model-status.error .metric-icon { color: var(--red); background: color-mix(in srgb, var(--red) 11%, var(--surface)); }
+.knowledge-model-progress { height: 5px; margin-top: 9px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--blue) 13%, var(--surface-raised)); }
+.knowledge-model-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--blue); transition: width 180ms ease-out; }
 .knowledge-policy { align-self: start; padding: 22px; }
 .policy-illustration { display: grid; width: 51px; height: 51px; place-items: center; margin-bottom: 16px; border: 1px solid color-mix(in srgb, var(--violet) 25%, var(--border)); border-radius: 12px; color: var(--violet); background: color-mix(in srgb, var(--violet) 8%, transparent); }
 .knowledge-policy h2 { margin: 0 0 8px; font-size: 14px; }

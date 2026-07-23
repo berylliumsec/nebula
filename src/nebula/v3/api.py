@@ -209,8 +209,10 @@ from .knowledge import (
     UnsupportedDocumentError,
     ingest_document,
     knowledge_summary,
+    migrate_inline_knowledge_indexes,
     reindex_document,
 )
+from .knowledge_index import KnowledgeIndex, KnowledgeIndexError, KnowledgeIndexStatus
 from .missions import (
     MAX_API_MISSION_COST_USD,
     MAX_API_MISSION_DURATION_SECONDS,
@@ -801,6 +803,7 @@ def create_app(
     bootstrap_workspace: bool = False,
     diagnostic_manager: DiagnosticManager | None = None,
     allow_browser_diagnostic_events: bool = False,
+    knowledge_index: KnowledgeIndex | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -1034,6 +1037,7 @@ def create_app(
             automation_tool_platform=automation_tool_platform,
             provider_factory=chat_provider_factory,
             operator_id=active_operator_id,
+            knowledge_index=knowledge_index,
         )
 
     def active_operator_id() -> str:
@@ -1212,6 +1216,24 @@ def create_app(
             return failures
 
         try:
+            if knowledge_index is not None and knowledge_index.status.state == "ready":
+                try:
+                    await asyncio.to_thread(
+                        migrate_inline_knowledge_indexes,
+                        store=store,
+                        knowledge_index=knowledge_index,
+                    )
+                except KnowledgeIndexError as exc:
+                    emit_diagnostic(
+                        "warning",
+                        "knowledge",
+                        "knowledge.index.legacy_migration_failed",
+                        "Legacy document chunks remain available through lexical retrieval.",
+                        outcome="degraded",
+                        stage="startup",
+                        retryable=True,
+                        exception=exc,
+                    )
             if automation_runtime is not None:
                 await start_component(
                     "runtime",
@@ -1274,6 +1296,7 @@ def create_app(
     )
     app.state.store = store
     app.state.artifact_store = artifact_store
+    app.state.knowledge_index = knowledge_index
     app.state.auth_token = token
     app.state.allow_unauthenticated = allow_unauthenticated
     app.state.diagnostics = diagnostics
@@ -5295,6 +5318,22 @@ def create_app(
             allow_remote_mcp=request.allow_cloud_tool_results,
         )
 
+    @app.get(
+        f"{API_PREFIX}/knowledge/index-status",
+        response_model=KnowledgeIndexStatus,
+        tags=["knowledge"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def knowledge_index_status() -> KnowledgeIndexStatus:
+        if knowledge_index is None:
+            return KnowledgeIndexStatus(
+                backend="disabled",
+                state="disabled",
+                model="none",
+                total_bytes=0,
+            )
+        return knowledge_index.status
+
     @app.post(
         f"{API_PREFIX}/knowledge/ingest",
         response_model=KnowledgeSource,
@@ -5322,6 +5361,7 @@ def create_app(
                 status_code=422,
                 detail="content_base64 must be valid base64",
             ) from exc
+
         if len(content) > MAX_DOCUMENT_BYTES:
             raise HTTPException(
                 status_code=413,
@@ -5339,6 +5379,7 @@ def create_app(
                 filename=request.filename,
                 data=content,
                 media_type=request.media_type,
+                knowledge_index=knowledge_index,
             )
             return knowledge_summary(created)
         except DocumentTooLargeError as exc:
@@ -5368,6 +5409,11 @@ def create_app(
                 stage="api",
             )
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except KnowledgeIndexError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="the local knowledge index is unavailable; retry or reindex the source",
+            ) from exc
 
     @app.post(
         f"{API_PREFIX}/knowledge/{{knowledge_id}}/reindex",
@@ -5387,6 +5433,7 @@ def create_app(
                 store=store,
                 artifact_store=artifact_store,
                 source_id=knowledge_id,
+                knowledge_index=knowledge_index,
             )
             return knowledge_summary(updated)
         except DocumentTooLargeError as exc:
@@ -5416,6 +5463,11 @@ def create_app(
                 stage="api",
             )
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except KnowledgeIndexError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="the local knowledge index is unavailable; retry reindexing",
+            ) from exc
 
     @app.delete(
         f"{API_PREFIX}/knowledge/{{knowledge_id}}",
@@ -5427,6 +5479,21 @@ def create_app(
         """Remove a retrieval source while retaining its immutable artifact."""
 
         store.delete(KnowledgeSource, knowledge_id)
+        if knowledge_index is not None:
+            try:
+                await asyncio.to_thread(knowledge_index.delete_source, knowledge_id)
+            except KnowledgeIndexError as exc:
+                record_diagnostic(
+                    "warning",
+                    "knowledge",
+                    "knowledge.index.delete_cleanup_failed",
+                    "A deleted knowledge source could not be removed from the rebuildable index.",
+                    outcome="degraded",
+                    stage="knowledge-delete",
+                    retryable=True,
+                    safe_failure_cause="The local Chroma index was unavailable.",
+                    exception=exc,
+                )
         return Response(status_code=204)
 
     @app.get(

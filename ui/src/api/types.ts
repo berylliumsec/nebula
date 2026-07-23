@@ -1230,6 +1230,15 @@ export interface KnowledgeIngestRequest {
   contentBase64: string;
 }
 
+export interface KnowledgeIndexStatus {
+  backend: string;
+  state: "disabled" | "required" | "downloading" | "preparing" | "ready" | "error";
+  model: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  detail?: string;
+}
+
 export interface HealthResponse {
   status: "ok" | "degraded";
   version: string;

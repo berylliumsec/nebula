@@ -983,12 +983,14 @@ describe("ApiClient", () => {
     };
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify([source]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ backend: "chromadb", state: "downloading", model: "all-MiniLM-L6-v2", downloaded_bytes: 41_589_410, total_bytes: 83_178_821, detail: null }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(source), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...source, revision: 2 }), { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
 
     const listed = await client.listKnowledgeSources("engagement-1");
+    const indexStatus = await client.getKnowledgeIndexStatus();
     const ingested = await client.ingestKnowledgeSource({
       engagementId: "engagement-1",
       filename: "scope.md",
@@ -1004,13 +1006,22 @@ describe("ApiClient", () => {
       metadata: { filename: "scope.md", mediaType: "text/markdown", chunkCount: 3 },
     });
     expect(ingested.engagementId).toBe("engagement-1");
+    expect(indexStatus).toEqual({
+      backend: "chromadb",
+      state: "downloading",
+      model: "all-MiniLM-L6-v2",
+      downloadedBytes: 41_589_410,
+      totalBytes: 83_178_821,
+      detail: undefined,
+    });
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
       "http://127.0.0.1:8765/api/v1/knowledge?engagement_id=engagement-1&limit=1000&offset=0",
+      "http://127.0.0.1:8765/api/v1/knowledge/index-status",
       "http://127.0.0.1:8765/api/v1/knowledge/ingest",
       "http://127.0.0.1:8765/api/v1/knowledge/knowledge-1/reindex",
       "http://127.0.0.1:8765/api/v1/knowledge/knowledge-1",
     ]);
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
       engagement_id: "engagement-1",
       filename: "scope.md",
       media_type: "text/markdown",

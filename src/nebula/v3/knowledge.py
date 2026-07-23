@@ -25,6 +25,7 @@ from pypdf import PdfReader
 
 from .artifacts import ArtifactIntegrityError, ArtifactStore
 from .domain import Artifact, Engagement, KnowledgeSource, utc_now
+from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
 from .storage import NebulaStore
 
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
@@ -232,6 +233,7 @@ def ingest_document(
     filename: str,
     data: bytes,
     media_type: str | None = None,
+    knowledge_index: KnowledgeIndex | None = None,
 ) -> KnowledgeSource:
     """Atomically persist an authoritative artifact and its retrieval source."""
 
@@ -251,7 +253,7 @@ def ingest_document(
         name=clean_name,
         source_type=extracted.source_type,
         artifact_id=stored.artifact.id,
-        status="ready",
+        status="indexing" if knowledge_index is not None else "ready",
         citation=clean_name,
     )
     chunks = build_chunks(
@@ -264,8 +266,12 @@ def ingest_document(
             "document_count": len(chunks),
             "metadata": _index_metadata(
                 stored.artifact,
-                chunks=chunks,
+                chunks=chunks if knowledge_index is None else None,
+                chunk_count=len(chunks),
                 indexed_at=utc_now().isoformat(),
+                index_descriptor=(
+                    knowledge_index.descriptor if knowledge_index is not None else None
+                ),
             ),
         }
     )
@@ -281,6 +287,26 @@ def ingest_document(
         )
         artifact_store.discard_new_blob(stored)
         raise
+    if knowledge_index is None:
+        return source
+    try:
+        knowledge_index.upsert_source(source, chunks)
+    except KnowledgeIndexError:
+        current = store.get(KnowledgeSource, source.id)
+        store.update(
+            KnowledgeSource,
+            source.id,
+            {"status": "error"},
+            expected_revision=current.revision,
+        )
+        raise
+    current = store.get(KnowledgeSource, source.id)
+    source = store.update(
+        KnowledgeSource,
+        source.id,
+        {"status": "ready"},
+        expected_revision=current.revision,
+    )
     return source
 
 
@@ -289,6 +315,7 @@ def reindex_document(
     store: NebulaStore,
     artifact_store: ArtifactStore,
     source_id: str,
+    knowledge_index: KnowledgeIndex | None = None,
 ) -> KnowledgeSource:
     """Rebuild a knowledge index exclusively from its immutable artifact."""
 
@@ -317,21 +344,47 @@ def reindex_document(
     metadata.update(
         _index_metadata(
             artifact,
-            chunks=chunks,
+            chunks=chunks if knowledge_index is None else None,
+            chunk_count=len(chunks),
             indexed_at=utc_now().isoformat(),
+            index_descriptor=(
+                knowledge_index.descriptor if knowledge_index is not None else None
+            ),
         )
     )
-    return store.update(
+    if knowledge_index is not None:
+        metadata.pop("chunks", None)
+    indexing = store.update(
         KnowledgeSource,
         source.id,
         {
             "source_type": extracted.source_type,
-            "status": "ready",
+            "status": "indexing" if knowledge_index is not None else "ready",
             "citation": source.citation or source.name,
             "document_count": len(chunks),
             "metadata": metadata,
         },
         expected_revision=source.revision,
+    )
+    if knowledge_index is None:
+        return indexing
+    try:
+        knowledge_index.upsert_source(indexing, chunks)
+    except KnowledgeIndexError:
+        current = store.get(KnowledgeSource, indexing.id)
+        store.update(
+            KnowledgeSource,
+            indexing.id,
+            {"status": "error"},
+            expected_revision=current.revision,
+        )
+        raise
+    current = store.get(KnowledgeSource, indexing.id)
+    return store.update(
+        KnowledgeSource,
+        indexing.id,
+        {"status": "ready"},
+        expected_revision=current.revision,
     )
 
 
@@ -342,22 +395,65 @@ def knowledge_summary(source: KnowledgeSource) -> KnowledgeSource:
     return source.model_copy(update={"metadata": metadata})
 
 
+def migrate_inline_knowledge_indexes(
+    *, store: NebulaStore, knowledge_index: KnowledgeIndex
+) -> int:
+    """Move pre-Chroma inline chunks into the persistent vector index."""
+
+    sources: list[KnowledgeSource] = []
+    offset = 0
+    while True:
+        page = store.list_entities(KnowledgeSource, offset=offset, limit=1_000)
+        sources.extend(page)
+        if len(page) < 1_000:
+            break
+        offset += len(page)
+    migrated = 0
+    for source in sources:
+        if source.status.casefold() != "ready":
+            continue
+        chunks = source.metadata.get("chunks")
+        if not isinstance(chunks, list) or not chunks:
+            continue
+        valid_chunks = [chunk for chunk in chunks if isinstance(chunk, dict)]
+        if not valid_chunks:
+            continue
+        knowledge_index.upsert_source(source, valid_chunks)
+        metadata = dict(source.metadata)
+        metadata.pop("chunks", None)
+        metadata.update(knowledge_index.descriptor)
+        store.update(
+            KnowledgeSource,
+            source.id,
+            {"metadata": metadata},
+            expected_revision=source.revision,
+        )
+        migrated += 1
+    return migrated
+
+
 def _index_metadata(
     artifact: Artifact,
     *,
-    chunks: list[dict[str, Any]],
+    chunks: list[dict[str, Any]] | None,
+    chunk_count: int | None = None,
     indexed_at: str,
+    index_descriptor: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    metadata: dict[str, Any] = {
         "filename": artifact.filename,
         "media_type": artifact.media_type,
         "size": artifact.size,
         "sha256": artifact.sha256,
-        "chunk_count": len(chunks),
+        "chunk_count": len(chunks or []) if chunk_count is None else chunk_count,
         "indexed_at": indexed_at,
         "ingestion_version": INGESTION_VERSION,
-        "chunks": chunks,
     }
+    if chunks is not None:
+        metadata["chunks"] = chunks
+    if index_descriptor is not None:
+        metadata.update(index_descriptor)
+    return metadata
 
 
 def _decode_text(data: bytes) -> str:
@@ -696,6 +792,7 @@ __all__ = [
     "extract_document",
     "ingest_document",
     "knowledge_summary",
+    "migrate_inline_knowledge_indexes",
     "reindex_document",
     "safe_filename",
 ]

@@ -14,7 +14,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import type { KnowledgeSource } from "../api/types";
+import type { KnowledgeIndexStatus, KnowledgeSource } from "../api/types";
 import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -49,6 +49,11 @@ function encodeBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+function formatModelBytes(value: number): string {
+  if (value <= 0) return "0 MiB";
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 export function KnowledgePage() {
   const confirm = useConfirmation();
   const [searchParams] = useSearchParams();
@@ -66,6 +71,7 @@ export function KnowledgePage() {
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
   const [uploading, setUploading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string>();
+  const [indexStatus, setIndexStatus] = useState<KnowledgeIndexStatus>();
   const [error, setError] = useState<string>();
   const [selected, setSelected] = useState<KnowledgeSource>();
   const sources = knowledgeSources;
@@ -84,6 +90,47 @@ export function KnowledgePage() {
       setSelected(requested);
     }
   }, [requestedSourceId, sources]);
+
+  useEffect(() => {
+    if (!api || coreState !== "online") return;
+    const controller = new AbortController();
+    void api.getKnowledgeIndexStatus(controller.signal).then(setIndexStatus).catch((statusError) => {
+      if (!controller.signal.aborted) {
+        void logCaughtDiagnostic("interface.knowledge_page.caught_failure_05", "The knowledge index status could not be loaded.", statusError, "knowledge_page");
+      }
+    });
+    return () => controller.abort();
+  }, [api, coreState]);
+
+  const withIndexStatusPolling = async <T,>(operation: () => Promise<T>): Promise<T> => {
+    let polling = true;
+    const poll = async () => {
+      while (polling && api) {
+        try {
+          setIndexStatus(await api.getKnowledgeIndexStatus());
+        } catch (pollError) {
+          void logCaughtDiagnostic("interface.knowledge_page.caught_failure_06", "A knowledge index status poll failed during an active operation.", pollError, "knowledge_page");
+          // The operation itself owns the operator-visible error.
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+      }
+    };
+    const pollingTask = poll();
+    try {
+      return await operation();
+    } finally {
+      polling = false;
+      await pollingTask;
+      if (api) {
+        try {
+          setIndexStatus(await api.getKnowledgeIndexStatus());
+        } catch (refreshError) {
+          void logCaughtDiagnostic("interface.knowledge_page.caught_failure_07", "The final knowledge index status refresh failed.", refreshError, "knowledge_page");
+          // Preserve the operation result when a final status refresh fails.
+        }
+      }
+    }
+  };
 
   const setSourceBusy = (id: string, busy: boolean) => {
     setBusyIds((current) => {
@@ -112,12 +159,12 @@ export function KnowledgePage() {
     try {
       const contentBase64 = encodeBase64(await file.arrayBuffer());
       setStatusMessage(`Indexing ${file.name}…`);
-      await ingestKnowledgeSource({
-        engagementId: engagement.id,
-        filename: file.name,
-        mediaType: file.type || undefined,
-        contentBase64,
-      });
+      await withIndexStatusPolling(() => ingestKnowledgeSource({
+          engagementId: engagement.id,
+          filename: file.name,
+          mediaType: file.type || undefined,
+          contentBase64,
+        }));
       setStatusMessage(`${file.name} is ready for cited retrieval.`);
     } catch (uploadError) {
       void logCaughtDiagnostic("interface.knowledge_page.caught_failure_01", "A handled interface operation failed.", uploadError, "knowledge_page");
@@ -132,7 +179,7 @@ export function KnowledgePage() {
     setSourceBusy(source.id, true);
     setError(undefined);
     try {
-      await reindexKnowledgeSource(source.id);
+      await withIndexStatusPolling(() => reindexKnowledgeSource(source.id));
       setStatusMessage(`${source.name} was reindexed.`);
     } catch (reindexError) {
       void logCaughtDiagnostic("interface.knowledge_page.caught_failure_02", "A handled interface operation failed.", reindexError, "knowledge_page");
@@ -148,7 +195,7 @@ export function KnowledgePage() {
     setError(undefined);
     setStatusMessage(`Reindexing ${candidates.length} source${candidates.length === 1 ? "" : "s"}…`);
     candidates.forEach((source) => setSourceBusy(source.id, true));
-    const results = await Promise.allSettled(candidates.map((source) => reindexKnowledgeSource(source.id)));
+    const results = await withIndexStatusPolling(() => Promise.allSettled(candidates.map((source) => reindexKnowledgeSource(source.id))));
     candidates.forEach((source) => setSourceBusy(source.id, false));
     const failures = results.filter((result) => result.status === "rejected");
     if (failures.length) {
@@ -211,6 +258,20 @@ export function KnowledgePage() {
           <button className="button primary" type="button" disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} {uploading ? "Adding source…" : "Add source"}</button>
         </>}
       />
+      {indexStatus && !["ready", "disabled"].includes(indexStatus.state) && <section className={`knowledge-model-status ${indexStatus.state}`} role="status" aria-live="polite">
+        <span className="metric-icon">{["downloading", "preparing"].includes(indexStatus.state) ? <LoaderCircle className="spin" size={18} /> : <Database size={18} />}</span>
+        <div>
+          <strong>{indexStatus.state === "required" ? "Local semantic search" : indexStatus.state === "downloading" ? "Downloading the local retrieval model" : indexStatus.state === "preparing" ? "Preparing semantic search" : "Semantic search setup needs attention"}</strong>
+          <p>{indexStatus.state === "required"
+              ? `Adding or reindexing a source will download the ${formatModelBytes(indexStatus.totalBytes)} ${indexStatus.model} model once. It remains on this device.`
+              : indexStatus.state === "downloading"
+                ? `${formatModelBytes(indexStatus.downloadedBytes)} of ${formatModelBytes(indexStatus.totalBytes)} downloaded · ${Math.min(100, Math.round((indexStatus.downloadedBytes / Math.max(1, indexStatus.totalBytes)) * 100))}%`
+                : indexStatus.state === "preparing"
+                  ? "Download complete. Verifying and preparing the model on this device."
+                  : `${indexStatus.detail ?? "The local embedding model could not be prepared."} Check the connection and retry Add source or Reindex.`}</p>
+          {indexStatus.state === "downloading" && <div className="knowledge-model-progress" role="progressbar" aria-label="Embedding model download" aria-valuemin={0} aria-valuemax={indexStatus.totalBytes} aria-valuenow={indexStatus.downloadedBytes}><span style={{ width: `${Math.min(100, (indexStatus.downloadedBytes / Math.max(1, indexStatus.totalBytes)) * 100)}%` }} /></div>}
+        </div>
+      </section>}
       {statusMessage && <div className="knowledge-status" role="status">{uploading && <LoaderCircle className="spin" size={15} />}{statusMessage}</div>}
       {error && <DiagnosticErrorNotice error={error} fallback="The knowledge operation could not be completed." />}
       <div className="knowledge-layout">
