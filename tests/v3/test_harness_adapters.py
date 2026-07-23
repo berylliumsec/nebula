@@ -9,6 +9,7 @@ from typing import Any
 
 from jsonschema import Draft7Validator
 from pydantic import SecretStr
+import pytest
 
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.domain import (
@@ -274,7 +275,7 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
             )
         )
         events = [
-            event async for event in connection.run_turn("inspect", model="gpt-test")
+            event async for event in connection.run_turn("inspect", model="gpt-5.4")
         ]
 
         assert [method for method, _ in rpc.calls[:3]] == [
@@ -303,6 +304,14 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert usage_event.detailed_usage is not None
         assert usage_event.detailed_usage.input_tokens == 3
         assert usage_event.detailed_usage.output_tokens == 2
+        assert usage_event.detailed_usage.cost_usd == pytest.approx(0.0000375)
+        assert usage_event.detailed_usage.model_usage["gpt-5.4"] == {
+            "cost_usd": pytest.approx(0.0000375),
+            "pricing_basis": "standard_api_equivalent",
+            "pricing_model": "gpt-5.4",
+            "pricing_verified_on": "2026-07-22",
+            "pricing_source": "https://developers.openai.com/api/docs/models/gpt-5.4",
+        }
         assert decisions[0].category == "command"
         assert rpc.responses == [(41, {"decision": "accept"})]
         instructions = rpc.calls[1][1]["developerInstructions"]

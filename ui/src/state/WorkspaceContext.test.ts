@@ -15,7 +15,9 @@ describe("evolveRunFromEvent", () => {
     expect(run).toMatchObject({ status: "running", totalTasks: 2 });
     run = evolveRunFromEvent(run, event("task.completed", 3, { task_id: "one" }));
     expect(run.completedTasks).toBe(1);
-    run = evolveRunFromEvent(run, event("run.completed", 4, { cost_usd: 1.25 }));
+    run = evolveRunFromEvent(run, event("harness.usage", 4, { run_cost_usd: 0.0000375 }));
+    expect(run.spentUsd).toBe(0.0000375);
+    run = evolveRunFromEvent(run, event("run.completed", 5, { cost_usd: 1.25 }));
     expect(run).toMatchObject({ status: "complete", completedTasks: 2, spentUsd: 1.25 });
   });
 

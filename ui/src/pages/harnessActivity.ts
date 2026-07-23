@@ -178,3 +178,14 @@ export function shouldShowActivityKind(item: HarnessActivityItem): boolean {
   const normalize = (value: string) => value.toLowerCase().replaceAll(/[_\s-]/g, "");
   return normalize(item.kind) !== normalize(item.title);
 }
+
+export function harnessCostLabel(item: HarnessActivityItem): string | undefined {
+  const cost = item.usage?.costUsd;
+  if (!cost) return undefined;
+  const precision = cost < 0.0001 ? 6 : 4;
+  const scale = 10 ** precision;
+  const displayed = (Math.round(cost * scale) / scale).toFixed(precision);
+  return item.vendor === "codex_app_server"
+    ? `≈$${displayed} API equivalent`
+    : `$${displayed}`;
+}
