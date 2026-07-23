@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { DialogProvider } from "../components/DialogSystem";
-import { OverviewPage } from "./OverviewPage";
+import { formatProjectModelCost, OverviewPage } from "./OverviewPage";
 import "../styles.css";
 import "../refinement.css";
 
@@ -37,6 +37,7 @@ vi.mock("../state/WorkspaceContext", () => ({
       status: "complete",
       completedTasks: 1,
       totalTasks: 1,
+      spentUsd: 0.0000375,
     },
     startMission: vi.fn(),
     stopMission: vi.fn(),
@@ -63,5 +64,13 @@ describe("project overview mission activity", () => {
     expect(getComputedStyle(markdownListItem!).display).toBe("list-item");
     expect(within(activity!).getByText("192.168.1.1").tagName).toBe("CODE");
     expect(screen.queryByText(/\*\*Analyst-Facing Result\*\*/)).toBeNull();
+    expect(screen.getByText("$0.000038")).toBeInTheDocument();
+  });
+
+  it("formats mission costs without hiding small harness totals", () => {
+    expect(formatProjectModelCost(undefined)).toBe("—");
+    expect(formatProjectModelCost(0)).toBe("$0.00");
+    expect(formatProjectModelCost(0.00125)).toBe("$0.0013");
+    expect(formatProjectModelCost(1.25)).toBe("$1.25");
   });
 });
