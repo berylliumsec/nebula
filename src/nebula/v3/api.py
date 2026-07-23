@@ -205,8 +205,12 @@ from .execution_ai import (
 from .knowledge import (
     MAX_DOCUMENT_BYTES,
     DocumentTooLargeError,
+    FetchedUrlDocument,
     InvalidDocumentError,
+    InvalidSourceUrlError,
+    SourceFetchError,
     UnsupportedDocumentError,
+    fetch_url_document,
     ingest_document,
     knowledge_summary,
     migrate_inline_knowledge_indexes,
@@ -546,6 +550,11 @@ class KnowledgeIngestRequest(NebulaModel):
     )
 
 
+class KnowledgeUrlIngestRequest(NebulaModel):
+    engagement_id: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=2_048)
+
+
 class MissionStartRequest(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
     name: str = Field(min_length=1, max_length=300)
@@ -804,6 +813,7 @@ def create_app(
     diagnostic_manager: DiagnosticManager | None = None,
     allow_browser_diagnostic_events: bool = False,
     knowledge_index: KnowledgeIndex | None = None,
+    knowledge_url_fetcher: Callable[[str], FetchedUrlDocument] | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -824,6 +834,7 @@ def create_app(
             "pass either mission_service or mission_checkpoint_path, not both"
         )
     diagnostics = diagnostic_manager or get_diagnostics()
+    url_fetcher = knowledge_url_fetcher or fetch_url_document
 
     def emit_diagnostic(
         level: str,
@@ -5409,6 +5420,57 @@ def create_app(
                 stage="api",
             )
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except KnowledgeIndexError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="the local knowledge index is unavailable; retry or reindex the source",
+            ) from exc
+
+    @app.post(
+        f"{API_PREFIX}/knowledge/ingest-url",
+        response_model=KnowledgeSource,
+        status_code=201,
+        tags=["knowledge"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def ingest_knowledge_url(
+        request: KnowledgeUrlIngestRequest,
+    ) -> KnowledgeSource:
+        if artifact_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="knowledge ingestion requires an artifact store",
+            )
+        # Validate ownership before performing any outbound network request.
+        store.get(Engagement, request.engagement_id)
+        try:
+            fetched = await asyncio.to_thread(url_fetcher, request.url)
+            created = await asyncio.to_thread(
+                ingest_document,
+                store=store,
+                artifact_store=artifact_store,
+                engagement_id=request.engagement_id,
+                filename=fetched.filename,
+                data=fetched.data,
+                media_type=fetched.media_type,
+                knowledge_index=knowledge_index,
+                artifact_source="knowledge-url",
+                citation=fetched.source_url,
+                source_metadata={
+                    "origin": "url",
+                    "source_url": fetched.source_url,
+                    "fetched_at": utc_now().isoformat(),
+                },
+            )
+            return knowledge_summary(created)
+        except DocumentTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except UnsupportedDocumentError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        except (InvalidDocumentError, InvalidSourceUrlError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except SourceFetchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         except KnowledgeIndexError as exc:
             raise HTTPException(
                 status_code=503,

@@ -29,6 +29,7 @@ import type {
   HealthResponse,
   KnowledgeIngestRequest,
   KnowledgeSource,
+  KnowledgeUrlIngestRequest,
   MissionCreateRequest,
   ObservationSummary,
   ObservationCreateRequest,
@@ -151,6 +152,7 @@ interface WorkspaceContextValue {
   updateReport: (id: string, request: ReportUpdateRequest) => Promise<ReportSummary>;
   signOffReport: (id: string, expectedRevision: number, operatorId: string, attestation?: string) => Promise<ReportSummary>;
   ingestKnowledgeSource: (request: KnowledgeIngestRequest) => Promise<KnowledgeSource>;
+  ingestKnowledgeUrlSource: (request: KnowledgeUrlIngestRequest) => Promise<KnowledgeSource>;
   reindexKnowledgeSource: (id: string) => Promise<void>;
   removeKnowledgeSource: (id: string) => Promise<void>;
   refreshSetupRuntime: () => Promise<void>;
@@ -771,6 +773,18 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     [api, coreState],
   );
 
+  const ingestKnowledgeUrlSource = useCallback(
+    async (request: KnowledgeUrlIngestRequest) => {
+      if (coreState !== "online" || !api) {
+        throw new Error("Nebula Core must be online to add a knowledge source.");
+      }
+      const created = await api.ingestKnowledgeUrlSource(request);
+      setKnowledgeSources((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      return created;
+    },
+    [api, coreState],
+  );
+
   const reindexKnowledgeSource = useCallback(
     async (id: string) => {
       if (coreState !== "online" || !api) {
@@ -849,6 +863,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       updateReport,
       signOffReport,
       ingestKnowledgeSource,
+      ingestKnowledgeUrlSource,
       reindexKnowledgeSource,
       removeKnowledgeSource,
       refreshSetupRuntime,
@@ -902,6 +917,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       retryResource,
       signOffReport,
       ingestKnowledgeSource,
+      ingestKnowledgeUrlSource,
       reindexKnowledgeSource,
       removeKnowledgeSource,
       refreshSetupRuntime,

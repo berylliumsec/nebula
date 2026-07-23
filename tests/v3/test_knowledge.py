@@ -1,7 +1,9 @@
 import base64
 import io
+import socket
 import zipfile
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,7 +11,14 @@ import nebula.v3.knowledge as knowledge_module
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import Artifact, Engagement, KnowledgeSource
-from nebula.v3.knowledge import extract_document, ingest_document
+from nebula.v3.knowledge import (
+    FetchedUrlDocument,
+    InvalidSourceUrlError,
+    SourceFetchError,
+    extract_document,
+    fetch_url_document,
+    ingest_document,
+)
 from nebula.v3.storage import NebulaStore
 
 
@@ -193,6 +202,224 @@ def test_ingestion_requires_an_existing_engagement_and_artifact_store(tmp_path):
     )
     assert response.status_code == 503
     assert response.json()["detail"] == "knowledge ingestion requires an artifact store"
+
+
+def test_url_source_is_stored_as_an_immutable_query_free_artifact(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="URL knowledge"))
+    requested: list[str] = []
+
+    def fetcher(url: str) -> FetchedUrlDocument:
+        requested.append(url)
+        return FetchedUrlDocument(
+            data=b"<html><body>Public deployment guide</body></html>",
+            filename="guide.html",
+            media_type="text/html; charset=utf-8",
+            source_url="https://docs.example.com/guide.html",
+        )
+
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=artifacts,
+            auth_token="test-token",
+            knowledge_url_fetcher=fetcher,
+        )
+    )
+    response = client.post(
+        "/api/v1/knowledge/ingest-url",
+        headers=_auth(),
+        json={
+            "engagement_id": engagement.id,
+            "url": "https://docs.example.com/guide.html?token=do-not-store",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    source = response.json()
+    assert requested == ["https://docs.example.com/guide.html?token=do-not-store"]
+    assert source["name"] == "guide.html"
+    assert source["source_type"] == "html"
+    assert source["citation"] == "https://docs.example.com/guide.html"
+    assert source["metadata"]["origin"] == "url"
+    assert source["metadata"]["source_url"] == "https://docs.example.com/guide.html"
+    assert "token" not in str(source["metadata"])
+    artifact = store.get(Artifact, source["artifact_id"])
+    assert artifact.source == "knowledge-url"
+    assert artifacts.read(artifact).startswith(b"<html>")
+    assert "token" not in str(artifact.metadata)
+
+    reindexed = client.post(
+        f"/api/v1/knowledge/{source['id']}/reindex", headers=_auth()
+    )
+    assert reindexed.status_code == 200
+    assert (
+        reindexed.json()["metadata"]["source_url"] == source["metadata"]["source_url"]
+    )
+    assert requested == ["https://docs.example.com/guide.html?token=do-not-store"]
+
+
+def test_url_source_validates_engagement_before_fetching(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    called = False
+
+    def fetcher(url: str) -> FetchedUrlDocument:
+        nonlocal called
+        called = True
+        raise AssertionError(url)
+
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=artifacts,
+            auth_token="test-token",
+            knowledge_url_fetcher=fetcher,
+        )
+    )
+    response = client.post(
+        "/api/v1/knowledge/ingest-url",
+        headers=_auth(),
+        json={
+            "engagement_id": "missing",
+            "url": "https://example.com/guide.txt",
+        },
+    )
+    assert response.status_code == 404
+    assert called is False
+
+
+@pytest.mark.parametrize(
+    ("failure", "status_code"),
+    [
+        (InvalidSourceUrlError("source URL must be public"), 422),
+        (SourceFetchError("source URL timed out"), 502),
+    ],
+)
+def test_url_source_returns_bounded_fetch_errors(tmp_path, failure, status_code):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="URL errors"))
+
+    def fetcher(url: str) -> FetchedUrlDocument:
+        del url
+        raise failure
+
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=artifacts,
+            auth_token="test-token",
+            knowledge_url_fetcher=fetcher,
+        )
+    )
+    response = client.post(
+        "/api/v1/knowledge/ingest-url",
+        headers=_auth(),
+        json={
+            "engagement_id": engagement.id,
+            "url": "https://example.com/source.txt",
+        },
+    )
+    assert response.status_code == status_code
+    assert response.json()["detail"] == str(failure)
+    assert store.count(Artifact) == 0
+    assert store.count(KnowledgeSource) == 0
+
+
+def test_url_fetch_revalidates_public_redirects_and_strips_query_metadata(
+    monkeypatch,
+):
+    class Peer:
+        @staticmethod
+        def get_extra_info(name: str):
+            return ("93.184.216.34", 443) if name == "server_addr" else None
+
+    responses = [
+        httpx.Response(
+            302,
+            headers={"location": "/guide.html?signature=secret"},
+            request=httpx.Request("GET", "https://example.com/start"),
+            extensions={"network_stream": Peer()},
+        ),
+        httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=b"<main>Bounded public guide</main>",
+            request=httpx.Request("GET", "https://example.com/guide.html"),
+            extensions={"network_stream": Peer()},
+        ),
+    ]
+
+    class Client:
+        def __init__(self, **options):
+            assert options["follow_redirects"] is False
+            assert options["trust_env"] is False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def stream(self, method: str, url: str, *, headers, extensions):
+            assert method == "GET"
+            assert url.startswith("https://93.184.216.34/")
+            assert headers["Host"] == "example.com"
+            assert extensions["sni_hostname"] == "example.com"
+            response = responses.pop(0)
+
+            class Stream:
+                def __enter__(self):
+                    return response
+
+                def __exit__(self, *args):
+                    response.close()
+                    return None
+
+            return Stream()
+
+    monkeypatch.setattr(knowledge_module.httpx, "Client", Client)
+    monkeypatch.setattr(
+        knowledge_module.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("93.184.216.34", 443),
+            )
+        ],
+    )
+
+    fetched = fetch_url_document(
+        "https://example.com/start?temporary=credential#fragment"
+    )
+
+    assert fetched.filename == "guide.html"
+    assert fetched.media_type == "text/html; charset=utf-8"
+    assert fetched.data == b"<main>Bounded public guide</main>"
+    assert fetched.source_url == "https://example.com/guide.html"
+    assert responses == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "ftp://example.com/file.txt",
+        "http://user:password@example.com/file.txt",
+        "http://127.0.0.1/private",
+        "http://169.254.169.254/latest/meta-data",
+        "http://[::1]/private",
+    ],
+)
+def test_url_fetch_rejects_non_http_credentials_and_private_networks(url):
+    with pytest.raises(InvalidSourceUrlError):
+        fetch_url_document(url)
 
 
 def test_ingestion_compensates_a_failed_database_transaction(tmp_path, monkeypatch):

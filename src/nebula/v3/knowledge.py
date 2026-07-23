@@ -10,17 +10,23 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception
 
 import hashlib
+import ipaddress
 import json
 import posixpath
 import re
+import socket
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import SplitResult, unquote, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
+import httpx
 from pypdf import PdfReader
 
 from .artifacts import ArtifactIntegrityError, ArtifactStore
@@ -34,6 +40,8 @@ MAX_PDF_PAGES = 2_000
 CHUNK_CHARACTERS = 1_800
 CHUNK_OVERLAP_CHARACTERS = 180
 INGESTION_VERSION = "nebula.knowledge.v1"
+MAX_SOURCE_URL_LENGTH = 2_048
+MAX_SOURCE_REDIRECTS = 5
 
 
 class KnowledgeIngestionError(ValueError):
@@ -52,6 +60,14 @@ class InvalidDocumentError(KnowledgeIngestionError):
     """The document is malformed or contains no usable text."""
 
 
+class InvalidSourceUrlError(KnowledgeIngestionError):
+    """The requested URL is unsafe or unsupported."""
+
+
+class SourceFetchError(KnowledgeIngestionError):
+    """The remote source could not be fetched safely."""
+
+
 @dataclass(frozen=True)
 class ExtractedSection:
     text: str
@@ -64,6 +80,14 @@ class ExtractedDocument:
     source_type: str
     media_type: str
     sections: tuple[ExtractedSection, ...]
+
+
+@dataclass(frozen=True)
+class FetchedUrlDocument:
+    data: bytes
+    filename: str
+    media_type: str | None
+    source_url: str
 
 
 _EXTENSION_FORMATS: dict[str, tuple[str, str]] = {
@@ -234,6 +258,9 @@ def ingest_document(
     data: bytes,
     media_type: str | None = None,
     knowledge_index: KnowledgeIndex | None = None,
+    artifact_source: str = "knowledge-upload",
+    citation: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> KnowledgeSource:
     """Atomically persist an authoritative artifact and its retrieval source."""
 
@@ -245,8 +272,11 @@ def ingest_document(
         engagement_id=engagement_id,
         filename=clean_name,
         media_type=extracted.media_type,
-        source="knowledge-upload",
-        metadata={"ingestion_version": INGESTION_VERSION},
+        source=artifact_source,
+        metadata={
+            "ingestion_version": INGESTION_VERSION,
+            **(source_metadata or {}),
+        },
     )
     source = KnowledgeSource(
         engagement_id=engagement_id,
@@ -254,7 +284,7 @@ def ingest_document(
         source_type=extracted.source_type,
         artifact_id=stored.artifact.id,
         status="indexing" if knowledge_index is not None else "ready",
-        citation=clean_name,
+        citation=citation or clean_name,
     )
     chunks = build_chunks(
         extracted,
@@ -264,15 +294,20 @@ def ingest_document(
     source = source.model_copy(
         update={
             "document_count": len(chunks),
-            "metadata": _index_metadata(
-                stored.artifact,
-                chunks=chunks if knowledge_index is None else None,
-                chunk_count=len(chunks),
-                indexed_at=utc_now().isoformat(),
-                index_descriptor=(
-                    knowledge_index.descriptor if knowledge_index is not None else None
+            "metadata": {
+                **_index_metadata(
+                    stored.artifact,
+                    chunks=chunks if knowledge_index is None else None,
+                    chunk_count=len(chunks),
+                    indexed_at=utc_now().isoformat(),
+                    index_descriptor=(
+                        knowledge_index.descriptor
+                        if knowledge_index is not None
+                        else None
+                    ),
                 ),
-            ),
+                **(source_metadata or {}),
+            },
         }
     )
     try:
@@ -308,6 +343,103 @@ def ingest_document(
         expected_revision=current.revision,
     )
     return source
+
+
+def fetch_url_document(url: str) -> FetchedUrlDocument:
+    """Fetch one bounded public HTTP(S) document with redirect revalidation."""
+
+    current = _validate_source_url(url)
+    headers = {
+        "Accept": ", ".join(
+            [
+                "text/plain",
+                "text/markdown",
+                "text/csv",
+                "application/json",
+                "text/html",
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "*/*;q=0.1",
+            ]
+        ),
+        "User-Agent": "Nebula/3 knowledge-source-fetcher",
+    }
+    timeout = httpx.Timeout(connect=10, read=30, write=10, pool=5)
+    try:
+        with httpx.Client(
+            follow_redirects=False,
+            timeout=timeout,
+            trust_env=False,
+            headers=headers,
+        ) as client:
+            for redirect_count in range(MAX_SOURCE_REDIRECTS + 1):
+                resolved = _resolve_public_addresses(current)
+                with _stream_public_response(client, current, resolved) as response:
+                    if response.is_redirect:
+                        if redirect_count >= MAX_SOURCE_REDIRECTS:
+                            raise SourceFetchError(
+                                "source URL exceeded the redirect limit"
+                            )
+                        location = response.headers.get("location")
+                        if not location:
+                            raise SourceFetchError(
+                                "source URL returned a redirect without a location"
+                            )
+                        next_url = _validate_source_url(
+                            urljoin(urlunsplit(current), location)
+                        )
+                        if current.scheme == "https" and next_url.scheme == "http":
+                            raise InvalidSourceUrlError(
+                                "HTTPS source URLs cannot redirect to HTTP"
+                            )
+                        current = next_url
+                        continue
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        raise SourceFetchError(
+                            f"source URL returned HTTP {response.status_code}"
+                        ) from exc
+                    declared = response.headers.get("content-length")
+                    if declared:
+                        try:
+                            declared_size = int(declared)
+                        except ValueError as exc:
+                            raise SourceFetchError(
+                                "source URL returned an invalid Content-Length"
+                            ) from exc
+                        if declared_size < 0:
+                            raise SourceFetchError(
+                                "source URL returned an invalid Content-Length"
+                            )
+                        if declared_size > MAX_DOCUMENT_BYTES:
+                            raise DocumentTooLargeError(
+                                f"document exceeds the "
+                                f"{MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB limit"
+                            )
+                    content = bytearray()
+                    for chunk in response.iter_bytes():
+                        content.extend(chunk)
+                        if len(content) > MAX_DOCUMENT_BYTES:
+                            raise DocumentTooLargeError(
+                                f"document exceeds the "
+                                f"{MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB limit"
+                            )
+                    media_type = response.headers.get("content-type")
+                    return FetchedUrlDocument(
+                        data=bytes(content),
+                        filename=_url_filename(current, media_type),
+                        media_type=media_type,
+                        source_url=_display_source_url(current),
+                    )
+    except KnowledgeIngestionError:
+        raise
+    except httpx.TimeoutException as exc:
+        raise SourceFetchError("source URL timed out") from exc
+    except httpx.HTTPError as exc:
+        raise SourceFetchError("source URL could not be fetched") from exc
+    raise SourceFetchError("source URL could not be fetched")
 
 
 def reindex_document(
@@ -752,6 +884,182 @@ def _extract_pdf(data: bytes) -> tuple[ExtractedSection, ...]:
     return tuple(sections)
 
 
+def _validate_source_url(value: str) -> SplitResult:
+    candidate = value.strip()
+    if not candidate or len(candidate) > MAX_SOURCE_URL_LENGTH:
+        raise InvalidSourceUrlError(
+            f"source URL must be between 1 and {MAX_SOURCE_URL_LENGTH} characters"
+        )
+    if any(character.isspace() for character in candidate) or "\\" in candidate:
+        raise InvalidSourceUrlError("source URL contains invalid characters")
+    parsed = urlsplit(candidate)
+    scheme = parsed.scheme.casefold()
+    if scheme not in {"http", "https"}:
+        raise InvalidSourceUrlError("source URL must use HTTP or HTTPS")
+    if parsed.username is not None or parsed.password is not None:
+        raise InvalidSourceUrlError("source URL cannot contain credentials")
+    if not parsed.hostname:
+        raise InvalidSourceUrlError("source URL requires a hostname")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise InvalidSourceUrlError("source URL has an invalid port") from exc
+    try:
+        hostname = parsed.hostname.rstrip(".").encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise InvalidSourceUrlError("source URL has an invalid hostname") from exc
+    if not hostname:
+        raise InvalidSourceUrlError("source URL requires a hostname")
+    formatted_host = f"[{hostname}]" if ":" in hostname else hostname
+    netloc = formatted_host + (f":{port}" if port is not None else "")
+    return SplitResult(
+        scheme=scheme,
+        netloc=netloc,
+        path=parsed.path or "/",
+        query=parsed.query,
+        fragment="",
+    )
+
+
+def _resolve_public_addresses(parsed: SplitResult) -> set[str]:
+    hostname = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        records = socket.getaddrinfo(
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+    except OSError as exc:
+        raise SourceFetchError("source URL hostname could not be resolved") from exc
+    addresses: set[str] = set()
+    for record in records:
+        raw_address = str(record[4][0]).split("%", 1)[0]
+        try:
+            address = ipaddress.ip_address(raw_address)
+        except ValueError as exc:
+            raise InvalidSourceUrlError(
+                "source URL resolved to an invalid address"
+            ) from exc
+        if not address.is_global:
+            raise InvalidSourceUrlError(
+                "source URL must resolve only to public network addresses"
+            )
+        addresses.add(str(address))
+    if not addresses:
+        raise SourceFetchError("source URL hostname returned no usable addresses")
+    return addresses
+
+
+def _validate_response_peer(
+    response: httpx.Response, resolved_addresses: set[str]
+) -> None:
+    stream = response.extensions.get("network_stream")
+    peer = (
+        stream.get_extra_info("server_addr")
+        if stream is not None and hasattr(stream, "get_extra_info")
+        else None
+    )
+    if not isinstance(peer, tuple) or not peer:
+        raise SourceFetchError("source URL connection address could not be verified")
+    try:
+        address = ipaddress.ip_address(str(peer[0]).split("%", 1)[0])
+    except ValueError as exc:
+        raise SourceFetchError("source URL connection address was invalid") from exc
+    if not address.is_global or str(address) not in resolved_addresses:
+        raise InvalidSourceUrlError(
+            "source URL connection did not match its validated public address"
+        )
+
+
+@contextmanager
+def _stream_public_response(
+    client: httpx.Client,
+    parsed: SplitResult,
+    resolved_addresses: set[str],
+) -> Iterator[httpx.Response]:
+    last_error: httpx.HTTPError | None = None
+    for raw_address in sorted(
+        resolved_addresses,
+        key=lambda value: (ipaddress.ip_address(value).version, value),
+    ):
+        address = ipaddress.ip_address(raw_address)
+        formatted_address = f"[{address}]" if address.version == 6 else str(address)
+        port = parsed.port
+        pinned_netloc = formatted_address + (f":{port}" if port is not None else "")
+        pinned_url = urlunsplit(
+            SplitResult(
+                scheme=parsed.scheme,
+                netloc=pinned_netloc,
+                path=parsed.path,
+                query=parsed.query,
+                fragment="",
+            )
+        )
+        try:
+            with client.stream(
+                "GET",
+                pinned_url,
+                headers={
+                    "Host": parsed.netloc,
+                    "Connection": "close",
+                },
+                extensions={"sni_hostname": parsed.hostname},
+            ) as response:
+                _validate_response_peer(response, {str(address)})
+                yield response
+                return
+        except (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+        ) as exc:  # diagnostic-expected: retry the next prevalidated public address
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise SourceFetchError("source URL could not be reached") from last_error
+    raise SourceFetchError("source URL hostname returned no usable addresses")
+
+
+def _display_source_url(parsed: SplitResult) -> str:
+    return urlunsplit(
+        SplitResult(
+            scheme=parsed.scheme,
+            netloc=parsed.netloc,
+            path=parsed.path,
+            query="",
+            fragment="",
+        )
+    )
+
+
+def _url_filename(parsed: SplitResult, media_type: str | None) -> str:
+    candidate = unquote(posixpath.basename(parsed.path)).strip()
+    if candidate:
+        try:
+            return safe_filename(candidate)
+        except (
+            InvalidDocumentError
+        ):  # diagnostic-expected: fall back to a media-derived safe filename
+            pass
+    normalized_media = (media_type or "").partition(";")[0].strip().lower()
+    extension = {
+        "text/markdown": ".md",
+        "text/csv": ".csv",
+        "application/csv": ".csv",
+        "application/json": ".json",
+        "application/jsonl": ".jsonl",
+        "application/x-jsonlines": ".jsonl",
+        "application/x-ndjson": ".jsonl",
+        "text/html": ".html",
+        "application/xhtml+xml": ".html",
+        "application/pdf": ".pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    }.get(normalized_media, ".txt")
+    return f"source{extension}"
+
+
 def _split_text(text: str) -> list[str]:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     normalized = re.sub(r"[\t\f\v]+", " ", normalized)
@@ -785,11 +1093,17 @@ __all__ = [
     "DocumentTooLargeError",
     "INGESTION_VERSION",
     "InvalidDocumentError",
+    "InvalidSourceUrlError",
     "KnowledgeIngestionError",
     "MAX_DOCUMENT_BYTES",
+    "MAX_SOURCE_REDIRECTS",
+    "MAX_SOURCE_URL_LENGTH",
+    "FetchedUrlDocument",
+    "SourceFetchError",
     "UnsupportedDocumentError",
     "build_chunks",
     "extract_document",
+    "fetch_url_document",
     "ingest_document",
     "knowledge_summary",
     "migrate_inline_knowledge_indexes",
