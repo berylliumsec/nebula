@@ -212,7 +212,7 @@ from .knowledge import (
     migrate_inline_knowledge_indexes,
     reindex_document,
 )
-from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
+from .knowledge_index import KnowledgeIndex, KnowledgeIndexError, KnowledgeIndexStatus
 from .missions import (
     MAX_API_MISSION_COST_USD,
     MAX_API_MISSION_DURATION_SECONDS,
@@ -1216,7 +1216,7 @@ def create_app(
             return failures
 
         try:
-            if knowledge_index is not None:
+            if knowledge_index is not None and knowledge_index.status.state == "ready":
                 try:
                     await asyncio.to_thread(
                         migrate_inline_knowledge_indexes,
@@ -5318,6 +5318,22 @@ def create_app(
             allow_remote_mcp=request.allow_cloud_tool_results,
         )
 
+    @app.get(
+        f"{API_PREFIX}/knowledge/index-status",
+        response_model=KnowledgeIndexStatus,
+        tags=["knowledge"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def knowledge_index_status() -> KnowledgeIndexStatus:
+        if knowledge_index is None:
+            return KnowledgeIndexStatus(
+                backend="disabled",
+                state="disabled",
+                model="none",
+                total_bytes=0,
+            )
+        return knowledge_index.status
+
     @app.post(
         f"{API_PREFIX}/knowledge/ingest",
         response_model=KnowledgeSource,
@@ -5345,6 +5361,7 @@ def create_app(
                 status_code=422,
                 detail="content_base64 must be valid base64",
             ) from exc
+
         if len(content) > MAX_DOCUMENT_BYTES:
             raise HTTPException(
                 status_code=413,

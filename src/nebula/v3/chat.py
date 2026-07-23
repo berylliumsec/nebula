@@ -2116,8 +2116,10 @@ class ChatService:
         ]
         all_terms = set().union(*query_terms) if query_terms else set()
         candidates: list[_RetrievedChunk] = []
-        vector_retrieval = self.knowledge_index is not None
-        if self.knowledge_index is not None:
+        if (
+            self.knowledge_index is not None
+            and self.knowledge_index.status.state == "ready"
+        ):
             try:
                 candidates = self._retrieve_vector_candidates(
                     engagement_id,
@@ -2137,21 +2139,25 @@ class ChatService:
                     safe_failure_cause="The local Chroma knowledge index was unavailable.",
                     exception=exc,
                 )
-                vector_retrieval = False
         # Inline chunks are retained only for pre-Chroma sources and library
-        # embedders without an index. They also provide a safe upgrade fallback.
-        if not candidates:
-            vector_retrieval = False
-            candidates = self._retrieve_legacy_candidates(
-                engagement_id,
-                query_terms=query_terms,
-                redact=redact,
-            )
+        # embedders without an index. Merge them during a gradual migration so
+        # adding a newly indexed source never hides an older source.
+        legacy_candidates = self._retrieve_legacy_candidates(
+            engagement_id,
+            query_terms=query_terms,
+            redact=redact,
+        )
+        known_chunks = {item.citation.chunk_id for item in candidates}
+        candidates.extend(
+            item
+            for item in legacy_candidates
+            if item.citation.chunk_id not in known_chunks
+        )
         candidates.sort(key=lambda item: (-item.score, item.ordinal))
         selected: list[_RetrievedChunk] = []
         tokens = 0
         for candidate in candidates:
-            if not vector_retrieval and all_terms and candidate.score <= 0:
+            if all_terms and candidate.score <= 0:
                 continue
             candidate_tokens = estimate_tokens(candidate.text, message_count=1)
             if len(selected) >= 8 or tokens + candidate_tokens > token_budget:

@@ -56,6 +56,7 @@ import type {
   HarnessSessionActivity,
   HarnessSessionSummary,
   KnowledgeIngestRequest,
+  KnowledgeIndexStatus,
   KnowledgeSource,
   MissionCreateRequest,
   McpServerProfile,
@@ -452,6 +453,15 @@ interface WireKnowledgeSource extends WireEntity {
   citation?: string | null;
   document_count?: number;
   metadata?: JsonObject;
+}
+
+interface WireKnowledgeIndexStatus extends JsonObject {
+  backend: string;
+  state: KnowledgeIndexStatus["state"];
+  model: string;
+  downloaded_bytes: number;
+  total_bytes: number;
+  detail?: string | null;
 }
 
 interface WireChatCitation extends JsonObject {
@@ -4354,6 +4364,19 @@ export class ApiClient {
       signal,
       engagementId,
     ).then((items) => page(items.map(mapKnowledgeSource)));
+  }
+
+  getKnowledgeIndexStatus(signal?: AbortSignal): Promise<KnowledgeIndexStatus> {
+    return this.request<WireKnowledgeIndexStatus>("knowledge/index-status", {
+      signal,
+    }).then((value) => ({
+      backend: value.backend,
+      state: value.state,
+      model: value.model,
+      downloadedBytes: numberField(value.downloaded_bytes),
+      totalBytes: numberField(value.total_bytes),
+      detail: typeof value.detail === "string" ? value.detail : undefined,
+    }));
   }
 
   ingestKnowledgeSource(

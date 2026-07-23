@@ -190,7 +190,11 @@ artifact with the reindex action.
 
 Chroma's local `all-MiniLM-L6-v2` ONNX embedding model is used by default. The first
 index or query downloads and caches approximately 80 MiB; subsequent embedding and
-retrieval stay local. Chat asks the selected model for up to four bounded search
+retrieval stay local. Before that first download, the Knowledge page explains the
+one-time local setup. While it runs, the page reports downloaded bytes, total size,
+percentage, verification/preparation, and an actionable retry state if preparation
+fails. Core does not trigger this download during startup, so progress is always
+observable from the operator workspace. Chat asks the selected model for up to four bounded search
 queries, retrieves vector candidates only from the active Project, adds a small
 exact-term reranking bonus for security identifiers, and injects no more than eight
 cited chunks within the knowledge token budget. Cloud-provider privacy gates and

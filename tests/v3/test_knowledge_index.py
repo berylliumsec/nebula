@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
+from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
@@ -71,6 +72,10 @@ def test_chroma_index_persists_semantic_chunks_and_isolates_engagements(tmp_path
             knowledge_index=index,
         )
     )
+    status = client.get("/api/v1/knowledge/index-status", headers=_auth())
+    assert status.status_code == 200
+    assert status.json()["state"] == "ready"
+    assert status.json()["model"] == SecurityEmbeddingFunction.name()
 
     def upload(engagement_id: str, filename: str, content: bytes) -> dict[str, Any]:
         response = client.post(
@@ -158,3 +163,34 @@ def test_startup_migrates_inline_chunks_to_chroma(tmp_path):
     assert migrated.metadata["index_backend"] == "chromadb"
     assert "chunks" not in migrated.metadata
     assert index.query(engagement.id, ["SQL storage"], limit=8)[0].id == "legacy-chunk"
+
+
+def test_default_chroma_index_reports_first_use_download_before_ingestion(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(ONNXMiniLM_L6_V2, "DOWNLOAD_PATH", tmp_path / "model-cache")
+    index = ChromaKnowledgeIndex(tmp_path / "knowledge-index")
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=ArtifactStore(tmp_path / "artifacts"),
+            auth_token="test-token",
+            knowledge_index=index,
+        )
+    )
+
+    assert index.status.model == "all-MiniLM-L6-v2"
+    assert index.status.state == "required"
+    assert index.status.downloaded_bytes == 0
+    assert index.status.total_bytes == 83_178_821
+    response = client.get("/api/v1/knowledge/index-status", headers=_auth())
+    assert response.status_code == 200
+    assert response.json() == {
+        "backend": "chromadb",
+        "state": "required",
+        "model": "all-MiniLM-L6-v2",
+        "downloaded_bytes": 0,
+        "total_bytes": 83_178_821,
+        "detail": None,
+    }

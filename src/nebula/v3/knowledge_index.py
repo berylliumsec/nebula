@@ -9,22 +9,158 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from threading import Lock
+from typing import Any, Literal, Protocol, cast
 
 import chromadb
+from chromadb.api.types import DefaultEmbeddingFunction, Documents, Embeddings
 from chromadb.config import Settings
+from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
-from .domain import KnowledgeSource
+from .domain import KnowledgeSource, NebulaModel
 
 
 COLLECTION_NAME = "nebula-knowledge-v1"
 INDEX_BACKEND = "chromadb"
 INDEX_VERSION = "nebula.chroma.v1"
 UPSERT_BATCH_SIZE = 500
+DEFAULT_MODEL_BYTES = 83_178_821
+_MODEL_FILES = (
+    "config.json",
+    "model.onnx",
+    "special_tokens_map.json",
+    "tokenizer_config.json",
+    "tokenizer.json",
+    "vocab.txt",
+)
 
 
 class KnowledgeIndexError(RuntimeError):
     """A persistent knowledge-index operation could not be completed."""
+
+
+class KnowledgeIndexStatus(NebulaModel):
+    """Operator-safe state for local embedding-model preparation."""
+
+    backend: str = INDEX_BACKEND
+    state: Literal["disabled", "required", "downloading", "preparing", "ready", "error"]
+    model: str = ONNXMiniLM_L6_V2.MODEL_NAME
+    downloaded_bytes: int = 0
+    total_bytes: int = DEFAULT_MODEL_BYTES
+    detail: str | None = None
+
+
+class _ModelStatusTracker:
+    def __init__(self, *, ready: bool, model: str = ONNXMiniLM_L6_V2.MODEL_NAME):
+        self._lock = Lock()
+        self._status = KnowledgeIndexStatus(
+            state="ready" if ready else "required",
+            model=model,
+            downloaded_bytes=DEFAULT_MODEL_BYTES if ready else 0,
+        )
+
+    def snapshot(self) -> KnowledgeIndexStatus:
+        with self._lock:
+            return self._status.model_copy(deep=True)
+
+    def downloading(self, *, downloaded: int, total: int) -> None:
+        with self._lock:
+            bounded_total = max(1, total or DEFAULT_MODEL_BYTES)
+            self._status = self._status.model_copy(
+                update={
+                    "state": "downloading",
+                    "downloaded_bytes": min(max(0, downloaded), bounded_total),
+                    "total_bytes": bounded_total,
+                    "detail": None,
+                }
+            )
+
+    def preparing(self) -> None:
+        with self._lock:
+            self._status = self._status.model_copy(
+                update={
+                    "state": "preparing",
+                    "downloaded_bytes": self._status.total_bytes,
+                    "detail": None,
+                }
+            )
+
+    def ready(self) -> None:
+        with self._lock:
+            self._status = self._status.model_copy(
+                update={
+                    "state": "ready",
+                    "downloaded_bytes": self._status.total_bytes,
+                    "detail": None,
+                }
+            )
+
+    def failed(self) -> None:
+        with self._lock:
+            self._status = self._status.model_copy(
+                update={
+                    "state": "error",
+                    "detail": "The local embedding model could not be prepared.",
+                }
+            )
+
+
+class _DownloadProgress:
+    def __init__(self, tracker: _ModelStatusTracker, *, total: int):
+        self.tracker = tracker
+        self.total = total or DEFAULT_MODEL_BYTES
+        self.downloaded = 0
+
+    def __enter__(self) -> "_DownloadProgress":
+        self.tracker.downloading(downloaded=0, total=self.total)
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.tracker.preparing()
+
+    def update(self, size: int) -> None:
+        self.downloaded += size
+        self.tracker.downloading(downloaded=self.downloaded, total=self.total)
+
+
+class _TrackedDefaultEmbeddingFunction(DefaultEmbeddingFunction):
+    """Chroma's default local model with observable first-use progress."""
+
+    def __init__(self, tracker: _ModelStatusTracker) -> None:
+        self._tracker = tracker
+        self._model = ONNXMiniLM_L6_V2()
+        self._model.tqdm = self._progress
+
+    def _progress(self, **options: Any) -> _DownloadProgress:
+        total = options.get("total")
+        return _DownloadProgress(
+            self._tracker,
+            total=total if isinstance(total, int) else DEFAULT_MODEL_BYTES,
+        )
+
+    def __call__(self, input: Documents) -> Embeddings:
+        if not _default_model_ready() and _default_model_archive().is_file():
+            self._tracker.preparing()
+        try:
+            embeddings = self._model(input)
+        except Exception:
+            self._tracker.failed()
+            raise
+        self._tracker.ready()
+        return embeddings
+
+
+def _default_model_directory() -> Path:
+    return Path(ONNXMiniLM_L6_V2.DOWNLOAD_PATH) / ONNXMiniLM_L6_V2.EXTRACTED_FOLDER_NAME
+
+
+def _default_model_archive() -> Path:
+    return Path(ONNXMiniLM_L6_V2.DOWNLOAD_PATH) / ONNXMiniLM_L6_V2.ARCHIVE_FILENAME
+
+
+def _default_model_ready() -> bool:
+    directory = _default_model_directory()
+    return all((directory / filename).is_file() for filename in _MODEL_FILES)
 
 
 @dataclass(frozen=True)
@@ -45,6 +181,9 @@ class KnowledgeIndex(Protocol):
 
     @property
     def descriptor(self) -> dict[str, str]: ...
+
+    @property
+    def status(self) -> KnowledgeIndexStatus: ...
 
     def upsert_source(
         self, source: KnowledgeSource, chunks: Sequence[dict[str, Any]]
@@ -73,6 +212,12 @@ class ChromaKnowledgeIndex:
         self.path = Path(path).expanduser().resolve()
         self.path.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path.chmod(0o700)
+        if embedding_function is None:
+            self._model_status = _ModelStatusTracker(ready=_default_model_ready())
+            embedding_function = _TrackedDefaultEmbeddingFunction(self._model_status)
+        else:
+            name = getattr(embedding_function, "name", lambda: "custom")()
+            self._model_status = _ModelStatusTracker(ready=True, model=str(name))
         try:
             self._client = chromadb.PersistentClient(
                 path=self.path,
@@ -82,8 +227,7 @@ class ChromaKnowledgeIndex:
                 "name": COLLECTION_NAME,
                 "metadata": {"hnsw:space": "cosine", "index_version": INDEX_VERSION},
             }
-            if embedding_function is not None:
-                options["embedding_function"] = embedding_function
+            options["embedding_function"] = embedding_function
             self._collection = self._client.get_or_create_collection(**options)
         except Exception as exc:
             raise KnowledgeIndexError("could not initialize the Chroma index") from exc
@@ -95,6 +239,10 @@ class ChromaKnowledgeIndex:
             "index_version": INDEX_VERSION,
             "collection": COLLECTION_NAME,
         }
+
+    @property
+    def status(self) -> KnowledgeIndexStatus:
+        return self._model_status.snapshot()
 
     def upsert_source(
         self, source: KnowledgeSource, chunks: Sequence[dict[str, Any]]
@@ -229,4 +377,5 @@ __all__ = [
     "IndexedKnowledgeChunk",
     "KnowledgeIndex",
     "KnowledgeIndexError",
+    "KnowledgeIndexStatus",
 ]
