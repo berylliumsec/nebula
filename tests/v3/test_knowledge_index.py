@@ -113,9 +113,15 @@ def test_chroma_index_persists_semantic_chunks_and_isolates_engagements(tmp_path
     assert "hardware credential" in matches[0].text
     assert "CROSS_ENGAGEMENT_SECRET" not in [match.text for match in matches]
 
-    context = ChatService(store, knowledge_index=reopened).harness_knowledge_context(
-        engagement.id, "How does a user log in?"
+    chat = ChatService(store, knowledge_index=reopened)
+    search = chat.harness_knowledge_search(
+        engagement.id,
+        "How does a user log in?",
+        allow_local_only=True,
     )
+    assert "hardware credential" in search.matches[0].text
+    assert search.matches[0].citation.source_id == source["id"]
+    context = chat.harness_knowledge_context(engagement.id, "How does a user log in?")
     assert "hardware credential" in context.text
     assert [citation.source_id for citation in context.citations] == [source["id"]]
 
