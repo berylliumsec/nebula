@@ -10,10 +10,13 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception
 
 import hashlib
+import html
 import ipaddress
 import json
+import os
 import posixpath
 import re
+import shutil
 import socket
 import zipfile
 from collections.abc import Iterator
@@ -27,6 +30,13 @@ from urllib.parse import SplitResult, unquote, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import httpx
+from playwright.sync_api import (
+    Browser,
+    Error as PlaywrightError,
+    Playwright,
+    Route,
+    sync_playwright,
+)
 from pypdf import PdfReader
 
 from .artifacts import ArtifactIntegrityError, ArtifactStore
@@ -42,6 +52,9 @@ CHUNK_OVERLAP_CHARACTERS = 180
 INGESTION_VERSION = "nebula.knowledge.v1"
 MAX_SOURCE_URL_LENGTH = 2_048
 MAX_SOURCE_REDIRECTS = 5
+MAX_RENDER_RESOURCE_BYTES = 8 * 1024 * 1024
+MAX_RENDER_TOTAL_BYTES = 40 * 1024 * 1024
+RENDER_SETTLE_MILLISECONDS = 1_500
 
 
 class KnowledgeIngestionError(ValueError):
@@ -68,6 +81,10 @@ class SourceFetchError(KnowledgeIngestionError):
     """The remote source could not be fetched safely."""
 
 
+class BrowserRuntimeUnavailableError(SourceFetchError):
+    """No supported local Chromium runtime can render a web source."""
+
+
 @dataclass(frozen=True)
 class ExtractedSection:
     text: str
@@ -86,6 +103,14 @@ class ExtractedDocument:
 class FetchedUrlDocument:
     data: bytes
     filename: str
+    media_type: str | None
+    source_url: str
+    capture_method: str = "http"
+
+
+@dataclass(frozen=True)
+class _FetchedUrlResource:
+    data: bytes
     media_type: str | None
     source_url: str
 
@@ -346,7 +371,34 @@ def ingest_document(
 
 
 def fetch_url_document(url: str) -> FetchedUrlDocument:
-    """Fetch one bounded public HTTP(S) document with redirect revalidation."""
+    """Capture one bounded public URL, rendering HTML in an isolated browser."""
+
+    resource = _fetch_url_resource(url, max_bytes=MAX_DOCUMENT_BYTES)
+    filename = _url_filename(
+        _validate_source_url(resource.source_url), resource.media_type
+    )
+    if _is_html_media_type(resource.media_type, filename):
+        rendered = _render_html_snapshot(
+            resource.data,
+            base_url=resource.source_url,
+        )
+        return FetchedUrlDocument(
+            data=rendered,
+            filename=filename,
+            media_type="text/html; charset=utf-8",
+            source_url=resource.source_url,
+            capture_method="playwright",
+        )
+    return FetchedUrlDocument(
+        data=resource.data,
+        filename=filename,
+        media_type=resource.media_type,
+        source_url=resource.source_url,
+    )
+
+
+def _fetch_url_resource(url: str, *, max_bytes: int) -> _FetchedUrlResource:
+    """Fetch bytes through a DNS-pinned, redirect-revalidated public route."""
 
     current = _validate_source_url(url)
     headers = {
@@ -413,23 +465,22 @@ def fetch_url_document(url: str) -> FetchedUrlDocument:
                             raise SourceFetchError(
                                 "source URL returned an invalid Content-Length"
                             )
-                        if declared_size > MAX_DOCUMENT_BYTES:
+                        if declared_size > max_bytes:
                             raise DocumentTooLargeError(
-                                f"document exceeds the "
-                                f"{MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB limit"
+                                f"remote resource exceeds the "
+                                f"{max_bytes // (1024 * 1024)} MiB limit"
                             )
                     content = bytearray()
                     for chunk in response.iter_bytes():
                         content.extend(chunk)
-                        if len(content) > MAX_DOCUMENT_BYTES:
+                        if len(content) > max_bytes:
                             raise DocumentTooLargeError(
-                                f"document exceeds the "
-                                f"{MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB limit"
+                                f"remote resource exceeds the "
+                                f"{max_bytes // (1024 * 1024)} MiB limit"
                             )
                     media_type = response.headers.get("content-type")
-                    return FetchedUrlDocument(
+                    return _FetchedUrlResource(
                         data=bytes(content),
-                        filename=_url_filename(current, media_type),
                         media_type=media_type,
                         source_url=_display_source_url(current),
                     )
@@ -440,6 +491,172 @@ def fetch_url_document(url: str) -> FetchedUrlDocument:
     except httpx.HTTPError as exc:
         raise SourceFetchError("source URL could not be fetched") from exc
     raise SourceFetchError("source URL could not be fetched")
+
+
+def _is_html_media_type(media_type: str | None, filename: str) -> bool:
+    normalized = (media_type or "").partition(";")[0].strip().casefold()
+    return normalized in {"text/html", "application/xhtml+xml"} or Path(
+        filename
+    ).suffix.casefold() in {".html", ".htm"}
+
+
+def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
+    """Run page scripts, then persist only a passive visible-text HTML snapshot."""
+
+    try:
+        markup = document.decode("utf-8")
+    except UnicodeDecodeError:
+        markup = document.decode("utf-8", errors="replace")
+    safe_base = html.escape(base_url, quote=True)
+    base_element = f'<base data-nebula-source href="{safe_base}">'
+    head = re.search(r"<head(?:\s[^>]*)?>", markup, flags=re.IGNORECASE)
+    if head is None:
+        markup = f"<head>{base_element}</head>{markup}"
+    else:
+        markup = f"{markup[: head.end()]}{base_element}{markup[head.end() :]}"
+
+    blocked_error: list[KnowledgeIngestionError] = []
+    transferred_bytes = 0
+
+    def route_request(route: Route) -> None:
+        nonlocal transferred_bytes
+        request = route.request
+        if request.method != "GET":
+            route.abort("blockedbyclient")
+            return
+        if request.resource_type in {
+            "document",
+            "font",
+            "image",
+            "media",
+            "websocket",
+            "worker",
+        }:
+            route.abort("blockedbyclient")
+            return
+        try:
+            resource = _fetch_url_resource(
+                request.url,
+                max_bytes=MAX_RENDER_RESOURCE_BYTES,
+            )
+            transferred_bytes += len(resource.data)
+            if transferred_bytes > MAX_RENDER_TOTAL_BYTES:
+                raise DocumentTooLargeError(
+                    "rendered page resources exceed the 40 MiB limit"
+                )
+            route.fulfill(
+                status=200,
+                body=resource.data,
+                content_type=resource.media_type or "application/octet-stream",
+            )
+        except KnowledgeIngestionError as exc:
+            blocked_error.append(exc)
+            route.abort("blockedbyclient")
+
+    try:
+        with sync_playwright() as playwright:
+            browser = _launch_chromium(playwright)
+            try:
+                context = browser.new_context(
+                    accept_downloads=False,
+                    java_script_enabled=True,
+                    service_workers="block",
+                    user_agent="Nebula/3 knowledge-source-renderer",
+                    viewport={"width": 1280, "height": 900},
+                )
+                try:
+                    context.route("**/*", route_request)
+                    context.add_init_script(
+                        """
+                        const disableConstructor = (name) => {
+                          if (name in globalThis) {
+                            Object.defineProperty(globalThis, name, {
+                              configurable: false,
+                              value: class DisabledNetworkPrimitive {
+                                constructor() {
+                                  throw new Error(`${name} is disabled`);
+                                }
+                              }
+                            });
+                          }
+                        };
+                        for (const name of [
+                          "EventSource",
+                          "RTCPeerConnection",
+                          "WebSocket",
+                          "WebTransport",
+                          "webkitRTCPeerConnection"
+                        ]) {
+                          disableConstructor(name);
+                        }
+                        Object.defineProperty(globalThis, "open", {
+                          configurable: false,
+                          value: () => null
+                        });
+                        """
+                    )
+                    page = context.new_page()
+                    page.set_default_timeout(30_000)
+                    page.set_content(markup, wait_until="domcontentloaded")
+                    page.wait_for_timeout(RENDER_SETTLE_MILLISECONDS)
+                    if blocked_error:
+                        raise blocked_error[0]
+                    title = page.title().strip()
+                    visible_text = page.locator("body").inner_text().strip()
+                finally:
+                    context.close()
+            finally:
+                browser.close()
+    except KnowledgeIngestionError:
+        raise
+    except PlaywrightError as exc:
+        raise SourceFetchError("source page could not be rendered") from exc
+
+    if not visible_text:
+        raise InvalidDocumentError("rendered page contains no visible text")
+    if len(visible_text) > MAX_EXTRACTED_CHARACTERS:
+        raise DocumentTooLargeError("rendered page text exceeds the 4 MiB index limit")
+    snapshot = (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        f"<title>{html.escape(title)}</title></head><body><main><pre>"
+        f"{html.escape(visible_text)}</pre></main></body></html>"
+    ).encode("utf-8")
+    if len(snapshot) > MAX_DOCUMENT_BYTES:
+        raise DocumentTooLargeError("rendered page exceeds the 20 MiB limit")
+    return snapshot
+
+
+def _launch_chromium(playwright: Playwright) -> Browser:
+    """Launch managed Playwright Chromium or an explicitly supported system build."""
+
+    configured = os.getenv("NEBULA_PLAYWRIGHT_EXECUTABLE", "").strip()
+    candidates: list[str] = []
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute() or not candidate.is_file():
+            raise BrowserRuntimeUnavailableError(
+                "NEBULA_PLAYWRIGHT_EXECUTABLE must name an absolute browser executable"
+            )
+        candidates.append(str(candidate))
+    try:
+        return playwright.chromium.launch(headless=True)
+    except PlaywrightError as default_error:
+        for command in ("google-chrome", "chromium", "chromium-browser"):
+            executable = shutil.which(command)
+            if executable and executable not in candidates:
+                candidates.append(executable)
+        for executable in candidates:
+            try:
+                return playwright.chromium.launch(
+                    headless=True,
+                    executable_path=executable,
+                )
+            except PlaywrightError:
+                continue
+        raise BrowserRuntimeUnavailableError(
+            "URL page rendering requires Chromium; install Playwright Chromium "
+            "or a system Chrome/Chromium browser"
+        ) from default_error
 
 
 def reindex_document(
@@ -1089,6 +1306,7 @@ def _split_text(text: str) -> list[str]:
 
 
 __all__ = [
+    "BrowserRuntimeUnavailableError",
     "CHUNK_CHARACTERS",
     "DocumentTooLargeError",
     "INGESTION_VERSION",

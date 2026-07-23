@@ -47,6 +47,7 @@ reportlab = ">=5,<6"
 pillow = ">=11,<13"
 keyring = ">=25,<27"
 chromadb = ">=1.5.9,<2"
+playwright = ">=1.58,<2"
 
 [tool.poetry.extras]
 # Flash Attention is intentionally not installed by the core package.  Local

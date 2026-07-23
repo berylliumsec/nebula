@@ -89,11 +89,12 @@ Install Python 3.11–3.13, Poetry 2.1.3, Node.js 20 with npm, the stable Rust t
 git clone https://github.com/BerylliumSec/nebula.git
 cd nebula
 poetry install --with dev
+poetry run playwright install chromium
 npm --prefix ui ci
 npm --prefix ui run tauri -- dev
 ```
 
-The final command builds the local Nebula Core sidecar, starts the UI development server, and opens the native desktop directly from the checkout.
+The Playwright browser renders JavaScript-driven URL knowledge sources. If Chrome or Chromium is already installed, Nebula can use that system browser instead. The final command builds the local Nebula Core sidecar, starts the UI development server, and opens the native desktop directly from the checkout.
 
 <details>
 <summary>Browser-only development and pre-merge checks</summary>

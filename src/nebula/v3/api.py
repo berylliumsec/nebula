@@ -204,6 +204,7 @@ from .execution_ai import (
 )
 from .knowledge import (
     MAX_DOCUMENT_BYTES,
+    BrowserRuntimeUnavailableError,
     DocumentTooLargeError,
     FetchedUrlDocument,
     InvalidDocumentError,
@@ -5457,6 +5458,7 @@ def create_app(
                 artifact_source="knowledge-url",
                 citation=fetched.source_url,
                 source_metadata={
+                    "capture_method": fetched.capture_method,
                     "origin": "url",
                     "source_url": fetched.source_url,
                     "fetched_at": utc_now().isoformat(),
@@ -5469,6 +5471,8 @@ def create_app(
             raise HTTPException(status_code=415, detail=str(exc)) from exc
         except (InvalidDocumentError, InvalidSourceUrlError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except BrowserRuntimeUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except SourceFetchError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except KnowledgeIndexError as exc:

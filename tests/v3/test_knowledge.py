@@ -12,6 +12,7 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import Artifact, Engagement, KnowledgeSource
 from nebula.v3.knowledge import (
+    BrowserRuntimeUnavailableError,
     FetchedUrlDocument,
     InvalidSourceUrlError,
     SourceFetchError,
@@ -242,6 +243,7 @@ def test_url_source_is_stored_as_an_immutable_query_free_artifact(tmp_path):
     assert source["name"] == "guide.html"
     assert source["source_type"] == "html"
     assert source["citation"] == "https://docs.example.com/guide.html"
+    assert source["metadata"]["capture_method"] == "http"
     assert source["metadata"]["origin"] == "url"
     assert source["metadata"]["source_url"] == "https://docs.example.com/guide.html"
     assert "token" not in str(source["metadata"])
@@ -294,6 +296,7 @@ def test_url_source_validates_engagement_before_fetching(tmp_path):
     ("failure", "status_code"),
     [
         (InvalidSourceUrlError("source URL must be public"), 422),
+        (BrowserRuntimeUnavailableError("Chromium is unavailable"), 503),
         (SourceFetchError("source URL timed out"), 502),
     ],
 )
@@ -331,6 +334,12 @@ def test_url_source_returns_bounded_fetch_errors(tmp_path, failure, status_code)
 def test_url_fetch_revalidates_public_redirects_and_strips_query_metadata(
     monkeypatch,
 ):
+    rendered: list[tuple[bytes, str]] = []
+
+    def render(document: bytes, *, base_url: str) -> bytes:
+        rendered.append((document, base_url))
+        return b"<html><body>Rendered guide</body></html>"
+
     class Peer:
         @staticmethod
         def get_extra_info(name: str):
@@ -381,6 +390,7 @@ def test_url_fetch_revalidates_public_redirects_and_strips_query_metadata(
             return Stream()
 
     monkeypatch.setattr(knowledge_module.httpx, "Client", Client)
+    monkeypatch.setattr(knowledge_module, "_render_html_snapshot", render)
     monkeypatch.setattr(
         knowledge_module.socket,
         "getaddrinfo",
@@ -401,9 +411,51 @@ def test_url_fetch_revalidates_public_redirects_and_strips_query_metadata(
 
     assert fetched.filename == "guide.html"
     assert fetched.media_type == "text/html; charset=utf-8"
-    assert fetched.data == b"<main>Bounded public guide</main>"
+    assert fetched.data == b"<html><body>Rendered guide</body></html>"
     assert fetched.source_url == "https://example.com/guide.html"
+    assert fetched.capture_method == "playwright"
+    assert rendered == [
+        (
+            b"<main>Bounded public guide</main>",
+            "https://example.com/guide.html",
+        )
+    ]
     assert responses == []
+
+
+def test_playwright_snapshot_captures_dynamic_text_through_pinned_routes(
+    monkeypatch,
+):
+    requested: list[str] = []
+
+    def fetch_resource(url: str, *, max_bytes: int):
+        requested.append(url)
+        assert max_bytes == knowledge_module.MAX_RENDER_RESOURCE_BYTES
+        return knowledge_module._FetchedUrlResource(
+            data=b'{"message":"Rendered by JavaScript"}',
+            media_type="application/json",
+            source_url=url,
+        )
+
+    monkeypatch.setattr(knowledge_module, "_fetch_url_resource", fetch_resource)
+    snapshot = knowledge_module._render_html_snapshot(
+        b"""
+        <html><head><title>Dynamic guide</title></head>
+        <body><main id="content">Loading</main>
+        <script>
+          fetch("/content.json").then(response => response.json()).then(data => {
+            document.querySelector("#content").textContent = data.message;
+          });
+        </script></body></html>
+        """,
+        base_url="https://docs.example.com/guide?ephemeral=secret",
+    )
+
+    assert requested == ["https://docs.example.com/content.json"]
+    assert b"Rendered by JavaScript" in snapshot
+    assert b"Loading" not in snapshot
+    assert b"ephemeral" not in snapshot
+    assert b"<script" not in snapshot
 
 
 @pytest.mark.parametrize(
