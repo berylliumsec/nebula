@@ -108,7 +108,8 @@ export function KnowledgePage() {
       while (polling && api) {
         try {
           setIndexStatus(await api.getKnowledgeIndexStatus());
-        } catch {
+        } catch (pollError) {
+          void logCaughtDiagnostic("interface.knowledge_page.caught_failure_06", "A knowledge index status poll failed during an active operation.", pollError, "knowledge_page");
           // The operation itself owns the operator-visible error.
         }
         await new Promise((resolve) => window.setTimeout(resolve, 250));
@@ -123,7 +124,8 @@ export function KnowledgePage() {
       if (api) {
         try {
           setIndexStatus(await api.getKnowledgeIndexStatus());
-        } catch {
+        } catch (refreshError) {
+          void logCaughtDiagnostic("interface.knowledge_page.caught_failure_07", "The final knowledge index status refresh failed.", refreshError, "knowledge_page");
           // Preserve the operation result when a final status refresh fails.
         }
       }
