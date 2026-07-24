@@ -123,6 +123,9 @@ jobs:
           poetry install --with dev --no-interaction
           npm --prefix ui ci
           python scripts/nebula3_version.py check --expected "$NEBULA_VERSION"
+          poetry run python -m scripts.stage_playwright_runtime \
+            ui/src-tauri/resources/playwright-browsers \
+            --target "${{ matrix.target }}"
       - name: Run Linux release tests
         env:
           NEBULA_UPDATER_PUBLIC_KEY: ${{ secrets.NEBULA_UPDATER_PUBLIC_KEY }}
@@ -273,6 +276,9 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y xauth xvfb "./release-assets/Nebula-$VERSION-linux-x86_64.deb"
           xvfb-run -a /usr/bin/nebula --self-test
+          browser="$(find /usr -path '*/playwright-browsers/*' -type f \( -name headless_shell -o -name chrome-headless-shell \) -perm /111 -print -quit)"
+          test -n "$browser"
+          "$browser" --headless --no-sandbox --disable-gpu --dump-dom about:blank | grep -F '<html'
           /usr/bin/nebula-core doctor --data-dir /tmp/nebula-clean-doctor --json > /tmp/doctor.json
           grep -F '"mode": "analysis-only"' /tmp/doctor.json
           grep -F '"host_fallback": false' /tmp/doctor.json

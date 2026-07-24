@@ -94,7 +94,12 @@ npm --prefix ui ci
 npm --prefix ui run dev:desktop
 ```
 
-The Playwright browser renders JavaScript-driven URL knowledge sources. If Chrome or Chromium is already installed, Nebula can use that system browser instead. The final command builds the local Nebula Core sidecar, starts the UI development server, and opens the native desktop directly from the checkout.
+The Playwright browser renders JavaScript-driven URL knowledge sources. Signed
+Linux installers include the locked Chromium headless runtime used by the
+packaged desktop. Source checkouts require the explicit installation step above;
+Nebula can also use an existing system Chrome or Chromium browser. The final
+command builds the local Nebula Core sidecar, starts the UI development server,
+and opens the native desktop directly from the checkout.
 
 <details>
 <summary>Browser-only development and pre-merge checks</summary>

@@ -203,7 +203,10 @@ public-IP-pinned network boundary; private addresses, unsafe redirects, download
 service workers, WebSockets, images, media, and fonts are blocked. Core stores a
 passive visible-text HTML snapshot rather than executable page markup. Non-HTML
 document URLs retain their original bounded bytes. Rendering uses Playwright's
-installed Chromium or a system Chrome/Chromium browser.
+installed Chromium or a system Chrome/Chromium browser. Native Linux installers
+carry the Playwright-version-matched Chromium headless shell as an audited
+application resource, so URL ingestion does not require a separate browser
+installation.
 
 Chroma's local `all-MiniLM-L6-v2` ONNX embedding model is used by default. The first
 index or query downloads and caches approximately 80 MiB; subsequent embedding and
