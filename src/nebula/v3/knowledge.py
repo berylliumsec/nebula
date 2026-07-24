@@ -505,7 +505,7 @@ def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
 
     try:
         markup = document.decode("utf-8")
-    except UnicodeDecodeError:
+    except UnicodeDecodeError:  # diagnostic-expected: bounded replacement
         markup = document.decode("utf-8", errors="replace")
     safe_base = html.escape(base_url, quote=True)
     base_element = f'<base data-nebula-source href="{safe_base}">'
@@ -549,7 +549,7 @@ def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
                 body=resource.data,
                 content_type=resource.media_type or "application/octet-stream",
             )
-        except KnowledgeIngestionError as exc:
+        except KnowledgeIngestionError as exc:  # diagnostic-expected: deferred re-raise
             blocked_error.append(exc)
             route.abort("blockedbyclient")
 
@@ -651,7 +651,7 @@ def _launch_chromium(playwright: Playwright) -> Browser:
                     headless=True,
                     executable_path=executable,
                 )
-            except PlaywrightError:
+            except PlaywrightError:  # diagnostic-expected: try another Chromium
                 continue
         raise BrowserRuntimeUnavailableError(
             "URL page rendering requires Chromium; install Playwright Chromium "
