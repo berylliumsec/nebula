@@ -11,6 +11,7 @@ from .diagnostics import record_caught_exception
 
 import hashlib
 import html
+import importlib
 import ipaddress
 import json
 import os
@@ -30,13 +31,6 @@ from urllib.parse import SplitResult, unquote, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import httpx
-from playwright.sync_api import (
-    Browser,
-    Error as PlaywrightError,
-    Playwright,
-    Route,
-    sync_playwright,
-)
 from pypdf import PdfReader
 
 from .artifacts import ArtifactIntegrityError, ArtifactStore
@@ -503,6 +497,7 @@ def _is_html_media_type(media_type: str | None, filename: str) -> bool:
 def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
     """Run page scripts, then persist only a passive visible-text HTML snapshot."""
 
+    sync_playwright, playwright_error = _load_playwright_runtime()
     try:
         markup = document.decode("utf-8")
     except UnicodeDecodeError:  # diagnostic-expected: bounded replacement
@@ -518,7 +513,7 @@ def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
     blocked_error: list[KnowledgeIngestionError] = []
     transferred_bytes = 0
 
-    def route_request(route: Route) -> None:
+    def route_request(route: Any) -> None:
         nonlocal transferred_bytes
         request = route.request
         if request.method != "GET":
@@ -555,7 +550,7 @@ def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
 
     try:
         with sync_playwright() as playwright:
-            browser = _launch_chromium(playwright)
+            browser = _launch_chromium(playwright, playwright_error)
             try:
                 context = browser.new_context(
                     accept_downloads=False,
@@ -609,7 +604,7 @@ def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
                 browser.close()
     except KnowledgeIngestionError:
         raise
-    except PlaywrightError as exc:
+    except playwright_error as exc:
         raise SourceFetchError("source page could not be rendered") from exc
 
     if not visible_text:
@@ -626,7 +621,24 @@ def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
     return snapshot
 
 
-def _launch_chromium(playwright: Playwright) -> Browser:
+def _load_playwright_runtime() -> tuple[Any, type[Exception]]:
+    """Load the optional renderer without making all of Core depend on its import."""
+
+    try:
+        runtime = importlib.import_module("playwright.sync_api")
+    except ModuleNotFoundError as exc:
+        if exc.name and exc.name.split(".", 1)[0] == "playwright":
+            raise BrowserRuntimeUnavailableError(
+                "URL page rendering is unavailable because Playwright is not installed"
+            ) from exc
+        raise
+    return runtime.sync_playwright, runtime.Error
+
+
+def _launch_chromium(
+    playwright: Any,
+    playwright_error: type[Exception],
+) -> Any:
     """Launch managed Playwright Chromium or an explicitly supported system build."""
 
     configured = os.getenv("NEBULA_PLAYWRIGHT_EXECUTABLE", "").strip()
@@ -640,7 +652,7 @@ def _launch_chromium(playwright: Playwright) -> Browser:
         candidates.append(str(candidate))
     try:
         return playwright.chromium.launch(headless=True)
-    except PlaywrightError as default_error:
+    except playwright_error as default_error:
         for command in ("google-chrome", "chromium", "chromium-browser"):
             executable = shutil.which(command)
             if executable and executable not in candidates:
@@ -651,7 +663,7 @@ def _launch_chromium(playwright: Playwright) -> Browser:
                     headless=True,
                     executable_path=executable,
                 )
-            except PlaywrightError:  # diagnostic-expected: try another Chromium
+            except playwright_error:  # diagnostic-expected: try another Chromium
                 continue
         raise BrowserRuntimeUnavailableError(
             "URL page rendering requires Chromium; install Playwright Chromium "

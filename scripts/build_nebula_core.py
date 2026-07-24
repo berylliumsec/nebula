@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import os
 import shutil
 import subprocess
@@ -21,6 +22,28 @@ if __package__ in {None, ""}:
 from scripts.generate_third_party_notices import generate_notices
 from scripts.nebula3_version import check_versions
 from scripts.package_audit import FORBIDDEN_MODULES, inspect_pyinstaller_binary
+
+
+REQUIRED_RUNTIME_IMPORTS = ("playwright.sync_api",)
+
+
+def require_runtime_imports() -> None:
+    """Fail before freezing when the Poetry environment is out of date."""
+
+    missing: list[str] = []
+    for module in REQUIRED_RUNTIME_IMPORTS:
+        try:
+            importlib.import_module(module)
+        except ModuleNotFoundError as exc:
+            if exc.name and (exc.name == module or module.startswith(f"{exc.name}.")):
+                missing.append(module)
+                continue
+            raise
+    if missing:
+        raise RuntimeError(
+            "required Core dependencies are not installed: "
+            f"{', '.join(missing)}; run `poetry install --with dev` and rebuild"
+        )
 
 
 def macos_codesign_arguments(
@@ -112,6 +135,7 @@ def stage_runtime_payload(root: Path) -> tuple[Path, Path]:
 
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
+    require_runtime_imports()
     version = check_versions(root)
     migrations, frontend = stage_runtime_payload(root)
     license_file = root / "LICENSE.md"
