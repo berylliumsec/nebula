@@ -41,6 +41,7 @@ the installation is incomplete.
 
 ```bash
 poetry install --with dev
+poetry run playwright install chromium
 poetry run nebula-core doctor
 poetry run nebula-core migrate
 poetry run nebula-core serve --host 127.0.0.1 --port 8765
@@ -187,6 +188,14 @@ semantic index in ChromaDB under `<data-dir>/knowledge-index` (override with
 `NEBULA_V3_KNOWLEDGE_INDEX_DIR`). Existing inline chunk indexes are migrated when
 Core starts, and an individual source can always be rebuilt from its immutable
 artifact with the reindex action.
+
+Public URL sources are fetched once and HTML pages are rendered with Playwright
+before indexing. Browser requests are intercepted and fetched through Core's
+public-IP-pinned network boundary; private addresses, unsafe redirects, downloads,
+service workers, WebSockets, images, media, and fonts are blocked. Core stores a
+passive visible-text HTML snapshot rather than executable page markup. Non-HTML
+document URLs retain their original bounded bytes. Rendering uses Playwright's
+installed Chromium or a system Chrome/Chromium browser.
 
 Chroma's local `all-MiniLM-L6-v2` ONNX embedding model is used by default. The first
 index or query downloads and caches approximately 80 MiB; subsequent embedding and

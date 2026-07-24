@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   BookOpen,
@@ -6,6 +6,7 @@ import {
   Download,
   FileText,
   Globe2,
+  Link2,
   LoaderCircle,
   RefreshCw,
   Search,
@@ -23,7 +24,7 @@ import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 
 function sourceIcon(source: KnowledgeSource) {
-  if (source.sourceType.includes("web")) return Globe2;
+  if (source.metadata.origin === "url" || source.sourceType.includes("web")) return Globe2;
   if (source.sourceType.includes("structured")) return Database;
   if (source.metadata.mediaType === "application/pdf" || source.sourceType.includes("document")) return FileText;
   return BookOpen;
@@ -62,6 +63,7 @@ export function KnowledgePage() {
     coreState,
     engagement,
     ingestKnowledgeSource,
+    ingestKnowledgeUrlSource,
     knowledgeSources,
     reindexKnowledgeSource,
     removeKnowledgeSource,
@@ -70,6 +72,8 @@ export function KnowledgePage() {
   const [query, setQuery] = useState("");
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
   const [uploading, setUploading] = useState(false);
+  const [addingUrl, setAddingUrl] = useState(false);
+  const [sourceUrl, setSourceUrl] = useState("");
   const [statusMessage, setStatusMessage] = useState<string>();
   const [indexStatus, setIndexStatus] = useState<KnowledgeIndexStatus>();
   const [error, setError] = useState<string>();
@@ -175,6 +179,42 @@ export function KnowledgePage() {
     }
   };
 
+  const addUrl = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const value = sourceUrl.trim();
+    if (!engagement) {
+      setError("Create or select a project before adding a knowledge source.");
+      return;
+    }
+    if (!URL.canParse(value)) {
+      setError("Enter a valid HTTP or HTTPS URL.");
+      return;
+    }
+    const parsed = new URL(value);
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      setError("Enter a valid HTTP or HTTPS URL.");
+      return;
+    }
+    setUploading(true);
+    setError(undefined);
+    setStatusMessage(`Fetching ${value}…`);
+    try {
+      const created = await withIndexStatusPolling(() => ingestKnowledgeUrlSource({
+        engagementId: engagement.id,
+        url: value,
+      }));
+      setAddingUrl(false);
+      setSourceUrl("");
+      setStatusMessage(`${created.name} is ready for cited retrieval.`);
+    } catch (urlError) {
+      void logCaughtDiagnostic("interface.knowledge_page.caught_failure_08", "A URL knowledge source could not be added.", urlError, "knowledge_page");
+      setStatusMessage(undefined);
+      setError(urlError instanceof Error ? urlError.message : "Could not ingest the URL source.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const reindex = async (source: KnowledgeSource) => {
     setSourceBusy(source.id, true);
     setError(undefined);
@@ -255,7 +295,8 @@ export function KnowledgePage() {
         description="Sources available for cited retrieval."
         actions={<>
           <input ref={inputRef} className="sr-only" type="file" aria-label="Choose knowledge source" accept=".txt,.md,.markdown,.rst,.log,.csv,.json,.jsonl,.ndjson,.html,.htm,.pdf,.docx,.xlsx,text/plain,text/markdown,text/x-markdown,text/csv,application/csv,application/json,application/jsonl,application/x-jsonlines,application/x-ndjson,text/html,application/xhtml+xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => void uploadFile(event)} />
-          <button className="button primary" type="button" disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} {uploading ? "Adding source…" : "Add source"}</button>
+          <button className="button secondary" type="button" disabled={!canMutate || uploading} onClick={() => { setError(undefined); setAddingUrl(true); }}><Link2 size={16} /> Add URL</button>
+          <button className="button primary" type="button" disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} {uploading ? "Adding source…" : "Upload file"}</button>
         </>}
       />
       {indexStatus && !["ready", "disabled"].includes(indexStatus.state) && <section className={`knowledge-model-status ${indexStatus.state}`} role="status" aria-live="polite">
@@ -300,7 +341,7 @@ export function KnowledgePage() {
                 </article>
               );
             })}
-            {visibleSources.length === 0 && <div className="empty-state compact"><BookOpen size={23} /><strong>{query ? "No matching knowledge sources" : "No knowledge sources loaded"}</strong><p>{query ? "Try a different source name or citation." : canMutate ? "Add a document to make it available for cited analyst chat." : "Connect Core and select a project to add sources."}</p></div>}
+            {visibleSources.length === 0 && <div className="empty-state compact"><BookOpen size={23} /><strong>{query ? "No matching knowledge sources" : "No knowledge sources loaded"}</strong><p>{query ? "Try a different source name or citation." : canMutate ? "Upload a document or add a public URL for cited analyst chat." : "Connect Core and select a project to add sources."}</p></div>}
           </div>
         </section>
         <aside className="panel knowledge-policy">
@@ -311,7 +352,8 @@ export function KnowledgePage() {
           </details>
         </aside>
       </div>
-      {selected && <aside className="resource-inspector" role="complementary" aria-labelledby="knowledge-detail-title"><header><div><small>{sourceType(selected)}</small><h2 id="knowledge-detail-title">{selected.name}</h2></div><button className="icon-button subtle" type="button" aria-label="Close knowledge details" onClick={() => setSelected(undefined)}><X size={17} /></button></header><dl className="resource-details"><div><dt>Status</dt><dd>{selected.status}</dd></div><div><dt>Chunks</dt><dd>{selected.documentCount || "Not indexed"}</dd></div><div><dt>Citation</dt><dd>{selected.citation || selected.name}</dd></div><div><dt>Updated</dt><dd>{displayTime(selected.updatedAt)}</dd></div><div><dt>Source type</dt><dd>{sourceType(selected)}</dd></div></dl><section><h3>Retrieval boundary</h3><p>Content is untrusted data and cannot grant tools, expand scope, or modify system policy.</p></section><div className="inspector-actions"><button className="button secondary full" type="button" disabled={!canMutate || busyIds.has(selected.id)} onClick={() => void reindex(selected)}><RefreshCw size={14} /> Reindex source</button></div></aside>}
+      {addingUrl && <div className="dialog-backdrop"><form className="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="knowledge-url-dialog-title" onSubmit={(event) => void addUrl(event)}><header><div><small>Public web source</small><h2 id="knowledge-url-dialog-title">Add source from URL</h2></div><button className="icon-button subtle" type="button" aria-label="Close URL source dialog" disabled={uploading} onClick={() => { setAddingUrl(false); setSourceUrl(""); }}><X size={17} /></button></header><p className="provider-dialog-note">Nebula opens the page in an isolated browser, captures its rendered text once, and indexes that immutable snapshot. Every requested address must remain on the public internet.</p><label>URL<input required autoFocus type="url" inputMode="url" maxLength={2048} placeholder="https://docs.example.com/guide" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} /></label><footer><button className="button secondary" type="button" disabled={uploading} onClick={() => { setAddingUrl(false); setSourceUrl(""); }}>Cancel</button><button className="button primary" type="submit" disabled={uploading || !sourceUrl.trim()}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Link2 size={15} />} {uploading ? "Rendering and indexing…" : "Add URL source"}</button></footer></form></div>}
+      {selected && <aside className="resource-inspector" role="complementary" aria-labelledby="knowledge-detail-title"><header><div><small>{sourceType(selected)}</small><h2 id="knowledge-detail-title">{selected.name}</h2></div><button className="icon-button subtle" type="button" aria-label="Close knowledge details" onClick={() => setSelected(undefined)}><X size={17} /></button></header><dl className="resource-details"><div><dt>Status</dt><dd>{selected.status}</dd></div><div><dt>Chunks</dt><dd>{selected.documentCount || "Not indexed"}</dd></div><div><dt>Citation</dt><dd>{selected.citation || selected.name}</dd></div>{typeof selected.metadata.sourceUrl === "string" && <div><dt>Source URL</dt><dd>{selected.metadata.sourceUrl}</dd></div>}<div><dt>Updated</dt><dd>{displayTime(selected.updatedAt)}</dd></div><div><dt>Source type</dt><dd>{sourceType(selected)}</dd></div></dl><section><h3>Retrieval boundary</h3><p>Content is untrusted data and cannot grant tools, expand scope, or modify system policy.</p></section><div className="inspector-actions"><button className="button secondary full" type="button" disabled={!canMutate || busyIds.has(selected.id)} onClick={() => void reindex(selected)}><RefreshCw size={14} /> Reindex source</button></div></aside>}
     </div>
   );
 }

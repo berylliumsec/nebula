@@ -1219,6 +1219,9 @@ export interface KnowledgeSource {
     sha256?: string;
     chunkCount?: number;
     indexedAt?: string;
+    origin?: string;
+    sourceUrl?: string;
+    fetchedAt?: string;
     [key: string]: unknown;
   };
 }
@@ -1228,6 +1231,11 @@ export interface KnowledgeIngestRequest {
   filename: string;
   mediaType?: string;
   contentBase64: string;
+}
+
+export interface KnowledgeUrlIngestRequest {
+  engagementId: Identifier;
+  url: string;
 }
 
 export interface KnowledgeIndexStatus {

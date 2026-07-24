@@ -58,6 +58,7 @@ import type {
   KnowledgeIngestRequest,
   KnowledgeIndexStatus,
   KnowledgeSource,
+  KnowledgeUrlIngestRequest,
   MissionCreateRequest,
   McpServerProfile,
   OperatorExecution,
@@ -1743,6 +1744,9 @@ function mapKnowledgeSource(value: WireKnowledgeSource): KnowledgeSource {
           ? metadata.chunk_count
           : undefined,
       indexedAt: stringField(metadata.indexed_at),
+      origin: stringField(metadata.origin),
+      sourceUrl: stringField(metadata.source_url),
+      fetchedAt: stringField(metadata.fetched_at),
     },
   };
 }
@@ -4391,6 +4395,20 @@ export class ApiClient {
         filename: body.filename,
         media_type: body.mediaType,
         content_base64: body.contentBase64,
+      }),
+    }).then(mapKnowledgeSource);
+  }
+
+  ingestKnowledgeUrlSource(
+    body: KnowledgeUrlIngestRequest,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeSource> {
+    return this.request<WireKnowledgeSource>("knowledge/ingest-url", {
+      method: "POST",
+      signal,
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        url: body.url,
       }),
     }).then(mapKnowledgeSource);
   }

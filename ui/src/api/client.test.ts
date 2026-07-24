@@ -985,6 +985,7 @@ describe("ApiClient", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify([source]), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ backend: "chromadb", state: "downloading", model: "all-MiniLM-L6-v2", downloaded_bytes: 41_589_410, total_bytes: 83_178_821, detail: null }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(source), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...source, citation: "https://docs.example.com/scope", metadata: { ...source.metadata, origin: "url", source_url: "https://docs.example.com/scope" } }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...source, revision: 2 }), { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
@@ -997,6 +998,10 @@ describe("ApiClient", () => {
       mediaType: "text/markdown",
       contentBase64: "IyBTY29wZQ==",
     });
+    const urlIngested = await client.ingestKnowledgeUrlSource({
+      engagementId: "engagement-1",
+      url: "https://docs.example.com/scope?token=secret",
+    });
     await client.reindexKnowledgeSource("knowledge-1");
     await client.deleteKnowledgeSource("knowledge-1");
 
@@ -1006,6 +1011,10 @@ describe("ApiClient", () => {
       metadata: { filename: "scope.md", mediaType: "text/markdown", chunkCount: 3 },
     });
     expect(ingested.engagementId).toBe("engagement-1");
+    expect(urlIngested.metadata).toMatchObject({
+      origin: "url",
+      sourceUrl: "https://docs.example.com/scope",
+    });
     expect(indexStatus).toEqual({
       backend: "chromadb",
       state: "downloading",
@@ -1018,6 +1027,7 @@ describe("ApiClient", () => {
       "http://127.0.0.1:8765/api/v1/knowledge?engagement_id=engagement-1&limit=1000&offset=0",
       "http://127.0.0.1:8765/api/v1/knowledge/index-status",
       "http://127.0.0.1:8765/api/v1/knowledge/ingest",
+      "http://127.0.0.1:8765/api/v1/knowledge/ingest-url",
       "http://127.0.0.1:8765/api/v1/knowledge/knowledge-1/reindex",
       "http://127.0.0.1:8765/api/v1/knowledge/knowledge-1",
     ]);
@@ -1026,6 +1036,10 @@ describe("ApiClient", () => {
       filename: "scope.md",
       media_type: "text/markdown",
       content_base64: "IyBTY29wZQ==",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toEqual({
+      engagement_id: "engagement-1",
+      url: "https://docs.example.com/scope?token=secret",
     });
   });
 

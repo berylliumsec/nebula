@@ -170,6 +170,8 @@ def main() -> None:
         "regex",
         "--collect-data",
         "chromadb",
+        "--collect-all",
+        "playwright",
         "--hidden-import",
         "chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2",
         "--hidden-import",
