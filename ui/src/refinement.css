@@ -633,7 +633,7 @@ kbd { font-size: 11px; }
 .browser-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-new-tab { display: inline-flex; width: 32px; height: 32px; flex: 0 0 32px; align-items: center; justify-content: center; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .browser-tab button:hover, .browser-new-tab:hover { color: var(--text); background: var(--surface-hover); }
-.browser-toolbar { display: grid; height: 48px; min-height: 48px; flex: 0 0 48px; grid-template-columns: 34px 34px 34px minmax(180px, 1fr) 34px; gap: 4px; align-items: center; padding: 6px 8px; overflow: visible; border-bottom: 1px solid var(--border-soft); }
+.browser-toolbar { display: grid; height: 48px; min-height: 48px; flex: 0 0 48px; grid-template-columns: 34px 34px 34px minmax(180px, 1fr) 34px 34px; gap: 4px; align-items: center; padding: 6px 8px; overflow: visible; border-bottom: 1px solid var(--border-soft); }
 .browser-toolbar > button { display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .browser-toolbar > button:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
 .browser-toolbar > button:disabled { opacity: .4; cursor: default; }
@@ -652,7 +652,7 @@ kbd { font-size: 11px; }
 .browser-privacy-notice svg { color: var(--green); }
 .browser-notice > span { flex: 1; }
 .browser-notice.error { color: var(--red); background: var(--red-muted); }
-.browser-notice button { display: inline-flex; align-items: center; gap: 4px; border: 0; color: var(--blue); background: transparent; cursor: pointer; }
+.browser-notice :where(button, a) { display: inline-flex; align-items: center; gap: 4px; border: 0; color: var(--blue); background: transparent; text-decoration: none; cursor: pointer; }
 .browser-unavailable { min-height: 590px; }
 .persistent-terminal[hidden] { display: none !important; }
 .persistent-code-editor[hidden] { display: none !important; }

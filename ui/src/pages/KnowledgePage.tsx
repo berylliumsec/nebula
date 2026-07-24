@@ -287,6 +287,12 @@ export function KnowledgePage() {
     }
   };
 
+  const closeUrlDialog = () => {
+    setAddingUrl(false);
+    setSourceUrl("");
+    setError(undefined);
+  };
+
   const canMutate = coreState === "online" && Boolean(engagement);
   return (
     <div className="page knowledge-page">
@@ -314,7 +320,7 @@ export function KnowledgePage() {
         </div>
       </section>}
       {statusMessage && <div className="knowledge-status" role="status">{uploading && <LoaderCircle className="spin" size={15} />}{statusMessage}</div>}
-      {error && <DiagnosticErrorNotice error={error} fallback="The knowledge operation could not be completed." />}
+      {error && !addingUrl && <DiagnosticErrorNotice error={error} fallback="The knowledge operation could not be completed." />}
       <div className="knowledge-layout">
         <section className="panel data-panel knowledge-sources">
           <header className="data-toolbar">
@@ -352,7 +358,7 @@ export function KnowledgePage() {
           </details>
         </aside>
       </div>
-      {addingUrl && <div className="dialog-backdrop"><form className="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="knowledge-url-dialog-title" onSubmit={(event) => void addUrl(event)}><header><div><small>Public web source</small><h2 id="knowledge-url-dialog-title">Add source from URL</h2></div><button className="icon-button subtle" type="button" aria-label="Close URL source dialog" disabled={uploading} onClick={() => { setAddingUrl(false); setSourceUrl(""); }}><X size={17} /></button></header><p className="provider-dialog-note">Nebula opens the page in an isolated browser, captures its rendered text once, and indexes that immutable snapshot. Every requested address must remain on the public internet.</p><label>URL<input required autoFocus type="url" inputMode="url" maxLength={2048} placeholder="https://docs.example.com/guide" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} /></label><footer><button className="button secondary" type="button" disabled={uploading} onClick={() => { setAddingUrl(false); setSourceUrl(""); }}>Cancel</button><button className="button primary" type="submit" disabled={uploading || !sourceUrl.trim()}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Link2 size={15} />} {uploading ? "Rendering and indexing…" : "Add URL source"}</button></footer></form></div>}
+      {addingUrl && <div className="dialog-backdrop"><form className="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="knowledge-url-dialog-title" onSubmit={(event) => void addUrl(event)}><header><div><small>Public web source</small><h2 id="knowledge-url-dialog-title">Add source from URL</h2></div><button className="icon-button subtle" type="button" aria-label="Close URL source dialog" disabled={uploading} onClick={closeUrlDialog}><X size={17} /></button></header><p className="provider-dialog-note">Nebula opens the page in an isolated browser, captures its rendered text once, and indexes that immutable snapshot. Every requested address must remain on the public internet.</p><label>URL<input required autoFocus type="url" inputMode="url" maxLength={2048} placeholder="https://docs.example.com/guide" value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); if (error) setError(undefined); }} /></label>{error && <DiagnosticErrorNotice error={error} fallback="The URL source could not be added." compact />}<footer><button className="button secondary" type="button" disabled={uploading} onClick={closeUrlDialog}>Cancel</button><button className="button primary" type="submit" disabled={uploading || !sourceUrl.trim()}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Link2 size={15} />} {uploading ? "Rendering and indexing…" : "Add URL source"}</button></footer></form></div>}
       {selected && <aside className="resource-inspector" role="complementary" aria-labelledby="knowledge-detail-title"><header><div><small>{sourceType(selected)}</small><h2 id="knowledge-detail-title">{selected.name}</h2></div><button className="icon-button subtle" type="button" aria-label="Close knowledge details" onClick={() => setSelected(undefined)}><X size={17} /></button></header><dl className="resource-details"><div><dt>Status</dt><dd>{selected.status}</dd></div><div><dt>Chunks</dt><dd>{selected.documentCount || "Not indexed"}</dd></div><div><dt>Citation</dt><dd>{selected.citation || selected.name}</dd></div>{typeof selected.metadata.sourceUrl === "string" && <div><dt>Source URL</dt><dd>{selected.metadata.sourceUrl}</dd></div>}<div><dt>Updated</dt><dd>{displayTime(selected.updatedAt)}</dd></div><div><dt>Source type</dt><dd>{sourceType(selected)}</dd></div></dl><section><h3>Retrieval boundary</h3><p>Content is untrusted data and cannot grant tools, expand scope, or modify system policy.</p></section><div className="inspector-actions"><button className="button secondary full" type="button" disabled={!canMutate || busyIds.has(selected.id)} onClick={() => void reindex(selected)}><RefreshCw size={14} /> Reindex source</button></div></aside>}
     </div>
   );

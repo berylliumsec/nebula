@@ -331,6 +331,7 @@ export function SessionsPage() {
     deleteObservation,
     engagement,
     evidence,
+    ingestKnowledgeUrlSource,
     knowledgeSources,
     libraryItems,
     providers,
@@ -1968,7 +1969,12 @@ export function SessionsPage() {
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} /></Suspense>
           </div>}
           {engagement && <div className="persistent-browser" hidden={view !== "browser"}>
-            <WorkbenchBrowser active={view === "browser"} projectId={engagement.id} onOpenFiles={() => setView("workspace")} />
+            <WorkbenchBrowser
+              active={view === "browser"}
+              projectId={engagement.id}
+              onAddKnowledgeUrl={(url) => ingestKnowledgeUrlSource({ engagementId: engagement.id, url })}
+              onOpenFiles={() => setView("workspace")}
+            />
           </div>}
           {(view === "terminal" || view === "code") && (!api || !engagement) ? (
             <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal and Code become available as soon as Nebula finishes creating or loading a project.</p></div>

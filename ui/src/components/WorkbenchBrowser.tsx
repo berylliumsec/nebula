@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Download, ExternalLink, Globe2, LoaderCircle, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Check, Download, ExternalLink, Globe2, LoaderCircle, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { Link } from "react-router-dom";
 import { isTauriRuntime } from "../api/runtime";
 import {
   normalizeBrowserInput,
@@ -27,8 +28,14 @@ interface BrowserTab {
 interface WorkbenchBrowserProps {
   active: boolean;
   projectId: string;
+  onAddKnowledgeUrl: (url: string) => Promise<{ id: string; name: string }>;
   onOpenFiles: () => void;
 }
+
+type BrowserNotice =
+  | { kind: "download"; message: string }
+  | { kind: "knowledge"; message: string; sourceId: string }
+  | { kind: "info"; message: string };
 
 const MAX_TABS = 16;
 const CLIPPING_OVERFLOW = new Set(["auto", "clip", "hidden", "scroll"]);
@@ -76,7 +83,7 @@ function visibleSurfaceRect(element: HTMLElement): DOMRect {
   return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
-export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBrowserProps) {
+export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenFiles }: WorkbenchBrowserProps) {
   const confirm = useConfirmation();
   const dialogOpen = useDialogOpen();
   const { activityOpen, paletteOpen, sidebarCollapsed } = useChrome();
@@ -84,8 +91,9 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
   const [tabs, setTabs] = useState<BrowserTab[]>(() => [blankTab()]);
   const [activeId, setActiveId] = useState(() => tabs[0].id);
   const [capabilities, setCapabilities] = useState<BrowserCapabilities>();
-  const [notice, setNotice] = useState<string>();
+  const [notice, setNotice] = useState<BrowserNotice>();
   const [error, setError] = useState<string>();
+  const [addingKnowledge, setAddingKnowledge] = useState(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(tabs);
@@ -206,10 +214,10 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
             let result = await workbenchBrowser.importDownload(payload.downloadId!, projectId, false);
             if (result.state === "conflict") {
               const replace = await confirm({ title: `Replace ${payload.filename}?`, message: <>A file with this name already exists in Project Files. Replace it with the website download?</>, confirmLabel: "Replace file", tone: "danger" });
-              if (!replace) { await workbenchBrowser.discardDownload(payload.downloadId!, projectId); setNotice(`${payload.filename} was discarded.`); return; }
+              if (!replace) { await workbenchBrowser.discardDownload(payload.downloadId!, projectId); setNotice({ kind: "info", message: `${payload.filename} was discarded.` }); return; }
               result = await workbenchBrowser.importDownload(payload.downloadId!, projectId, true);
             }
-            setNotice(`${result.overwritten ? "Replaced" : "Downloaded"} ${result.path} in Project Files.`);
+            setNotice({ kind: "download", message: `${result.overwritten ? "Replaced" : "Downloaded"} ${result.path} in Project Files.` });
           } catch (caught) {
             void logCaughtDiagnostic("interface.workbench_browser.download_import_failed", "A website download could not be imported into Project Files.", caught, "workbench_browser");
             setError(errorMessage(caught));
@@ -281,10 +289,30 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
     try {
       await workbenchBrowser.clear(projectId);
       const next = blankTab();
-      setTabs([next]); setActiveId(next.id); setNotice("Project browser data was cleared.");
+      setTabs([next]); setActiveId(next.id); setNotice({ kind: "info", message: "Project browser data was cleared." });
     } catch (caught) {
       void logCaughtDiagnostic("interface.workbench_browser.clear_failed", "Project browser data could not be cleared.", caught, "workbench_browser");
       setError(errorMessage(caught));
+    }
+  };
+
+  const addCurrentPageToKnowledge = async () => {
+    if (!activeTab?.created || activeTab.loading || !activeTab.url || addingKnowledge) return;
+    setAddingKnowledge(true);
+    setNotice(undefined);
+    setError(undefined);
+    try {
+      const created = await onAddKnowledgeUrl(activeTab.url);
+      setNotice({
+        kind: "knowledge",
+        message: `${created.name} is ready for cited retrieval.`,
+        sourceId: created.id,
+      });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.workbench_browser.knowledge_ingest_failed", "The current browser page could not be added to Project Sources.", caught, "workbench_browser");
+      setError(errorMessage(caught));
+    } finally {
+      setAddingKnowledge(false);
     }
   };
 
@@ -301,11 +329,18 @@ export function WorkbenchBrowser({ active, projectId, onOpenFiles }: WorkbenchBr
         <button type="button" aria-label="Forward" disabled={!activeTab?.created} onClick={() => void runControl("forward")}><ArrowRight size={16} /></button>
         <button type="button" aria-label={activeTab?.loading ? "Stop loading" : "Reload"} disabled={!activeTab?.created} onClick={() => void runControl(activeTab?.loading ? "stop" : "reload")}>{activeTab?.loading ? <X size={15} /> : <RefreshCw size={15} />}</button>
         <form onSubmit={submit}><Search size={15} aria-hidden="true" /><label className="sr-only" htmlFor="browser-address">Address or search</label><input id="browser-address" value={activeTab?.address ?? ""} placeholder="Search or enter an address" autoComplete="off" spellCheck={false} onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} /></form>
+        <button type="button" aria-label="Add current page to Project Sources" title="Add this public page to Project Sources" disabled={!activeTab?.created || activeTab.loading || !activeTab.url || addingKnowledge} onClick={() => void addCurrentPageToKnowledge()}>{addingKnowledge ? <LoaderCircle className="spin" size={15} /> : <BookPlus size={15} />}</button>
         <button type="button" aria-label="Clear Project browser data" title="Clear Project browser data" onClick={() => void clearData()}><Trash2 size={15} /></button>
       </div>
       {capabilities?.projectStorage === "ephemeral" && <div className="browser-privacy-notice"><ShieldCheck size={14} /> macOS 13 browser data is isolated and cleared when Nebula closes.</div>}
       {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
-      {notice && <div className="browser-notice" role="status"><Download size={14} /><span>{notice}</span><button type="button" onClick={onOpenFiles}>Open Files <ExternalLink size={12} /></button><button type="button" aria-label="Dismiss browser notice" onClick={() => setNotice(undefined)}><X size={14} /></button></div>}
+      {notice && <div className="browser-notice" role="status">
+        {notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : notice.kind === "download" ? <Download size={14} /> : <Check size={14} />}
+        <span>{notice.message}</span>
+        {notice.kind === "download" && <button type="button" onClick={onOpenFiles}>Open Files <ExternalLink size={12} /></button>}
+        {notice.kind === "knowledge" && <Link to={`/project?view=sources&source=${encodeURIComponent(notice.sourceId)}`}>View source <ExternalLink size={12} /></Link>}
+        <button type="button" aria-label="Dismiss browser notice" onClick={() => setNotice(undefined)}><X size={14} /></button>
+      </div>}
       <div className={`browser-surface${activeTab?.created ? " is-live" : ""}`} ref={surfaceRef}>
         {!activeTab?.created && <div className="browser-start"><Globe2 size={34} /><strong>Browse from the Workbench</strong><p>Pages run in an isolated {capabilities?.engine ?? "system webview"} profile for this Project.</p><form onSubmit={submit}><Search size={16} /><input aria-label="Start browsing" autoFocus={active} value={activeTab?.address ?? ""} placeholder="Search or enter an address" onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} /><button className="button primary" type="submit">Go</button></form>{activeTab?.error && <small role="alert">{activeTab.error}</small>}</div>}
       </div>
