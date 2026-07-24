@@ -59,6 +59,8 @@ import type {
   KnowledgeIndexStatus,
   KnowledgeSource,
   KnowledgeUrlIngestRequest,
+  LibraryIngestRequest,
+  LibraryItem,
   MissionCreateRequest,
   McpServerProfile,
   OperatorExecution,
@@ -447,6 +449,16 @@ interface WireLocalProviderDetection extends JsonObject {
 
 interface WireKnowledgeSource extends WireEntity {
   engagement_id: string;
+  name: string;
+  source_type: string;
+  artifact_id?: string | null;
+  status: string;
+  citation?: string | null;
+  document_count?: number;
+  metadata?: JsonObject;
+}
+
+interface WireLibraryItem extends WireEntity {
   name: string;
   source_type: string;
   artifact_id?: string | null;
@@ -1747,6 +1759,34 @@ function mapKnowledgeSource(value: WireKnowledgeSource): KnowledgeSource {
       origin: stringField(metadata.origin),
       sourceUrl: stringField(metadata.source_url),
       fetchedAt: stringField(metadata.fetched_at),
+    },
+  };
+}
+
+function mapLibraryItem(value: WireLibraryItem): LibraryItem {
+  const metadata = value.metadata ?? {};
+  return {
+    id: value.id,
+    name: value.name,
+    sourceType: value.source_type,
+    artifactId: value.artifact_id ?? undefined,
+    status: value.status,
+    citation: value.citation ?? undefined,
+    documentCount: numberField(value.document_count),
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+    metadata: {
+      ...metadata,
+      filename: stringField(metadata.filename),
+      mediaType: stringField(metadata.media_type),
+      size: typeof metadata.size === "number" ? metadata.size : undefined,
+      sha256: stringField(metadata.sha256),
+      chunkCount:
+        typeof metadata.chunk_count === "number"
+          ? metadata.chunk_count
+          : undefined,
+      indexedAt: stringField(metadata.indexed_at),
+      scope: stringField(metadata.scope),
     },
   };
 }
@@ -4368,6 +4408,40 @@ export class ApiClient {
       signal,
       engagementId,
     ).then((items) => page(items.map(mapKnowledgeSource)));
+  }
+
+  listLibraryItems(signal?: AbortSignal): Promise<Page<LibraryItem>> {
+    return this.request<WireLibraryItem[]>("library/items", { signal })
+      .then((items) => page(items.map(mapLibraryItem)));
+  }
+
+  ingestLibraryItem(
+    body: LibraryIngestRequest,
+    signal?: AbortSignal,
+  ): Promise<LibraryItem> {
+    return this.request<WireLibraryItem>("library/items/ingest", {
+      method: "POST",
+      signal,
+      body: JSON.stringify({
+        filename: body.filename,
+        media_type: body.mediaType,
+        content_base64: body.contentBase64,
+      }),
+    }).then(mapLibraryItem);
+  }
+
+  reindexLibraryItem(id: string, signal?: AbortSignal): Promise<LibraryItem> {
+    return this.request<WireLibraryItem>(
+      `library/items/${encodeURIComponent(id)}/reindex`,
+      { method: "POST", signal },
+    ).then(mapLibraryItem);
+  }
+
+  async deleteLibraryItem(id: string, signal?: AbortSignal): Promise<void> {
+    await this.request<void>(`library/items/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      signal,
+    });
   }
 
   getKnowledgeIndexStatus(signal?: AbortSignal): Promise<KnowledgeIndexStatus> {

@@ -42,6 +42,7 @@ from nebula.v3.domain import (
     HarnessTurnStatus,
     HarnessWorkspaceAccess,
     KnowledgeSource,
+    LibraryItem,
     McpApprovalMode,
     McpAuthMode,
     McpCapabilitySnapshot,
@@ -879,6 +880,71 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
             if item.session_id == chat.id
         ]
         assert messages[-1].citations[0].source_id == source.id
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
+def test_harness_gateway_queries_workspace_library_without_project_sources(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        item = store.create(
+            LibraryItem(
+                id="library-script",
+                name="shared_check.py",
+                source_type="script",
+                citation="Library: shared_check.py",
+                metadata={
+                    "scope": "library",
+                    "chunks": [
+                        {
+                            "id": "library-chunk",
+                            "text": "The reusable check finds GLOBAL_LIBRARY_MARKER.",
+                        }
+                    ],
+                },
+            )
+        )
+        service = ChatService(store)
+        runtime.bind_knowledge_retriever(
+            lambda engagement_id, query, allow_local_only, token_budget: (
+                service.harness_knowledge_search(
+                    engagement_id,
+                    query,
+                    allow_local_only=allow_local_only,
+                    token_budget=token_budget,
+                )
+            )
+        )
+        _, _, harness_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Find the reusable marker",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            include_knowledge=True,
+        )
+        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=harness_turn.id,
+            connection=None,
+            task=None,
+        )
+
+        response = await runtime._gateway_call(
+            session,
+            "knowledge.search",
+            {"query": "reusable marker"},
+        )
+
+        assert response["isError"] is False
+        payload = response["structuredContent"]
+        assert payload["matches"][0]["source_id"] == item.id
+        assert payload["matches"][0]["citation"] == "Library: shared_check.py"
+        assert "GLOBAL_LIBRARY_MARKER" in payload["matches"][0]["text"]
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 

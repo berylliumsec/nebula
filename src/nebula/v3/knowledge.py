@@ -34,7 +34,7 @@ import httpx
 from pypdf import PdfReader
 
 from .artifacts import ArtifactIntegrityError, ArtifactStore
-from .domain import Artifact, Engagement, KnowledgeSource, utc_now
+from .domain import Artifact, Engagement, KnowledgeSource, LibraryItem, utc_now
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
 from .storage import NebulaStore
 
@@ -49,6 +49,7 @@ MAX_SOURCE_REDIRECTS = 5
 MAX_RENDER_RESOURCE_BYTES = 8 * 1024 * 1024
 MAX_RENDER_TOTAL_BYTES = 40 * 1024 * 1024
 RENDER_SETTLE_MILLISECONDS = 1_500
+GLOBAL_LIBRARY_ARTIFACT_OWNER = "global-library"
 
 
 class KnowledgeIngestionError(ValueError):
@@ -130,6 +131,33 @@ _EXTENSION_FORMATS: dict[str, tuple[str, str]] = {
         "xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ),
+    ".py": ("script", "text/x-python"),
+    ".sh": ("script", "text/x-shellscript"),
+    ".bash": ("script", "text/x-shellscript"),
+    ".zsh": ("script", "text/x-shellscript"),
+    ".js": ("script", "text/javascript"),
+    ".jsx": ("script", "text/javascript"),
+    ".ts": ("script", "text/typescript"),
+    ".tsx": ("script", "text/typescript"),
+    ".rb": ("script", "text/x-ruby"),
+    ".go": ("script", "text/x-go"),
+    ".rs": ("script", "text/x-rust"),
+    ".java": ("script", "text/x-java"),
+    ".c": ("script", "text/x-c"),
+    ".h": ("script", "text/x-c"),
+    ".cpp": ("script", "text/x-c++"),
+    ".hpp": ("script", "text/x-c++"),
+    ".cs": ("script", "text/x-csharp"),
+    ".php": ("script", "text/x-php"),
+    ".pl": ("script", "text/x-perl"),
+    ".lua": ("script", "text/x-lua"),
+    ".sql": ("script", "text/x-sql"),
+    ".yaml": ("text", "application/yaml"),
+    ".yml": ("text", "application/yaml"),
+    ".toml": ("text", "application/toml"),
+    ".xml": ("text", "application/xml"),
+    ".ini": ("text", "text/plain"),
+    ".conf": ("text", "text/plain"),
 }
 
 _MEDIA_FORMATS: dict[str, tuple[str, str]] = {
@@ -153,6 +181,16 @@ _MEDIA_FORMATS: dict[str, tuple[str, str]] = {
         "xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ),
+    "text/x-python": ("script", "text/x-python"),
+    "text/x-shellscript": ("script", "text/x-shellscript"),
+    "text/javascript": ("script", "text/javascript"),
+    "application/javascript": ("script", "text/javascript"),
+    "text/typescript": ("script", "text/typescript"),
+    "application/yaml": ("text", "application/yaml"),
+    "text/yaml": ("text", "application/yaml"),
+    "application/toml": ("text", "application/toml"),
+    "application/xml": ("text", "application/xml"),
+    "text/xml": ("text", "application/xml"),
 }
 
 
@@ -754,6 +792,172 @@ def knowledge_summary(source: KnowledgeSource) -> KnowledgeSource:
 
     metadata = {key: value for key, value in source.metadata.items() if key != "chunks"}
     return source.model_copy(update={"metadata": metadata})
+
+
+def ingest_library_item(
+    *,
+    store: NebulaStore,
+    artifact_store: ArtifactStore,
+    filename: str,
+    data: bytes,
+    media_type: str | None = None,
+    knowledge_index: KnowledgeIndex | None = None,
+) -> LibraryItem:
+    """Persist a reusable document or script and add it to the global index."""
+
+    clean_name = safe_filename(filename)
+    extracted = extract_document(data, filename=clean_name, media_type=media_type)
+    stored = artifact_store.put_bytes_with_status(
+        data,
+        engagement_id=GLOBAL_LIBRARY_ARTIFACT_OWNER,
+        filename=clean_name,
+        media_type=extracted.media_type,
+        source="library-upload",
+        metadata={
+            "ingestion_version": INGESTION_VERSION,
+            "scope": "library",
+        },
+    )
+    item = LibraryItem(
+        name=clean_name,
+        source_type=extracted.source_type,
+        artifact_id=stored.artifact.id,
+        status="indexing" if knowledge_index is not None else "ready",
+        citation=f"Library: {clean_name}",
+    )
+    chunks = build_chunks(
+        extracted,
+        source_id=item.id,
+        artifact_id=stored.artifact.id,
+    )
+    item = item.model_copy(
+        update={
+            "document_count": len(chunks),
+            "metadata": _index_metadata(
+                stored.artifact,
+                chunks=chunks if knowledge_index is None else None,
+                chunk_count=len(chunks),
+                indexed_at=utc_now().isoformat(),
+                index_descriptor=(
+                    knowledge_index.library_descriptor
+                    if knowledge_index is not None
+                    else None
+                ),
+            )
+            | {"scope": "library"},
+        }
+    )
+    try:
+        store.create_many([stored.artifact, item])
+    except Exception:
+        artifact_store.discard_new_blob(stored)
+        raise
+    if knowledge_index is None:
+        return item
+    try:
+        knowledge_index.upsert_library_item(item, chunks)
+    except KnowledgeIndexError:
+        current = store.get(LibraryItem, item.id)
+        store.update(
+            LibraryItem,
+            item.id,
+            {"status": "error"},
+            expected_revision=current.revision,
+        )
+        raise
+    current = store.get(LibraryItem, item.id)
+    return store.update(
+        LibraryItem,
+        item.id,
+        {"status": "ready"},
+        expected_revision=current.revision,
+    )
+
+
+def reindex_library_item(
+    *,
+    store: NebulaStore,
+    artifact_store: ArtifactStore,
+    item_id: str,
+    knowledge_index: KnowledgeIndex | None = None,
+) -> LibraryItem:
+    """Rebuild one global Library item from its immutable artifact."""
+
+    item = store.get(LibraryItem, item_id)
+    if not item.artifact_id:
+        raise InvalidDocumentError("Library item has no authoritative artifact")
+    artifact = store.get(Artifact, item.artifact_id)
+    if artifact.engagement_id != GLOBAL_LIBRARY_ARTIFACT_OWNER:
+        raise ArtifactIntegrityError("Library artifact ownership does not match item")
+    if not artifact_store.verify(artifact):
+        raise ArtifactIntegrityError("Library artifact failed integrity verification")
+    data = artifact_store.read(artifact)
+    extracted = extract_document(
+        data,
+        filename=artifact.filename or item.name,
+        media_type=artifact.media_type,
+    )
+    chunks = build_chunks(
+        extracted,
+        source_id=item.id,
+        artifact_id=artifact.id,
+    )
+    metadata = dict(item.metadata)
+    metadata.update(
+        _index_metadata(
+            artifact,
+            chunks=chunks if knowledge_index is None else None,
+            chunk_count=len(chunks),
+            indexed_at=utc_now().isoformat(),
+            index_descriptor=(
+                knowledge_index.library_descriptor
+                if knowledge_index is not None
+                else None
+            ),
+        )
+    )
+    metadata["scope"] = "library"
+    if knowledge_index is not None:
+        metadata.pop("chunks", None)
+    indexing = store.update(
+        LibraryItem,
+        item.id,
+        {
+            "source_type": extracted.source_type,
+            "status": "indexing" if knowledge_index is not None else "ready",
+            "citation": item.citation or f"Library: {item.name}",
+            "document_count": len(chunks),
+            "metadata": metadata,
+        },
+        expected_revision=item.revision,
+    )
+    if knowledge_index is None:
+        return indexing
+    try:
+        knowledge_index.upsert_library_item(indexing, chunks)
+    except KnowledgeIndexError:
+        current = store.get(LibraryItem, indexing.id)
+        store.update(
+            LibraryItem,
+            indexing.id,
+            {"status": "error"},
+            expected_revision=current.revision,
+        )
+        raise
+    current = store.get(LibraryItem, indexing.id)
+    return store.update(
+        LibraryItem,
+        indexing.id,
+        {"status": "ready"},
+        expected_revision=current.revision,
+    )
+
+
+def library_item_summary(item: LibraryItem) -> LibraryItem:
+    """Return an API-safe Library item without internal inline chunks."""
+
+    metadata = {key: value for key, value in item.metadata.items() if key != "chunks"}
+    return item.model_copy(update={"metadata": metadata})
 
 
 def migrate_inline_knowledge_indexes(

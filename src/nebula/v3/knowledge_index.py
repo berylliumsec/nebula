@@ -18,10 +18,11 @@ from chromadb.config import Settings
 from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
 from .diagnostics import record_caught_exception
-from .domain import KnowledgeSource, NebulaModel
+from .domain import KnowledgeSource, LibraryItem, NebulaModel
 
 
 COLLECTION_NAME = "nebula-knowledge-v1"
+LIBRARY_COLLECTION_NAME = "nebula-library-v1"
 INDEX_BACKEND = "chromadb"
 INDEX_VERSION = "nebula.chroma.v1"
 UPSERT_BATCH_SIZE = 500
@@ -175,6 +176,7 @@ class IndexedKnowledgeChunk:
     page: int | None
     distance: float
     rank: int
+    scope: Literal["engagement", "library"] = "engagement"
 
 
 class KnowledgeIndex(Protocol):
@@ -184,6 +186,9 @@ class KnowledgeIndex(Protocol):
     def descriptor(self) -> dict[str, str]: ...
 
     @property
+    def library_descriptor(self) -> dict[str, str]: ...
+
+    @property
     def status(self) -> KnowledgeIndexStatus: ...
 
     def upsert_source(
@@ -191,6 +196,19 @@ class KnowledgeIndex(Protocol):
     ) -> None: ...
 
     def delete_source(self, source_id: str) -> None: ...
+
+    def upsert_library_item(
+        self, item: LibraryItem, chunks: Sequence[dict[str, Any]]
+    ) -> None: ...
+
+    def delete_library_item(self, item_id: str) -> None: ...
+
+    def query_library(
+        self,
+        queries: Sequence[str],
+        *,
+        limit: int,
+    ) -> list[IndexedKnowledgeChunk]: ...
 
     def query(
         self,
@@ -230,6 +248,14 @@ class ChromaKnowledgeIndex:
             }
             options["embedding_function"] = embedding_function
             self._collection = self._client.get_or_create_collection(**options)
+            library_options: dict[str, Any] = {
+                "name": LIBRARY_COLLECTION_NAME,
+                "metadata": {"hnsw:space": "cosine", "index_version": INDEX_VERSION},
+                "embedding_function": embedding_function,
+            }
+            self._library_collection = self._client.get_or_create_collection(
+                **library_options
+            )
         except Exception as exc:
             raise KnowledgeIndexError("could not initialize the Chroma index") from exc
 
@@ -239,6 +265,14 @@ class ChromaKnowledgeIndex:
             "index_backend": INDEX_BACKEND,
             "index_version": INDEX_VERSION,
             "collection": COLLECTION_NAME,
+        }
+
+    @property
+    def library_descriptor(self) -> dict[str, str]:
+        return {
+            "index_backend": INDEX_BACKEND,
+            "index_version": INDEX_VERSION,
+            "collection": LIBRARY_COLLECTION_NAME,
         }
 
     @property
@@ -292,6 +326,64 @@ class ChromaKnowledgeIndex:
                 f"could not remove knowledge source {source_id} from the index"
             ) from exc
 
+    def upsert_library_item(
+        self, item: LibraryItem, chunks: Sequence[dict[str, Any]]
+    ) -> None:
+        """Replace all indexed chunks for one workspace Library item."""
+
+        try:
+            self._library_collection.delete(where={"source_id": item.id})
+            for start in range(0, len(chunks), UPSERT_BATCH_SIZE):
+                batch = chunks[start : start + UPSERT_BATCH_SIZE]
+                ids: list[str] = []
+                documents: list[str] = []
+                metadatas: list[dict[str, Any]] = []
+                for raw in batch:
+                    metadata: dict[str, str | int | bool] = {
+                        "source_id": item.id,
+                        "name": item.name,
+                        "scope": "library",
+                    }
+                    artifact_id = raw.get("artifact_id") or item.artifact_id
+                    if isinstance(artifact_id, str):
+                        metadata["artifact_id"] = artifact_id
+                    page = raw.get("page")
+                    if isinstance(page, int) and page > 0:
+                        metadata["page"] = page
+                    ids.append(str(raw["id"]))
+                    documents.append(str(raw["text"]))
+                    metadatas.append(metadata)
+                self._library_collection.upsert(
+                    ids=ids,
+                    documents=documents,
+                    metadatas=cast(Any, metadatas),
+                )
+        except Exception as exc:
+            raise KnowledgeIndexError(
+                f"could not index Library item {item.id}"
+            ) from exc
+
+    def delete_library_item(self, item_id: str) -> None:
+        try:
+            self._library_collection.delete(where={"source_id": item_id})
+        except Exception as exc:
+            raise KnowledgeIndexError(
+                f"could not remove Library item {item_id} from the index"
+            ) from exc
+
+    def query_library(
+        self,
+        queries: Sequence[str],
+        *,
+        limit: int,
+    ) -> list[IndexedKnowledgeChunk]:
+        return self._query_collection(
+            self._library_collection,
+            queries,
+            limit=limit,
+            scope="library",
+        )
+
     def query(
         self,
         engagement_id: str,
@@ -299,22 +391,43 @@ class ChromaKnowledgeIndex:
         *,
         limit: int,
     ) -> list[IndexedKnowledgeChunk]:
+        return self._query_collection(
+            self._collection,
+            queries,
+            limit=limit,
+            where={"engagement_id": engagement_id},
+            scope="engagement",
+        )
+
+    def _query_collection(
+        self,
+        collection: Any,
+        queries: Sequence[str],
+        *,
+        limit: int,
+        scope: Literal["engagement", "library"],
+        where: dict[str, str] | None = None,
+    ) -> list[IndexedKnowledgeChunk]:
         cleaned = [" ".join(query.split()).strip() for query in queries]
         cleaned = [query for query in cleaned if query]
         if not cleaned or limit <= 0:
             return []
         try:
-            result = self._collection.query(
-                query_texts=cleaned,
-                n_results=limit,
-                where={"engagement_id": engagement_id},
-                include=["documents", "metadatas", "distances"],
+            options: dict[str, Any] = {
+                "query_texts": cleaned,
+                "n_results": limit,
+                "include": ["documents", "metadatas", "distances"],
+            }
+            if where is not None:
+                options["where"] = where
+            result = collection.query(
+                **options,
             )
         except Exception as exc:
             # Chroma reports an empty filtered collection differently across
             # releases. An entirely empty collection is an ordinary no-match.
             try:
-                if self._collection.count() == 0:
+                if collection.count() == 0:
                     return []
             except Exception as count_error:
                 record_caught_exception(
@@ -369,6 +482,7 @@ class ChromaKnowledgeIndex:
                     if isinstance(distance, (int, float))
                     else 1.0,
                     rank=ordinal,
+                    scope=scope,
                 )
                 previous = candidates.get(candidate.id)
                 if previous is None or candidate.distance < previous.distance:
@@ -381,6 +495,7 @@ __all__ = [
     "ChromaKnowledgeIndex",
     "INDEX_BACKEND",
     "INDEX_VERSION",
+    "LIBRARY_COLLECTION_NAME",
     "IndexedKnowledgeChunk",
     "KnowledgeIndex",
     "KnowledgeIndexError",

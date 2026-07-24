@@ -38,6 +38,7 @@ from .domain import (
     ContextSourceReference,
     Engagement,
     KnowledgeSource,
+    LibraryItem,
     McpServerProfile,
     NebulaModel,
     ProviderProfile,
@@ -2150,8 +2151,20 @@ class ChatService:
             if any(source.status.casefold() == "ready" for source in sources):
                 return True
             if len(sources) < 1_000:
-                return False
+                break
             offset += len(sources)
+        offset = 0
+        while True:
+            items = self.store.list_entities(
+                LibraryItem,
+                offset=offset,
+                limit=1_000,
+            )
+            if any(item.status.casefold() == "ready" for item in items):
+                return True
+            if len(items) < 1_000:
+                return False
+            offset += len(items)
 
     def _retrieve(
         self,
@@ -2233,7 +2246,7 @@ class ChatService:
         redact: bool,
     ) -> list[_RetrievedChunk]:
         assert self.knowledge_index is not None
-        ready_sources: dict[str, KnowledgeSource] = {}
+        ready_sources: dict[str, KnowledgeSource | LibraryItem] = {}
         offset = 0
         while True:
             sources = self.store.list_entities(
@@ -2250,11 +2263,26 @@ class ChatService:
             if len(sources) < 1_000:
                 break
             offset += len(sources)
+        offset = 0
+        while True:
+            items = self.store.list_entities(
+                LibraryItem,
+                offset=offset,
+                limit=1_000,
+            )
+            ready_sources.update(
+                (item.id, item) for item in items if item.status.casefold() == "ready"
+            )
+            if len(items) < 1_000:
+                break
+            offset += len(items)
+        result_limit = min(64, max(16, len(queries) * 8))
         matches = self.knowledge_index.query(
             engagement_id,
             queries,
-            limit=min(64, max(16, len(queries) * 8)),
+            limit=result_limit,
         )
+        matches.extend(self.knowledge_index.query_library(queries, limit=result_limit))
         candidates: list[_RetrievedChunk] = []
         for match in matches:
             source = ready_sources.get(match.source_id)
@@ -2300,14 +2328,33 @@ class ChatService:
     ) -> list[_RetrievedChunk]:
         candidates: list[_RetrievedChunk] = []
         ordinal = 0
+        engagement_sources: list[KnowledgeSource | LibraryItem] = []
         offset = 0
-        while len(candidates) < 5_000:
-            sources = self.store.list_entities(
+        while len(engagement_sources) < 5_000:
+            knowledge_page = self.store.list_entities(
                 KnowledgeSource,
                 engagement_id=engagement_id,
                 offset=offset,
                 limit=1_000,
             )
+            engagement_sources.extend(knowledge_page)
+            if len(knowledge_page) < 1_000:
+                break
+            offset += len(knowledge_page)
+        library_sources: list[KnowledgeSource | LibraryItem] = []
+        offset = 0
+        while len(library_sources) < 5_000:
+            library_page = self.store.list_entities(
+                LibraryItem,
+                offset=offset,
+                limit=1_000,
+            )
+            library_sources.extend(library_page)
+            if len(library_page) < 1_000:
+                break
+            offset += len(library_page)
+        source_groups = (engagement_sources, library_sources)
+        for sources in source_groups:
             for source in sources:
                 if source.status.casefold() != "ready":
                     continue
@@ -2340,9 +2387,9 @@ class ChatService:
                     if per_query_scores:
                         score += per_query_scores[0]
                     chunk_id = str(raw.get("id") or f"{source.id}:{index + 1}")
-                    page = raw.get("page")
-                    if not isinstance(page, int) or page < 1:
-                        page = None
+                    chunk_page = raw.get("page")
+                    if not isinstance(chunk_page, int) or chunk_page < 1:
+                        chunk_page = None
                     artifact_id = raw.get("artifact_id")
                     if not isinstance(artifact_id, str):
                         artifact_id = source.artifact_id
@@ -2354,7 +2401,7 @@ class ChatService:
                                 citation=source.citation,
                                 artifact_id=artifact_id,
                                 chunk_id=chunk_id,
-                                page=page,
+                                page=chunk_page,
                                 excerpt=re.sub(r"\s+", " ", text)[:320],
                             ),
                             text=text,
@@ -2364,9 +2411,6 @@ class ChatService:
                         )
                     )
                     ordinal += 1
-            if len(sources) < 1_000:
-                break
-            offset += len(sources)
         return candidates
 
     @staticmethod
@@ -2400,7 +2444,7 @@ class ChatService:
         return selected
 
     @staticmethod
-    def _source_is_local_only(source: KnowledgeSource) -> bool:
+    def _source_is_local_only(source: KnowledgeSource | LibraryItem) -> bool:
         if source.metadata.get("local_only") is True:
             return True
         privacy = source.metadata.get("privacy")

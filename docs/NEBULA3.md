@@ -180,7 +180,7 @@ as sensitive data. They are not described as backups because Nebula 3 does not
 yet provide a restore path. Scratch workspace files are excluded unless an
 operator promoted them to an artifact.
 
-## Project knowledge retrieval
+## Project knowledge and the global Library
 
 Project document uploads are extracted locally and split into bounded, overlapping
 chunks. The original artifact remains authoritative; Core stores only a rebuildable
@@ -188,6 +188,14 @@ semantic index in ChromaDB under `<data-dir>/knowledge-index` (override with
 `NEBULA_V3_KNOWLEDGE_INDEX_DIR`). Existing inline chunk indexes are migrated when
 Core starts, and an individual source can always be rebuilt from its immutable
 artifact with the reindex action.
+
+The top-level **Library** is the reusable workspace-wide counterpart to Project
+sources. Documents and scripts added there are stored as immutable,
+content-addressed artifacts owned by the local workspace and indexed in the
+separate `nebula-library-v1` Chroma collection. They remain available when the
+operator switches Projects. Script formats are decoded and chunked as untrusted
+text; Nebula never executes a Library upload. Removing an item removes it from
+retrieval but retains its immutable repository artifact.
 
 Public URL sources are fetched once and HTML pages are rendered with Playwright
 before indexing. Browser requests are intercepted and fetched through Core's
@@ -203,10 +211,12 @@ retrieval stay local. Before that first download, the Knowledge page explains th
 one-time local setup. While it runs, the page reports downloaded bytes, total size,
 percentage, verification/preparation, and an actionable retry state if preparation
 fails. Core does not trigger this download during startup, so progress is always
-observable from the operator workspace. Chat asks the selected model for up to four bounded search
-queries, retrieves vector candidates only from the active Project, adds a small
-exact-term reranking bonus for security identifiers, and injects no more than eight
-cited chunks within the knowledge token budget. Cloud-provider privacy gates and
+observable from the operator workspace. Chat asks the selected model for up to
+four bounded search queries, retrieves vector candidates from the active Project
+and the global Library, adds a small exact-term reranking bonus for security
+identifiers, and injects no more than eight cited chunks within the knowledge
+token budget. Library citations are labeled `Library:` so their workspace-wide
+scope stays visible. Cloud-provider privacy gates, per-request confirmation, and
 secret redaction still apply after retrieval.
 
 ## Context compaction

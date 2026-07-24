@@ -30,6 +30,8 @@ import type {
   KnowledgeIngestRequest,
   KnowledgeSource,
   KnowledgeUrlIngestRequest,
+  LibraryIngestRequest,
+  LibraryItem,
   MissionCreateRequest,
   ObservationSummary,
   ObservationCreateRequest,
@@ -53,13 +55,13 @@ import { logCaughtDiagnostic } from "../diagnostics";
 type CoreState = "checking" | "online" | "offline";
 export type WorkspaceState = "starting" | "bootstrapping" | "ready" | "degraded" | "failed";
 export type ResourceLoadState = "loading" | "ready" | "empty" | "failed";
-export type WorkspaceResource = "projects" | "providers" | "providerCatalog" | "operators" | "setup" | "activity" | "approvals" | "assets" | "findings" | "evidence" | "notes" | "sources" | "reports";
+export type WorkspaceResource = "projects" | "providers" | "providerCatalog" | "operators" | "setup" | "activity" | "approvals" | "assets" | "findings" | "evidence" | "notes" | "sources" | "library" | "reports";
 export interface ResourceStatus {
   state: ResourceLoadState;
   error?: unknown;
 }
 
-const workspaceResources: WorkspaceResource[] = ["projects", "providers", "providerCatalog", "operators", "setup", "activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "reports"];
+const workspaceResources: WorkspaceResource[] = ["projects", "providers", "providerCatalog", "operators", "setup", "activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "library", "reports"];
 const initialResourceStatus = Object.fromEntries(workspaceResources.map((key) => [key, { state: "loading" }])) as Record<WorkspaceResource, ResourceStatus>;
 
 export function evolveRunFromEvent(current: AgentRunSummary, event: RunEvent): AgentRunSummary {
@@ -124,6 +126,7 @@ interface WorkspaceContextValue {
   providers: ProviderHealth[];
   providerCatalog: ProviderCatalogEntry[];
   knowledgeSources: KnowledgeSource[];
+  libraryItems: LibraryItem[];
   previewMode: boolean;
   resolveApproval: (id: string, request: ApprovalDecisionRequest) => Promise<void>;
   refreshProvider: (id: string) => Promise<void>;
@@ -155,6 +158,9 @@ interface WorkspaceContextValue {
   ingestKnowledgeUrlSource: (request: KnowledgeUrlIngestRequest) => Promise<KnowledgeSource>;
   reindexKnowledgeSource: (id: string) => Promise<void>;
   removeKnowledgeSource: (id: string) => Promise<void>;
+  ingestLibraryItem: (request: LibraryIngestRequest) => Promise<LibraryItem>;
+  reindexLibraryItem: (id: string) => Promise<void>;
+  removeLibraryItem: (id: string) => Promise<void>;
   refreshSetupRuntime: () => Promise<void>;
   reconnect: () => void;
   retryResource: (resource: WorkspaceResource) => Promise<void>;
@@ -187,6 +193,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [providers, setProviders] = useState<ProviderHealth[]>([]);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([]);
+  const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [attempt, setAttempt] = useState(0);
   const [selectedEngagementId, setSelectedEngagementId] = useState(() => localStorage.getItem("nebula.engagement") ?? "");
   const [selectedMissionId, setSelectedMissionId] = useState(() => localStorage.getItem("nebula.mission") ?? "");
@@ -230,12 +237,13 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         setWorkspaceState("bootstrapping");
 
         const loadErrors: string[] = [];
-        const [engagementResult, providerResult, catalogResult, operatorResult, setupResult] = await Promise.allSettled([
+        const [engagementResult, providerResult, catalogResult, operatorResult, setupResult, libraryResult] = await Promise.allSettled([
           nextApi.listEngagements(controller.signal),
           nextApi.listProviders(controller.signal),
           nextApi.listProviderCatalog(controller.signal),
           nextApi.listOperatorProfiles(controller.signal),
           nextApi.setupStatus(controller.signal),
+          nextApi.listLibraryItems(controller.signal),
         ]);
         if (!active) return;
 
@@ -273,6 +281,11 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           setSetupStatus(undefined);
           loadErrors.push("setup status");
         }
+        if (libraryResult.status === "fulfilled") setLibraryItems(libraryResult.value.items);
+        else {
+          setLibraryItems([]);
+          loadErrors.push("library");
+        }
         setResourceStatus((current) => ({
           ...current,
           projects: engagementResult.status === "fulfilled" ? { state: engagementItems.length ? "ready" : "empty" } : { state: "failed", error: engagementResult.reason },
@@ -280,6 +293,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           providerCatalog: catalogResult.status === "fulfilled" ? { state: catalogResult.value.length ? "ready" : "empty" } : { state: "failed", error: catalogResult.reason },
           operators: operatorResult.status === "fulfilled" ? { state: operatorResult.value.length ? "ready" : "empty" } : { state: "failed", error: operatorResult.reason },
           setup: setupResult.status === "fulfilled" ? { state: "ready" } : { state: "failed", error: setupResult.reason },
+          library: libraryResult.status === "fulfilled" ? { state: libraryResult.value.items.length ? "ready" : "empty" } : { state: "failed", error: libraryResult.reason },
         }));
 
         let nextRun: AgentRunSummary | undefined;
@@ -807,6 +821,40 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     [api, coreState],
   );
 
+  const ingestLibraryItem = useCallback(
+    async (request: LibraryIngestRequest) => {
+      if (coreState !== "online" || !api) {
+        throw new Error("Nebula Core must be online to add a Library item.");
+      }
+      const created = await api.ingestLibraryItem(request);
+      setLibraryItems((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      return created;
+    },
+    [api, coreState],
+  );
+
+  const reindexLibraryItem = useCallback(
+    async (id: string) => {
+      if (coreState !== "online" || !api) {
+        throw new Error("Nebula Core must be online to reindex a Library item.");
+      }
+      const updated = await api.reindexLibraryItem(id);
+      setLibraryItems((current) => current.map((item) => item.id === id ? updated : item));
+    },
+    [api, coreState],
+  );
+
+  const removeLibraryItem = useCallback(
+    async (id: string) => {
+      if (coreState !== "online" || !api) {
+        throw new Error("Nebula Core must be online to remove a Library item.");
+      }
+      await api.deleteLibraryItem(id);
+      setLibraryItems((current) => current.filter((item) => item.id !== id));
+    },
+    [api, coreState],
+  );
+
   const value = useMemo(
     () => ({
       api,
@@ -835,6 +883,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       providers,
       providerCatalog,
       knowledgeSources,
+      libraryItems,
       previewMode: false,
       resolveApproval,
       refreshProvider,
@@ -866,6 +915,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       ingestKnowledgeUrlSource,
       reindexKnowledgeSource,
       removeKnowledgeSource,
+      ingestLibraryItem,
+      reindexLibraryItem,
+      removeLibraryItem,
       refreshSetupRuntime,
       reconnect,
       retryResource,
@@ -891,6 +943,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       providers,
       providerCatalog,
       knowledgeSources,
+      libraryItems,
       reconnect,
       addProvider,
       updateProvider,
@@ -920,6 +973,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       ingestKnowledgeUrlSource,
       reindexKnowledgeSource,
       removeKnowledgeSource,
+      ingestLibraryItem,
+      reindexLibraryItem,
+      removeLibraryItem,
       refreshSetupRuntime,
       refreshProvider,
       reverifyProvider,

@@ -1537,6 +1537,19 @@ class KnowledgeSource(Entity):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class LibraryItem(Entity):
+    """A reusable knowledge item owned by the local Nebula workspace."""
+
+    entity_kind: ClassVar[str] = "library_items"
+    name: str
+    source_type: str
+    artifact_id: str | None = None
+    status: str = "ready"
+    citation: str | None = None
+    document_count: int = Field(default=0, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class ChatRole(StringEnum):
     SYSTEM = "system"
     USER = "user"
@@ -2261,6 +2274,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     HarnessSession,
     SourceSnapshot,
     KnowledgeSource,
+    LibraryItem,
     ScopeImport,
     ChatSession,
     ChatTurn,
