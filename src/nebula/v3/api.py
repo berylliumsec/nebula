@@ -148,6 +148,7 @@ from .domain import (
     HarnessSession,
     HarnessTurn,
     KnowledgeSource,
+    LibraryItem,
     MissionGrant,
     NebulaModel,
     OperationEvent,
@@ -212,9 +213,12 @@ from .knowledge import (
     UnsupportedDocumentError,
     fetch_url_document,
     ingest_document,
+    ingest_library_item,
     knowledge_summary,
+    library_item_summary,
     migrate_inline_knowledge_indexes,
     reindex_document,
+    reindex_library_item,
 )
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError, KnowledgeIndexStatus
 from .missions import (
@@ -338,6 +342,7 @@ CUSTOM_RESOURCES = {
     "automation_policies",
     "chat_turns",
     "context_snapshots",
+    "library_items",
     "operator_profiles",
     "runner_profiles",
 }
@@ -553,6 +558,15 @@ class KnowledgeIngestRequest(NebulaModel):
 class KnowledgeUrlIngestRequest(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
     url: str = Field(min_length=1, max_length=2_048)
+
+
+class LibraryIngestRequest(NebulaModel):
+    filename: str = Field(min_length=1, max_length=1024)
+    media_type: str | None = Field(default=None, max_length=200)
+    content_base64: str = Field(
+        min_length=1,
+        max_length=4 * ((MAX_DOCUMENT_BYTES + 2) // 3),
+    )
 
 
 class MissionStartRequest(NebulaModel):
@@ -5569,6 +5583,147 @@ def create_app(
                     stage="knowledge-delete",
                     retryable=True,
                     safe_failure_cause="The local Chroma index was unavailable.",
+                    exception=exc,
+                )
+        return Response(status_code=204)
+
+    @app.get(
+        f"{API_PREFIX}/library/items",
+        response_model=list[LibraryItem],
+        tags=["library"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_library_items(
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[LibraryItem]:
+        return [
+            library_item_summary(item)
+            for item in store.list_entities(
+                LibraryItem,
+                offset=offset,
+                limit=limit,
+            )
+        ]
+
+    @app.get(
+        f"{API_PREFIX}/library/items/{{item_id}}",
+        response_model=LibraryItem,
+        tags=["library"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_library_item(item_id: str) -> LibraryItem:
+        return library_item_summary(store.get(LibraryItem, item_id))
+
+    @app.post(
+        f"{API_PREFIX}/library/items/ingest",
+        response_model=LibraryItem,
+        status_code=201,
+        tags=["library"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def ingest_global_library_item(
+        request: LibraryIngestRequest,
+    ) -> LibraryItem:
+        if artifact_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Library ingestion requires an artifact store",
+            )
+        try:
+            content = base64.b64decode(request.content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="content_base64 must be valid base64",
+            ) from exc
+        if len(content) > MAX_DOCUMENT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"document exceeds the "
+                    f"{MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB limit"
+                ),
+            )
+        try:
+            created = await asyncio.to_thread(
+                ingest_library_item,
+                store=store,
+                artifact_store=artifact_store,
+                filename=request.filename,
+                data=content,
+                media_type=request.media_type,
+                knowledge_index=knowledge_index,
+            )
+            return library_item_summary(created)
+        except DocumentTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except UnsupportedDocumentError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        except InvalidDocumentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except KnowledgeIndexError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="the local Library index is unavailable; retry or reindex the item",
+            ) from exc
+
+    @app.post(
+        f"{API_PREFIX}/library/items/{{item_id}}/reindex",
+        response_model=LibraryItem,
+        tags=["library"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def reindex_global_library_item(item_id: str) -> LibraryItem:
+        if artifact_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Library reindexing requires an artifact store",
+            )
+        try:
+            updated = await asyncio.to_thread(
+                reindex_library_item,
+                store=store,
+                artifact_store=artifact_store,
+                item_id=item_id,
+                knowledge_index=knowledge_index,
+            )
+            return library_item_summary(updated)
+        except DocumentTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except UnsupportedDocumentError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        except InvalidDocumentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except KnowledgeIndexError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="the local Library index is unavailable; retry reindexing",
+            ) from exc
+
+    @app.delete(
+        f"{API_PREFIX}/library/items/{{item_id}}",
+        status_code=204,
+        tags=["library"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_global_library_item(item_id: str) -> Response:
+        """Remove an item from retrieval while retaining its immutable artifact."""
+
+        store.delete(LibraryItem, item_id)
+        if knowledge_index is not None:
+            try:
+                await asyncio.to_thread(knowledge_index.delete_library_item, item_id)
+            except KnowledgeIndexError as exc:
+                record_diagnostic(
+                    "warning",
+                    "knowledge",
+                    "knowledge.library.delete_index_failed",
+                    "A Library item was removed but its rebuildable index cleanup failed.",
+                    outcome="degraded",
+                    stage="knowledge-delete",
+                    retryable=True,
+                    safe_failure_cause="The local Chroma Library collection was unavailable.",
                     exception=exc,
                 )
         return Response(status_code=204)

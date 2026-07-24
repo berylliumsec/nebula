@@ -5,6 +5,7 @@ import { AppShell } from "./components/AppShell";
 const SessionsPage = lazy(() => import("./pages/SessionsPage").then((module) => ({ default: module.SessionsPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((module) => ({ default: module.FindingsPage })));
 const ProjectPage = lazy(() => import("./pages/ProjectPage").then((module) => ({ default: module.ProjectPage })));
+const LibraryPage = lazy(() => import("./pages/LibraryPage").then((module) => ({ default: module.LibraryPage })));
 const ReportsPage = lazy(() => import("./pages/ReportsPage").then((module) => ({ default: module.ReportsPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 
@@ -27,6 +28,7 @@ export function App() {
         <Route path="findings" element={route(<FindingsPage />)} />
         <Route path="reports" element={route(<ReportsPage />)} />
         <Route path="project" element={route(<ProjectPage />)} />
+        <Route path="library" element={route(<LibraryPage />)} />
         <Route path="settings" element={route(<SettingsPage />)} />
         <Route path="sessions" element={<LegacyRedirect destination="/" view="chat" />} />
         <Route path="agents" element={<LegacyRedirect destination="/" view="missions" />} />

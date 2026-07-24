@@ -1,5 +1,6 @@
 import {
   Bug,
+  BookMarked,
   FileText,
   FolderKanban,
   Settings,
@@ -60,6 +61,16 @@ export const navigationItems: NavigationItem[] = [
     description: "Project overview, assets, evidence, and sources",
     icon: FolderKanban,
     shortcut: "G P",
+    group: "workspace",
+  },
+  {
+    commandId: "navigate.library",
+    path: "/library",
+    label: "Library",
+    aliases: ["Knowledge base", "Repository", "Documents", "Scripts", "Chroma"],
+    description: "Reusable documents and scripts shared across projects",
+    icon: BookMarked,
+    shortcut: "G L",
     group: "workspace",
   },
   {

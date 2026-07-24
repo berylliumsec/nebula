@@ -1226,6 +1226,34 @@ export interface KnowledgeSource {
   };
 }
 
+export interface LibraryItem {
+  id: Identifier;
+  name: string;
+  sourceType: string;
+  artifactId?: Identifier;
+  status: string;
+  citation?: string;
+  documentCount: number;
+  createdAt: string;
+  updatedAt: string;
+  metadata: {
+    filename?: string;
+    mediaType?: string;
+    size?: number;
+    sha256?: string;
+    chunkCount?: number;
+    indexedAt?: string;
+    scope?: string;
+    [key: string]: unknown;
+  };
+}
+
+export interface LibraryIngestRequest {
+  filename: string;
+  mediaType?: string;
+  contentBase64: string;
+}
+
 export interface KnowledgeIngestRequest {
   engagementId: Identifier;
   filename: string;

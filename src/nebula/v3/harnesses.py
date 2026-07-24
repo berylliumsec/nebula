@@ -74,6 +74,7 @@ from .domain import (
     HarnessTurnOrigin,
     HarnessTurnStatus,
     KnowledgeSource,
+    LibraryItem,
     McpApprovalMode,
     McpAuthMode,
     McpCwdPolicy,
@@ -5746,28 +5747,47 @@ class HarnessRuntimeService:
         if not requested or self.knowledge_retriever is None:
             return False
         eligible = False
+        engagement_sources: list[KnowledgeSource | LibraryItem] = []
         offset = 0
-        while True:
-            sources = self.store.list_entities(
+        while len(engagement_sources) < 10_000:
+            knowledge_page = self.store.list_entities(
                 KnowledgeSource,
                 engagement_id=engagement_id,
                 offset=offset,
                 limit=1_000,
             )
+            engagement_sources.extend(knowledge_page)
+            if len(knowledge_page) < 1_000:
+                break
+            offset += len(knowledge_page)
+        library_sources: list[KnowledgeSource | LibraryItem] = []
+        offset = 0
+        while len(library_sources) < 10_000:
+            library_page = self.store.list_entities(
+                LibraryItem,
+                offset=offset,
+                limit=1_000,
+            )
+            library_sources.extend(library_page)
+            if len(library_page) < 1_000:
+                break
+            offset += len(library_page)
+        source_groups = (engagement_sources, library_sources)
+        for sources in source_groups:
             for source in sources:
                 if source.status.casefold() != "ready":
                     continue
                 local_only = source.metadata.get("local_only") is True
                 privacy = source.metadata.get("privacy")
                 local_only = local_only or (
-                    isinstance(privacy, dict) and privacy.get("local_only") is True
+                    isinstance(privacy, dict)
+                    and privacy.get("local_only") is True
                 )
                 if profile.privacy.local_only or not local_only:
                     eligible = True
                     break
-            if eligible or len(sources) < 1_000:
+            if eligible:
                 break
-            offset += len(sources)
         if not eligible:
             return False
         if profile.privacy.local_only:
