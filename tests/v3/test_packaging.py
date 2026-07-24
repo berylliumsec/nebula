@@ -316,15 +316,15 @@ def test_core_payload_staging_excludes_caches_and_source_maps(tmp_path):
     assert not (staged_frontend / "assets/app.js.map").exists()
 
 
-def test_tauri_dev_hook_builds_core_and_required_resources_before_vite():
+def test_desktop_dev_prepares_core_before_tauri_and_starts_vite_in_hook():
     tauri = json.loads(
         (ROOT / "ui/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
     )
     package = json.loads((ROOT / "ui/package.json").read_text(encoding="utf-8"))
 
-    assert tauri["build"]["beforeDevCommand"] == "npm run dev:desktop"
+    assert tauri["build"]["beforeDevCommand"] == "npm run dev"
     assert package["scripts"]["dev:desktop"] == (
-        "npm run build && npm run build:core && npm run dev"
+        "npm run build && npm run build:core && tauri dev"
     )
     assert package["scripts"]["build:core"] == (
         "poetry -C .. run python -m scripts.build_nebula_core"

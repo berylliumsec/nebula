@@ -17,13 +17,14 @@ To run the desktop application, install the repository's Poetry development
 dependencies and launch Tauri from the repository root:
 
 ```bash
-npm --prefix ui run tauri -- dev
+npm --prefix ui run dev:desktop
 ```
 
-The Tauri development hook builds the browser workspace, freezes the current
-Nebula Core into the target-triple sidecar path, generates its build metadata
-and third-party notices, and then starts Vite. The first launch therefore takes
-longer than browser-only development with `npm run dev`.
+The desktop launcher first builds the browser workspace, freezes the current
+Nebula Core into the target-triple sidecar path, and generates its build
+metadata and third-party notices. It starts Tauri only after those steps finish;
+Tauri's development hook can then start Vite immediately. The first launch
+therefore takes longer than browser-only development with `npm run dev`.
 
 ## Usage recordings
 
