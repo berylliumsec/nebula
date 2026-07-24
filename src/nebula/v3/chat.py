@@ -2271,9 +2271,7 @@ class ChatService:
                 limit=1_000,
             )
             ready_sources.update(
-                (item.id, item)
-                for item in items
-                if item.status.casefold() == "ready"
+                (item.id, item) for item in items if item.status.casefold() == "ready"
             )
             if len(items) < 1_000:
                 break
@@ -2284,9 +2282,7 @@ class ChatService:
             queries,
             limit=result_limit,
         )
-        matches.extend(
-            self.knowledge_index.query_library(queries, limit=result_limit)
-        )
+        matches.extend(self.knowledge_index.query_library(queries, limit=result_limit))
         candidates: list[_RetrievedChunk] = []
         for match in matches:
             source = ready_sources.get(match.source_id)

@@ -5780,8 +5780,7 @@ class HarnessRuntimeService:
                 local_only = source.metadata.get("local_only") is True
                 privacy = source.metadata.get("privacy")
                 local_only = local_only or (
-                    isinstance(privacy, dict)
-                    and privacy.get("local_only") is True
+                    isinstance(privacy, dict) and privacy.get("local_only") is True
                 )
                 if profile.privacy.local_only or not local_only:
                     eligible = True
