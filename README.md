@@ -91,7 +91,7 @@ cd nebula
 poetry install --with dev
 poetry run playwright install chromium
 npm --prefix ui ci
-npm --prefix ui run tauri -- dev
+npm --prefix ui run dev:desktop
 ```
 
 The Playwright browser renders JavaScript-driven URL knowledge sources. If Chrome or Chromium is already installed, Nebula can use that system browser instead. The final command builds the local Nebula Core sidecar, starts the UI development server, and opens the native desktop directly from the checkout.
