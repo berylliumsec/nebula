@@ -17,6 +17,7 @@ from pydantic import SecretStr
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.chat import ChatService
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
 from nebula.v3.domain import (
@@ -350,7 +351,7 @@ def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_
             complete_owner(turn, final_message, usage)
 
         runtime._complete_owner = observed_complete_owner
-        _, chat_turn, harness_turn = runtime.prepare_chat(
+        chat, chat_turn, harness_turn = runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -758,6 +759,196 @@ def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path
         owner = store.get(ChatTurn, chat_turn.id)
         assert owner.execution_tool_calls == 1
         assert owner.artifact_queries == 0
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
+def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        source = store.create(
+            KnowledgeSource(
+                id="knowledge-a",
+                engagement_id=engagement.id,
+                name="target.txt",
+                source_type="text/plain",
+                citation="Target notes",
+                metadata={
+                    "chunks": [
+                        {
+                            "id": "chunk-a",
+                            "text": (
+                                "The relevant harness marker is HARNESS_KNOWLEDGE_443."
+                            ),
+                        }
+                    ]
+                },
+            )
+        )
+        other = store.create(Engagement(id="eng-b", name="Engagement B"))
+        store.create(
+            KnowledgeSource(
+                id="knowledge-b",
+                engagement_id=other.id,
+                name="private.txt",
+                source_type="text/plain",
+                metadata={
+                    "chunks": [
+                        {
+                            "id": "chunk-b",
+                            "text": (
+                                "The other engagement marker is "
+                                "CROSS_ENGAGEMENT_SECRET."
+                            ),
+                        }
+                    ]
+                },
+            )
+        )
+        service = ChatService(store)
+        runtime.bind_knowledge_retriever(
+            lambda engagement_id, query, allow_local_only, token_budget: (
+                service.harness_knowledge_search(
+                    engagement_id,
+                    query,
+                    allow_local_only=allow_local_only,
+                    token_budget=token_budget,
+                )
+            )
+        )
+        chat, chat_turn, harness_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Find the relevant harness marker",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            include_knowledge=True,
+        )
+        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        catalog = runtime._gateway_catalog(session)["tools"]
+        assert (
+            next(item for item in catalog if item["name"] == "knowledge.search")[
+                "inputSchema"
+            ]["additionalProperties"]
+            is False
+        )
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=harness_turn.id, connection=None, task=None
+        )
+
+        response = await runtime._gateway_call(
+            session,
+            "knowledge.search",
+            {"query": "relevant harness marker"},
+        )
+
+        assert response["isError"] is False
+        payload = response["structuredContent"]
+        assert payload["result_count"] == 1
+        assert payload["content_trust"] == "untrusted_data"
+        assert payload["matches"][0]["source_id"] == source.id
+        assert "HARNESS_KNOWLEDGE_443" in payload["matches"][0]["text"]
+        assert "CROSS_ENGAGEMENT_SECRET" not in json.dumps(payload)
+        latest_chat_turn = store.get(ChatTurn, chat_turn.id)
+        call = store.get(ToolCall, latest_chat_turn.tool_call_ids[0])
+        assert call.tool_name == "knowledge.search"
+        assert call.status == ToolCallStatus.COMPLETE
+        assert call.engagement_id == engagement.id
+        latest_turn = store.get(HarnessTurn, harness_turn.id)
+        assert latest_turn.metadata["citations"][0]["source_id"] == source.id
+        with pytest.raises(HarnessConfigurationError, match="only a query"):
+            await runtime._gateway_call(
+                session,
+                "knowledge.search",
+                {"query": "marker", "engagement_id": other.id},
+            )
+        runtime._complete_owner(
+            latest_turn,
+            "The marker is documented.",
+            ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        )
+        messages = [
+            item
+            for item in store.list_entities(
+                ChatMessage, engagement_id=engagement.id, limit=100
+            )
+            if item.session_id == chat.id
+        ]
+        assert messages[-1].citations[0].source_id == source.id
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
+def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        profile = store.update(
+            HarnessProfile,
+            profile.id,
+            {"privacy": {"local_only": False, "permits_sensitive_data": True}},
+            expected_revision=profile.revision,
+        )
+        for source_id, text, local_only in (
+            ("shared", "Shared deployment marker PUBLIC_MARKER.", False),
+            ("local", "Local deployment marker LOCAL_ONLY_SECRET.", True),
+        ):
+            store.create(
+                KnowledgeSource(
+                    id=source_id,
+                    engagement_id=engagement.id,
+                    name=f"{source_id}.txt",
+                    source_type="text/plain",
+                    metadata={
+                        "local_only": local_only,
+                        "chunks": [
+                            {
+                                "id": f"{source_id}-chunk",
+                                "text": text,
+                            }
+                        ],
+                    },
+                )
+            )
+        service = ChatService(store)
+        runtime.bind_knowledge_retriever(
+            lambda engagement_id, query, allow_local_only, token_budget: (
+                service.harness_knowledge_search(
+                    engagement_id,
+                    query,
+                    allow_local_only=allow_local_only,
+                    token_budget=token_budget,
+                )
+            )
+        )
+        _, _, harness_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Find deployment markers",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            include_knowledge=True,
+            allow_cloud_knowledge=True,
+        )
+        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=harness_turn.id, connection=None, task=None
+        )
+
+        response = await runtime._gateway_call(
+            session, "knowledge.search", {"query": "deployment marker"}
+        )
+
+        serialized = json.dumps(response["structuredContent"])
+        assert "PUBLIC_MARKER" in serialized
+        assert "LOCAL_ONLY_SECRET" not in serialized
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
@@ -1522,7 +1713,7 @@ def test_harness_export_closes_references_without_machine_credentials(tmp_path):
     assert exported_session["mcp_snapshot"][0]["bearer_secret_ref"] is None
 
 
-def test_harness_chat_reuses_bounded_knowledge_with_privacy_confirmation(tmp_path):
+def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(tmp_path):
     store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
     store.create(
         KnowledgeSource(
@@ -1573,15 +1764,22 @@ def test_harness_chat_reuses_bounded_knowledge_with_privacy_confirmation(tmp_pat
             json={**payload, "allow_cloud_knowledge": True},
         )
         assert allowed.status_code == 200, allowed.text
-        assert allowed.json()["citations"][0]["source_id"] == "knowledge-a"
-        assert "HARNESS_KNOWLEDGE_443" in adapter.connections[0].prompts[0]
+        assert allowed.json()["citations"] == []
+        assert "HARNESS_KNOWLEDGE_443" not in adapter.connections[0].prompts[0]
+        harness_turn = store.get(HarnessTurn, allowed.json()["harness_turn_id"])
+        assert harness_turn.metadata["knowledge_access"] is True
+        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        assert any(
+            item["name"] == "knowledge.search"
+            for item in runtime._gateway_catalog(session)["tools"]
+        )
         messages = [
             item
             for item in store.list_entities(ChatMessage, engagement_id=engagement.id)
             if item.session_id == allowed.json()["session_id"]
         ]
         assert messages[0].content == "What harness marker is relevant?"
-        assert messages[-1].citations[0].source_id == "knowledge-a"
+        assert messages[-1].citations == []
 
 
 def test_remote_harness_mcp_requires_profile_policy_and_turn_confirmation(tmp_path):

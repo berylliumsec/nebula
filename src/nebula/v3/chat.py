@@ -209,6 +209,22 @@ class HarnessKnowledgeContext:
 
 
 @dataclass(frozen=True)
+class HarnessKnowledgeMatch:
+    """One bounded, source-backed result returned through the harness gateway."""
+
+    text: str
+    citation: ChatCitation
+    local_only: bool
+
+
+@dataclass(frozen=True)
+class HarnessKnowledgeSearchResult:
+    """Structured retrieval results without exposing the underlying index."""
+
+    matches: list[HarnessKnowledgeMatch]
+
+
+@dataclass(frozen=True)
 class _RetrievedChunk:
     citation: ChatCitation
     text: str
@@ -487,18 +503,57 @@ class ChatService:
     ) -> HarnessKnowledgeContext:
         """Reuse engagement retrieval without provider planning or history replay."""
 
-        if not self._has_ready_knowledge(engagement_id):
-            return HarnessKnowledgeContext("", [], False)
-        chunks = self._retrieve(
+        result = self.harness_knowledge_search(
             engagement_id,
-            [query],
-            redact=False,
-            token_budget=max(1, min(token_budget, 8_192)),
+            query,
+            allow_local_only=True,
+            token_budget=token_budget,
         )
+        chunks = [
+            _RetrievedChunk(
+                citation=match.citation,
+                text=match.text,
+                local_only=match.local_only,
+                score=0,
+                ordinal=index,
+            )
+            for index, match in enumerate(result.matches)
+        ]
         return HarnessKnowledgeContext(
             text=_reference_instructions(chunks, trusted_operator_help=False),
             citations=[chunk.citation for chunk in chunks],
             contains_local_only=any(chunk.local_only for chunk in chunks),
+        )
+
+    def harness_knowledge_search(
+        self,
+        engagement_id: str,
+        query: str,
+        *,
+        allow_local_only: bool,
+        token_budget: int = 4_096,
+    ) -> HarnessKnowledgeSearchResult:
+        """Return a bounded engagement-scoped search for a managed harness."""
+
+        clean_query = query.strip()
+        if not clean_query or not self._has_ready_knowledge(engagement_id):
+            return HarnessKnowledgeSearchResult([])
+        chunks = self._retrieve(
+            engagement_id,
+            [clean_query],
+            redact=not allow_local_only,
+            token_budget=max(1, min(token_budget, 8_192)),
+            allow_local_only=allow_local_only,
+        )
+        return HarnessKnowledgeSearchResult(
+            [
+                HarnessKnowledgeMatch(
+                    text=chunk.text,
+                    citation=chunk.citation,
+                    local_only=chunk.local_only,
+                )
+                for chunk in chunks
+            ]
         )
 
     async def prepare_async(self, request: ChatCompletionRequest) -> PreparedChat:
@@ -2105,6 +2160,7 @@ class ChatService:
         *,
         redact: bool,
         token_budget: int,
+        allow_local_only: bool = True,
     ) -> list[_RetrievedChunk]:
         query_terms = [
             {
@@ -2153,6 +2209,8 @@ class ChatService:
             for item in legacy_candidates
             if item.citation.chunk_id not in known_chunks
         )
+        if not allow_local_only:
+            candidates = [item for item in candidates if not item.local_only]
         candidates.sort(key=lambda item: (-item.score, item.ordinal))
         selected: list[_RetrievedChunk] = []
         tokens = 0
