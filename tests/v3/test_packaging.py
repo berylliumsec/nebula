@@ -23,6 +23,10 @@ from scripts.package_audit import (
     inspect_installer_tree,
     validate_members,
 )
+from scripts.stage_playwright_runtime import (
+    PlaywrightRuntimeStageError,
+    stage_playwright_runtime,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,6 +66,20 @@ def test_protected_release_distribution_is_linux_x86_64_only():
         "notarytool",
     ):
         assert unsupported not in workflows
+
+
+def test_release_stages_and_smoke_tests_bundled_playwright_chromium():
+    release = (ROOT / ".github/workflows/nebula3-release.yml").read_text(
+        encoding="utf-8"
+    )
+    continuous_integration = (ROOT / ".github/workflows/ci.yml").read_text(
+        encoding="utf-8"
+    )
+    command = "python -m scripts.stage_playwright_runtime"
+    assert command in release
+    assert command in continuous_integration
+    assert "ui/src-tauri/resources/playwright-browsers" in release
+    assert "--dump-dom about:blank" in release
 
 
 def test_updater_manifest_supports_validated_recovery_with_native_libraries():
@@ -316,6 +334,65 @@ def test_core_payload_staging_excludes_caches_and_source_maps(tmp_path):
     assert not (staged_frontend / "assets/app.js.map").exists()
 
 
+def test_playwright_runtime_staging_keeps_only_verified_generated_payload(tmp_path):
+    destination = tmp_path / "playwright-browsers"
+    destination.mkdir()
+    (destination / ".gitignore").write_text("*\n", encoding="utf-8")
+    (destination / "stale-browser").write_text("stale\n", encoding="utf-8")
+    commands: list[tuple[list[str], str]] = []
+
+    def install(command, *, env, check, text):
+        assert check is True
+        assert text is True
+        runtime = Path(env["PLAYWRIGHT_BROWSERS_PATH"])
+        executable = (
+            runtime / "chromium_headless_shell-test" / "chrome-linux" / "headless_shell"
+        )
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"browser")
+        executable.chmod(0o755)
+        (executable.parent / "LICENSE.headless_shell").write_text(
+            "Chromium license\n",
+            encoding="utf-8",
+        )
+        commands.append((command, env["PLAYWRIGHT_BROWSERS_PATH"]))
+        return subprocess.CompletedProcess(command, 0)
+
+    manifest = stage_playwright_runtime(
+        destination,
+        target="x86_64-unknown-linux-gnu",
+        run=install,
+    )
+
+    assert not (destination / "stale-browser").exists()
+    assert (destination / ".gitignore").is_file()
+    assert manifest["browser"] == "chromium-headless-shell"
+    assert manifest["executables"] == [
+        "chromium_headless_shell-test/chrome-linux/headless_shell"
+    ]
+    assert manifest["licenses"] == [
+        "chromium_headless_shell-test/chrome-linux/LICENSE.headless_shell"
+    ]
+    assert commands[0][0][-3:] == ["install", "--only-shell", "chromium"]
+    assert commands[0][1] == str(destination.resolve())
+
+
+def test_playwright_runtime_staging_rejects_a_symlink_destination(tmp_path):
+    target = tmp_path / "outside"
+    target.mkdir()
+    destination = tmp_path / "playwright-browsers"
+    destination.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(
+        PlaywrightRuntimeStageError,
+        match="cannot be a symbolic link",
+    ):
+        stage_playwright_runtime(
+            destination,
+            target="x86_64-unknown-linux-gnu",
+        )
+
+
 def test_desktop_dev_prepares_core_before_tauri_and_starts_vite_in_hook():
     tauri = json.loads(
         (ROOT / "ui/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
@@ -333,6 +410,10 @@ def test_desktop_dev_prepares_core_before_tauri_and_starts_vite_in_hook():
     assert (
         "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt"
         in tauri["bundle"]["resources"]
+    )
+    assert (
+        tauri["bundle"]["resources"]["resources/playwright-browsers"]
+        == "playwright-browsers"
     )
 
 
@@ -413,12 +494,45 @@ def test_artifact_member_audit_rejects_build_residue():
 def test_installer_tree_gate_requires_legal_files_and_rejects_toolchains(tmp_path):
     binary = tmp_path / "usr/bin"
     legal = tmp_path / "usr/share/doc/nebula"
+    playwright = (
+        tmp_path
+        / "usr/lib/nebula/playwright-browsers"
+        / "chromium_headless_shell-test/chrome-linux"
+    )
     binary.mkdir(parents=True)
     legal.mkdir(parents=True)
+    playwright.mkdir(parents=True)
     for name in ("nebula-ui", "nebula-core"):
         (binary / name).write_bytes(b"binary")
     (legal / "LICENSE").write_text("BSD\n", encoding="utf-8")
     (legal / "THIRD_PARTY_NOTICES.txt").write_text("Notices\n", encoding="utf-8")
+    browser = playwright / "headless_shell"
+    browser.write_bytes(b"browser")
+    browser.chmod(0o755)
+    (playwright / "LICENSE.headless_shell").write_text(
+        "Chromium license\n",
+        encoding="utf-8",
+    )
+    (
+        tmp_path / "usr/lib/nebula/playwright-browsers/nebula-playwright-runtime.json"
+    ).write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "browser": "chromium-headless-shell",
+                "playwright_version": "1.61.0",
+                "target": "x86_64-unknown-linux-gnu",
+                "payload_bytes": 7,
+                "executables": [
+                    "chromium_headless_shell-test/chrome-linux/headless_shell"
+                ],
+                "licenses": [
+                    "chromium_headless_shell-test/chrome-linux/LICENSE.headless_shell"
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     assert inspect_installer_tree(tmp_path)["status"] == "ok"
 
     (binary / "python3").write_bytes(b"toolchain")

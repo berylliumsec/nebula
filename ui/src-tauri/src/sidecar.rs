@@ -2,7 +2,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, SocketAddrV4, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, ChildStderr, ChildStdin, Command, Stdio},
     sync::{Mutex, mpsc},
     thread::JoinHandle,
@@ -26,6 +26,8 @@ const MAX_HEALTH_RESPONSE_BYTES: u64 = 64 * 1024;
 const MAX_STARTUP_LOG_BYTES: usize = 256 * 1024;
 const MAX_PENDING_LOG_BYTES: usize = 16 * 1024;
 const STARTUP_LOG_NAME: &str = "nebula-core-startup.log";
+const PLAYWRIGHT_RESOURCE_DIRECTORY: &str = "playwright-browsers";
+const PLAYWRIGHT_RESOURCE_MANIFEST: &str = "nebula-playwright-runtime.json";
 const LOG_TRUNCATED_MARKER: &[u8] = b"\n[nebula] startup log truncated at 256 KiB\n";
 const TRUSTED_SYSTEM_PATH: &str =
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/homebrew/bin";
@@ -189,6 +191,26 @@ fn sibling_sidecar_path() -> Result<PathBuf, String> {
         return Err("the configured Nebula Core sidecar is not a file".to_string());
     }
     Ok(resolved)
+}
+
+fn bundled_playwright_browsers_path(resource_dir: &Path) -> Result<Option<PathBuf>, String> {
+    let candidate = resource_dir.join(PLAYWRIGHT_RESOURCE_DIRECTORY);
+    if !candidate.join(PLAYWRIGHT_RESOURCE_MANIFEST).is_file() {
+        return Ok(None);
+    }
+    let resolved_resource_dir = resource_dir
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve the Nebula resource directory: {error}"))?;
+    let resolved = candidate
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve the bundled Playwright runtime: {error}"))?;
+    if !resolved.is_dir() || !resolved.starts_with(&resolved_resource_dir) {
+        return Err(
+            "refusing to use a bundled Playwright runtime outside the application resources"
+                .to_string(),
+        );
+    }
+    Ok(Some(resolved))
 }
 
 fn secure_token() -> Result<String, String> {
@@ -843,6 +865,11 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
     let settings_path = app_data_dir.join("diagnostics-settings.json");
     let startup_log_path = log_dir.join(STARTUP_LOG_NAME);
     let mut startup_log_file = open_startup_log(&startup_log_path)?;
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("cannot locate the Nebula resource directory: {error}"))?;
+    let playwright_browsers = bundled_playwright_browsers_path(&resource_dir)?;
 
     let mut command = Command::new(sidecar);
     command
@@ -864,6 +891,10 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if let Some(path) = playwright_browsers {
+        command.env("PLAYWRIGHT_BROWSERS_PATH", path);
+    }
 
     for name in SIDECAR_ENV_ALLOWLIST {
         if let Some(value) = std::env::var_os(name) {
@@ -1281,6 +1312,35 @@ mod tests {
             "nebula-core"
         };
         assert_eq!(Path::new(name).components().count(), 1);
+    }
+
+    #[test]
+    fn bundled_playwright_runtime_requires_a_manifest_inside_resources() {
+        let directory = std::env::temp_dir().join(format!(
+            "nebula-playwright-resource-test-{}",
+            secure_token().expect("token generation should work")
+        ));
+        let browsers = directory.join(PLAYWRIGHT_RESOURCE_DIRECTORY);
+        fs::create_dir_all(&browsers).expect("browser resource should be created");
+        assert_eq!(
+            bundled_playwright_browsers_path(&directory)
+                .expect("an absent manifest should be accepted"),
+            None
+        );
+        fs::write(
+            browsers.join(PLAYWRIGHT_RESOURCE_MANIFEST),
+            b"{\"schema\":1}\n",
+        )
+        .expect("browser manifest should be written");
+        assert_eq!(
+            bundled_playwright_browsers_path(&directory).expect("a bundled runtime should resolve"),
+            Some(
+                browsers
+                    .canonicalize()
+                    .expect("browser resource should canonicalize")
+            )
+        );
+        fs::remove_dir_all(directory).expect("browser resource should be removed");
     }
 
     #[cfg(unix)]

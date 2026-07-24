@@ -49,7 +49,8 @@
     "licenseFile": "../../LICENSE.md",
     "resources": {
       "../../LICENSE.md": "licenses/LICENSE.md",
-      "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt"
+      "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt",
+      "resources/playwright-browsers": "playwright-browsers"
     },
     "shortDescription": "Local-first security engagement workspace",
     "longDescription": "Nebula provides a zero-setup security workbench with policy-controlled automation and evidence.",

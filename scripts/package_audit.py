@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -123,6 +124,7 @@ FORBIDDEN_INSTALLER_BINARIES = {
 }
 
 FORBIDDEN_RESIDUE_SUFFIXES = (".pyc", ".pyo", ".js.map", ".css.map")
+PLAYWRIGHT_RUNTIME_MANIFEST = "nebula-playwright-runtime.json"
 
 
 def _normalized(member: str) -> str:
@@ -234,15 +236,71 @@ def inspect_installer_tree(root: Path) -> dict[str, object]:
         missing.append("LICENSE")
     if not has_suffix("/THIRD_PARTY_NOTICES.txt"):
         missing.append("THIRD_PARTY_NOTICES.txt")
+    playwright_manifests = [
+        path for path in files if path.name == PLAYWRIGHT_RUNTIME_MANIFEST
+    ]
+    if len(playwright_manifests) != 1:
+        missing.append("bundled Playwright Chromium manifest")
     if missing:
         raise ArtifactAuditError(
             f"required installer content absent: {', '.join(missing)}"
         )
+    manifest_path = playwright_manifests[0]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ArtifactAuditError(
+            "bundled Playwright Chromium manifest is invalid"
+        ) from exc
+    executables = manifest.get("executables")
+    licenses = manifest.get("licenses")
+    if (
+        manifest.get("schema") != 1
+        or manifest.get("browser") != "chromium-headless-shell"
+        or not isinstance(manifest.get("playwright_version"), str)
+        or not manifest["playwright_version"]
+        or not isinstance(manifest.get("target"), str)
+        or not manifest["target"]
+        or not isinstance(manifest.get("payload_bytes"), int)
+        or manifest["payload_bytes"] <= 0
+        or not isinstance(executables, list)
+        or not executables
+        or not all(isinstance(value, str) and value for value in executables)
+        or not isinstance(licenses, list)
+        or not licenses
+        or not all(isinstance(value, str) and value for value in licenses)
+    ):
+        raise ArtifactAuditError(
+            "bundled Playwright Chromium manifest has an invalid contract"
+        )
+    runtime_root = manifest_path.parent.resolve()
+    for relative in executables:
+        executable = (runtime_root / relative).resolve()
+        if (
+            not executable.is_relative_to(runtime_root)
+            or not executable.is_file()
+            or not os.access(executable, os.X_OK)
+        ):
+            raise ArtifactAuditError(
+                "bundled Playwright Chromium executable is absent or not executable"
+            )
+    for relative in licenses:
+        license_file = (runtime_root / relative).resolve()
+        if (
+            not license_file.is_relative_to(runtime_root)
+            or not license_file.is_file()
+            or license_file.stat().st_size == 0
+        ):
+            raise ArtifactAuditError(
+                "bundled Playwright Chromium license payload is absent"
+            )
     return {
         "status": "ok",
         "tree": str(root),
         "file_count": len(files),
         "forbidden_path_count": 0,
+        "playwright_executable_count": len(executables),
+        "playwright_license_count": len(licenses),
     }
 
 

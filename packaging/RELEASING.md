@@ -67,9 +67,10 @@ manual draft creation must complete before a GitHub Release exists.
 
 The tag push starts the preparation workflow on Ubuntu 22.04 x86_64. It builds
 the direct AppImage and managed DEB, audits and self-tests both packages,
-verifies the updater signature against a tampered copy, generates SBOMs and
-checksums, creates GitHub provenance attestations, and runs clean DEB install
-tests on Ubuntu 24.04, Debian 12, and Kali rolling containers.
+smoke-tests the bundled Playwright Chromium headless shell, verifies the updater
+signature against a tampered copy, generates SBOMs and checksums, creates GitHub
+provenance attestations, and runs clean DEB install tests on Ubuntu 24.04,
+Debian 12, and Kali rolling containers.
 
 Record the successful preparation workflow run ID. Then manually run **Create
 Nebula 3 Linux release draft** with the immutable tag and preparation run ID:
@@ -94,6 +95,8 @@ Before publishing the draft, a release manager must verify:
 - updater signatures accept the original AppImage and reject the tampered test;
 - the AppImage and DEB layouts pass `nebula --self-test` and
   `nebula-core doctor --json`;
+- the bundled Playwright Chromium headless shell launches in the clean-install
+  matrix;
 - CycloneDX and SPDX SBOMs, SHA-256 sums, and GitHub provenance attestations are
   present for every required deliverable;
 - the version is marked as a prerelease when it contains a semantic-version
