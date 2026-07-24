@@ -81,6 +81,10 @@ REQUIRED_MEMBERS = (
     ("regex",),
     ("reportlab",),
     ("PIL",),
+    # URL knowledge rendering must be importable from the frozen Core and its
+    # bundled Node driver must remain executable after extraction.
+    ("playwright.sync_api",),
+    ("playwright/driver/node",),
     ("nebula/v3/BUILD_INFO.json", "nebula.v3.BUILD_INFO.json"),
     ("nebula/v3/migrations/script.py.mako",),
     ("nebula/v3/kali_tool_inventory.py",),

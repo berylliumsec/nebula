@@ -14,10 +14,12 @@ from scripts.nebula3_version import (
     set_version,
 )
 from scripts.build_nebula_core import macos_codesign_arguments
+from scripts.build_nebula_core import require_runtime_imports
 from scripts.build_nebula_core import stage_runtime_payload
 from scripts.package_audit import (
     ArtifactAuditError,
     FORBIDDEN_MODULES,
+    REQUIRED_MEMBERS,
     inspect_installer_tree,
     validate_members,
 )
@@ -226,6 +228,18 @@ def test_core_build_bundles_dynamic_chroma_runtime_modules():
         assert module in build_script
 
 
+def test_core_build_fails_before_freezing_when_playwright_is_absent(monkeypatch):
+    def missing_import(name: str):
+        raise ModuleNotFoundError("missing", name=name)
+
+    monkeypatch.setattr(
+        "scripts.build_nebula_core.importlib.import_module", missing_import
+    )
+
+    with pytest.raises(RuntimeError, match=r"poetry install --with dev"):
+        require_runtime_imports()
+
+
 def test_core_archive_rejects_nltk_and_its_pyinstaller_runtime_hook():
     for member in ("nltk", "nltk/tokenize/casual.py", "pyi_rth_nltk.py"):
         with pytest.raises(ArtifactAuditError, match="forbidden members"):
@@ -235,6 +249,15 @@ def test_core_archive_rejects_nltk_and_its_pyinstaller_runtime_hook():
 def test_core_archive_requires_timeout_capable_regex_runtime():
     with pytest.raises(ArtifactAuditError, match="required members absent: regex"):
         validate_members(["nebula.v3.cli", "nebula.v3.mcp_gateway"])
+
+
+def test_core_archive_requires_playwright_module_and_driver():
+    complete = {
+        candidate for alternatives in REQUIRED_MEMBERS for candidate in alternatives[:1]
+    }
+    for missing in ("playwright.sync_api", "playwright/driver/node"):
+        with pytest.raises(ArtifactAuditError, match="required members absent"):
+            validate_members(complete - {missing})
 
 
 def test_nebula3_runtime_has_no_conditional_import_fallbacks():
@@ -321,6 +344,8 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
             "regex",
             "reportlab",
             "PIL",
+            "playwright.sync_api",
+            "playwright/driver/node",
             "nebula/v3/BUILD_INFO.json",
             "nebula/v3/migrations/script.py.mako",
             "nebula/v3/kali_tool_inventory.py",

@@ -458,6 +458,20 @@ def test_playwright_snapshot_captures_dynamic_text_through_pinned_routes(
     assert b"<script" not in snapshot
 
 
+def test_missing_playwright_disables_url_rendering_without_breaking_core(monkeypatch):
+    def missing_import(name: str):
+        assert name == "playwright.sync_api"
+        raise ModuleNotFoundError("missing", name="playwright")
+
+    monkeypatch.setattr(knowledge_module.importlib, "import_module", missing_import)
+
+    with pytest.raises(
+        BrowserRuntimeUnavailableError,
+        match="Playwright is not installed",
+    ):
+        knowledge_module._load_playwright_runtime()
+
+
 @pytest.mark.parametrize(
     "url",
     [
