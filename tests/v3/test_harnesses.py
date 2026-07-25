@@ -102,7 +102,12 @@ class FakeConnection(HarnessConnection):
         )
         if self.fail:
             raise HarnessTransportError("uncertain transport loss token=do-not-store")
-        answer = f"Harness answer for {prompt}"
+        operator_prompt = prompt
+        prefix = "BEGIN OPERATOR REQUEST\n"
+        suffix = "\nEND OPERATOR REQUEST"
+        if prefix in prompt and prompt.endswith(suffix):
+            operator_prompt = prompt.split(prefix, 1)[1][: -len(suffix)]
+        answer = f"Harness answer for {operator_prompt}"
         yield HarnessEvent(type="message_delta", delta=answer[:8])
         yield HarnessEvent(type="message_delta", delta=answer[8:])
         if prompt == "Continue autonomously":
@@ -951,6 +956,159 @@ def test_harness_gateway_queries_workspace_library_without_project_sources(tmp_p
     asyncio.run(scenario())
 
 
+def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        project_source = store.create(
+            KnowledgeSource(
+                id="project-guide",
+                engagement_id=engagement.id,
+                name="guide.html",
+                source_type="html",
+                citation="https://docs.example.com/security/guide.html",
+                document_count=3,
+                metadata={
+                    "origin": "url",
+                    "source_url": "https://docs.example.com/security/guide.html",
+                    "chunks": [{"id": "guide-chunk", "text": "Deployment guide"}],
+                },
+            )
+        )
+        other = store.create(Engagement(id="eng-other", name="Other"))
+        store.create(
+            KnowledgeSource(
+                id="other-guide",
+                engagement_id=other.id,
+                name="private.html",
+                source_type="html",
+                citation="https://private.example/guide",
+                metadata={
+                    "source_url": "https://private.example/guide",
+                    "chunks": [{"id": "private-chunk", "text": "Private"}],
+                },
+            )
+        )
+        library_source = store.create(
+            LibraryItem(
+                id="library-guide",
+                name="shared.md",
+                source_type="markdown",
+                citation="Library: shared.md",
+                document_count=1,
+                metadata={
+                    "scope": "library",
+                    "chunks": [{"id": "shared-chunk", "text": "Shared"}],
+                },
+            )
+        )
+        service = ChatService(store)
+        runtime.bind_knowledge_retriever(
+            lambda engagement_id, query, allow_local_only, token_budget: (
+                service.harness_knowledge_search(
+                    engagement_id,
+                    query,
+                    allow_local_only=allow_local_only,
+                    token_budget=token_budget,
+                )
+            )
+        )
+        _, chat_turn, harness_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="List the available sources",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            include_knowledge=True,
+        )
+        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        catalog = runtime._gateway_catalog(session)["tools"]
+        assert {
+            item["name"] for item in catalog if item["name"].startswith("knowledge.")
+        } == {"knowledge.list", "knowledge.search"}
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=harness_turn.id,
+            connection=None,
+            task=None,
+        )
+
+        response = await runtime._gateway_call(
+            session,
+            "knowledge.list",
+            {"scope": "all", "limit": 100},
+        )
+
+        assert response["isError"] is False
+        payload = response["structuredContent"]
+        assert payload["total_count"] == 2
+        assert payload["next_offset"] is None
+        assert payload["content_trust"] == "untrusted_metadata"
+        assert payload["sources"] == [
+            {
+                "source_id": library_source.id,
+                "scope": "library",
+                "name": "shared.md",
+                "citation": "Library: shared.md",
+                "source_type": "markdown",
+                "source_url": None,
+                "document_count": 1,
+                "updated_at": library_source.updated_at.isoformat(),
+            },
+            {
+                "source_id": project_source.id,
+                "scope": "project",
+                "name": "guide.html",
+                "citation": "https://docs.example.com/security/guide.html",
+                "source_type": "html",
+                "source_url": "https://docs.example.com/security/guide.html",
+                "document_count": 3,
+                "updated_at": project_source.updated_at.isoformat(),
+            },
+        ]
+        assert "private.example" not in json.dumps(payload)
+        latest_chat_turn = store.get(ChatTurn, chat_turn.id)
+        call = store.get(ToolCall, latest_chat_turn.tool_call_ids[0])
+        assert call.tool_name == "knowledge.list"
+        assert call.status == ToolCallStatus.COMPLETE
+        with pytest.raises(HarnessConfigurationError, match="accepts only"):
+            await runtime._gateway_call(
+                session,
+                "knowledge.list",
+                {"engagement_id": other.id},
+            )
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+        _, _, disabled_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Do not use knowledge",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            include_knowledge=False,
+        )
+        disabled_session = store.get(HarnessSession, disabled_turn.harness_session_id)
+        runtime._active[disabled_session.id] = SimpleNamespace(
+            turn_id=disabled_turn.id,
+            connection=None,
+            task=None,
+        )
+        denied = await runtime._gateway_call(
+            disabled_session,
+            "knowledge.list",
+            {},
+        )
+        assert denied["isError"] is True
+        assert "not enabled" in denied["content"][0]["text"]
+        runtime._active.pop(disabled_session.id)
+        await runtime.close_session(disabled_session.id)
+
+    asyncio.run(scenario())
+
+
 def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
@@ -1015,6 +1173,11 @@ def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
         serialized = json.dumps(response["structuredContent"])
         assert "PUBLIC_MARKER" in serialized
         assert "LOCAL_ONLY_SECRET" not in serialized
+        listed = await runtime._gateway_call(
+            session, "knowledge.list", {"scope": "project"}
+        )
+        listed_sources = listed["structuredContent"]["sources"]
+        assert [item["source_id"] for item in listed_sources] == ["shared"]
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
@@ -1391,7 +1554,12 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
         failed = store.get(HarnessTurn, turn.id)
         assert failed.status == HarnessTurnStatus.INTERRUPTED
         assert store.get(ChatTurn, chat_turn.id).status.value == "interrupted"
-        assert adapter.connections[0].prompts == ["Do not replay me"]
+        assert len(adapter.connections[0].prompts) == 1
+        assert 'knowledge.list":"disabled"' in adapter.connections[0].prompts[0]
+        assert (
+            "BEGIN OPERATOR REQUEST\nDo not replay me\nEND OPERATOR REQUEST"
+            in adapter.connections[0].prompts[0]
+        )
 
         # A later Core instance reconciles uncertain durable state but never opens
         # a connection or reissues the objective.
@@ -1832,6 +2000,12 @@ def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(tmp_pat
         assert allowed.status_code == 200, allowed.text
         assert allowed.json()["citations"] == []
         assert "HARNESS_KNOWLEDGE_443" not in adapter.connections[0].prompts[0]
+        assert '"knowledge.list":"enabled"' in adapter.connections[0].prompts[0]
+        assert '"knowledge.search":"enabled"' in adapter.connections[0].prompts[0]
+        assigned_gateway_tools = {
+            item["name"] for item in adapter.connections[0].request.gateway_tools
+        }
+        assert {"knowledge.list", "knowledge.search"} <= assigned_gateway_tools
         harness_turn = store.get(HarnessTurn, allowed.json()["harness_turn_id"])
         assert harness_turn.metadata["knowledge_access"] is True
         session = store.get(HarnessSession, harness_turn.harness_session_id)
