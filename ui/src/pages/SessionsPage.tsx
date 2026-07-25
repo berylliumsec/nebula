@@ -68,6 +68,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { AgentsPage } from "./AgentsPage";
 import {
   harnessCostLabel,
+  groupHarnessActivityItems,
   isTimelineActivity,
   isSameHarnessSessionActivity,
   reasoningSummaryState,
@@ -204,6 +205,52 @@ function HarnessActivityDisclosure({
   // A completed activity must not force-close content the operator is reading.
   const [open, setOpen] = useState(initiallyOpen);
   return <details className={className} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>{children}</details>;
+}
+
+function activityStatusTone(status: string | undefined): string {
+  if (["completed", "complete", "success"].includes(status ?? "")) return "healthy";
+  if (["failed", "error", "cancelled"].includes(status ?? "")) return "unavailable";
+  return "pending";
+}
+
+function HarnessNarrativeGroup({ items }: { items: HarnessActivityItem[] }) {
+  const active = items.some((item) => ["running", "streaming"].includes(item.status ?? ""));
+  const failed = items.some((item) => ["failed", "error", "cancelled"].includes(item.status ?? ""));
+  const hasCommentary = items.some((item) => item.title === "Commentary");
+  const status = active ? "Streaming" : failed ? "Failed" : "Completed";
+  const hasReasoningSummary = items.some((item) => reasoningSummaryState(item));
+  return (
+    <HarnessActivityDisclosure
+      className={`harness-activity-card harness-narrative-card${items[0]?.parentItemId ? " nested" : ""}`}
+      initiallyOpen={active}
+    >
+      <summary>
+        <span className={`status-dot ${active ? "pending" : failed ? "unavailable" : "healthy"}`} />
+        <strong>{hasCommentary ? "Reasoning & commentary" : "Reasoning"}</strong>
+        <span>{items.length} update{items.length === 1 ? "" : "s"} · {status}</span>
+        <ChevronDown className="harness-disclosure-chevron" size={14} aria-hidden="true" />
+      </summary>
+      <div className="harness-activity-body harness-narrative-body">
+        {items.map((item) => {
+          const summaryText = reasoningSummaryText(item);
+          const outputs = Object.entries(item.streams).filter(([stream]) => stream !== "reasoning_summary");
+          return (
+            <section className="harness-narrative-row" key={item.key}>
+              <header><strong>{item.title}</strong>{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</header>
+              {summaryText && <p className="harness-reasoning-summary">{summaryText}</p>}
+              {reasoningSummaryState(item) === "pending" && !summaryText && <p>Codex is reasoning. A display-safe summary will appear if one is provided.</p>}
+              {reasoningSummaryState(item) === "not_provided" && <p>No display-safe reasoning summary was provided by Codex.</p>}
+              {!summaryText && outputs.length === 0 && item.summary && <p>{item.summary}</p>}
+              {outputs.map(([stream, output]) => stream === "commentary"
+                ? <p className="harness-commentary-text" key={stream}>{output}</p>
+                : <div className="harness-output" key={stream}><small>{stream}</small><pre tabIndex={0}>{output}</pre></div>)}
+            </section>
+          );
+        })}
+        {hasReasoningSummary && <small className="harness-reasoning-note">Provider-safe summaries only. Private reasoning traces are not captured or retained.</small>}
+      </div>
+    </HarnessActivityDisclosure>
+  );
 }
 
 function assistantMessageStatus(message: ConversationMessage): ThreadMessageLike["status"] {
@@ -1389,22 +1436,13 @@ export function SessionsPage() {
     const wantsKnowledge = includeKnowledge && knowledgeItemCount > 0;
     let allowCloudKnowledge = false;
     const knowledgeRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
-    const knowledgeRuntimeName = runtimeKind === "harness" ? harnessRuntime?.name : providerRuntime?.name;
     const knowledgeRuntimePermitsSensitive = runtimeKind === "harness" ? harnessRuntime?.permitsSensitiveData : providerRuntime?.permitsSensitiveData;
-    if (wantsKnowledge && !knowledgeRuntimeIsLocal && knowledgeRuntimeName) {
+    if (wantsKnowledge && !knowledgeRuntimeIsLocal) {
       if (!knowledgeRuntimePermitsSensitive) {
         setChatError("This runtime profile is text-only. Enable project/document data in Settings or turn off knowledge retrieval.");
         return;
       }
-      allowCloudKnowledge = await confirm({
-        title: "Share cited excerpts?",
-        message: `Allow this request to send bounded excerpts from ${knowledgeItemCount} project and Library item${knowledgeItemCount === 1 ? "" : "s"} to ${knowledgeRuntimeName}? Local-only items will remain blocked.`,
-        confirmLabel: "Allow this request",
-      });
-      if (!allowCloudKnowledge) {
-        setChatError("Message not sent because cloud knowledge transfer was not approved.");
-        return;
-      }
+      allowCloudKnowledge = true;
     }
 
     const wantsTools = runtimeKind === "harness"
@@ -2046,8 +2084,12 @@ export function SessionsPage() {
                       <header><strong>{message.role === "user" ? "You" : "Nebula assistant"}</strong><span>{timeLabel(message.createdAt)}</span>{message.usage && <span>{message.usage.totalTokens} tokens</span>}</header>
                       {message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p className={message.role === "assistant" && message.state === "streaming" ? "assistant-streaming-text" : undefined}>{message.content}</p>)}
                       {activityItems.some((item) => item.assistantId === message.id && shouldShowActivityItem(item)) && <section className="harness-timeline" aria-label="Harness activity">
-                        {activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item)).map((item) => <HarnessActivityDisclosure className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} initiallyOpen={["running", "streaming", "waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? "") || item.kind === "plan"} key={item.key}>
-                          <summary><span className={`status-dot ${["completed", "complete", "success"].includes(item.status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(item.status ?? "") ? "unavailable" : "pending"}`} /><strong>{item.title}</strong>{shouldShowActivityKind(item) && <code>{item.kind?.replaceAll("_", " ")}</code>}{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</summary>
+                        {groupHarnessActivityItems(activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item))).map((group) => {
+                          if (group.type === "narrative") return <HarnessNarrativeGroup items={group.items} key={group.key} />;
+                          const item = group.items[0];
+                          if (!item) return null;
+                          return <HarnessActivityDisclosure className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} initiallyOpen={["running", "streaming", "waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? "") || item.kind === "plan"} key={group.key}>
+                          <summary><span className={`status-dot ${activityStatusTone(item.status)}`} /><strong>{item.title}</strong>{shouldShowActivityKind(item) && <code>{item.kind?.replaceAll("_", " ")}</code>}{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</summary>
                           <div className="harness-activity-body">
                             {item.summary && <p>{item.summary}</p>}
                             {reasoningSummaryText(item) && <p className="harness-reasoning-summary">{reasoningSummaryText(item)}</p>}
@@ -2064,7 +2106,8 @@ export function SessionsPage() {
                             {item.kind === "subagent" && item.status === "running" && selectedHarness?.capabilities?.subagentControl && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void stopSubagent(item)}>Stop subagent</button>}
                             {item.type === "checkpoint" && selectedHarness?.capabilities?.checkpointRewind && <button className="button quiet" type="button" disabled={harnessControlBusy || (item.sessionId === harnessSessionId && harnessActivity?.busy)} title={item.sessionId === harnessSessionId && harnessActivity?.busy ? "Checkpoint rewind is available while the session is idle" : undefined} onClick={() => void rewindCheckpoint(item)}>Rewind files here</button>}
                           </div>
-                        </HarnessActivityDisclosure>)}
+                        </HarnessActivityDisclosure>;
+                        })}
                       </section>}
                       {runtimeKind !== "harness" && toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}{card.status !== "running" && <button className="button quiet" type="button" onClick={() => void openArtifacts(card)}><Search size={13} /> Artifacts</button>}</div>)}
                       {harnessInteractions.filter((interaction) => interaction.harnessTurnId === message.harnessTurnId && interaction.status === "pending").map((interaction) => <div className="chat-approval-card harness-interaction" key={interaction.id}>

@@ -455,6 +455,16 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .harness-activity-body p { margin: 0; color: var(--muted); }
 .harness-activity-body .harness-reasoning-summary { color: var(--text); white-space: pre-wrap; }
 .harness-reasoning-note { color: var(--muted); }
+.harness-disclosure-chevron { flex: 0 0 auto; color: var(--muted); transition: transform 140ms ease; }
+.harness-narrative-card[open] .harness-disclosure-chevron { transform: rotate(180deg); }
+.harness-narrative-body { gap: 0; padding-left: 11px; }
+.harness-narrative-row { display: grid; gap: 5px; padding: 9px 0; border-top: 1px solid var(--border); }
+.harness-narrative-row:first-child { border-top: 0; padding-top: 0; }
+.harness-narrative-row > header { display: flex; align-items: baseline; gap: 8px; }
+.harness-narrative-row > header strong { flex: 1; font-size: 12px; }
+.harness-narrative-row > header span { color: var(--muted); font-size: 10px; text-transform: capitalize; }
+.harness-narrative-row > p { margin: 0; }
+.harness-narrative-row .harness-commentary-text { color: var(--text); white-space: pre-wrap; }
 .harness-output, .harness-structured { min-width: 0; }
 .harness-output > small { display: block; margin-bottom: 4px; color: var(--muted); text-transform: uppercase; }
 .harness-output pre, .harness-structured { max-height: none; margin: 0; padding: 9px; overflow-x: auto; overflow-y: visible; overscroll-behavior-x: contain; border-radius: 7px; background: var(--bg); white-space: pre-wrap; word-break: break-word; font-size: 11px; }
