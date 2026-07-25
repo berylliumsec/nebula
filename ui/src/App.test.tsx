@@ -362,9 +362,9 @@ describe("Nebula workspace", () => {
     const composer = screen.getByRole("textbox", { name: "Message the analyst assistant" });
     await user.type(composer, "Review the scope");
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    await user.click(await screen.findByRole("button", { name: "Allow this request" }));
 
     expect(await screen.findByText("Bounded answer")).toBeVisible();
+    expect(screen.queryByText("Share cited excerpts?")).not.toBeInTheDocument();
     expect(composer).toHaveValue("");
     await user.click(composer);
     expect(fireEvent.keyDown(composer, { key: "ArrowUp" })).toBe(false);

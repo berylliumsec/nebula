@@ -44,6 +44,41 @@ export interface HarnessActivityItem {
   occurredAt?: string;
 }
 
+export interface HarnessActivityDisplayGroup {
+  key: string;
+  type: "item" | "narrative";
+  items: HarnessActivityItem[];
+}
+
+export function groupHarnessActivityItems(
+  items: HarnessActivityItem[],
+): HarnessActivityDisplayGroup[] {
+  const narrativeByParent = new Map<string, HarnessActivityItem[]>();
+  for (const item of items) {
+    if (item.kind !== "reasoning") continue;
+    const parent = item.parentItemId ?? "";
+    narrativeByParent.set(parent, [...(narrativeByParent.get(parent) ?? []), item]);
+  }
+
+  const emittedNarrativeParents = new Set<string>();
+  const groups: HarnessActivityDisplayGroup[] = [];
+  for (const item of items) {
+    if (item.kind !== "reasoning") {
+      groups.push({ key: item.key, type: "item", items: [item] });
+      continue;
+    }
+    const parent = item.parentItemId ?? "";
+    if (emittedNarrativeParents.has(parent)) continue;
+    emittedNarrativeParents.add(parent);
+    groups.push({
+      key: `narrative:${parent || "root"}:${item.key}`,
+      type: "narrative",
+      items: narrativeByParent.get(parent) ?? [item],
+    });
+  }
+  return groups;
+}
+
 const CHAT_CHROME_EVENT_TYPES = new Set([
   "message_delta",
   "started",

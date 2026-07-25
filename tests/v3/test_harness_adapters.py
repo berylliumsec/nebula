@@ -272,6 +272,16 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
                 mcp_profiles=(_mcp_profile(),),
                 credential_store=CredentialStore(),
                 permission_handler=permission,
+                gateway_tools=(
+                    {
+                        "name": "knowledge.list",
+                        "description": "List available Nebula sources",
+                    },
+                    {
+                        "name": "knowledge.search",
+                        "description": "Search available Nebula sources",
+                    },
+                ),
             )
         )
         events = [
@@ -318,6 +328,9 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert "unrestricted vendor workspace agent" in instructions
         assert "BEGIN TRUSTED VENDOR-NATIVE CAPABILITIES (JSON)\n[]" in instructions
         assert '"name":"run_command"' in instructions
+        assert '"name":"knowledge.list"' in instructions
+        assert '"name":"knowledge.search"' in instructions
+        assert '"source":"nebula_core_gateway"' in instructions
         _validate("CommandExecutionRequestApprovalResponse.json", rpc.responses[0][1])
 
     asyncio.run(scenario())

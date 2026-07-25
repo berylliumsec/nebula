@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HarnessActivityEvent, HarnessSessionActivity } from "../api/types";
 import {
   finalAssistantContent,
+  groupHarnessActivityItems,
   harnessCostLabel,
   isSameHarnessSessionActivity,
   isTimelineActivity,
@@ -208,6 +209,71 @@ describe("harness activity presentation", () => {
 
     expect(reasoningSummaryState(item)).toBe("available");
     expect(reasoningSummaryText(item)).toBe("Safe stream");
+  });
+
+  it("groups reasoning and commentary by parent without grouping tool cards", () => {
+    const base = {
+      assistantId: "assistant-1",
+      type: "item_upsert",
+      vendor: "codex_app_server" as const,
+      status: "completed",
+      sequence: 1,
+      streams: {},
+      payload: {},
+      artifactIds: [],
+    };
+    const reasoning = {
+      ...base,
+      key: "reasoning-1",
+      itemId: "reasoning-1",
+      kind: "reasoning" as const,
+      title: "Reasoning",
+    };
+    const tool = {
+      ...base,
+      key: "tool-1",
+      itemId: "tool-1",
+      kind: "tool" as const,
+      title: "Knowledge list",
+      sequence: 2,
+    };
+    const commentary = {
+      ...base,
+      key: "commentary-1",
+      itemId: "commentary-1",
+      kind: "reasoning" as const,
+      title: "Commentary",
+      sequence: 3,
+      streams: { commentary: "I’ll list the available sources." },
+    };
+    const nestedReasoning = {
+      ...base,
+      key: "reasoning-nested",
+      itemId: "reasoning-nested",
+      parentItemId: "subagent-1",
+      kind: "reasoning" as const,
+      title: "Reasoning",
+      sequence: 4,
+    };
+
+    const groups = groupHarnessActivityItems([
+      reasoning,
+      tool,
+      commentary,
+      nestedReasoning,
+    ]);
+
+    expect(groups.map((group) => group.type)).toEqual([
+      "narrative",
+      "item",
+      "narrative",
+    ]);
+    expect(groups[0].items.map((item) => item.key)).toEqual([
+      "reasoning-1",
+      "commentary-1",
+    ]);
+    expect(groups[1].items).toEqual([tool]);
+    expect(groups[2].items).toEqual([nestedReasoning]);
   });
 
   it("labels catalog-derived Codex cost as an API-equivalent estimate", () => {
