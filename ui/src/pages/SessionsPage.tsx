@@ -2020,7 +2020,7 @@ export function SessionsPage() {
             <AgentsPage embedded />
           ) : view === "activity" && api && engagement ? (
             <div className="workbench-activity-stack">
-              <ExecutionHistory api={api} engagementId={engagement.id} refreshKey={executionRefresh} onRerun={setRunCandidate} providers={providers} onChatAttached={openAttachedChat} />
+              <ExecutionHistory api={api} engagementId={engagement.id} refreshKey={executionRefresh} onRerun={setRunCandidate} providers={providers} harnesses={harnesses} onChatAttached={openAttachedChat} />
               <TerminalCommandHistoryPanel api={api} engagementId={engagement.id} />
             </div>
           ) : view === "workspace" && api && engagement ? (
@@ -2032,6 +2032,7 @@ export function SessionsPage() {
               evidenceOptions={evidence.map((item) => ({ id: item.id, label: item.title }))}
               assetOptions={assets.map((item) => ({ id: item.id, label: item.displayName }))}
               providers={providers}
+              harnesses={harnesses}
               initialDraft={noteDraft}
               onInitialDraftConsumed={clearNoteDraft}
               createObservation={createObservation}

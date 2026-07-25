@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import type {
   GeneratedDraft,
+  HarnessProfile,
   OperatorExecution,
   ProviderHealth,
 } from "../api/types";
@@ -107,5 +108,65 @@ describe("ExecutionInsightDialog", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(editGeneratedDraft).toHaveBeenCalledWith("draft-1", content, 1);
     expect(transitionGeneratedDraft).toHaveBeenCalledWith("draft-1", "accept", 2);
+  });
+
+  it("offers a Codex harness for structured execution drafts", async () => {
+    const user = userEvent.setup();
+    const draft = {
+      id: "draft-codex",
+      engagementId: "engagement-1",
+      executionId: execution.id,
+      providerProfileId: "harness-1",
+      model: "codex-model",
+      promptVersion: "execution-note/v1",
+      contextFingerprint: "b".repeat(64),
+      status: "ready",
+      content: {
+        title: "Codex execution note",
+        summary: "Bounded summary",
+        observations: [],
+        potentialFindings: [],
+        evidenceIds: [],
+      },
+      metadata: { backend_kind: "harness" },
+      revision: 1,
+    } satisfies GeneratedDraft;
+    const generateExecutionDraft = vi.fn().mockResolvedValue(draft);
+    const harness = {
+      id: "harness-1",
+      name: "Local Codex",
+      kind: "codex_app_server",
+      enabled: true,
+      localOnly: true,
+      permitsSensitiveData: false,
+      models: ["codex-model"],
+      defaultModel: "codex-model",
+    } as HarnessProfile;
+
+    render(
+      <ExecutionInsightDialog
+        action="draft"
+        api={{ generateExecutionDraft } as unknown as ApiClient}
+        execution={execution}
+        providers={[]}
+        harnesses={[harness]}
+        onClose={vi.fn()}
+        onChatAttached={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: /Local Codex · Codex/ })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Generate draft" }));
+    await screen.findByText(/Accepting creates one observation/);
+    expect(generateExecutionDraft).toHaveBeenCalledWith(
+      execution.id,
+      "harness",
+      "codex-model",
+      false,
+      expect.objectContaining({
+        backendKind: "harness",
+        harnessProfileId: "harness-1",
+      }),
+    );
   });
 });

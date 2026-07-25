@@ -213,7 +213,9 @@ export interface ScopeImportCandidate {
 }
 
 export interface ScopeImportProvenance {
+  backendKind?: "provider" | "harness";
   providerProfileId: Identifier;
+  harnessProfileId?: Identifier;
   model: string;
   promptVersion: string;
   sourceSha256: string;
@@ -243,7 +245,9 @@ export interface ScopeImport {
 
 export interface ScopeImportCreateRequest {
   engagementId: Identifier;
-  providerId: Identifier;
+  backendKind?: "provider" | "harness";
+  providerId?: Identifier;
+  harnessProfileId?: Identifier;
   model: string;
   filename: string;
   mediaType?: string;
@@ -414,7 +418,9 @@ export interface ReportUpdateRequest {
 }
 
 export interface AIWritingProvenance {
+  backendKind?: "provider" | "harness";
   providerProfileId: Identifier;
+  harnessProfileId?: Identifier;
   model: string;
   promptVersion: string;
   sourceSha256: string;
@@ -433,7 +439,9 @@ export interface ReportNoteTransform {
 
 export interface WritingTransformRequest {
   engagementId: Identifier;
-  providerId: Identifier;
+  backendKind?: "provider" | "harness";
+  providerId?: Identifier;
+  harnessProfileId?: Identifier;
   model: string;
   purpose: "note" | "report_summary" | "report_section";
   instruction: string;

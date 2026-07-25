@@ -21,6 +21,7 @@ from .domain import (
     AgentAttempt,
     AgentRun,
     Artifact,
+    ChatBackend,
     ChatMessage,
     ChatRole,
     ChatSession,
@@ -35,6 +36,7 @@ from .domain import (
     ProviderProfile,
     RunStatus,
     HarnessProfile,
+    ScopePolicy,
 )
 from .harnesses import HarnessRuntimeService
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
@@ -107,7 +109,9 @@ class DraftTransitionRequest(NebulaModel):
 
 
 class ExecutionChatAttachRequest(NebulaModel):
-    provider_id: str = Field(min_length=1, max_length=200)
+    backend_kind: Literal["provider", "harness"] = "provider"
+    provider_id: str | None = Field(default=None, max_length=200)
+    harness_profile_id: str | None = Field(default=None, max_length=200)
     model: str = Field(min_length=1, max_length=500)
     cloud_confirmed: bool = False
 
@@ -535,18 +539,59 @@ class ExecutionAIService:
     def attach_to_chat(
         self, execution_id: str, request: ExecutionChatAttachRequest
     ) -> ExecutionChatAttachment:
-        execution, profile, _provider = self._provider_context(
-            execution_id,
-            provider_id=request.provider_id,
-            model=request.model,
-            cloud_confirmed=request.cloud_confirmed,
-            require_structured=False,
-        )
+        harness_session_id: str | None = None
+        if request.backend_kind == "harness":
+            if request.provider_id:
+                raise ExecutionAIError(
+                    "configuration_invalid",
+                    "harness chat attachment requires no provider_id",
+                    status_code=422,
+                )
+            execution, backend_id = self._harness_context(
+                execution_id,
+                harness_profile_id=request.harness_profile_id,
+                model=request.model,
+                cloud_confirmed=request.cloud_confirmed,
+            )
+            assert self.harness_runtime is not None
+            harness_session = self.harness_runtime.create_session(
+                engagement_id=execution.engagement_id,
+                profile_id=backend_id,
+                model=request.model,
+                mcp_server_ids=[],
+            )
+            harness_session_id = harness_session.id
+        else:
+            if not request.provider_id or request.harness_profile_id:
+                raise ExecutionAIError(
+                    "configuration_invalid",
+                    "provider chat attachment requires provider_id and no harness_profile_id",
+                    status_code=422,
+                )
+            execution, profile, _provider = self._provider_context(
+                execution_id,
+                provider_id=request.provider_id,
+                model=request.model,
+                cloud_confirmed=request.cloud_confirmed,
+                require_structured=False,
+            )
+            backend_id = profile.id
         context, fingerprint, metadata = self._context(execution)
         session = ChatSession(
             engagement_id=execution.engagement_id,
             title=f"Discuss execution {execution.id[:8]}",
-            provider_profile_id=profile.id,
+            backend=(
+                ChatBackend.HARNESS
+                if request.backend_kind == "harness"
+                else ChatBackend.PROVIDER
+            ),
+            provider_profile_id=(
+                backend_id if request.backend_kind == "provider" else None
+            ),
+            harness_profile_id=(
+                backend_id if request.backend_kind == "harness" else None
+            ),
+            harness_session_id=harness_session_id,
             model=request.model,
             metadata={
                 "message_count": 1,
@@ -575,6 +620,15 @@ class ExecutionAIService:
                 "categories": metadata["categories"],
             },
         )
+        if request.backend_kind == "harness":
+            session = session.model_copy(
+                update={
+                    "metadata": {
+                        **session.metadata,
+                        "pending_context_message_id": message.id,
+                    }
+                }
+            )
         self.store.create_many([session, message])
         self.store.append_operation_event(
             execution.id,
@@ -897,7 +951,21 @@ class ExecutionAIService:
                 "harness_unavailable", "an enabled harness is required", status_code=422
             )
         execution = self.store.get(OperatorExecution, execution_id)
+        engagement = self.store.get(Engagement, execution.engagement_id)
         profile = self.store.get(HarnessProfile, harness_profile_id)
+        self._validate_harness_profile(
+            engagement, profile, model=model, cloud_confirmed=cloud_confirmed
+        )
+        return execution, profile.id
+
+    def _validate_harness_profile(
+        self,
+        engagement: Engagement,
+        profile: HarnessProfile,
+        *,
+        model: str,
+        cloud_confirmed: bool,
+    ) -> None:
         if not profile.enabled:
             raise ExecutionAIError("harness_unavailable", "harness profile is disabled")
         if profile.capabilities.models and model not in profile.capabilities.models:
@@ -906,6 +974,13 @@ class ExecutionAIService:
                 f"model {model!r} is not supported by the harness",
                 status_code=422,
             )
+        if engagement.scope_policy_id:
+            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if scope.local_only and not profile.privacy.local_only:
+                raise ExecutionAIError(
+                    "privacy_denied",
+                    "engagement scope is local-only and cannot use this harness",
+                )
         if not profile.privacy.local_only:
             if not profile.privacy.permits_sensitive_data:
                 raise ExecutionAIError(
@@ -918,7 +993,6 @@ class ExecutionAIService:
                     "explicit confirmation is required for a remote harness",
                     status_code=428,
                 )
-        return execution, profile.id
 
     def _validate_harness_backend(
         self,
@@ -932,28 +1006,11 @@ class ExecutionAIService:
             raise ExecutionAIError(
                 "harness_unavailable", "an enabled harness is required", status_code=422
             )
-        self.store.get(Engagement, engagement_id)
+        engagement = self.store.get(Engagement, engagement_id)
         profile = self.store.get(HarnessProfile, harness_profile_id)
-        if not profile.enabled:
-            raise ExecutionAIError("harness_unavailable", "harness profile is disabled")
-        if profile.capabilities.models and model not in profile.capabilities.models:
-            raise ExecutionAIError(
-                "model_not_allowed",
-                f"model {model!r} is not supported by the harness",
-                status_code=422,
-            )
-        if not profile.privacy.local_only:
-            if not profile.privacy.permits_sensitive_data:
-                raise ExecutionAIError(
-                    "privacy_denied",
-                    "harness profile does not permit engagement data transfer",
-                )
-            if not cloud_confirmed:
-                raise ExecutionAIError(
-                    "cloud_confirmation_required",
-                    "explicit confirmation is required for a remote harness",
-                    status_code=428,
-                )
+        self._validate_harness_profile(
+            engagement, profile, model=model, cloud_confirmed=cloud_confirmed
+        )
         return profile.id
 
     def _provider_context(

@@ -9,10 +9,12 @@ import { FileUp, LoaderCircle, ShieldCheck, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type {
   EngagementScopePolicy,
+  HarnessProfile,
   ProviderHealth,
   ScopeImport,
 } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { aiRuntimeLabel, aiRuntimeOptions } from "./aiRuntimes";
 
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const ACCEPTED =
@@ -23,17 +25,9 @@ interface ScopeImportDialogProps {
   engagementId: string;
   scope: EngagementScopePolicy;
   providers: ProviderHealth[];
+  harnesses?: HarnessProfile[];
   onApplied: (scope: EngagementScopePolicy) => void;
   onClose: () => void;
-}
-
-function providerModel(provider: ProviderHealth | undefined): string {
-  return (
-    provider?.effectiveDefaultModel ??
-    provider?.defaultModel ??
-    provider?.models[0] ??
-    ""
-  );
 }
 
 function encodeBase64(buffer: ArrayBuffer): string {
@@ -50,44 +44,31 @@ export function ScopeImportDialog({
   engagementId,
   scope,
   providers,
+  harnesses = [],
   onApplied,
   onClose,
 }: ScopeImportDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const availableProviders = useMemo(
-    () =>
-      providers.filter(
-        (provider) =>
-          provider.enabled &&
-          provider.models.length > 0 &&
-          provider.capabilities.some((capability) =>
-            capability.toLowerCase().includes("strict structured"),
-          ),
-      ),
-    [providers],
+  const runtimes = useMemo(
+    () => aiRuntimeOptions(providers, harnesses, { requireStructuredProvider: true }),
+    [harnesses, providers],
   );
-  const [providerId, setProviderId] = useState(availableProviders[0]?.id ?? "");
-  const selectedProvider = availableProviders.find(
-    (provider) => provider.id === providerId,
+  const [runtimeKey, setRuntimeKey] = useState(runtimes[0]?.key ?? "");
+  const selectedRuntime = runtimes.find(
+    (runtime) => runtime.key === runtimeKey,
   );
-  const [model, setModel] = useState(() =>
-    providerModel(availableProviders[0]),
-  );
+  const [model, setModel] = useState(() => runtimes[0]?.defaultModel ?? "");
   const [file, setFile] = useState<File>();
   const [cloudConfirmed, setCloudConfirmed] = useState(false);
   const [result, setResult] = useState<ScopeImport>();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState<"extract" | "apply">();
   const [error, setError] = useState<string>();
-  const isLocal =
-    selectedProvider?.local === true ||
-    selectedProvider?.kind === "local" ||
-    selectedProvider?.privacy === "local_only";
   const cloudBlocked = Boolean(
-    selectedProvider && !isLocal && !selectedProvider.permitsSensitiveData,
+    selectedRuntime && !selectedRuntime.local && !selectedRuntime.permitsSensitiveData,
   );
   const needsCloudConfirmation = Boolean(
-    selectedProvider && !isLocal && selectedProvider.permitsSensitiveData,
+    selectedRuntime && !selectedRuntime.local && selectedRuntime.permitsSensitiveData,
   );
 
   const chooseFile = (event: ChangeEvent<HTMLInputElement>) => {
@@ -104,10 +85,10 @@ export function ScopeImportDialog({
     setError(undefined);
   };
 
-  const selectProvider = (nextId: string) => {
-    const next = availableProviders.find((provider) => provider.id === nextId);
-    setProviderId(nextId);
-    setModel(providerModel(next));
+  const selectRuntime = (nextKey: string) => {
+    const next = runtimes.find((runtime) => runtime.key === nextKey);
+    setRuntimeKey(nextKey);
+    setModel(next?.defaultModel ?? "");
     setCloudConfirmed(false);
     setResult(undefined);
     setSelectedIds(new Set());
@@ -115,13 +96,15 @@ export function ScopeImportDialog({
 
   const extract = async (event: FormEvent) => {
     event.preventDefault();
-    if (!file || !selectedProvider || !model || cloudBlocked) return;
+    if (!file || !selectedRuntime || !model || cloudBlocked) return;
     setBusy("extract");
     setError(undefined);
     try {
       const created = await api.createScopeImport({
         engagementId,
-        providerId: selectedProvider.id,
+        backendKind: selectedRuntime.kind,
+        providerId: selectedRuntime.kind === "provider" ? selectedRuntime.id : undefined,
+        harnessProfileId: selectedRuntime.kind === "harness" ? selectedRuntime.id : undefined,
         model,
         filename: file.name,
         mediaType: file.type || undefined,
@@ -253,19 +236,19 @@ export function ScopeImportDialog({
                 </small>
               </span>
             </button>
-            {availableProviders.length ? (
+            {runtimes.length ? (
               <div className="ai-writing-runtime">
                 <label>
-                  Provider
+                  Runtime
                   <select
-                    aria-label="Scope import provider"
-                    value={providerId}
+                    aria-label="Scope import runtime"
+                    value={runtimeKey}
                     disabled={Boolean(busy)}
-                    onChange={(event) => selectProvider(event.target.value)}
+                    onChange={(event) => selectRuntime(event.target.value)}
                   >
-                    {availableProviders.map((provider) => (
-                      <option value={provider.id} key={provider.id}>
-                        {provider.name}
+                    {runtimes.map((runtime) => (
+                      <option value={runtime.key} key={runtime.key}>
+                        {aiRuntimeLabel(runtime)}
                       </option>
                     ))}
                   </select>
@@ -278,7 +261,7 @@ export function ScopeImportDialog({
                     disabled={Boolean(busy)}
                     onChange={(event) => setModel(event.target.value)}
                   >
-                    {selectedProvider?.models.map((item) => (
+                    {selectedRuntime?.models.map((item) => (
                       <option value={item} key={item}>
                         {item}
                       </option>
@@ -288,15 +271,15 @@ export function ScopeImportDialog({
               </div>
             ) : (
               <DiagnosticErrorNotice
-                error="No enabled provider declares strict structured output."
-                fallback="Configure a structured-output provider before importing scope."
+                error="No enabled strict-output provider or Codex harness is available."
+                fallback="Configure an AI runtime before importing scope."
                 compact
               />
             )}
             {cloudBlocked && (
               <DiagnosticErrorNotice
-                error={`${selectedProvider?.name ?? "This provider"} cannot receive project data.`}
-                fallback="This provider cannot receive the document."
+                error={`${selectedRuntime?.name ?? "This runtime"} cannot receive project data.`}
+                fallback="This runtime cannot receive the document."
                 compact
               />
             )}
@@ -310,7 +293,7 @@ export function ScopeImportDialog({
                 />
                 <span>
                   Allow this request to send the selected scope document text to{" "}
-                  {selectedProvider?.name}. This approval applies only to this
+                  {selectedRuntime?.name}. This approval applies only to this
                   import.
                 </span>
               </label>
@@ -432,7 +415,7 @@ export function ScopeImportDialog({
               disabled={
                 Boolean(busy) ||
                 !file ||
-                !selectedProvider ||
+                !selectedRuntime ||
                 !model ||
                 cloudBlocked ||
                 (needsCloudConfirmation && !cloudConfirmed)
