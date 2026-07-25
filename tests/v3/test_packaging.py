@@ -82,6 +82,17 @@ def test_release_stages_and_smoke_tests_bundled_playwright_chromium():
     assert "--dump-dom about:blank" in release
 
 
+def test_linux_deb_declares_bundled_chromium_runtime_dependencies():
+    tauri = json.loads(
+        (ROOT / "ui/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+    )
+
+    assert set(tauri["bundle"]["linux"]["deb"]["depends"]) >= {
+        "libnspr4",
+        "libnss3",
+    }
+
+
 def test_updater_manifest_supports_validated_recovery_with_native_libraries():
     workflow = (ROOT / ".github/workflows/publish-updater-manifest.yml").read_text(
         encoding="utf-8"
