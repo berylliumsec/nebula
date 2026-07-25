@@ -46,8 +46,8 @@ CHUNK_OVERLAP_CHARACTERS = 180
 INGESTION_VERSION = "nebula.knowledge.v1"
 MAX_SOURCE_URL_LENGTH = 2_048
 MAX_SOURCE_REDIRECTS = 5
-MAX_RENDER_RESOURCE_BYTES = 8 * 1024 * 1024
-MAX_RENDER_TOTAL_BYTES = 40 * 1024 * 1024
+MAX_RENDER_RESOURCE_BYTES = 50 * 1024 * 1024
+MAX_RENDER_TOTAL_BYTES = 50 * 1024 * 1024
 RENDER_SETTLE_MILLISECONDS = 1_500
 GLOBAL_LIBRARY_ARTIFACT_OWNER = "global-library"
 
@@ -575,7 +575,8 @@ def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
             transferred_bytes += len(resource.data)
             if transferred_bytes > MAX_RENDER_TOTAL_BYTES:
                 raise DocumentTooLargeError(
-                    "rendered page resources exceed the 40 MiB limit"
+                    "rendered page resources exceed the "
+                    f"{MAX_RENDER_TOTAL_BYTES // (1024 * 1024)} MiB limit"
                 )
             route.fulfill(
                 status=200,
