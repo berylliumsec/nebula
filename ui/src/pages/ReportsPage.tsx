@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Archive, BadgeCheck, Download, FileText, LoaderCircle, Plus, RotateCcw, Save, ShieldCheck, Sparkles, X } from "lucide-react";
 import type { AIWritingProvenance, ReportNoteTransform } from "../api/types";
 import { AIWritingDialog } from "../components/AIWritingDialog";
+import { aiRuntimeOptions } from "../components/aiRuntimes";
 import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -29,6 +30,7 @@ export function ReportsPage() {
     createReport,
     engagement,
     findings,
+    harnesses,
     observations,
     providers,
     reports,
@@ -58,6 +60,10 @@ export function ReportsPage() {
   const [signing, setSigning] = useState(false);
   const [writingTarget, setWritingTarget] = useState<{ kind: "summary" } | { kind: "note"; observationId: string }>();
   const readOnly = selected?.status === "final";
+  const writingRuntimes = useMemo(
+    () => aiRuntimeOptions(providers, harnesses),
+    [harnesses, providers],
+  );
 
   useEffect(() => {
     if (selectedId && reports.some((report) => report.id === selectedId)) return;
@@ -280,7 +286,7 @@ export function ReportsPage() {
             {readOnly && <p className="provider-dialog-note" role="status">This final report is an immutable signed record. Export remains available; create a new draft to make changes.</p>}
             <label>Report title<input value={title} readOnly={readOnly} onChange={(event) => setField(setTitle, event.target.value)} /></label>
             <label>
-              <span className="report-field-heading"><span>Executive summary</span>{!readOnly && <button className="button quiet" type="button" disabled={!api || !providers.some((provider) => provider.enabled && provider.models.length)} onClick={() => setWritingTarget({ kind: "summary" })}><Sparkles size={14} /> Draft with AI</button>}</span>
+              <span className="report-field-heading"><span>Executive summary</span>{!readOnly && <button className="button quiet" type="button" disabled={!api || !writingRuntimes.length} onClick={() => setWritingTarget({ kind: "summary" })}><Sparkles size={14} /> Draft with AI</button>}</span>
               <textarea rows={14} value={summary} readOnly={readOnly} placeholder="Summarize scope, posture, material findings, and recommended next actions…" onChange={(event) => {
                 if (readOnly) return;
                 setSummary(event.target.value);
@@ -313,6 +319,7 @@ export function ReportsPage() {
         api={api}
         engagementId={engagement.id}
         providers={providers}
+        harnesses={harnesses}
         purpose={writingTarget.kind === "summary" ? "report_summary" : "report_section"}
         title={writingTarget.kind === "summary" ? "Draft executive summary with AI" : "Transform note into a report section"}
         description={writingTarget.kind === "summary"

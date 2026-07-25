@@ -4,10 +4,12 @@ import type { ApiClient } from "../api/client";
 import type {
   GeneratedDraft,
   GeneratedDraftContent,
+  HarnessProfile,
   OperatorExecution,
   ProviderHealth,
 } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { aiRuntimeLabel, aiRuntimeOptions } from "./aiRuntimes";
 
 type InsightAction = "draft" | "chat";
 
@@ -16,6 +18,7 @@ interface ExecutionInsightDialogProps {
   api: ApiClient;
   execution: OperatorExecution;
   providers: ProviderHealth[];
+  harnesses?: HarnessProfile[];
   onClose: () => void;
   onChatAttached: (sessionId: string) => void | Promise<void>;
 }
@@ -28,25 +31,22 @@ const CATEGORIES = [
   "Linked execution and evidence identifiers",
 ];
 
-function strictProvider(provider: ProviderHealth): boolean {
-  return provider.capabilities.some((capability) => capability.toLowerCase().includes("strict structured"));
-}
-
 export function ExecutionInsightDialog({
   action,
   api,
   execution,
   providers,
+  harnesses = [],
   onClose,
   onChatAttached,
 }: ExecutionInsightDialogProps) {
-  const candidates = useMemo(
-    () => providers.filter((provider) => provider.enabled && (action === "chat" || strictProvider(provider))),
-    [action, providers],
+  const runtimes = useMemo(
+    () => aiRuntimeOptions(providers, harnesses, { requireStructuredProvider: action === "draft" }),
+    [action, harnesses, providers],
   );
-  const [providerId, setProviderId] = useState(candidates[0]?.id ?? "");
-  const provider = candidates.find((item) => item.id === providerId);
-  const [model, setModel] = useState(provider?.defaultModel ?? provider?.models[0] ?? "");
+  const [runtimeKey, setRuntimeKey] = useState(runtimes[0]?.key ?? "");
+  const runtime = runtimes.find((item) => item.key === runtimeKey);
+  const [model, setModel] = useState(runtime?.defaultModel ?? "");
   const [cloudConfirmed, setCloudConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -54,46 +54,69 @@ export function ExecutionInsightDialog({
   const [content, setContent] = useState<GeneratedDraftContent>();
 
   useEffect(() => {
-    if (provider) return;
-    const next = candidates[0];
-    setProviderId(next?.id ?? "");
-    setModel(next?.defaultModel ?? next?.models[0] ?? "");
-  }, [candidates, provider]);
+    if (runtime) return;
+    const next = runtimes[0];
+    setRuntimeKey(next?.key ?? "");
+    setModel(next?.defaultModel ?? "");
+  }, [runtime, runtimes]);
 
-  const selectProvider = (id: string) => {
-    const selected = candidates.find((item) => item.id === id);
-    setProviderId(id);
-    setModel(selected?.defaultModel ?? selected?.models[0] ?? "");
+  const selectRuntime = (key: string) => {
+    const selected = runtimes.find((item) => item.key === key);
+    setRuntimeKey(key);
+    setModel(selected?.defaultModel ?? "");
     setCloudConfirmed(false);
   };
 
-  const cloud = Boolean(provider && !provider.local);
-  const modelOptions = [...new Set([...(provider?.models ?? []), ...(model ? [model] : [])])];
-  const canSubmit = Boolean(provider && model.trim() && (!cloud || cloudConfirmed) && !busy);
+  const cloud = Boolean(runtime && !runtime.local);
+  const cloudBlocked = Boolean(runtime && !runtime.local && !runtime.permitsSensitiveData);
+  const modelOptions = [...new Set([...(runtime?.models ?? []), ...(model ? [model] : [])])];
+  const canSubmit = Boolean(runtime && model.trim() && !cloudBlocked && (!cloud || cloudConfirmed) && !busy);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!provider || !canSubmit) return;
+    if (!runtime || !canSubmit) return;
     setBusy(true);
     setError(undefined);
     try {
       if (action === "chat") {
-        const attachment = await api.attachExecutionToChat(
-          execution.id,
-          provider.id,
-          model.trim(),
-          cloudConfirmed,
-        );
+        const attachment = runtime.kind === "harness"
+          ? await api.attachExecutionToChat(
+            execution.id,
+            undefined,
+            model.trim(),
+            cloudConfirmed,
+            { backendKind: "harness", harnessProfileId: runtime.id },
+          )
+          : await api.attachExecutionToChat(
+            execution.id,
+            runtime.id,
+            model.trim(),
+            cloudConfirmed,
+          );
         await onChatAttached(attachment.sessionId);
         onClose();
         return;
       }
-      let generated = await api.generateExecutionDraft(
-        execution.id,
-        provider.id,
-        model.trim(),
-        cloudConfirmed,
-      );
+      let generated = runtime.kind === "harness"
+        ? await api.generateExecutionDraft(
+          execution.id,
+          "harness",
+          model.trim(),
+          cloudConfirmed,
+          {
+            backendKind: "harness",
+            harnessProfileId: runtime.id,
+            suggestNextSteps: false,
+            takeNotes: true,
+            cloudConfirmed,
+          },
+        )
+        : await api.generateExecutionDraft(
+          execution.id,
+          runtime.id,
+          model.trim(),
+          cloudConfirmed,
+        );
       for (let attempt = 0; attempt < 300 && generated.status === "generating"; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 200));
         generated = await api.getGeneratedDraft(generated.id);
@@ -148,12 +171,13 @@ export function ExecutionInsightDialog({
       <form className="provider-dialog execution-insight-dialog" role="dialog" aria-modal="true" aria-labelledby="execution-insight-title" onSubmit={(event) => void submit(event)}>
         <header><div><small>Operator-triggered · bounded redacted context</small><h2 id="execution-insight-title">{action === "draft" ? "Draft execution note" : "Discuss execution in chat"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close execution action" disabled={busy} onClick={onClose}><X size={17} /></button></header>
         {!draft?.content ? <>
-          <p className="provider-dialog-note">No request is made until you submit this dialog. The provider receives only these categories:</p>
+          <p className="provider-dialog-note">No request is made until you submit this dialog. The selected AI runtime receives only these categories:</p>
           <ul className="execution-context-categories">{CATEGORIES.map((category) => <li key={category}>{category}</li>)}</ul>
-          <label>Provider<select value={providerId} disabled={busy} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{candidates.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.local ? "local" : "cloud"}</option>)}</select></label>
-          <label>Model<select required value={model} disabled={busy || !modelOptions.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelOptions.length ? "Select model" : "Run provider health check to discover models"}</option>{modelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-          {action === "draft" && candidates.length === 0 && <p className="form-error" role="alert">No enabled provider declares strict structured output. Configure one before drafting a note.</p>}
-          {cloud && <label className="provider-consent"><input type="checkbox" checked={cloudConfirmed} onChange={(event) => setCloudConfirmed(event.target.checked)} /><span><strong>Allow this cloud request</strong><small>Send the listed redacted execution categories to {provider?.name} for this request only. The provider profile must also permit engagement data.</small></span></label>}
+          <label>Runtime<select aria-label="Execution AI runtime" value={runtimeKey} disabled={busy} onChange={(event) => selectRuntime(event.target.value)}><option value="">Select runtime</option>{runtimes.map((item) => <option value={item.key} key={item.key}>{aiRuntimeLabel(item)}</option>)}</select></label>
+          <label>Model<select required value={model} disabled={busy || !modelOptions.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelOptions.length ? "Select model" : "Check the runtime to discover models"}</option>{modelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+          {action === "draft" && runtimes.length === 0 && <p className="form-error" role="alert">No enabled strict-output provider or Codex harness is available. Configure one before drafting a note.</p>}
+          {cloudBlocked && <p className="form-error" role="alert">{runtime?.name} is configured as text-only and cannot receive execution data.</p>}
+          {cloud && !cloudBlocked && <label className="provider-consent"><input type="checkbox" checked={cloudConfirmed} onChange={(event) => setCloudConfirmed(event.target.checked)} /><span><strong>Allow this cloud request</strong><small>Send the listed redacted execution categories to {runtime?.name} for this request only. The runtime profile must also permit engagement data.</small></span></label>}
         </> : content && <section className="execution-draft-editor">
           <p className="provider-dialog-note">Review and edit this generated draft. Accepting creates one observation; potential findings remain unverified hypotheses.</p>
           <label>Title<input value={content.title} onChange={(event) => setContent({ ...content, title: event.target.value })} /></label>

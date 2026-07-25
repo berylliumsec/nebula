@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
-import type { ProviderHealth, WritingTransformResponse } from "../api/types";
+import type { HarnessProfile, ProviderHealth, WritingTransformResponse } from "../api/types";
 import { AIWritingDialog } from "./AIWritingDialog";
 
 const provider = {
@@ -16,6 +16,17 @@ const provider = {
   models: ["model-1"],
   defaultModel: "model-1",
 } as ProviderHealth;
+
+const harness = {
+  id: "harness-1",
+  name: "Local Codex",
+  kind: "codex_app_server",
+  enabled: true,
+  localOnly: true,
+  permitsSensitiveData: false,
+  models: ["codex-model"],
+  defaultModel: "codex-model",
+} as HarnessProfile;
 
 const response: WritingTransformResponse = {
   content: "Generated report prose.",
@@ -66,5 +77,44 @@ describe("AIWritingDialog", () => {
       content: "Reviewed and edited report prose.",
       provenance: response.provenance,
     }));
+  });
+
+  it("uses a Codex harness when no model provider is configured", async () => {
+    const user = userEvent.setup();
+    const transformWriting = vi.fn().mockResolvedValue({
+      ...response,
+      provenance: {
+        ...response.provenance,
+        providerProfileId: harness.id,
+        model: "codex-model",
+      },
+    });
+    render(<AIWritingDialog
+      api={{ transformWriting } as unknown as ApiClient}
+      engagementId="engagement-1"
+      providers={[]}
+      harnesses={[harness]}
+      purpose="note"
+      title="Transform note"
+      description="Transform with Codex."
+      sourceLabel="Analyst note"
+      sourceText="Port 443 was open."
+      initialInstruction="Make it concise."
+      onApply={vi.fn()}
+      onClose={vi.fn()}
+    />);
+
+    expect(screen.getByRole("option", { name: /Local Codex · Codex/ })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Generate draft" }));
+
+    await waitFor(() => expect(transformWriting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backendKind: "harness",
+        providerId: undefined,
+        harnessProfileId: "harness-1",
+        model: "codex-model",
+      }),
+      expect.any(AbortSignal),
+    ));
   });
 });

@@ -12,7 +12,7 @@ import ipaddress
 import re
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -1584,7 +1584,9 @@ class ScopeImportCandidate(NebulaModel):
 
 
 class ScopeImportProvenance(NebulaModel):
+    backend_kind: Literal["provider", "harness"] = "provider"
     provider_profile_id: str = Field(min_length=1, max_length=200)
+    harness_profile_id: str | None = Field(default=None, max_length=200)
     model: str = Field(min_length=1, max_length=500)
     prompt_version: str = Field(min_length=1, max_length=100)
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -2122,7 +2124,9 @@ class GeneratedDraft(Entity):
 class AIWritingProvenance(NebulaModel):
     """Review metadata for AI-assisted prose that an operator chose to keep."""
 
+    backend_kind: Literal["provider", "harness"] = "provider"
     provider_profile_id: str = Field(min_length=1, max_length=200)
+    harness_profile_id: str | None = Field(default=None, max_length=200)
     model: str = Field(min_length=1, max_length=500)
     prompt_version: str = Field(min_length=1, max_length=100)
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

@@ -1165,6 +1165,7 @@ def create_app(
     writing_ai = writing_ai_service or WritingAIService(
         store=store,
         provider_factory=provider_factory,
+        harness_runtime=harness_runtime,
     )
     if writing_ai.store is not store:
         raise ValueError("writing_ai_service must use the API store")
@@ -1175,6 +1176,7 @@ def create_app(
             artifact_store=artifact_store,
             provider_factory=provider_factory,
             operator_id=active_operator_id,
+            harness_runtime=harness_runtime,
         )
     if scope_imports is not None and scope_imports.store is not store:
         raise ValueError("scope_import_service must use the API store")
@@ -4859,7 +4861,9 @@ def create_app(
         try:
             return await require_scope_import_service().create(
                 engagement_id=engagement_id,
+                backend_kind=request.backend_kind,
                 provider_id=request.provider_id,
+                harness_profile_id=request.harness_profile_id,
                 model=request.model,
                 filename=request.filename,
                 data=content,

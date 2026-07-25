@@ -5,6 +5,7 @@ import type {
   ObservationCreateRequest,
   ObservationSummary,
   ObservationUpdateRequest,
+  HarnessProfile,
   ProviderHealth,
   ObservationDependencies,
 } from "../api/types";
@@ -12,6 +13,7 @@ import { useConfirmation } from "./DialogSystem";
 import { AIWritingDialog } from "./AIWritingDialog";
 import type { SelectionActionDraft } from "./selection";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { aiRuntimeOptions } from "./aiRuntimes";
 
 interface LinkOption {
   id: string;
@@ -24,6 +26,7 @@ interface NotesPanelProps {
   evidenceOptions?: LinkOption[];
   assetOptions?: LinkOption[];
   providers?: ProviderHealth[];
+  harnesses?: HarnessProfile[];
   initialDraft?: SelectionActionDraft;
   onInitialDraftConsumed?: () => void;
   createObservation?: (request: ObservationCreateRequest) => Promise<ObservationSummary>;
@@ -51,6 +54,7 @@ export function NotesPanel({
   evidenceOptions = [],
   assetOptions = [],
   providers = [],
+  harnesses = [],
   initialDraft,
   onInitialDraftConsumed,
   createObservation,
@@ -86,6 +90,10 @@ export function NotesPanel({
   const selected = useMemo(
     () => notes.find((note) => note.id === selectedId),
     [notes, selectedId],
+  );
+  const writingRuntimes = useMemo(
+    () => aiRuntimeOptions(providers, harnesses),
+    [harnesses, providers],
   );
 
   useEffect(() => setDeleteBlocker(undefined), [selectedId]);
@@ -285,7 +293,7 @@ export function NotesPanel({
             <input aria-label="Note title" value={draft.title} placeholder="Note title" maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />
             <div>
               {selected && <button className="button quiet" type="button" onClick={() => void remove()}><Trash2 size={14} /> Delete</button>}
-              <button className="button quiet" type="button" disabled={!draft.body.trim() || !providers.some((provider) => provider.enabled && provider.models.length)} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
+              <button className="button quiet" type="button" disabled={!draft.body.trim() || !writingRuntimes.length} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
               <button className="button quiet" type="button" disabled={!draft.body.trim() || !onAskNebula} onClick={() => onAskNebula?.({ text: draft.body, sourceKind: "note", sourceId: selected?.id, sourceLabel: draft.title || "Untitled note" })}><MessageSquareQuote size={14} /> Ask Nebula</button>
               <button className="button primary" type="button" disabled={saving || !draft.title.trim()} onClick={() => void save()}><Save size={14} /> {saving ? "Saving…" : "Save"}</button>
             </div>
@@ -303,6 +311,7 @@ export function NotesPanel({
         api={api}
         engagementId={engagementId}
         providers={providers}
+        harnesses={harnesses}
         purpose="note"
         title="Transform note with AI"
         description="Tell Nebula how to organize or rewrite this note. The generated text remains editable and is not persisted until you save the note."

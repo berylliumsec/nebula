@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +10,9 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     Engagement,
+    HarnessKind,
+    HarnessProfile,
+    ProviderPrivacy,
     ProviderProfile,
     ScopeImportClassification,
     ScopeImportStatus,
@@ -68,6 +72,78 @@ class StructuredProvider:
             usage=ModelUsage(input_tokens=20, output_tokens=10, total_tokens=30),
             provider_request_id="scope-request-1",
         )
+
+
+class StructuredHarnessRuntime:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def analyze_structured(self, **request):
+        self.requests.append(request)
+        return SimpleNamespace(
+            id="harness-turn-1",
+            response=json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "target_type": "domain",
+                            "classification": "allowed",
+                            "raw_value": "app.example.test",
+                            "source_location": "line 1",
+                            "source_excerpt": "In scope: app.example.test",
+                        }
+                    ],
+                    "warnings": [],
+                }
+            ),
+            usage={"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
+        )
+
+
+def test_scope_import_supports_codex_harness_runtime(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(id="eng-1", name="Codex scope import"))
+    harness = store.create(
+        HarnessProfile(
+            name="Local Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/usr/bin/codex",
+            default_model="model-1",
+            privacy=ProviderPrivacy(local_only=True),
+            capabilities={"models": ["model-1"]},
+        )
+    )
+    runtime = StructuredHarnessRuntime()
+    service = ScopeImportService(
+        store=store,
+        artifact_store=artifacts,
+        harness_runtime=runtime,  # type: ignore[arg-type]
+    )
+
+    created = asyncio.run(
+        service.create(
+            engagement_id=engagement.id,
+            backend_kind="harness",
+            provider_id=None,
+            harness_profile_id=harness.id,
+            model="model-1",
+            filename="scope.txt",
+            data=b"In scope: app.example.test",
+            media_type="text/plain",
+            cloud_confirmed=False,
+        )
+    )
+
+    assert created.status == ScopeImportStatus.READY
+    assert created.usage.total_tokens == 12
+    assert created.provenance.backend_kind == "harness"
+    assert created.provenance.provider_profile_id == harness.id
+    assert created.provenance.harness_profile_id == harness.id
+    assert created.provenance.provider_request_ids == ["harness-turn-1"]
+    assert created.candidates[0].normalized_value == "app.example.test"
+    assert runtime.requests[0]["profile_id"] == harness.id
+    assert "app.example.test" in runtime.requests[0]["files"]["scope-chunk.json"]
 
 
 def test_scope_import_is_reviewed_additive_and_revision_safe(tmp_path):

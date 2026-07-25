@@ -26,6 +26,7 @@ import type {
   FindingCreateRequest,
   FindingSummary,
   FindingUpdateRequest,
+  HarnessProfile,
   HealthResponse,
   KnowledgeIngestRequest,
   KnowledgeSource,
@@ -124,6 +125,7 @@ interface WorkspaceContextValue {
   observations: ObservationSummary[];
   reports: ReportSummary[];
   providers: ProviderHealth[];
+  harnesses: HarnessProfile[];
   providerCatalog: ProviderCatalogEntry[];
   knowledgeSources: KnowledgeSource[];
   libraryItems: LibraryItem[];
@@ -191,6 +193,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [observations, setObservations] = useState<ObservationSummary[]>([]);
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [providers, setProviders] = useState<ProviderHealth[]>([]);
+  const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([]);
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
@@ -237,9 +240,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         setWorkspaceState("bootstrapping");
 
         const loadErrors: string[] = [];
-        const [engagementResult, providerResult, catalogResult, operatorResult, setupResult, libraryResult] = await Promise.allSettled([
+        const [engagementResult, providerResult, harnessResult, catalogResult, operatorResult, setupResult, libraryResult] = await Promise.allSettled([
           nextApi.listEngagements(controller.signal),
           nextApi.listProviders(controller.signal),
+          nextApi.listHarnesses(controller.signal),
           nextApi.listProviderCatalog(controller.signal),
           nextApi.listOperatorProfiles(controller.signal),
           nextApi.setupStatus(controller.signal),
@@ -264,6 +268,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           setProviders([]);
           loadErrors.push("model providers");
         }
+        setHarnesses(harnessResult.status === "fulfilled" ? harnessResult.value : []);
         if (catalogResult.status === "fulfilled") setProviderCatalog(catalogResult.value);
         else {
           setProviderCatalog([]);
@@ -881,6 +886,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       observations,
       reports,
       providers,
+      harnesses,
       providerCatalog,
       knowledgeSources,
       libraryItems,
@@ -941,6 +947,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       setupStatus,
       resourceStatus,
       providers,
+      harnesses,
       providerCatalog,
       knowledgeSources,
       libraryItems,

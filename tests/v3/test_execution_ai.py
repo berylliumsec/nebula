@@ -14,6 +14,7 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     AgentAttempt,
     AgentRun,
+    ChatBackend,
     ChatSession,
     Evidence,
     ExecutionOrigin,
@@ -93,6 +94,10 @@ class StubHarnessRuntime:
             response=self.response,
             usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
         )
+
+    def create_session(self, **request):
+        self.requests.append({"create_session": request})
+        return SimpleNamespace(id="harness-session-1")
 
 
 def _fixture(tmp_path, *, local: bool = True, strict: bool = True):
@@ -503,6 +508,54 @@ async def test_cloud_transfer_requires_confirmation_and_chat_attachment_stays_in
     assert "JSON DATA ONLY" in attachment.context_message.content
     assert "supersecret123" not in attachment.context_message.content
     assert store.count(ChatSession, engagement_id=engagement.id) == 1
+
+
+def test_execution_chat_attachment_supports_codex_harness(tmp_path):
+    (
+        store,
+        artifacts,
+        engagement,
+        execution,
+        _profile,
+        _evidence,
+        _provider,
+        _service,
+    ) = _fixture(tmp_path)
+    harness = store.create(
+        HarnessProfile(
+            name="Local Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/usr/bin/codex",
+            default_model="model-1",
+            privacy=ProviderPrivacy(local_only=True),
+            capabilities={"models": ["model-1"]},
+        )
+    )
+    runtime = StubHarnessRuntime("{}")
+    service = ExecutionAIService(
+        store=store,
+        artifact_store=artifacts,
+        harness_runtime=runtime,  # type: ignore[arg-type]
+    )
+
+    attachment = service.attach_to_chat(
+        execution.id,
+        ExecutionChatAttachRequest(
+            backend_kind="harness",
+            harness_profile_id=harness.id,
+            model="model-1",
+        ),
+    )
+
+    assert attachment.session.engagement_id == engagement.id
+    assert attachment.session.backend == ChatBackend.HARNESS
+    assert attachment.session.harness_profile_id == harness.id
+    assert attachment.session.harness_session_id == "harness-session-1"
+    assert (
+        attachment.session.metadata["pending_context_message_id"]
+        == attachment.context_message.id
+    )
+    assert runtime.requests[-1]["create_session"]["mcp_server_ids"] == []
 
 
 def test_execution_ai_api_is_closed_and_protected(tmp_path):

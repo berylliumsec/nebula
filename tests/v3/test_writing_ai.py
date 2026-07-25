@@ -9,7 +9,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
-from nebula.v3.domain import Engagement, ProviderPrivacy, ProviderProfile
+from nebula.v3.domain import (
+    Engagement,
+    HarnessKind,
+    HarnessProfile,
+    ProviderPrivacy,
+    ProviderProfile,
+)
 from nebula.v3.providers import ModelResponse, ModelUsage
 from nebula.v3.storage import NebulaStore
 from nebula.v3.writing_ai import (
@@ -45,6 +51,19 @@ class StubProvider:
             text=self.response_text,
             usage=ModelUsage(input_tokens=11, output_tokens=4, total_tokens=15),
             provider_request_id="writing-request-1",
+        )
+
+
+class StubHarnessRuntime:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def analyze_structured(self, **request):
+        self.requests.append(request)
+        return SimpleNamespace(
+            id="harness-turn-1",
+            response="Codex-rewritten analyst prose.",
+            usage={"input_tokens": 9, "output_tokens": 5, "total_tokens": 14},
         )
 
 
@@ -115,6 +134,90 @@ async def test_cloud_transform_requires_per_request_confirmation(tmp_path):
         request.model_copy(update={"cloud_confirmed": True})
     )
     assert accepted.content == "Rewritten analyst prose."
+
+
+@async_test
+async def test_transform_supports_codex_harness_runtime(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    engagement = store.create(Engagement(name="Codex writing"))
+    harness = store.create(
+        HarnessProfile(
+            name="Local Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/usr/bin/codex",
+            default_model="model-1",
+            privacy=ProviderPrivacy(local_only=True),
+            capabilities={"models": ["model-1"]},
+        )
+    )
+    runtime = StubHarnessRuntime()
+    service = WritingAIService(
+        store=store,
+        harness_runtime=runtime,  # type: ignore[arg-type]
+    )
+
+    result = await service.transform(
+        WritingTransformRequest(
+            engagement_id=engagement.id,
+            backend_kind="harness",
+            harness_profile_id=harness.id,
+            model="model-1",
+            purpose="note",
+            instruction="Make it concise.",
+            source_text="Observed 443/tcp open.",
+        )
+    )
+
+    assert result.content == "Codex-rewritten analyst prose."
+    assert result.usage.total_tokens == 14
+    assert result.provenance.backend_kind == "harness"
+    assert result.provenance.provider_profile_id == harness.id
+    assert result.provenance.harness_profile_id == harness.id
+    assert result.provenance.provider_request_id == "harness-turn-1"
+    assert runtime.requests[0]["profile_id"] == harness.id
+    assert runtime.requests[0]["files"] == {"source.md": "Observed 443/tcp open."}
+
+
+@async_test
+async def test_remote_codex_writing_requires_confirmation(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    engagement = store.create(Engagement(name="Remote Codex writing"))
+    harness = store.create(
+        HarnessProfile(
+            name="Remote Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            connection_mode="endpoint",
+            transport="unix",
+            endpoint="unix:///tmp/codex.sock",
+            default_model="model-1",
+            privacy=ProviderPrivacy(permits_sensitive_data=True),
+            capabilities={"models": ["model-1"]},
+        )
+    )
+    runtime = StubHarnessRuntime()
+    service = WritingAIService(
+        store=store,
+        harness_runtime=runtime,  # type: ignore[arg-type]
+    )
+    request = WritingTransformRequest(
+        engagement_id=engagement.id,
+        backend_kind="harness",
+        harness_profile_id=harness.id,
+        model="model-1",
+        purpose="note",
+        instruction="Organize this note.",
+        source_text="Sensitive project note",
+    )
+
+    with pytest.raises(WritingAIError) as denied:
+        await service.transform(request)
+    assert denied.value.status_code == 428
+    assert runtime.requests == []
+
+    accepted = await service.transform(
+        request.model_copy(update={"cloud_confirmed": True})
+    )
+    assert accepted.content == "Codex-rewritten analyst prose."
 
 
 def test_writing_transform_api_is_authenticated(tmp_path):

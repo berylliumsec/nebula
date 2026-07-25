@@ -272,7 +272,9 @@ interface WireReport extends WireEntity {
 }
 
 interface WireAIWritingProvenance extends JsonObject {
+  backend_kind?: "provider" | "harness";
   provider_profile_id: string;
+  harness_profile_id?: string | null;
   model: string;
   prompt_version: string;
   source_sha256: string;
@@ -1096,7 +1098,9 @@ interface WireScopeImport extends WireEntity {
   }>;
   warnings?: string[];
   provenance?: {
+    backend_kind?: "provider" | "harness";
     provider_profile_id: string;
+    harness_profile_id?: string | null;
     model: string;
     prompt_version: string;
     source_sha256: string;
@@ -1448,7 +1452,9 @@ function mapReport(value: WireReport): ReportSummary {
 
 function mapAIWritingProvenance(value: WireAIWritingProvenance) {
   return {
+    backendKind: value.backend_kind ?? "provider",
     providerProfileId: value.provider_profile_id,
+    harnessProfileId: value.harness_profile_id ?? undefined,
     model: value.model,
     promptVersion: value.prompt_version,
     sourceSha256: value.source_sha256,
@@ -1474,7 +1480,9 @@ function writingProvenanceBody(
   value: ReportNoteTransform["provenance"],
 ): JsonObject {
   return {
+    backend_kind: value.backendKind ?? "provider",
     provider_profile_id: value.providerProfileId,
+    harness_profile_id: value.harnessProfileId,
     model: value.model,
     prompt_version: value.promptVersion,
     source_sha256: value.sourceSha256,
@@ -2592,7 +2600,9 @@ function mapScopeImport(value: WireScopeImport): ScopeImport {
     warnings: value.warnings ?? [],
     provenance: value.provenance
       ? {
+          backendKind: value.provenance.backend_kind ?? "provider",
           providerProfileId: value.provenance.provider_profile_id,
+          harnessProfileId: value.provenance.harness_profile_id ?? undefined,
           model: value.provenance.model,
           promptVersion: value.provenance.prompt_version,
           sourceSha256: value.provenance.source_sha256,
@@ -3752,7 +3762,9 @@ export class ApiClient {
         signal,
         body: JSON.stringify({
           engagement_id: body.engagementId,
+          backend_kind: body.backendKind ?? "provider",
           provider_id: body.providerId,
+          harness_profile_id: body.harnessProfileId,
           model: body.model,
           filename: body.filename,
           media_type: body.mediaType || null,
@@ -4189,7 +4201,9 @@ export class ApiClient {
       signal,
       body: JSON.stringify({
         engagement_id: body.engagementId,
+        backend_kind: body.backendKind ?? "provider",
         provider_id: body.providerId,
+        harness_profile_id: body.harnessProfileId,
         model: body.model,
         purpose: body.purpose,
         instruction: body.instruction,
@@ -5097,9 +5111,13 @@ export class ApiClient {
 
   attachExecutionToChat(
     executionId: string,
-    providerId: string,
+    providerId: string | undefined,
     model: string,
     cloudConfirmed: boolean,
+    runtime?: {
+      backendKind: "provider" | "harness";
+      harnessProfileId?: string;
+    },
   ): Promise<ExecutionChatAttachment> {
     return this.request<WireExecutionChatAttachment>(
       `executions/${encodeURIComponent(executionId)}/chat-attachments`,
@@ -5107,6 +5125,8 @@ export class ApiClient {
         method: "POST",
         body: JSON.stringify({
           provider_id: providerId,
+          backend_kind: runtime?.backendKind ?? "provider",
+          harness_profile_id: runtime?.harnessProfileId,
           model,
           cloud_confirmed: cloudConfirmed,
         }),

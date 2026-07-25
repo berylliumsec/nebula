@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import type {
   EngagementScopePolicy,
+  HarnessProfile,
   ProviderHealth,
   ScopeImport,
 } from "../api/types";
@@ -133,5 +134,47 @@ describe("ScopeImportDialog", () => {
       expect.objectContaining({ revision: 5 }),
     );
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("uses a Codex harness when no strict-output provider is configured", async () => {
+    const createScopeImport = vi.fn().mockResolvedValue(imported);
+    const harness = {
+      id: "harness-1",
+      name: "Local Codex",
+      kind: "codex_app_server",
+      enabled: true,
+      localOnly: true,
+      permitsSensitiveData: false,
+      models: ["codex-model"],
+      defaultModel: "codex-model",
+    } as HarnessProfile;
+    render(
+      <ScopeImportDialog
+        api={{ createScopeImport } as unknown as ApiClient}
+        engagementId="eng-1"
+        scope={scope}
+        providers={[]}
+        harnesses={[harness]}
+        onApplied={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: /Local Codex · Codex/ })).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Choose scope document"), {
+      target: {
+        files: [new File(["target"], "scope.txt", { type: "text/plain" })],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Analyze document" }));
+
+    await waitFor(() => expect(createScopeImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backendKind: "harness",
+        providerId: undefined,
+        harnessProfileId: "harness-1",
+        model: "codex-model",
+      }),
+    ));
   });
 });

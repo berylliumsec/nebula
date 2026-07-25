@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Ban, Clipboard, FileClock, LoaderCircle, MessageSquare, NotebookPen, Play, RefreshCw } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import type { OperatorExecution, ProviderHealth } from "../api/types";
+import type { HarnessProfile, OperatorExecution, ProviderHealth } from "../api/types";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { ExecutionInsightDialog } from "./ExecutionInsightDialog";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -13,6 +13,7 @@ interface ExecutionHistoryProps {
   refreshKey?: number;
   onRerun: (candidate: FencedRunCandidate) => void;
   providers: ProviderHealth[];
+  harnesses?: HarnessProfile[];
   onChatAttached: (sessionId: string) => void | Promise<void>;
 }
 
@@ -25,7 +26,7 @@ function duration(execution: OperatorExecution): string {
   return milliseconds < 1000 ? `${milliseconds} ms` : `${(milliseconds / 1000).toFixed(1)} s`;
 }
 
-export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, providers, onChatAttached }: ExecutionHistoryProps) {
+export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, providers, harnesses = [], onChatAttached }: ExecutionHistoryProps) {
   const [items, setItems] = useState<OperatorExecution[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [status, setStatus] = useState("");
@@ -223,7 +224,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
           </> : <div className="empty-state"><FileClock size={24} /><strong>Select an execution</strong><p>Output is loaded lazily and shown only in its redacted form here.</p></div>}
         </section>
       </div>
-      {selected && insightAction && <ExecutionInsightDialog action={insightAction} api={api} execution={selected} providers={providers} onClose={() => setInsightAction(undefined)} onChatAttached={onChatAttached} />}
+      {selected && insightAction && <ExecutionInsightDialog action={insightAction} api={api} execution={selected} providers={providers} harnesses={harnesses} onClose={() => setInsightAction(undefined)} onChatAttached={onChatAttached} />}
     </div>
   );
 }
