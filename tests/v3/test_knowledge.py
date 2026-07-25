@@ -458,6 +458,13 @@ def test_playwright_snapshot_captures_dynamic_text_through_pinned_routes(
     assert b"<script" not in snapshot
 
 
+def test_playwright_remote_resource_budget_is_50_mib():
+    expected = 50 * 1024 * 1024
+
+    assert knowledge_module.MAX_RENDER_RESOURCE_BYTES == expected
+    assert knowledge_module.MAX_RENDER_TOTAL_BYTES == expected
+
+
 def test_missing_playwright_disables_url_rendering_without_breaking_core(monkeypatch):
     def missing_import(name: str):
         assert name == "playwright.sync_api"
