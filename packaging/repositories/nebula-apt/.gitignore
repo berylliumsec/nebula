@@ -1,0 +1,8 @@
+downloads/
+public/
+archive.gpg
+*.key
+*.p8
+*.p12
+.env
+.env.*

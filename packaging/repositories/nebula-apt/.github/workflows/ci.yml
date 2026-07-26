@@ -1,0 +1,36 @@
+name: Validate APT repository source
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Validate promotion policy
+        run: |
+          python scripts/channel_policy.py channels.json
+          python -m unittest discover -s tests -v
+      - name: Validate shell entry points
+        run: |
+          sh -n scripts/build-repository.sh
+          sh -n scripts/smoke-test.sh
+      - name: Reject private credential material
+        run: |
+          test -z "$(find . -type f \( -name '*.key' -o -name '*.p8' -o -name '*.p12' -o -name '.env' \) -print)"
+          if git grep -E -- 'BEGIN (PGP )?PRIVATE KEY'; then
+            printf 'private key material is forbidden\n' >&2
+            exit 1
+          fi

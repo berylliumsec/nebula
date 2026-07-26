@@ -16,6 +16,9 @@ The protected workflow currently produces Linux x86_64 packages only:
 macOS, Windows, Linux arm64, RPM, Flatpak, Snap, and Homebrew artifacts are not
 built by this workflow and must not be promised in release copy.
 
+Use `.agents/skills/release-nebula-apt/SKILL.md` when promoting a published DEB
+into the signed APT repository.
+
 ## One-time repository setup
 
 Create a protected GitHub environment named `desktop-release`. Require release
@@ -122,3 +125,24 @@ from GitHub, and revalidates checksums, attestations, and the updater signature.
 If a content or release gate fails, leave the draft unpublished, fix the problem
 on a new commit, advance the version, and create a new tag. Do not replace
 artifacts on an existing published release or repoint its tag.
+
+## APT promotion
+
+The public `BerylliumSec/nebula-apt` repository is created from the secret-free
+scaffold in `packaging/repositories/nebula-apt`. Its protected `apt-release`
+environment holds only a dedicated signing subkey and passphrase; keep the
+primary key and revocation certificate offline. Commit only the exported public
+archive key and verify its fingerprint through an independent channel.
+
+After publishing an immutable Nebula release, dispatch `promote.yml` in the APT
+repository with the tag and matching `stable` or `prerelease` channel. The
+workflow verifies the release checksum and GitHub attestation and opens a
+reviewable pull request. Promotions must advance the channel and cannot change
+an already-recorded tag. Merging that pull request validates repository input
+before signing access, builds and signs both APT distributions, retains the
+current and previous package for upgrade testing, runs clean install, upgrade,
+self-test, doctor, and uninstall checks on Ubuntu, Debian, and Kali, and deploys
+the repository through GitHub Pages.
+
+Never upload a private key, passphrase, token, `.env` file, or decrypted
+credential to either public repository or a workflow artifact.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nebula APT Releases"
+  short_description: "Promote and publish signed Nebula APT releases"
+  default_prompt: "Use $release-nebula-apt to validate and promote a signed Nebula APT release."

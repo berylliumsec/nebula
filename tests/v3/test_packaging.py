@@ -68,6 +68,50 @@ def test_protected_release_distribution_is_linux_x86_64_only():
         assert unsupported not in workflows
 
 
+def test_apt_repository_scaffold_is_secret_free_and_verifies_promotions():
+    repository = ROOT / "packaging/repositories/nebula-apt"
+    required = (
+        ".github/workflows/ci.yml",
+        ".github/workflows/promote.yml",
+        ".github/workflows/publish.yml",
+        "scripts/build-repository.sh",
+        "scripts/channel_policy.py",
+        "scripts/promote.py",
+        "scripts/smoke-test.sh",
+        "scripts/verify_release_checksum.py",
+        "channels.json",
+    )
+    for relative in required:
+        assert (repository / relative).is_file()
+
+    workflows = "\n".join(
+        (repository / relative).read_text(encoding="utf-8")
+        for relative in (
+            ".github/workflows/promote.yml",
+            ".github/workflows/publish.yml",
+        )
+    )
+    assert "gh attestation verify" in workflows
+    assert "APT_SIGNING_SUBKEY" in workflows
+    assert "scripts/verify_release_checksum.py" in workflows
+    assert "test -s nebula-archive-keyring.asc" in workflows
+    assert 'test "$secret_fingerprint" = "$public_fingerprint"' in workflows
+    assert '$1 == "sec" && $15 == "#"' in workflows
+    assert '$1 == "ssb" && $12 ~ /s/ && $15 == "+"' in workflows
+    assert "needs: validate" in workflows
+    smoke = (repository / "scripts/smoke-test.sh").read_text(encoding="utf-8")
+    for image in ("ubuntu:24.04", "debian:12-slim", "kalilinux/kali-rolling:latest"):
+        assert image in smoke
+    builder = (repository / "scripts/build-repository.sh").read_text(encoding="utf-8")
+    assert 'dpkg-scanpackages "pool/$channel"' in builder
+    assert "dpkg-scanpackages --arch" not in builder
+    assert 'dpkg-deb -f "$deb" Architecture' in builder
+    assert 'chmod -R u=rwX,go=rX "$public"' in builder
+    assert "BEGIN PGP PRIVATE KEY BLOCK" not in workflows
+    assert "macos-" not in workflows
+    assert "Homebrew" not in workflows
+
+
 def test_release_stages_and_smoke_tests_bundled_playwright_chromium():
     release = (ROOT / ".github/workflows/nebula3-release.yml").read_text(
         encoding="utf-8"
