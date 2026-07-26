@@ -42,15 +42,43 @@ Nebula supports hosted, local, and OpenAI-compatible model runtimes. A model pro
 
 The current release candidate is **[Nebula 3.0.0-alpha.5](docs/releases/3.0.0-alpha.5.md)** for Linux x86_64. Docker or Podman is required for terminal and automation features.
 
+The preferred installation method is the signed [Nebula APT repository](https://github.com/BerylliumSec/nebula-apt). Its archive-key fingerprint is:
+
+```console
+1D90 1EB3 4C8C 1065 F118 680D 1C5C 924C B4B5 823D
+```
+
+Verify that fingerprint, add the current preview channel, and install:
+
+```console
+sudo apt update
+sudo apt install -y ca-certificates curl gnupg
+curl -fsSL https://berylliumsec.github.io/nebula-apt/nebula-archive-keyring.asc |
+  gpg --show-keys --fingerprint
+curl -fsSL https://berylliumsec.github.io/nebula-apt/nebula-archive-keyring.asc |
+  sudo gpg --dearmor --batch --yes -o /usr/share/keyrings/nebula-archive-keyring.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/nebula-archive-keyring.gpg] https://berylliumsec.github.io/nebula-apt prerelease main" |
+  sudo tee /etc/apt/sources.list.d/nebula.list >/dev/null
+sudo apt update
+sudo apt install nebula
+nebula
+```
+
+The `prerelease` channel is intentional while Nebula 3 is in preview. The DEB
+supports Debian, Ubuntu, Kali, and compatible systems. Future updates remain
+under administrator control through the normal APT workflow.
+
+<details>
+<summary>Install a downloaded DEB manually instead</summary>
+
 Download the DEB and `SHA256SUMS-linux-x64.txt` from [GitHub Releases](https://github.com/BerylliumSec/nebula/releases), then verify and install:
 
 ```console
 sha256sum --check --ignore-missing SHA256SUMS-linux-x64.txt
 sudo apt install ./Nebula-3.0.0-alpha.5-linux-x86_64.deb
-nebula
 ```
 
-The DEB supports Debian, Ubuntu, Kali, and compatible systems. Updates remain under administrator control.
+</details>
 
 <details>
 <summary>Use the portable AppImage instead</summary>
