@@ -102,9 +102,7 @@ def test_apt_repository_scaffold_is_secret_free_and_verifies_promotions():
     smoke = (repository / "scripts/smoke-test.sh").read_text(encoding="utf-8")
     for image in ("ubuntu:24.04", "debian:12-slim", "kalilinux/kali-rolling:latest"):
         assert image in smoke
-    builder = (repository / "scripts/build-repository.sh").read_text(
-        encoding="utf-8"
-    )
+    builder = (repository / "scripts/build-repository.sh").read_text(encoding="utf-8")
     assert 'dpkg-scanpackages "pool/$channel"' in builder
     assert "dpkg-scanpackages --arch" not in builder
     assert 'dpkg-deb -f "$deb" Architecture' in builder
