@@ -1,0 +1,132 @@
+name: Publish signed APT repository
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - channels.json
+      - nebula-archive-keyring.asc
+      - scripts/**
+      - .github/workflows/publish.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  attestations: read
+
+concurrency:
+  group: apt-pages
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Validate source before granting signing access
+        run: |
+          python scripts/channel_policy.py channels.json
+          python -m unittest discover -s tests -v
+          sh -n scripts/build-repository.sh
+          sh -n scripts/smoke-test.sh
+          test -s nebula-archive-keyring.asc
+          test "$(gpg --show-keys --with-colons nebula-archive-keyring.asc | awk -F: '$1 == "pub" { count++ } END { print count+0 }')" -eq 1
+
+  build-and-test:
+    needs: validate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    environment: apt-release
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install repository tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils dpkg-dev gnupg jq
+      - name: Import the protected signing subkey
+        env:
+          APT_SIGNING_SUBKEY: ${{ secrets.APT_SIGNING_SUBKEY }}
+          APT_SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+        run: |
+          test -n "$APT_SIGNING_SUBKEY"
+          test -n "$APT_SIGNING_PASSPHRASE"
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          install -d -m 0700 "$GNUPGHOME"
+          printf '%s' "$APT_SIGNING_SUBKEY" | gpg --batch --import
+          printf '%s' "$APT_SIGNING_PASSPHRASE" >"$RUNNER_TEMP/gpg-passphrase"
+          chmod 0600 "$RUNNER_TEMP/gpg-passphrase"
+          test -s nebula-archive-keyring.asc
+          secret_keys="$(gpg --batch --with-colons --list-secret-keys)"
+          test "$(awk -F: '$1 == "sec" { count++ } END { print count+0 }' <<<"$secret_keys")" -eq 1
+          test "$(awk -F: '$1 == "sec" && $15 == "#" { count++ } END { print count+0 }' <<<"$secret_keys")" -eq 1
+          test "$(awk -F: '$1 ~ /^s(ec|sb)$/ && $15 == "+" { count++ } END { print count+0 }' <<<"$secret_keys")" -eq 1
+          test "$(awk -F: '$1 == "ssb" && $12 ~ /s/ && $15 == "+" { count++ } END { print count+0 }' <<<"$secret_keys")" -eq 1
+          test "$(gpg --show-keys --with-colons nebula-archive-keyring.asc | awk -F: '$1 == "pub" { count++ } END { print count+0 }')" -eq 1
+          secret_fingerprint="$(awk -F: '$1 == "fpr" { print $10; exit }' <<<"$secret_keys")"
+          public_fingerprint="$(gpg --show-keys --with-colons nebula-archive-keyring.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test -n "$secret_fingerprint"
+          test "$secret_fingerprint" = "$public_fingerprint"
+          key="$(awk -F: '$1 == "sec" { print $5; exit }' <<<"$secret_keys")"
+          test -n "$key"
+          {
+            printf 'GNUPGHOME=%s\n' "$GNUPGHOME"
+            printf 'APT_SIGNING_KEY=%s\n' "$key"
+            printf 'APT_SIGNING_PASSPHRASE_FILE=%s\n' "$RUNNER_TEMP/gpg-passphrase"
+          } >>"$GITHUB_ENV"
+      - name: Download and verify every retained release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          install -d -m 0755 downloads
+          jq -c '.channels[][]' channels.json | while IFS= read -r entry; do
+            tag="$(jq -r .tag <<<"$entry")"
+            asset="$(jq -r .asset <<<"$entry")"
+            expected="$(jq -r .sha256 <<<"$entry")"
+            gh release download "$tag" --repo BerylliumSec/nebula \
+              --dir downloads --pattern "$asset" --skip-existing
+            test "$(sha256sum "downloads/$asset" | cut -d " " -f 1)" = "$expected"
+            gh attestation verify "downloads/$asset" --repo BerylliumSec/nebula
+          done
+      - name: Build and verify signed repository metadata
+        run: |
+          scripts/build-repository.sh channels.json downloads public "$APT_SIGNING_KEY"
+          gpg --dearmor <public/nebula-archive-keyring.asc >archive.gpg
+          for channel in stable prerelease; do
+            gpgv --keyring ./archive.gpg \
+              "public/dists/$channel/Release.gpg" \
+              "public/dists/$channel/Release"
+          done
+          test "$(gpg --show-keys --with-colons nebula-archive-keyring.asc | awk -F: '$1 == "fpr" { print $10; exit }')" = \
+               "$(gpg --show-keys --with-colons public/nebula-archive-keyring.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
+      - name: Smoke-test clean install, upgrade, doctor, and uninstall
+        run: scripts/smoke-test.sh public channels.json
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: public
+      - name: Remove signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/gpg-passphrase"
+          rm -rf "$RUNNER_TEMP/gnupg"
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Deploy the verified signed repository
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

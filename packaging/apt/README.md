@@ -1,11 +1,11 @@
-# Signed APT promotion
+# Signed APT support
 
-This directory prepares a static, signed APT repository; it does not create or push `berylliumsec/nebula-apt`.
+`publish-deb.sh` is the low-level single-distribution helper retained for local
+packaging tests. The production public repository source, channel promotion,
+protected signing, upgrade tests, and Pages deployment are maintained in the
+ready-to-copy scaffold at `packaging/repositories/nebula-apt`.
 
-The promotion pipeline must download the immutable managed DEB and its checksum from a published GitHub Release, verify the checksum, and then run:
-
-```console
-./publish-deb.sh Nebula-VERSION-linux-x86_64.deb PUBLIC_REPOSITORY_ROOT GPG_KEY_ID
-```
-
-Publish `PUBLIC_REPOSITORY_ROOT` at `https://berylliumsec.github.io/nebula-apt`. Keep the signing key in a protected release environment and publish only its exported `nebula-archive-keyring.asc`. The DEB owns `/usr/bin/nebula`, which launches the bundled desktop, and `/usr/bin/nebula-core`, which provides administration and diagnostics. The managed desktop build never invokes the Tauri updater.
+The production workflow downloads only managed DEBs from immutable published
+Nebula releases, verifies release checksums and GitHub provenance attestations,
+and signs metadata with a dedicated subkey from the external repository’s
+protected `apt-release` environment. No private signing material belongs here.

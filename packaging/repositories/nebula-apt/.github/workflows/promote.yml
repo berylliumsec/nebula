@@ -1,0 +1,92 @@
+name: Propose APT channel promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published immutable nebula-v3.* tag
+        required: true
+        type: string
+      channel:
+        description: APT distribution to update
+        required: true
+        type: choice
+        options:
+          - stable
+          - prerelease
+
+permissions:
+  contents: write
+  pull-requests: write
+  attestations: read
+
+concurrency:
+  group: apt-promote-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Validate the existing channel manifest
+        run: python scripts/channel_policy.py channels.json
+      - name: Validate the published release and managed DEB
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          case "$TAG" in nebula-v3.*) ;; *) exit 1 ;; esac
+          version="${TAG#nebula-v}"
+          case "$CHANNEL" in
+            stable)
+              case "$version" in
+                *-*) printf 'prerelease version cannot enter stable\n' >&2; exit 1 ;;
+              esac
+              ;;
+            prerelease)
+              case "$version" in
+                *-*) ;;
+                *) printf 'stable version cannot enter prerelease\n' >&2; exit 1 ;;
+              esac
+              ;;
+          esac
+          release="$(gh api "repos/BerylliumSec/nebula/releases/tags/$TAG")"
+          test "$(jq -r .draft <<<"$release")" = false
+          test "$(jq -r .prerelease <<<"$release")" = "$([ "$CHANNEL" = prerelease ] && echo true || echo false)"
+          asset="Nebula-$version-linux-x86_64.deb"
+          digest="$(jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .digest' <<<"$release")"
+          sha256="${digest#sha256:}"
+          test "${#sha256}" -eq 64
+          install -d -m 0755 release
+          gh release download "$TAG" --repo BerylliumSec/nebula --dir release \
+            --pattern "$asset" --pattern SHA256SUMS-linux-x64.txt
+          python scripts/verify_release_checksum.py \
+            --checksums release/SHA256SUMS-linux-x64.txt \
+            --asset "release/$asset" \
+            --sha256 "$sha256"
+          gh attestation verify "release/$asset" --repo BerylliumSec/nebula
+          python scripts/promote.py --channel "$CHANNEL" --tag "$TAG" --sha256 "$sha256"
+      - name: Push a reviewable promotion branch and open a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          branch="promote/$CHANNEL/$TAG"
+          git config user.name github-actions
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git checkout -b "$branch"
+          git add channels.json
+          git commit -m "Promote $TAG to $CHANNEL"
+          git push origin "$branch"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "Promote $TAG to APT $CHANNEL" \
+            --body "Verified release checksum and GitHub build attestation. Merging publishes and smoke-tests the signed APT repository."
