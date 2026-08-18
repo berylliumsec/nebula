@@ -2445,7 +2445,7 @@ function mapProvider(value: WireProvider): ProviderHealth {
   const capabilities = Object.entries(value.capabilities ?? {})
     .filter(([, supported]) => supported)
     .map(([name]) => name.replaceAll("_", " "));
-  const isGateway = ["gateway", "openrouter", "litellm"].some((name) =>
+  const isGateway = ["gateway", "openrouter", "orcarouter", "litellm"].some((name) =>
     value.provider_type.toLowerCase().includes(name),
   );
   const metadata = value.metadata ?? {};
