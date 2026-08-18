@@ -69,6 +69,7 @@ class ProviderFlavor(str, Enum):
     TOGETHER = "together"
     FIREWORKS = "fireworks"
     OPENROUTER = "openrouter"
+    ORCAROUTER = "orcarouter"
     LITELLM = "litellm"
     OLLAMA = "ollama"
     VLLM = "vllm"
@@ -1479,6 +1480,14 @@ PROVIDER_CATALOG: dict[ProviderFlavor, ProviderCatalogEntry] = {
             display_name="OpenRouter",
             default_base_url="https://openrouter.ai/api/v1",
             suggested_key_env="OPENROUTER_API_KEY",
+            support_tier="standard",
+        ),
+        ProviderCatalogEntry(
+            flavor=ProviderFlavor.ORCAROUTER,
+            adapter=ProviderKind.OPENAI_COMPATIBLE,
+            display_name="OrcaRouter",
+            default_base_url="https://api.orcarouter.ai/v1",
+            suggested_key_env="ORCAROUTER_API_KEY",
             support_tier="standard",
         ),
         ProviderCatalogEntry(

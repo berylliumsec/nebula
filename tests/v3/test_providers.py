@@ -381,6 +381,59 @@ def test_vllm_is_an_explicit_local_openai_compatible_provider():
     assert result.text == "ok"
 
 
+def test_orcarouter_catalog_entry_maps_to_openai_compatible_wire():
+    config = config_from_catalog(
+        provider_id="orcarouter",
+        flavor=ProviderFlavor.ORCAROUTER,
+        default_model="openai/gpt-4o",
+        capabilities=ModelCapabilities(),
+    )
+
+    assert config.kind == ProviderKind.OPENAI_COMPATIBLE
+    assert config.flavor == ProviderFlavor.ORCAROUTER
+    assert config.base_url == "https://api.orcarouter.ai/v1"
+    assert config.api_key_env == "ORCAROUTER_API_KEY"
+    assert config.local is False
+
+
+def test_orcarouter_openai_compatible_chat_round_trip():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-orca",
+                "object": "chat.completion",
+                "model": "openai/gpt-4o",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="orcarouter",
+            flavor=ProviderFlavor.ORCAROUTER,
+            default_model="openai/gpt-4o",
+            capabilities=ModelCapabilities(),
+            api_key_value="test-orca-key",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = asyncio.run(
+        provider.complete(
+            ModelRequest(messages=[ModelMessage(role="user", content="hello")])
+        )
+    )
+
+    assert result.text == "ok"
+
+
 def test_vllm_discovers_served_models_from_the_runtime():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/models"
