@@ -99,6 +99,26 @@ jobs:
           --file tests/v3/integration/Containerfile.operator-runtime
           --tag localhost/nebula-operator-runtime:ci
           .
+      - name: Diagnose rootless sandbox constraint compatibility
+        shell: bash
+        run: |
+          set +e
+          workspace="$RUNNER_TEMP/nebula-runtime-probe"
+          mkdir -p "$workspace"
+          chmod 0777 "$workspace"
+          runtime=(podman run --rm --pull=never --cap-drop=ALL --security-opt=no-new-privileges --network=none)
+          echo probe=hardening
+          timeout 8 "${runtime[@]}" localhost/nebula-operator-runtime:ci /bin/true
+          echo exit=$?
+          echo probe=resources
+          timeout 8 "${runtime[@]}" --cpus=1 --memory=512m --pids-limit=128 --user=65532:65532 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m --read-only localhost/nebula-operator-runtime:ci /bin/true
+          echo exit=$?
+          echo probe=workspace
+          timeout 8 "${runtime[@]}" --cpus=1 --memory=512m --pids-limit=128 --user=65532:65532 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m --read-only --mount="type=bind,src=$workspace,dst=/workspace" --workdir=/workspace localhost/nebula-operator-runtime:ci /bin/true
+          echo exit=$?
+          echo probe=interactive
+          printf "print('probe-ok')\n" | timeout 8 "${runtime[@]}" --cpus=1 --memory=512m --pids-limit=128 --user=65532:65532 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m --read-only --interactive --mount="type=bind,src=$workspace,dst=/workspace" --workdir=/workspace localhost/nebula-operator-runtime:ci /usr/local/bin/python -E -s -u
+          echo exit=$?
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
