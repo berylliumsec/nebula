@@ -17,7 +17,6 @@ import pty
 import re
 import signal
 import struct
-import subprocess
 import termios
 import tempfile
 from abc import ABC, abstractmethod
@@ -1138,8 +1137,7 @@ class ContainerSandboxRunner(SandboxRunner):
                 exc,
                 stage="sandbox",
             )
-            detail = str(exc).strip() or exc.__class__.__name__
-            return False, f"container runtime health check failed: {detail}"
+            return False, f"container runtime health check failed: {exc}"
 
     async def _validate_runtime_profile(self) -> tuple[bool, str]:
         assert self.profile is not None
@@ -1235,86 +1233,25 @@ class ContainerSandboxRunner(SandboxRunner):
             if not connection_ok:
                 return False, connection_detail
 
-        if (
-            self.profile.platform == RunnerPlatform.LINUX
-            and self.profile.context is None
-        ):
-            version_output, version_error, return_code = await self._capture(
-                "--version"
-            )
-            if return_code != 0:
-                return False, version_error or "Podman executable is unavailable"
-            if not version_output.strip().lower().startswith("podman version "):
-                return (
-                    False,
-                    "configured Podman executable returned invalid version metadata",
-                )
-            if os.geteuid() == 0:
-                return False, "Podman must be invoked by a non-root operator"
-            return True, "approved local rootless Podman runner is available"
-
-        # Request only the two fields used for admission. Older Podman builds
-        # can block while serializing the full ``info`` document to a pipe,
-        # even though the runtime itself is healthy.
-        info_output, info_error, return_code = await self._capture_podman_health()
+        info_output, info_error, return_code = await self._capture(
+            "info", "--format", "json"
+        )
         if return_code != 0:
             return False, info_error or "Podman service is unavailable"
-        if info_output.strip().lower() != "true":
+        info = json.loads(info_output)
+        host = _mapping_get(info, "host", "Host")
+        security = _mapping_get(host, "security", "Security")
+        if _mapping_get(security, "rootless", "Rootless") is not True:
             return False, "Podman service is not operating in rootless mode"
+        host_os = str(_mapping_get(host, "os", "OS", "Os")).lower()
+        if host_os and host_os != "linux":
+            return False, "Podman runner must execute Linux containers"
         detail = (
             "approved rootless Podman Machine runner is available"
             if self.profile.platform == RunnerPlatform.MACOS
             else "approved local rootless Podman runner is available"
         )
         return True, detail
-
-    async def _capture_podman_health(self) -> tuple[str, str, int]:
-        """Capture fixed-size admission fields without inherited-pipe races.
-
-        Rootless Podman may create a pause process which retains inherited pipe
-        descriptors. Redirecting the scalar result to regular files lets us
-        wait for the inspected Podman parent rather than for unrelated EOFs.
-        """
-
-        def capture() -> tuple[bytes, bytes, int]:
-            with (
-                tempfile.TemporaryFile() as stdout_file,
-                tempfile.TemporaryFile() as stderr_file,
-            ):
-                process = subprocess.Popen(
-                    [
-                        *self._runtime_argv(),
-                        "info",
-                        "--format",
-                        "{{.Host.Security.Rootless}}",
-                    ],
-                    stdin=subprocess.DEVNULL,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    env=_runtime_environment(),
-                )
-                try:
-                    return_code = process.wait(timeout=30)
-                except subprocess.TimeoutExpired as exc:
-                    process.kill()
-                    process.wait()
-                    raise asyncio.TimeoutError from exc
-                stdout_file.seek(0)
-                stderr_file.seek(0)
-                return (
-                    stdout_file.read(257),
-                    stderr_file.read(64 * 1024 + 1),
-                    return_code,
-                )
-
-        stdout, stderr, return_code = await asyncio.to_thread(capture)
-        if len(stdout) > 16 or len(stderr) > 64 * 1024:
-            raise SandboxError("Podman health output exceeded its fixed limit")
-        return (
-            stdout.decode("utf-8", errors="replace").strip(),
-            stderr.decode("utf-8", errors="replace").strip(),
-            int(return_code),
-        )
 
     async def _validate_podman_connection(self, *, machine: bool) -> tuple[bool, str]:
         assert self.profile is not None
@@ -1355,11 +1292,8 @@ class ContainerSandboxRunner(SandboxRunner):
             stderr=asyncio.subprocess.PIPE,
             env=_runtime_environment(),
         )
-        # Rootless Podman may need to initialize its user service and storage
-        # metadata on the first inspected command. Keep the probe bounded, but
-        # allow enough time for that legitimate local startup path.
         stdout, stderr = await _communicate_limited(
-            process, timeout_seconds=30, output_bytes=2_000_000
+            process, timeout_seconds=10, output_bytes=2_000_000
         )
         return (
             stdout.decode("utf-8", errors="replace").strip(),
@@ -1378,20 +1312,6 @@ class ContainerSandboxRunner(SandboxRunner):
                 else "--connection"
             )
             argv.extend([option, self.profile.context])
-        return argv
-
-    def _execution_runtime_argv(self) -> list[str]:
-        argv = self._runtime_argv()
-        if (
-            self.profile is not None
-            and self.profile.runtime_type == ContainerRuntimeType.PODMAN
-            and self.profile.platform == RunnerPlatform.LINUX
-        ):
-            # Container execution must not depend on an ambient systemd user
-            # session or journald endpoint. Keep inspection/control commands
-            # on Podman's defaults because older releases cannot apply these
-            # execution backends while serializing runtime information.
-            argv.extend(["--events-backend=file", "--cgroup-manager=cgroupfs"])
         return argv
 
     def _validate(self, request: SandboxRequest) -> Path | None:
@@ -1489,7 +1409,7 @@ class ContainerSandboxRunner(SandboxRunner):
             raise SandboxUnavailable("no container runtime is configured")
         limits = request.limits
         argv = [
-            *self._execution_runtime_argv(),
+            *self._runtime_argv(),
             "run",
             "--rm",
             f"--name={container_name}",
@@ -2822,10 +2742,9 @@ def _runtime_environment() -> dict[str, str]:
         "HOME",
         "XDG_RUNTIME_DIR",
     }
-    environment = {
+    return {
         name: value for name in retained if (value := os.environ.get(name)) is not None
     }
-    return environment
 
 
 __all__ = [

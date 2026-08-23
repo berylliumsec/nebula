@@ -171,13 +171,7 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
     workspace = runner._validate(request)
     argv = runner._argv(request, workspace)
 
-    assert argv[:5] == [
-        "/usr/bin/podman",
-        "--events-backend=file",
-        "--cgroup-manager=cgroupfs",
-        "run",
-        "--rm",
-    ]
+    assert argv[:3] == ["/usr/bin/podman", "run", "--rm"]
     assert "--name=nebula-tool" in argv
     assert "--pull=never" in argv
     assert "--read-only" in argv
@@ -336,9 +330,9 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
 
     async def capture(*arguments):
         nonlocal health_checks
-        if arguments == ("--version",):
+        if arguments == ("info", "--format", "json"):
             health_checks += 1
-            return "podman version 5.4.2", "", 0
+            return '{"host":{"security":{"rootless":true},"os":"linux"}}', "", 0
         if arguments == ("ps", "--all", "--format", "{{.Names}}"):
             return (
                 "nebula-terminal-good123\n"
@@ -372,11 +366,16 @@ def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
 
     async def capture(*arguments):
         nonlocal health_checks
-        if arguments == ("--version",):
+        if arguments == ("info", "--format", "json"):
             health_checks += 1
-            if health_checks == 1:
-                return "podman version 5.4.2", "", 0
-            return "", "Podman became unavailable", 1
+            rootless = health_checks == 1
+            return (
+                json.dumps(
+                    {"host": {"security": {"rootless": rootless}, "os": "linux"}}
+                ),
+                "",
+                0,
+            )
         if arguments == ("ps", "--all", "--format", "{{.Names}}"):
             return "nebula-terminal-orphan\n", "", 0
         raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
@@ -499,33 +498,13 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
     )
 
     async def capture(*arguments):
-        assert arguments == ("--version",)
-        return "podman version 5.4.2", "", 0
+        assert arguments == ("info", "--format", "json")
+        return '{"host":{"security":{"rootless":true},"os":"linux"}}', "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
     available, detail = asyncio.run(runner.available())
     assert available is True
     assert "rootless Podman" in detail
-    assert runner._runtime_argv() == ["/usr/bin/podman"]
-
-
-def test_container_runtime_timeout_has_actionable_health_detail(monkeypatch):
-    runner = ContainerSandboxRunner(
-        profile=RunnerProfile(
-            runtime_type=ContainerRuntimeType.PODMAN,
-            executable="/usr/bin/podman",
-            platform=RunnerPlatform.LINUX,
-            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
-        )
-    )
-
-    async def timeout():
-        raise asyncio.TimeoutError
-
-    monkeypatch.setattr(runner, "_validate_runtime_profile", timeout)
-    available, detail = asyncio.run(runner.available())
-    assert available is False
-    assert detail == "container runtime health check failed: TimeoutError"
 
 
 def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
@@ -662,13 +641,9 @@ def test_macos_podman_machine_requires_running_rootless_loopback_connection(
                 "",
                 0,
             )
-        raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
-
-    async def capture_health():
-        return "true", "", 0
+        return '{"host":{"security":{"rootless":true},"os":"linux"}}', "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
-    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
     available, detail = asyncio.run(runner.available())
     assert available is True
     assert "Podman Machine" in detail
