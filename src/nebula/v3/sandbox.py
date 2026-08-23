@@ -1309,14 +1309,6 @@ class ContainerSandboxRunner(SandboxRunner):
         if self.profile is None:
             raise SandboxUnavailable("no container runtime is configured")
         argv = [str(self.profile.executable)]
-        if (
-            self.profile.runtime_type == ContainerRuntimeType.PODMAN
-            and self.profile.platform == RunnerPlatform.LINUX
-        ):
-            # Rootless Linux execution must not depend on an ambient systemd
-            # user session or D-Bus endpoint. Both backends remain local and
-            # work with the cgroup-v2 hosts admitted by this runner profile.
-            argv.extend(["--events-backend=file", "--cgroup-manager=cgroupfs"])
         if self.profile.context:
             option = (
                 "--context"

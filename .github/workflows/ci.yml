@@ -97,31 +97,8 @@ jobs:
           --file tests/v3/integration/Containerfile.operator-runtime
           --tag localhost/nebula-operator-runtime:ci
           .
-      - name: Diagnose bounded rootless environment
-        shell: bash
-        run: |
-          set +e
-          for retained in minimal identity temp config full; do
-            echo "probe=$retained"
-            case "$retained" in
-              minimal)
-                timeout 8 env -i HOME="$HOME" PATH="$PATH" podman info --format json
-                ;;
-              identity)
-                timeout 8 env -i HOME="$HOME" PATH="$PATH" USER="$USER" LOGNAME="$LOGNAME" podman info --format json
-                ;;
-              temp)
-                timeout 8 env -i HOME="$HOME" PATH="$PATH" USER="$USER" LOGNAME="$LOGNAME" TMPDIR="${RUNNER_TEMP:-/tmp}" podman info --format json
-                ;;
-              config)
-                timeout 8 env -i HOME="$HOME" PATH="$PATH" USER="$USER" LOGNAME="$LOGNAME" TMPDIR="${RUNNER_TEMP:-/tmp}" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}" XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}" podman info --format json
-                ;;
-              full)
-                timeout 8 podman info --format json
-                ;;
-            esac
-            echo "exit=$?"
-          done
+      - name: Confirm rootless runtime after image build
+        run: timeout 10 podman info --format json >/dev/null
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman

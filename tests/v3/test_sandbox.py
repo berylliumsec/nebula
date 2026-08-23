@@ -171,13 +171,7 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
     workspace = runner._validate(request)
     argv = runner._argv(request, workspace)
 
-    assert argv[:5] == [
-        "/usr/bin/podman",
-        "--events-backend=file",
-        "--cgroup-manager=cgroupfs",
-        "run",
-        "--rm",
-    ]
+    assert argv[:3] == ["/usr/bin/podman", "run", "--rm"]
     assert "--name=nebula-tool" in argv
     assert "--pull=never" in argv
     assert "--read-only" in argv
@@ -511,11 +505,7 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
     available, detail = asyncio.run(runner.available())
     assert available is True
     assert "rootless Podman" in detail
-    assert runner._runtime_argv() == [
-        "/usr/bin/podman",
-        "--events-backend=file",
-        "--cgroup-manager=cgroupfs",
-    ]
+    assert runner._runtime_argv() == ["/usr/bin/podman"]
 
 
 def test_container_runtime_timeout_has_actionable_health_detail(monkeypatch):
