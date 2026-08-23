@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Braces, File, FilePlus2, Folder, LoaderCircle, RefreshCw, RotateCcw, Save, ShieldAlert } from "lucide-react";
+import { Braces, File, FilePlus2, Folder, LoaderCircle, MoreHorizontal, RefreshCw, RotateCcw, Save, ShieldAlert, Sparkles, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import type { WorkspaceEntry } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -8,6 +8,12 @@ import { CodeMirrorSurface, languageLabelForPath } from "./CodeMirrorSurface";
 import { useConfirmation } from "./DialogSystem";
 import { WorkspaceEntryContextMenu, type WorkspaceEntryMenuState } from "./WorkspaceEntryContextMenu";
 import { InlineValidationNotice } from "./InlineValidationNotice";
+import { AIWritingDialog } from "./AIWritingDialog";
+import type { HarnessProfile, ProviderHealth, WritingTransformResponse } from "../api/types";
+import { codeSuggestionRuntimeOptions } from "./aiRuntimes";
+import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
+import { sha256Hex } from "../sha256";
+import { StandardEmptyState } from "./SurfacePrimitives";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
 
@@ -15,6 +21,8 @@ interface CodeEditorPanelProps {
   active: boolean;
   api: ApiClient;
   engagementId: string;
+  providers?: ProviderHealth[];
+  harnesses?: HarnessProfile[];
 }
 
 function validWorkspacePath(path: string): boolean {
@@ -31,10 +39,9 @@ async function decodeWorkspaceFile(blob: Blob): Promise<{ content: string; sha25
   const payload = new Uint8Array(bytes);
   const content = new TextDecoder("utf-8", { fatal: true }).decode(payload);
   if (content.includes("\0")) throw new Error("This file appears to be binary and cannot be edited as text.");
-  const digest = await crypto.subtle.digest("SHA-256", payload);
   return {
     content,
-    sha256: [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join(""),
+    sha256: sha256Hex(payload),
   };
 }
 
@@ -46,7 +53,7 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[]): string 
   return directory ? `${directory}/${name}` : name;
 }
 
-export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelProps) {
+export function CodeEditorPanel({ active, api, engagementId, providers = [], harnesses = [] }: CodeEditorPanelProps) {
   const confirm = useConfirmation();
   const { buffer, setBuffer } = useWorkbenchEditor(engagementId);
   const [directory, setDirectory] = useState("");
@@ -60,6 +67,13 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
   const [conflict, setConflict] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [entryMenu, setEntryMenu] = useState<WorkspaceEntryMenuState>();
+  const [selection, setSelection] = useState("");
+  const [suggestionOpen, setSuggestionOpen] = useState(false);
+  const [suggestionRevision, setSuggestionRevision] = useState<string>();
+  const [localCompletionEnabled, setLocalCompletionEnabled] = useState(true);
+  const [mobileFilesOpen, setMobileFilesOpen] = useState(false);
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
+  const suggestionRuntimes = useMemo(() => codeSuggestionRuntimeOptions(providers, harnesses), [providers, harnesses]);
   const dirty = Boolean(buffer && (!buffer.existing || buffer.content !== buffer.savedContent));
   const crumbs = useMemo(() => directory ? directory.split("/") : [], [directory]);
 
@@ -124,6 +138,8 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
         savedContent: decoded.content,
       });
       setCursor({ line: 1, column: 1 });
+      setMobileFilesOpen(false);
+      setMobileToolsOpen(false);
     } catch (caughtError) {
       void logCaughtDiagnostic("interface.code_editor.open", "The code editor could not open a workspace file.", caughtError, "code_editor");
       setError(caughtError instanceof Error ? caughtError.message : "Could not open this file.");
@@ -149,6 +165,8 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
     setError(undefined);
     setNotice("Choose a workspace-relative path, then start typing.");
     setCursor({ line: 1, column: 1 });
+    setMobileFilesOpen(false);
+    setMobileToolsOpen(false);
   };
 
   const save = useCallback(async (force = false) => {
@@ -228,6 +246,35 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
     if (buffer) setBuffer({ ...buffer, ...changes });
   };
 
+  const openSuggestion = () => {
+    if (!buffer) return;
+    setSuggestionRevision(buffer.expectedSha256);
+    setSuggestionOpen(true);
+    setMobileToolsOpen(false);
+  };
+
+  const applySuggestion = (result: WritingTransformResponse) => {
+    if (!buffer || suggestionRevision !== buffer.expectedSha256) {
+      setError("The file changed while the suggestion was being prepared. Reload it before applying.");
+      setSuggestionOpen(false);
+      return;
+    }
+    const source = selection || buffer.content;
+    const start = selection ? buffer.content.indexOf(source) : 0;
+    const next = selection && start >= 0
+      ? `${buffer.content.slice(0, start)}${result.content}${buffer.content.slice(start + source.length)}`
+      : result.content;
+    updateBuffer({ content: next });
+    setNotice("Suggestion applied to the editor draft. Review it, then save explicitly.");
+    setSuggestionOpen(false);
+  };
+
+  const completionSource = async (context: CompletionContext): Promise<CompletionResult | null> => {
+    if (!localCompletionEnabled || !buffer || !context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*/)?.text) return null;
+    const items = await api.completeCode(engagementId, buffer.filePath, context.state.doc.toString(), context.pos);
+    return { from: context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*/)?.from ?? context.pos, options: items.map((item) => ({ label: item.label, type: item.type, detail: item.detail })) };
+  };
+
   const copyPath = async (entry: WorkspaceEntry) => {
     try {
       await navigator.clipboard.writeText(`/workspace/${entry.path}`);
@@ -286,21 +333,32 @@ export function CodeEditorPanel({ active, api, engagementId }: CodeEditorPanelPr
     }
   };
 
-  return <div className="code-editor-panel">
+  return <div className={`code-editor-panel${buffer ? " has-buffer" : ""}${mobileFilesOpen ? " mobile-files-open" : ""}`}>
     <aside className="code-editor-sidebar" aria-label="Editor files">
-      <header><div><Braces size={16} /><strong>Workspace</strong></div><div><button className="icon-button subtle" type="button" aria-label="New file" onClick={() => void createFile()}><FilePlus2 size={15} /></button><button className="icon-button subtle" type="button" aria-label="Refresh editor files" disabled={loading} onClick={() => void load(0)}><RefreshCw className={loading ? "spin" : undefined} size={14} /></button></div></header>
+      <header><div><Braces size={16} /><strong>Code workspace</strong></div><div><button className="icon-button subtle" type="button" aria-label="New file" onClick={() => void createFile()}><FilePlus2 size={15} /></button><button className="icon-button subtle" type="button" aria-label="Refresh editor files" disabled={loading} onClick={() => void load(0)}><RefreshCw className={loading ? "spin" : undefined} size={14} /></button>{buffer && <button className="icon-button subtle code-editor-mobile-only" type="button" aria-label="Hide editor files" onClick={() => setMobileFilesOpen(false)}><X size={15} /></button>}</div></header>
       <nav className="code-editor-crumbs" aria-label="Editor workspace path"><button type="button" onClick={() => setDirectory("")}>/workspace</button>{crumbs.map((crumb, index) => <span key={`${crumb}-${index}`}>/<button type="button" onClick={() => setDirectory(crumbs.slice(0, index + 1).join("/"))}>{crumb}</button></span>)}</nav>
       <div className="code-editor-files">{entries.map((entry) => <button type="button" title={`${entry.path} · Right-click for actions`} className={buffer?.existing && buffer.filePath === entry.path ? "active" : undefined} disabled={entry.kind === "symlink" || entry.kind === "other"} onContextMenu={(event) => { event.preventDefault(); setEntryMenu({ entry, x: event.clientX, y: event.clientY }); }} onClick={() => chooseEntry(entry)} key={entry.path}>{entry.kind === "directory" ? <Folder size={15} /> : <File size={15} />}<span><strong>{entry.name}</strong><small>{entry.kind === "file" ? `${entry.size.toLocaleString()} bytes` : entry.kind}</small></span></button>)}{!entries.length && !loading && <div className="empty-state compact"><Folder size={20} /><strong>No files here</strong><p>Create a text file or use Terminal to populate /workspace.</p></div>}{nextOffset !== undefined && <button className="button quiet" type="button" onClick={() => void load(nextOffset)}>Load more</button>}</div>
     </aside>
     <section className={`code-editor-main${buffer ? "" : " is-empty"}`}>
       {buffer ? <>
-        <header className="code-editor-toolbar"><label><span className="sr-only">File path</span><span aria-hidden="true">/workspace/</span><input aria-label="File path" value={buffer.filePath} readOnly={buffer.existing} spellCheck={false} onChange={(event) => updateBuffer({ filePath: event.target.value })} /></label><span className={`code-editor-dirty${dirty ? " dirty" : ""}`} aria-live="polite">{dirty ? "Unsaved" : "Saved"}</span><button className="button primary" type="button" disabled={saving || (!dirty && buffer.existing) || !validWorkspacePath(buffer.filePath.trim())} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />} {saving ? "Saving…" : "Save"}</button></header>
+        <header className="code-editor-toolbar">
+          <div className="code-editor-file-row"><label><span className="sr-only">File path</span><span aria-hidden="true">/workspace/</span><input aria-label="File path" value={buffer.filePath} readOnly={buffer.existing} spellCheck={false} onChange={(event) => updateBuffer({ filePath: event.target.value })} /></label><span className={`code-editor-dirty${dirty ? " dirty" : ""}`} aria-live="polite">{dirty ? "Unsaved" : "Saved"}</span></div>
+          <div className="code-editor-actions">
+            <strong className="code-editor-mobile-title"><Braces size={15} /> Code</strong>
+            <div className="code-editor-secondary-actions"><label className="code-editor-completion-toggle"><input type="checkbox" checked={localCompletionEnabled} onChange={(event) => setLocalCompletionEnabled(event.target.checked)} /> Local completions</label><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest code</button></div>
+            <button className="icon-button subtle code-editor-mobile-tools-toggle" type="button" aria-label="More editor actions" aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((open) => !open)}><MoreHorizontal size={18} /></button>
+            <button className="icon-button subtle code-editor-mobile-files-toggle" type="button" aria-label="Show editor files" onClick={() => { setMobileFilesOpen(true); setMobileToolsOpen(false); }}><Folder size={18} /></button>
+            <button className="button primary code-editor-save" type="button" disabled={saving || (!dirty && buffer.existing) || !validWorkspacePath(buffer.filePath.trim())} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />} {saving ? "Saving…" : "Save"}</button>
+          </div>
+          {mobileToolsOpen && <div className="code-editor-mobile-tools" aria-label="Editor options"><label className="code-editor-completion-toggle"><input type="checkbox" checked={localCompletionEnabled} onChange={(event) => setLocalCompletionEnabled(event.target.checked)} /> Local completions</label><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest code</button></div>}
+        </header>
         {error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}{validationError && <InlineValidationNotice message={validationError} />}{notice && <p className="workspace-notice" role="status">{notice}</p>}
         {conflict && <div className="code-editor-conflict" role="alert"><ShieldAlert size={17} /><span><strong>Newer workspace version detected</strong><small>Your draft is still open. Reload the Terminal version or overwrite it explicitly.</small></span><button className="button quiet" type="button" onClick={() => void reloadConflict()}><RotateCcw size={13} /> Reload</button><button className="button danger" type="button" onClick={() => void forceOverwrite()}>Force overwrite</button></div>}
-        <CodeMirrorSurface active={active} filePath={buffer.filePath} value={buffer.content} onChange={(content) => updateBuffer({ content })} onCursorChange={(line, column) => setCursor({ line, column })} onSave={() => void save()} />
+        <CodeMirrorSurface active={active} filePath={buffer.filePath} value={buffer.content} onChange={(content) => updateBuffer({ content })} onSelectionChange={setSelection} completionSource={completionSource} onCursorChange={(line, column) => setCursor({ line, column })} onSave={() => void save()} />
         <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span>UTF-8 · spaces: 2</span><span>/workspace · Terminal execution</span></footer>
-      </> : <><div className="empty-state"><Braces size={25} /><strong>Shared workspace editor</strong><p>Open or create a text file here, then run it from Terminal in /workspace using its interpreter.</p><button className="button primary" type="button" onClick={() => void createFile()}><FilePlus2 size={15} /> New file</button></div>{error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}</>}
+      </> : <><StandardEmptyState icon={<Braces size={25} />} title="Shared workspace editor" explanation="Open or create a text file here, then run it from Terminal in /workspace using its interpreter." primaryAction={<button className="button primary" type="button" onClick={() => void createFile()}><FilePlus2 size={15} /> New file</button>} />{error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}</>}
     </section>
+    {suggestionOpen && <AIWritingDialog api={api} engagementId={engagementId} providers={providers} harnesses={harnesses} purpose="code_suggestion" title="Suggest a code change" description="Generate an operator-reviewed suggestion for the active file. Nothing is saved until you review, apply, and save." sourceLabel={selection ? "Selected code" : buffer?.filePath ?? "Active file"} sourceText={selection || buffer?.content || ""} initialInstruction="Suggest a focused improvement for this code." onClose={() => setSuggestionOpen(false)} onApply={applySuggestion} />}
     {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
   </div>;
 }

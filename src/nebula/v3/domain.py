@@ -12,6 +12,7 @@ import ipaddress
 import re
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, ClassVar, Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -113,11 +114,14 @@ class ChatBackend(StringEnum):
 
 class HarnessKind(StringEnum):
     CODEX_APP_SERVER = "codex_app_server"
+    GROK_ACP = "grok_acp"
     # Retained only so historical profiles and activity records remain readable.
     CLAUDE_AGENT_SDK = "claude_agent_sdk"
 
 
-PROVIDED_HARNESS_KINDS = frozenset({HarnessKind.CODEX_APP_SERVER})
+PROVIDED_HARNESS_KINDS = frozenset(
+    {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}
+)
 
 
 class HarnessConnectionMode(StringEnum):
@@ -526,7 +530,18 @@ class Engagement(Entity):
     client_name: str | None = None
     owner_id: str | None = None
     tags: list[str] = Field(default_factory=list)
+    workspace_path: str | None = Field(default=None, max_length=4096)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("workspace_path")
+    @classmethod
+    def workspace_path_must_be_absolute(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        candidate = Path(value).expanduser()
+        if not candidate.is_absolute() or candidate == Path("/"):
+            raise ValueError("workspace_path must be an absolute non-root folder")
+        return str(candidate)
 
 
 class AutomationProjectPolicy(Entity):
@@ -1170,6 +1185,34 @@ class ProviderProfile(Entity):
         )
 
 
+class HarnessRuntimeOption(NebulaModel):
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1_000)
+
+
+class HarnessModelOptions(NebulaModel):
+    model: str = Field(min_length=1, max_length=500)
+    reasoning_efforts: list[HarnessRuntimeOption] = Field(
+        default_factory=list, max_length=32
+    )
+    default_reasoning_effort: str | None = Field(default=None, max_length=100)
+    service_tiers: list[HarnessRuntimeOption] = Field(
+        default_factory=list, max_length=32
+    )
+    default_service_tier: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def defaults_are_advertised(self) -> "HarnessModelOptions":
+        efforts = {item.id for item in self.reasoning_efforts}
+        tiers = {item.id for item in self.service_tiers}
+        if self.default_reasoning_effort and self.default_reasoning_effort not in efforts:
+            raise ValueError("default reasoning effort must be advertised")
+        if self.default_service_tier and self.default_service_tier not in tiers:
+            raise ValueError("default service tier must be advertised")
+        return self
+
+
 class HarnessCapabilities(NebulaModel):
     sessions: bool = True
     resume: bool = True
@@ -1181,6 +1224,10 @@ class HarnessCapabilities(NebulaModel):
     activity_replay: bool = False
     reasoning_summaries: bool = False
     plans: bool = False
+    planning_mode: bool = False
+    goal_monitoring: bool = False
+    skill_invocation: bool = False
+    modes: list[str] = Field(default_factory=list, max_length=64)
     live_command_output: bool = False
     file_diffs: bool = False
     detailed_usage: bool = False
@@ -1195,6 +1242,7 @@ class HarnessCapabilities(NebulaModel):
         default_factory=list, max_length=64
     )
     models: list[str] = Field(default_factory=list, max_length=256)
+    model_options: list[HarnessModelOptions] = Field(default_factory=list, max_length=256)
     harness_version: str | None = Field(default=None, max_length=200)
     adapter_version: str | None = Field(default=None, max_length=200)
     protocol_version: str | None = Field(default=None, max_length=200)
@@ -1255,6 +1303,13 @@ class HarnessProfile(Entity):
     @model_validator(mode="after")
     def connection_is_supported(self) -> "HarnessProfile":
         native = self.native_capabilities
+        if self.kind == HarnessKind.GROK_ACP:
+            if self.connection_mode != HarnessConnectionMode.SPAWN:
+                raise ValueError("Grok ACP currently supports managed stdio only")
+            if not self.executable:
+                raise ValueError("spawned Grok ACP harnesses require an executable")
+            if self.auth_mode != HarnessAuthMode.EXISTING_SESSION:
+                raise ValueError("Grok ACP uses the existing cached Grok login")
         if self.kind == HarnessKind.CLAUDE_AGENT_SDK and (
             native.browser or native.computer_use or native.image_generation
         ):
@@ -1287,8 +1342,8 @@ class HarnessProfile(Entity):
                 raise ValueError("spawned harnesses cannot define endpoint")
             if self.transport != HarnessTransport.STDIO:
                 raise ValueError("spawned harnesses must use stdio")
-            if self.kind == HarnessKind.CODEX_APP_SERVER and not self.executable:
-                raise ValueError("spawned Codex harnesses require executable")
+            if self.kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP} and not self.executable:
+                raise ValueError("spawned command harnesses require executable")
             if self.auth_mode == HarnessAuthMode.ENDPOINT_BEARER:
                 raise ValueError("spawned harnesses cannot use endpoint bearer auth")
         else:
@@ -1802,6 +1857,8 @@ class ChatSession(Entity):
     provider_profile_id: str | None = None
     harness_profile_id: str | None = None
     harness_session_id: str | None = None
+    parent_session_id: str | None = Field(default=None, max_length=200)
+    forked_from_message_id: str | None = Field(default=None, max_length=200)
     model: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -1823,6 +1880,29 @@ class ChatSession(Entity):
             raise ValueError(
                 "harness chat sessions require harness profile and session"
             )
+        return self
+
+
+class ChatContentBlock(NebulaModel):
+    """One ordered, durable block in a multimodal chat message."""
+
+    type: Literal["text", "code", "image", "artifact", "citation", "activity"]
+    text: str | None = Field(default=None, max_length=200_000)
+    language: str | None = Field(default=None, max_length=100)
+    artifact_id: str | None = Field(default=None, max_length=200)
+    media_type: str | None = Field(default=None, max_length=200)
+    alt: str | None = Field(default=None, max_length=1_000)
+    activity_id: str | None = Field(default=None, max_length=200)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def required_reference_is_present(self) -> "ChatContentBlock":
+        if self.type in {"text", "code"} and self.text is None:
+            raise ValueError(f"{self.type} blocks require text")
+        if self.type in {"image", "artifact"} and not self.artifact_id:
+            raise ValueError(f"{self.type} blocks require artifact_id")
+        if self.type == "activity" and not self.activity_id:
+            raise ValueError("activity blocks require activity_id")
         return self
 
 
@@ -1881,6 +1961,8 @@ class ChatMessage(Entity):
     sequence: int = Field(ge=1)
     role: ChatRole
     content: str = Field(min_length=1, max_length=200_000)
+    content_blocks: list[ChatContentBlock] = Field(default_factory=list, max_length=64)
+    source_message_id: str | None = Field(default=None, max_length=200)
     provider_profile_id: str | None = None
     model: str | None = None
     usage: ChatTokenUsage | None = None
@@ -1888,6 +1970,27 @@ class ChatMessage(Entity):
     provider_request_id: str | None = None
     citations: list[ChatCitation] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PairedDeviceSession(Entity):
+    """Revocable browser-device session; only token hashes are durable."""
+
+    entity_kind: ClassVar[str] = "paired_device_sessions"
+    name: str = Field(min_length=1, max_length=200)
+    token_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    csrf_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: datetime = Field(default_factory=utc_now)
+    last_used_at: datetime = Field(default_factory=utc_now)
+    idle_expires_at: datetime
+    absolute_expires_at: datetime
+    revoked_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def expiry_order_is_valid(self) -> "PairedDeviceSession":
+        if self.idle_expires_at > self.absolute_expires_at:
+            raise ValueError("idle expiry cannot exceed absolute expiry")
+        return self
 
 
 class ExecutionOrigin(NebulaModel):
@@ -2283,6 +2386,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatSession,
     ChatTurn,
     ChatMessage,
+    PairedDeviceSession,
     HarnessTurn,
     HarnessInteraction,
     ContextSnapshot,

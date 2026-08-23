@@ -14,6 +14,7 @@ import {
 import type { LibraryItem } from "../api/types";
 import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
+import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
 
@@ -233,7 +234,7 @@ export function LibraryPage() {
               </div>
             </article>;
           })}
-          {visibleItems.length === 0 && <div className="empty-state compact"><BookMarked size={24} /><strong>{query ? "No matching Library items" : "Your Library is empty"}</strong><p>{query ? "Try a different name or type." : "Add a document or script once, then retrieve it from any project."}</p></div>}
+          {visibleItems.length === 0 && <StandardEmptyState icon={<BookMarked size={24} />} title={query ? "No matching Library items" : "Your Library is empty"} explanation={query ? "Try a different name or type." : "Add a document or script once, then retrieve it from any project."} />}
         </div>
       </section>
     </div>

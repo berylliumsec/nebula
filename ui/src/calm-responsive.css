@@ -1,0 +1,100 @@
+@media (max-width: 1200px) {
+  :root { --side-width: 72px; }
+}
+
+@media (max-width: 1000px) {
+  :root { --activity-width: 320px; }
+  .page { padding-inline: 20px; }
+  .settings-page { max-width: 100%; }
+  .overview-grid { grid-template-columns: minmax(0, 1fr); }
+  .session-inspector-toggle { display: none; }
+  .session-layout.chat.inspector-open .session-inspector { display: none; }
+  .session-layout.chat,
+  .session-layout.chat.inspector-open { grid-template-columns: minmax(0, 1fr); }
+  .session-layout.chat.conversation-panel-open,
+  .session-layout.chat.conversation-panel-open.inspector-open { grid-template-columns: 280px minmax(0, 1fr); }
+  .session-scope > span { display: none; }
+}
+
+@media (max-width: 760px) {
+  :root { --top-height: 52px; }
+  .sessions-page:not(.full-screen) > .session-toolbar { display: none; }
+  .app-shell,
+  .app-shell.with-activity,
+  .app-shell.sidebar-collapsed,
+  .app-shell.sidebar-collapsed.with-activity {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--top-height) minmax(0, 1fr) auto;
+  }
+  .side-nav { display: block; grid-column: 1; visibility: hidden; }
+  .app-shell:not(.sidebar-collapsed) .side-nav { visibility: visible; }
+  .top-bar { grid-column: 1; padding-inline: 10px; }
+  .main-content { grid-column: 1; grid-row: 2; }
+  .page { padding: 18px 14px calc(76px + env(safe-area-inset-bottom)); }
+  .sessions-page { padding: 8px 8px calc(68px + env(safe-area-inset-bottom)); }
+  .session-layout.chat,
+  .session-layout.chat.inspector-open,
+  .session-layout.chat.conversation-panel-open,
+  .session-layout.chat.conversation-panel-open.inspector-open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .page-header { align-items: flex-start; gap: 12px; margin-bottom: 16px; }
+  .page-header h1 { font-size: var(--type-title-md); }
+  .page-header p { font-size: var(--type-secondary); }
+  .standard-empty-state,
+  .empty-state:not(.mini) { min-height: 150px; padding: 20px 16px; }
+  .chat-scroll { padding: 16px 12px; }
+  .chat-message { max-width: 100%; }
+  .chat-message.operator { max-width: 88%; margin-right: 0; }
+  .chat-composer { width: calc(100% - 12px); margin-inline: 6px; }
+  .session-conversations-toggle,
+  .session-scope,
+  .workbench-actions { display: none; }
+  .toolbar { min-height: var(--touch-target); }
+  .tab-bar > button { min-height: var(--touch-target); }
+  .button,
+  .icon-button,
+  .connection-chip,
+  .command-trigger { min-height: var(--touch-target); }
+  .icon-button,
+  .connection-chip,
+  .command-trigger { width: var(--touch-target); height: var(--touch-target); }
+  .list-row { min-height: var(--touch-target); grid-template-columns: auto minmax(0, 1fr) auto; }
+  .list-row-status { grid-column: 2; }
+  .list-row-actions { grid-column: 3; grid-row: 1 / span 2; }
+  .data-toolbar { align-items: stretch; }
+  .setup-card-grid > .setup-card {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 10px;
+  }
+  .setup-card-grid > .setup-card > .button { width: 100%; justify-self: stretch; }
+  .modal-surface,
+  .provider-dialog,
+  .modal-surface.complex-dialog,
+  .provider-dialog.complex-dialog {
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - 16px);
+  }
+}
+
+@media (max-width: 430px) {
+  .page { padding-inline: 12px; }
+  .panel-header { padding-inline: 12px; }
+  .surface-notice { margin-inline: 0; }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-settings-fields select { height: var(--touch-target); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

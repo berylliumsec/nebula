@@ -6,6 +6,7 @@ const workspaces = [
   ["findings", "/findings", "Findings"],
   ["reports", "/reports", "Reports"],
   ["project", "/project", "Scratch Project"],
+  ["library", "/library", "Library"],
   ["settings", "/settings", "Settings"],
 ] as const;
 
@@ -110,7 +111,10 @@ async function installTruthfulCore(page: Page) {
     });
   });
 
-  await page.route("**/api/v1/**", async (route) => {
+  // WebKit can replace the underlying page target during full document
+  // navigations. Keep the permanent Core fixture on the browser context so
+  // the API authority survives every route in the visual-audit journey.
+  await page.context().route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
@@ -168,6 +172,14 @@ async function installTruthfulCore(page: Page) {
         stack_frames: [{ module: "chat", function: "stream", line: 42 }],
         metadata: { component: "response_stream", provider: "local" },
       }] };
+    } else if (path.endsWith("/auth/devices")) {
+      body = [];
+    } else if (path.endsWith("/auth/pairings")) {
+      body = {
+        secret: "preview-single-use-secret",
+        confirmation_code: "123456",
+        expires_at: "2026-07-14T12:05:00Z",
+      };
     } else if (path.endsWith("/setup/status") || path.endsWith("/setup/runtime/refresh")) {
       body = {
         core: { status: "ready", detail: null },
@@ -204,6 +216,17 @@ async function installTruthfulCore(page: Page) {
           detail: "Verified fixed-path local runtime.",
         },
         assistant: { status: "needs_model", provider_profile_id: null, detail: "Optional model connection not configured." },
+      };
+    } else if (path.endsWith("/workspace-folders")) {
+      const requested = url.searchParams.get("path") ?? "/home/agent";
+      body = {
+        path: requested,
+        parent: requested === "/home/agent" ? "/home" : "/home/agent",
+        directories: requested === "/home/agent" ? [{
+          name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog",
+          path: "/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog",
+        }] : [],
+        truncated: false,
       };
     } else if (path.endsWith("/engagements")) {
       body = [{
@@ -280,6 +303,17 @@ async function installTruthfulCore(page: Page) {
         source_version: "terminal-viewport-v1",
         metadata: upload.metadata ?? {},
       };
+    } else if (path.endsWith("/provider-catalog")) {
+      body = [{
+        flavor: "vllm",
+        adapter: "openai_compatible",
+        display_name: "Local vLLM",
+        local: true,
+        default_base_url: "http://127.0.0.1:8000/v1",
+        suggested_key_env: null,
+        support_tier: "native",
+        notes: "Models are discovered from the selected local runtime.",
+      }];
     } else if (path.endsWith("/providers/discover-local")) {
       body = [];
     } else if (path.endsWith("/terminal/commands/status")) {
@@ -343,21 +377,50 @@ async function installTruthfulCore(page: Page) {
 }
 
 async function openWorkspace(page: Page, route: string, heading: string) {
-  await page.goto(route);
+  if (page.url() === "about:blank") {
+    await page.goto(route);
+  } else {
+    await page.evaluate((nextRoute) => {
+      const previous = location.href;
+      const next = new URL(nextRoute, location.origin);
+      history.pushState({}, "", `${next.pathname}${next.search}${next.hash}`);
+      dispatchEvent(new PopStateEvent("popstate"));
+      if (new URL(previous).hash !== next.hash) {
+        dispatchEvent(new HashChangeEvent("hashchange", { oldURL: previous, newURL: next.href }));
+      }
+    }, route);
+  }
+  await expect.poll(() => page.evaluate(() => `${location.pathname}${location.search}${location.hash}`)).toBe(route);
   if (heading === "Workbench") {
-    await expect(page.getByRole("tab", { name: "Terminal", exact: true })).toBeVisible({ timeout: 15_000 });
+    if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+      await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 15_000 });
+    } else {
+      await expect(page.getByRole("tab", { name: "Terminal", exact: true })).toBeVisible({ timeout: 15_000 });
+    }
     await expect(page.getByText("Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files.")).toHaveCount(0);
   } else {
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible({ timeout: 15_000 });
   }
+  await expect(page.locator("#nebula-boot")).toHaveCount(0);
   await expect(page.getByText("Interface preview")).toHaveCount(0);
   await expect(page.getByText(/Jordan|Acme/i)).toHaveCount(0);
   if (route === "/") {
-    await expect(page.getByText("Connected", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Screenshot" })).toBeVisible();
+    const liveTerminal = page.locator(".container-terminal-live");
+    await expect(liveTerminal).toBeVisible({ timeout: 20_000 });
+    await expect(liveTerminal.getByText("Connected", { exact: true })).toBeVisible();
+    await expect(liveTerminal.getByRole("button", { name: "Screenshot" })).toBeVisible();
   }
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(120);
+}
+
+async function setTheme(page: Page, theme: "light" | "dark" | "zero" | "high-contrast") {
+  await page.evaluate((value) => {
+    const oldValue = localStorage.getItem("nebula.theme");
+    localStorage.setItem("nebula.theme", value);
+    dispatchEvent(new StorageEvent("storage", { key: "nebula.theme", oldValue, newValue: value }));
+  }, theme);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 }
 
 async function findPathologicalText(page: Page) {
@@ -479,7 +542,7 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
   await context.close();
 });
 
-test("terminal screenshot capture opens a full-height integrated editor", async ({ page }) => {
+test("terminal screenshot capture opens a full-height integrated editor", async ({ page }, testInfo) => {
   await openWorkspace(page, "/", "Workbench");
   const uploadRequest = page.waitForRequest((request) => request.url().endsWith("/evidence/upload") && request.method() === "POST");
   await page.getByRole("button", { name: "Screenshot" }).click();
@@ -523,10 +586,15 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
       && dimensions.canvasHeight <= dimensions.viewportContentHeight + 1;
   }, { timeout: 15_000 }).toBe(true);
   const dimensions = await readDimensions();
+  const mobile = (page.viewportSize()?.width ?? 1_000) <= 760;
   const viewportHeight = page.viewportSize()?.height ?? 900;
   expect(dimensions.dialogHeight).toBeGreaterThan(Math.min(760, viewportHeight - 80));
-  expect(dimensions.editorHeight).toBeGreaterThan(Math.min(650, viewportHeight - 160));
-  expect(dimensions.viewportHeight).toBeGreaterThan(Math.min(440, viewportHeight - 290));
+  expect(dimensions.editorHeight).toBeGreaterThan(mobile
+    ? Math.min(440, viewportHeight - 190)
+    : Math.min(650, viewportHeight - 160));
+  expect(dimensions.viewportHeight).toBeGreaterThan(mobile
+    ? Math.min(320, viewportHeight - 310)
+    : Math.min(440, viewportHeight - 290));
   expect(dimensions.canvasWidth).toBeLessThanOrEqual(dimensions.viewportContentWidth + 1);
   expect(dimensions.canvasHeight).toBeLessThanOrEqual(dimensions.viewportContentHeight + 1);
 });
@@ -554,7 +622,8 @@ test("terminal pointer selection has a visible high-contrast highlight", async (
   expect(selectionRects.some((background) => ["rgb(22, 139, 210)", "rgb(18, 111, 168)"].includes(background))).toBe(true);
 });
 
-test("hidden terminal views stop emitting resize frames", async ({ page }) => {
+test("hidden terminal views stop emitting resize frames", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "narrow", "The persistent terminal is intentionally unavailable in the mobile companion.");
   await openWorkspace(page, "/", "Workbench");
   await expect.poll(() => page.evaluate(() => (
     (globalThis as typeof globalThis & { __terminalFrames?: Array<{ type?: string }> }).__terminalFrames
@@ -595,6 +664,9 @@ test(firstRunThemeTest, async ({ page }) => {
 
 test("primary navigation exposes only the five task destinations", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    await page.getByRole("button", { name: "Show sidebar" }).click();
+  }
   const navigation = page.getByRole("complementary", { name: "Primary navigation" });
   for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
     await expect(navigation.getByRole("link", { name: label, exact: true })).toBeVisible();
@@ -606,12 +678,122 @@ test("primary navigation exposes only the five task destinations", async ({ page
 
 test("Missions explains missing runtime setup and provides a working next action", async ({ page }) => {
   await openWorkspace(page, "/?view=missions", "Workbench");
-  await page.getByRole("tab", { name: "Autonomous missions", exact: true }).click();
 
   const controls = page.getByRole("region", { name: "Mission controls" });
   await expect(controls.getByText("Missions need an enabled model provider or agent harness with a verified model.")).toBeVisible();
   await expect(controls.getByRole("link", { name: "Configure runtime" })).toHaveAttribute("href", "/settings#models-settings");
   await expect(controls.getByRole("button", { name: "Automate task" })).toBeDisabled();
+});
+
+test("mission workflow freezes harness options, stages, and URL identity", async ({ page }) => {
+  const harness = {
+    ...entity,
+    id: "harness-mission",
+    name: "Codex harness",
+    kind: "codex_app_server",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "codex",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "gpt-5.6-sol",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true, skills: true, subagents: true },
+    capabilities: {
+      models: ["gpt-5.6-sol"],
+      model_options: [{
+        model: "gpt-5.6-sol",
+        reasoning_efforts: [{ id: "high", label: "High", description: "Thorough review." }],
+        default_reasoning_effort: "high",
+        service_tiers: [{ id: "priority", label: "Priority", description: "Faster execution." }],
+        default_service_tier: "priority",
+      }],
+      checked_at: entity.updated_at,
+      harness_version: "0.149.0",
+    },
+  };
+  let submitted: Record<string, unknown> | undefined;
+  let runs: unknown[] = [];
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/harnesses") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([harness]) });
+      return;
+    }
+    if (path.endsWith("/harness-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/runs") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(runs) });
+      return;
+    }
+    if (path.endsWith("/missions") && request.method() === "POST") {
+      submitted = request.postDataJSON() as Record<string, unknown>;
+      const created = {
+        ...entity,
+        id: "mission-url-authority",
+        engagement_id: "scratch-project",
+        objective: "Review the bounded project",
+        status: "queued",
+        backend: "harness",
+        supervisor_provider_id: null,
+        supervisor_model: "gpt-5.6-sol",
+        harness_profile_id: "harness-mission",
+        harness_session_id: "mission-session",
+        budget: {
+          max_duration_seconds: 3600,
+          max_tokens: 20000,
+          max_cost_usd: 10,
+          max_tool_calls: 50,
+          max_concurrency: 1,
+          max_delegation_depth: 0,
+          max_retries_per_task: 0,
+        },
+        runtime_snapshot: { runtime_options: { reasoning_effort: "high", service_tier: "priority" } },
+        metadata: {
+          name: "Staged security review",
+          stages: [{ title: "Verify", objective: "Verify the strongest observation" }],
+        },
+        started_at: null,
+        completed_at: null,
+      };
+      runs = [created];
+      await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(created) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=missions", "Workbench");
+  await page.getByRole("region", { name: "Mission controls" }).getByRole("button", { name: "Automate task" }).click();
+  const dialog = page.getByRole("dialog", { name: "Automate task" });
+  await dialog.getByLabel("Mission name").fill("Staged security review");
+  await dialog.getByLabel("Objective", { exact: true }).first().fill("Review the bounded project");
+  await dialog.getByText("Advanced", { exact: true }).click();
+  await expect(dialog.getByRole("combobox", { name: "Mission runtime" })).toHaveValue("harness");
+  await expect(dialog.getByRole("combobox", { name: "Mission harness effort" })).toHaveValue("high");
+  await expect(dialog.getByRole("combobox", { name: "Mission harness speed" })).toHaveValue("priority");
+  await dialog.getByRole("button", { name: "Add stage" }).click();
+  await dialog.getByRole("group", { name: "Stage 1" }).getByLabel("Name").fill("Verify");
+  await dialog.getByRole("group", { name: "Stage 1" }).getByLabel("Objective").fill("Verify the strongest observation");
+  await dialog.getByRole("button", { name: "Automate task" }).click();
+
+  await expect.poll(() => submitted).toMatchObject({
+    backend: "harness",
+    harness_profile_id: "harness-mission",
+    model: "gpt-5.6-sol",
+    harness_reasoning_effort: "high",
+    harness_service_tier: "priority",
+    stages: [{ title: "Verify", objective: "Verify the strongest observation" }],
+  });
+  await expect.poll(() => new URL(page.url()).searchParams.get("mission")).toBe("mission-url-authority");
+  await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Staged security review")).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include(".agents-page").analyze();
+  expect(accessibility.violations).toEqual([]);
 });
 
 test("Diagnostics explains and focuses a requested failure at every breakpoint", async ({ page }) => {
@@ -627,6 +809,34 @@ test("Diagnostics explains and focuses a requested failure at every breakpoint",
   expect(await page.locator(".diagnostics-panel").evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   const accessibility = await new AxeBuilder({ page }).include(".diagnostics-panel").analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("paired-device settings explain host-only pairing and use a compact dialog", async ({ page }) => {
+  await openWorkspace(page, "/settings#identity-security-settings", "Settings");
+  await expect(page.getByText("Pair new devices from the Nebula host")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pair device" })).toHaveCount(0);
+
+  // Change the document URL, not only its fragment, so runtime resolution
+  // consumes the host token in a fresh browser document.
+  await page.goto("/settings?host-runtime=1#token=preview-host-token");
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 15_000 });
+  await openWorkspace(page, "/settings#identity-security-settings", "Settings");
+  const opener = page.getByRole("button", { name: "Pair device" });
+  await opener.click();
+  const dialog = page.getByRole("dialog", { name: "Pair a device" });
+  await expect(dialog).toBeVisible();
+  await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+  const bounds = await dialog.boundingBox();
+  expect(bounds).toBeTruthy();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.y).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual((page.viewportSize()?.width ?? 0) + 1);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual((page.viewportSize()?.height ?? 0) + 1);
+  const accessibility = await new AxeBuilder({ page }).include(".device-pairing-dialog").analyze();
+  expect(accessibility.violations).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(opener).toBeFocused();
 });
 
 test("critical workspaces remain visually stable", async ({ page }, testInfo) => {
@@ -675,14 +885,14 @@ test("all task workspaces keep responsive content inside its owning surface", as
 test("all assistant states remain fully visible inside the workbench viewport", async ({ page }, testInfo) => {
   if (testInfo.project.name === "desktop") await page.setViewportSize({ width: 2048, height: 868 });
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
-  await openWorkspace(page, "/", "Workbench");
-  await page.getByRole("tab", { name: "Analyst chat", exact: true }).click();
+  await openWorkspace(page, "/?view=chat", "Workbench");
 
-  if (testInfo.project.name === "narrow") await page.getByRole("button", { name: "Conversations" }).click();
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Open conversations" }).click();
+  else await page.getByRole("button", { name: "Show conversations" }).click();
   const conversationRow = page.locator(".session-list nav > button").first();
   await expect(conversationRow).toBeVisible();
   expect(await conversationRow.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(50);
-  if (testInfo.project.name === "narrow") await page.getByRole("button", { name: "Current chat" }).click();
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Chat", exact: true }).click();
 
   const workspace = page.locator(".session-layout.chat .session-workspace");
   const emptyState = page.locator(".chat-empty-state");
@@ -730,11 +940,9 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   const composerBounds = await workspace.evaluate((element) => {
     const workspaceRect = element.getBoundingClientRect();
     const panel = element.querySelector<HTMLElement>(".chat-panel")!;
-    const settings = element.querySelector<HTMLElement>(".chat-settings")!;
     const scroll = element.querySelector<HTMLElement>(".chat-scroll")!;
     const composer = element.querySelector<HTMLElement>(".chat-composer")!;
     const panelRect = panel.getBoundingClientRect();
-    const settingsRect = settings.getBoundingClientRect();
     const scrollRect = scroll.getBoundingClientRect();
     const composerRect = composer.getBoundingClientRect();
     return {
@@ -744,7 +952,6 @@ test("all assistant states remain fully visible inside the workbench viewport", 
       panelBottom: panelRect.bottom,
       panelClientHeight: panel.clientHeight,
       panelScrollHeight: panel.scrollHeight,
-      settingsHeight: settingsRect.height,
       scrollHeight: scrollRect.height,
       composerTop: composerRect.top,
       composerBottom: composerRect.bottom,
@@ -758,6 +965,229 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   expect(composerBounds.composerBottom, geometry).toBeLessThanOrEqual(composerBounds.workspaceBottom + 1);
   expect(composerBounds.composerBottom).toBeLessThanOrEqual(composerBounds.viewportHeight + 1);
   expect(composerBounds.workspaceScrollHeight).toBeLessThanOrEqual(composerBounds.clientHeight + 1);
+});
+
+test("conversation pane defaults closed and restores its device preference without changing URL identity", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) <= 760, "Desktop conversation-pane contract");
+  await openWorkspace(page, "/?view=chat", "Workbench");
+
+  await expect(page.getByRole("complementary", { name: "Conversations" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Show conversations" })).toHaveAttribute("aria-expanded", "false");
+  expect(await page.evaluate(() => localStorage.getItem("nebula.conversations.open"))).toBeNull();
+
+  await page.getByRole("button", { name: "Show conversations" }).click();
+  const conversations = page.getByRole("complementary", { name: "Conversations" });
+  await expect(conversations).toBeVisible();
+  expect(await conversations.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(280);
+  expect(await page.evaluate(() => localStorage.getItem("nebula.conversations.open"))).toBe("true");
+  await expect(page).toHaveURL(/\?view=chat$/);
+
+  await page.reload();
+  await expect(conversations).toBeVisible();
+  await expect(page.getByRole("button", { name: "Hide conversations" }).first()).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("0 tokens", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Hide conversations" }).last().click();
+  await expect(conversations).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem("nebula.conversations.open"))).toBe("false");
+  await expect(page).toHaveURL(/\?view=chat$/);
+});
+
+test("conversation More actions remain usable on mobile Workbench navigation", async ({ page }) => {
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "conversation-actions-test",
+        engagement_id: "scratch-project",
+        title: "Conversation action review",
+        backend: "provider",
+        provider_profile_id: null,
+        harness_profile_id: null,
+        harness_session_id: null,
+        model: null,
+        metadata: {},
+      }]) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.getByRole("button", { name: "Open conversations", exact: true }).click();
+  } else await page.getByRole("button", { name: "Show conversations" }).click();
+  const row = page.locator(".session-list-item").filter({ hasText: "Conversation action review" });
+  const trigger = row.getByRole("button", { name: "More actions for Conversation action review" });
+  await row.hover();
+  await expect(trigger).toHaveCSS("opacity", "1");
+
+  await trigger.click();
+  const menu = page.getByRole("menu", { name: "Actions for Conversation action review" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  await expect(page.getByRole("textbox", { name: "Rename conversation Conversation action review" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await trigger.click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Delete Conversation action review?" });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    const triggerBox = await trigger.boundingBox();
+    expect(triggerBox?.width).toBeGreaterThanOrEqual(44);
+    expect(triggerBox?.height).toBeGreaterThanOrEqual(44);
+  }
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
+test("the 320px mobile companion keeps controls visible and the composer above navigation", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "One browser run covers the explicit 320px boundary.");
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "Start new chat", exact: true }).click();
+
+  const geometry = await page.locator(".sessions-page").evaluate((element) => {
+    const toolbar = element.querySelector<HTMLElement>(".session-toolbar")!.getBoundingClientRect();
+    const composer = element.querySelector<HTMLElement>(".chat-composer")!.getBoundingClientRect();
+    const navigation = element.querySelector<HTMLElement>(".mobile-companion-nav")!.getBoundingClientRect();
+    const composerInput = element.querySelector<HTMLTextAreaElement>(".chat-composer textarea")!;
+    const duplicateDock = document.querySelector<HTMLElement>(".side-nav.zero-anchor-dock");
+    const navigationIcons = [...element.querySelectorAll<SVGElement>(".mobile-companion-nav svg")]
+      .map((icon) => icon.getBoundingClientRect())
+      .map(({ width, height }) => ({ width, height }));
+    return {
+      composerBottom: composer.bottom,
+      navigationTop: navigation.top,
+      toolbarHeight: toolbar.height,
+      pageWidth: element.scrollWidth,
+      viewportWidth: window.innerWidth,
+      duplicateDockDisplay: duplicateDock ? getComputedStyle(duplicateDock).display : "missing",
+      composerFontSize: Number.parseFloat(getComputedStyle(composerInput).fontSize),
+      navigationIcons,
+    };
+  });
+  expect(geometry.composerBottom).toBeLessThanOrEqual(geometry.navigationTop - 1);
+  expect(geometry.toolbarHeight).toBeLessThanOrEqual(58);
+  expect(geometry.pageWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.duplicateDockDisplay).toBe("missing");
+  expect(geometry.composerFontSize).toBeGreaterThanOrEqual(16);
+  expect(geometry.navigationIcons).toHaveLength(4);
+  expect(geometry.navigationIcons.every(({ width, height }) => width >= 18 && height >= 18)).toBe(true);
+
+  await page.getByRole("button", { name: "More workbench views" }).click();
+  const focusAction = page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: "Enter focus mode" });
+  await expect(focusAction).toBeVisible();
+  await focusAction.click();
+  const fullScreenGeometry = await page.locator(".sessions-page.full-screen").evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      top: bounds.top,
+      right: bounds.right,
+      bottom: bounds.bottom,
+      left: bounds.left,
+      navigationDisplay: getComputedStyle(element.querySelector<HTMLElement>(".mobile-companion-nav")!).display,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  expect(fullScreenGeometry).toEqual({
+    top: 0,
+    right: 320,
+    bottom: 700,
+    left: 0,
+    navigationDisplay: "none",
+    viewportWidth: 320,
+    viewportHeight: 700,
+  });
+  await page.getByRole("button", { name: "Exit full screen workbench" }).click();
+
+  await page.getByRole("button", { name: "More workbench views" }).click();
+  const more = page.getByRole("dialog", { name: "More views" });
+  await expect(more).toBeVisible();
+  for (const label of ["Files", "Notes", "Missions", "Terminal", "Code", "Browser"]) {
+    await expect(more.getByRole("button", { name: new RegExp(`^${label}`) })).toBeVisible();
+  }
+  const accessibility = await new AxeBuilder({ page }).include(".mobile-more-sheet").analyze();
+  expect(accessibility.violations).toEqual([]);
+  await more.getByRole("button", { name: /^Files/ }).click();
+  await expect(page.getByRole("button", { name: "More workbench views" })).toBeVisible();
+});
+
+test("host folder picker remains usable as a bounded project workflow", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop" && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile browser projects.");
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await openWorkspace(page, "/settings", "Settings");
+  if (testInfo.project.name.startsWith("mobile-")) {
+    await page.getByRole("button", { name: "Show sidebar" }).click();
+  }
+  await page.getByRole("button", { name: "Switch project" }).click();
+  const switcher = page.getByRole("dialog", { name: "Project switcher" });
+  await switcher.getByRole("button", { name: "New project" }).click();
+  await switcher.getByLabel("Name", { exact: true }).fill("Folder picker acceptance");
+  await switcher.getByRole("button", { name: "Browse folders" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Choose project folder" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Nebula host")).toBeVisible();
+  await expect(dialog.getByText("/home/agent", { exact: true })).toBeVisible();
+  const geometry = await dialog.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const footerButtons = [...element.querySelectorAll<HTMLElement>("footer button")].map((button) => button.getBoundingClientRect());
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      footerButtons: footerButtons.map(({ height, left, right }) => ({ height, left, right })),
+    };
+  });
+  expect(geometry.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.top).toBeGreaterThanOrEqual(0);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight + 1);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  const minimumActionHeight = testInfo.project.name.startsWith("mobile-") ? 44 : 32;
+  expect(
+    geometry.footerButtons.every(({ height, left, right }) => height >= minimumActionHeight && left >= 0 && right <= geometry.viewportWidth + 1),
+    JSON.stringify(geometry),
+  ).toBe(true);
+
+  await dialog.getByRole("button", { name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog" }).click();
+  await expect(dialog.getByText("/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Select folder" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(switcher.getByLabel("Project folder", { exact: true })).toHaveValue("/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog");
+  await expect(switcher.getByRole("button", { name: "Browse folders" })).toBeFocused();
+
+  await switcher.getByRole("button", { name: "Browse folders" }).click();
+  await expect(page.getByRole("dialog", { name: "Choose project folder" }).getByText("/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog", { exact: true })).toBeVisible();
+  if (testInfo.project.name.startsWith("mobile-")) {
+    await page.getByRole("button", { name: "Close folder browser" }).click();
+  } else {
+    await page.keyboard.press("Escape");
+  }
+  await expect(page.getByRole("dialog", { name: "Choose project folder" })).toHaveCount(0);
+
+  const accessibility = await new AxeBuilder({ page }).include(".engagement-menu").analyze();
+  expect(accessibility.violations).toEqual([]);
 });
 
 test("streaming chat follows the bottom without overriding reader scroll intent", async ({ page }, testInfo) => {
@@ -850,10 +1280,12 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
     previousTrackpadPosition = currentTrackpadPosition;
   }
   const distanceFromBottom = () => chatScroll.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight);
-  for (let index = 0; index < 40 && await distanceFromBottom() > 2; index += 1) {
-    await page.mouse.wheel(0, 1000);
-    await page.waitForTimeout(10);
-  }
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
+  await page.mouse.wheel(0, -500);
+  await expect.poll(distanceFromBottom).toBeGreaterThan(100);
+  const scrollToLatest = page.getByRole("button", { name: "Scroll to latest message" });
+  await expect(scrollToLatest).toBeEnabled();
+  await scrollToLatest.click();
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
   await page.waitForTimeout(300);
   expect(await distanceFromBottom()).toBeLessThanOrEqual(2);
@@ -868,7 +1300,7 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   expect(await chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(readerPosition + 2);
 });
 
-test("an idle resumed harness uses one compact ready status", async ({ page }, testInfo) => {
+test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Harness status placement needs one desktop interaction run.");
   const harnessSessionId = "c9745e80-1111-4222-8333-444455556666";
   await page.route("**/api/v1/**", async (route) => {
@@ -947,18 +1379,423 @@ test("an idle resumed harness uses one compact ready status", async ({ page }, t
   });
 
   await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "Show conversations" }).click();
   await page.locator(".session-select").filter({ hasText: "Ready harness conversation" }).click();
-  await expect(page.locator(".chat-composer footer")).toContainText("Harness ready · Resumed session · 0 MCP");
+  await expect(page.locator(".chat-composer footer")).toContainText("Codex harness");
+  await expect(page.locator(".chat-composer footer")).toContainText("gpt-5-codex");
+  await expect(page.locator(".chat-composer footer")).not.toContainText("0 MCP");
+  await expect(page.locator(".harness-status-rail")).toHaveCount(0);
   await expect(page.locator(".chat-harness-progress")).toHaveCount(0);
+  await page.getByRole("button", { name: "More Workbench actions" }).click();
+  await page.getByRole("menuitem", { name: /Show session details/ }).click();
   await expect(page.locator(".session-inspector code").filter({ hasText: harnessSessionId })).toHaveText(harnessSessionId);
+
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
+  await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+  await expect(page.locator(".session-list nav > button.active")).toContainText("New conversation");
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  await expect(page.getByRole("combobox", { name: "Chat runtime" })).toBeEnabled();
+});
+
+test("New chat detaches from an in-flight saved conversation load", async ({ page }) => {
+  const savedSessionId = "chat-loading-while-detaching";
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: savedSessionId,
+        engagement_id: "scratch-project",
+        title: "Slow saved conversation",
+        backend: "provider",
+        provider_id: null,
+        harness_profile_id: null,
+        harness_session_id: null,
+        model: null,
+        metadata: {},
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/chat/sessions/${savedSessionId}/messages`) || path.endsWith(`/chat/sessions/${savedSessionId}/pending-turn`)) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await route.fulfill({ status: 200, contentType: "application/json", body: path.endsWith("/pending-turn") ? "null" : "[]" });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${savedSessionId}`, "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
+  await page.waitForTimeout(1_100);
+  await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.getByRole("button", { name: "Open conversations", exact: true }).click();
+  } else {
+    await page.getByRole("button", { name: "Show conversations" }).click();
+  }
+  await expect(page.locator(".session-list nav > button.active")).toContainText("New conversation");
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+  }
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  await expect(page.getByRole("combobox", { name: "Chat runtime" })).toBeEnabled();
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
+});
+
+test("harness model controls expose only the selected runtime's advertised options", async ({ page }, testInfo) => {
+  const harnesses = [{
+    ...entity,
+    id: "harness-grok-options",
+    name: "Grok ACP",
+    kind: "grok_acp",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "grok",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "grok-4.6",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
+    capabilities: {
+      models: ["grok-4.6", "grok-4.5"],
+      model_options: [
+        {
+          model: "grok-4.6",
+          reasoning_efforts: [
+            { id: "xhigh", label: "Extra high", description: "Maximum reasoning depth." },
+            { id: "high", label: "High", description: "Thorough reasoning." },
+            { id: "medium", label: "Medium", description: "Balanced reasoning." },
+            { id: "low", label: "Low", description: "Light reasoning." },
+          ],
+          default_reasoning_effort: "high",
+          service_tiers: [],
+          default_service_tier: null,
+        },
+        {
+          model: "grok-4.5",
+          reasoning_efforts: [
+            { id: "high", label: "High", description: null },
+            { id: "medium", label: "Medium", description: null },
+            { id: "low", label: "Low", description: null },
+          ],
+          default_reasoning_effort: "high",
+          service_tiers: [],
+          default_service_tier: null,
+        },
+      ],
+      checked_at: entity.updated_at,
+      harness_version: "1.0.5",
+    },
+  }, {
+    ...entity,
+    id: "harness-codex-options",
+    name: "Codex",
+    kind: "codex_app_server",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "codex",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "gpt-5.6",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
+    capabilities: {
+      models: ["gpt-5.6"],
+      model_options: [{
+        model: "gpt-5.6",
+        reasoning_efforts: [
+          { id: "medium", label: "Medium", description: null },
+          { id: "high", label: "High", description: null },
+        ],
+        default_reasoning_effort: "medium",
+        service_tiers: [
+          { id: "default", label: "Default", description: "Standard service tier." },
+          { id: "fast", label: "Fast", description: "Priority service tier." },
+        ],
+        default_service_tier: "default",
+      }],
+      checked_at: entity.updated_at,
+      harness_version: "0.149.0",
+    },
+  }];
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/harnesses")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(harnesses) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const settingsButton = page.getByRole("button", { name: "Assistant settings", exact: true });
+  await expect(page.getByRole("dialog", { name: "Assistant settings" })).toHaveCount(0);
+  const triggerStyle = await settingsButton.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      borderWidths: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
+      background: style.backgroundColor,
+    };
+  });
+  expect(triggerStyle.borderWidths).toEqual(["0px", "0px", "0px", "0px"]);
+  expect(triggerStyle.background).toBe("rgba(0, 0, 0, 0)");
+  await settingsButton.click();
+  const settingsDialog = page.getByRole("dialog", { name: "Assistant settings" });
+  await expect(settingsDialog).toBeVisible();
+  const expandedTriggerStyle = await settingsButton.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, borderWidths: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth] };
+  });
+  expect(expandedTriggerStyle.background).toBe("rgba(0, 0, 0, 0)");
+  expect(expandedTriggerStyle.borderWidths).toEqual(["0px", "0px", "0px", "0px"]);
+  const settingsGeometry = await settingsDialog.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const header = element.querySelector<HTMLElement>("header")!.getBoundingClientRect();
+    const fields = element.querySelector<HTMLElement>(".chat-settings-fields")!;
+    const firstControl = fields.querySelector<HTMLSelectElement>("select")!.getBoundingClientRect();
+    return {
+      width: bounds.width,
+      left: bounds.left,
+      right: bounds.right,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      headerHeight: header.height,
+      columns: getComputedStyle(fields).gridTemplateColumns.split(" ").length,
+      controlHeight: firstControl.height,
+      coarsePointer: matchMedia("(hover: none), (pointer: coarse)").matches,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    };
+  });
+  expect(settingsGeometry.width).toBeLessThanOrEqual(501);
+  expect(settingsGeometry.headerHeight).toBeLessThanOrEqual(45);
+  expect(settingsGeometry.columns).toBe(settingsGeometry.width >= 430 ? 2 : 1);
+  expect(settingsGeometry.controlHeight).toBeGreaterThanOrEqual(settingsGeometry.coarsePointer ? 43.5 : 33.5);
+  expect(settingsGeometry.controlHeight).toBeLessThanOrEqual(settingsGeometry.coarsePointer ? 44.5 : 34.5);
+  expect(settingsGeometry.left).toBeGreaterThanOrEqual(0);
+  expect(settingsGeometry.right).toBeLessThanOrEqual((page.viewportSize()?.width ?? 1440) + 1);
+  expect(settingsGeometry.top).toBeGreaterThanOrEqual(0);
+  expect(settingsGeometry.bottom).toBeLessThanOrEqual((page.viewportSize()?.height ?? 900) + 1);
+  expect(settingsGeometry.scrollWidth).toBeLessThanOrEqual(settingsGeometry.clientWidth + 1);
+  expect(settingsGeometry.bottom).toBeLessThanOrEqual(await page.locator(".chat-composer").evaluate((element) => element.getBoundingClientRect().top + 1));
+  expect((await new AxeBuilder({ page }).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
+  await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
+  await page.getByRole("combobox", { name: "Chat harness", exact: true }).selectOption("harness-grok-options");
+  await expect.poll(() => settingsButton.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
+  await page.screenshot({ path: testInfo.outputPath("assistant-settings.png") });
+
+  const model = page.getByRole("combobox", { name: "Chat harness model" });
+  const effort = page.getByRole("combobox", { name: "Harness reasoning effort" });
+  await expect(model).toHaveValue("grok-4.6");
+  await expect(model.locator("option")).toHaveText(["Select model", "grok-4.6", "grok-4.5"]);
+  await expect(effort).toHaveValue("high");
+  await expect(effort.locator("option")).toHaveText(["Harness default", "Extra high", "High", "Medium", "Low"]);
+  await expect(page.getByRole("combobox", { name: "Harness speed" })).toHaveCount(0);
+
+  await page.getByRole("combobox", { name: "Chat harness", exact: true }).selectOption("harness-codex-options");
+  await expect(model).toHaveValue("gpt-5.6");
+  await expect(effort).toHaveValue("medium");
+  await expect(page.getByRole("combobox", { name: "Harness speed" })).toHaveValue("default");
+  await expect(page.getByRole("combobox", { name: "Harness speed" }).locator("option"))
+    .toHaveText(["Harness default", "Default", "Fast"]);
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Assistant settings" })).toHaveCount(0);
+  await expect(settingsButton).toBeFocused();
+
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
+test("AI writing submits the visible supported model", async ({ page }, testInfo) => {
+  const report = {
+    ...entity,
+    id: "report-ai-model",
+    engagement_id: "scratch-project",
+    title: "Tested report",
+    status: "draft",
+    executive_summary: "",
+    finding_ids: [],
+    observation_ids: [],
+    note_transforms: [],
+    artifact_ids: [],
+    executive_summary_provenance: null,
+    signed_off_by: null,
+    signed_off_at: null,
+    metadata: {},
+  };
+  const grokHarness = {
+    ...entity,
+    id: "harness-grok-writing",
+    name: "grok",
+    kind: "grok_acp",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "grok",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "grok-4.6",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
+    capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, harness_version: "1.0.5" },
+  };
+  let submittedModel = "";
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/reports") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([report]) });
+      return;
+    }
+    if (path.endsWith("/harnesses") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([grokHarness]) });
+      return;
+    }
+    if (path.endsWith("/writing/transform") && request.method() === "POST") {
+      submittedModel = (request.postDataJSON() as { model: string }).model;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        content: "Generated executive summary.",
+        provenance: {
+          backend_kind: "harness",
+          provider_profile_id: grokHarness.id,
+          harness_profile_id: grokHarness.id,
+          model: submittedModel,
+          prompt_version: "writing-transform/v1",
+          source_sha256: "a".repeat(64),
+          instruction: "Draft a concise executive summary.",
+          generated_at: entity.updated_at,
+          provider_request_id: "turn-writing-model",
+        },
+        usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
+      }) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/reports", "Reports");
+  await page.getByRole("button", { name: "Draft executive summary with AI" }).click();
+  const dialog = page.getByRole("dialog", { name: "Draft executive summary with AI" });
+  await expect(dialog).toBeVisible();
+  const model = dialog.getByRole("combobox", { name: "AI writing model" });
+  await expect(model).toHaveValue("grok-4.6");
+  await dialog.getByRole("button", { name: "Generate draft" }).click();
+  await expect(dialog.getByRole("textbox", { name: "AI writing draft" })).toHaveValue("Generated executive summary.");
+  expect(submittedModel).toBe(await model.inputValue());
+  expect(submittedModel).toBe("grok-4.6");
+
+  const geometry = await dialog.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const actions = [...element.querySelectorAll<HTMLElement>("button")].filter((button) => getComputedStyle(button).display !== "none").map((button) => button.getBoundingClientRect().height);
+    return { left: bounds.left, right: bounds.right, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, viewportWidth: innerWidth, actionHeights: actions };
+  });
+  expect(geometry.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  if (testInfo.project.name.startsWith("mobile-")) expect(geometry.actionHeights.every((height) => height >= 44)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include(".ai-writing-dialog").analyze();
+  expect(accessibility.violations.filter((violation) => violation.id !== "aria-allowed-role")).toEqual([]);
+});
+
+test("oversized harness activity fails compactly without blocking mobile chat", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop" && !testInfo.project.name.startsWith("mobile-"), "Covered by permanent desktop and mobile browser projects.");
+  const detail = [{
+    type: "string_too_long",
+    loc: ["response", "summary"],
+    msg: "String should have at most 4000 characters",
+    input: `chat · MCP grok/${"x".repeat(8_000)}`,
+  }];
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "chat-verbose-activity",
+        engagement_id: "scratch-project",
+        title: "Verbose Grok activity",
+        backend: "harness",
+        harness_profile_id: "harness-verbose",
+        harness_session_id: "session-verbose",
+        model: "grok-build",
+        metadata: {},
+      }]) });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/chat-verbose-activity/messages")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "assistant-verbose",
+        engagement_id: "scratch-project",
+        session_id: "chat-verbose-activity",
+        sequence: 1,
+        role: "assistant",
+        content: "Earlier Grok response",
+        citations: [],
+        metadata: { harness_turn_id: "turn-verbose" },
+      }]) });
+      return;
+    }
+    if (path.endsWith("/harness-turns/turn-verbose/events")) {
+      await route.fulfill({ status: 422, contentType: "application/json", headers: { "x-request-id": "req_verbose" }, body: JSON.stringify({ detail }) });
+      return;
+    }
+    if (path.endsWith("/harness-turns/turn-verbose/interactions")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/chat-verbose-activity/pending-turn")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=chat-verbose-activity", "Workbench");
+  const notice = page.locator(".chat-panel .diagnostic-error-notice.compact");
+  await expect(notice).toBeVisible();
+  await expect(notice.locator("strong")).toHaveText("The supplied summary exceeded its validated length limit.");
+  await expect(notice).not.toContainText("x".repeat(100));
+  await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+  const geometry = await notice.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      width: bounds.width,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      viewportWidth: innerWidth,
+    };
+  });
+  expect(geometry.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  const accessibility = await new AxeBuilder({ page }).include(".diagnostic-error-notice.compact").analyze();
+  expect(accessibility.violations).toEqual([]);
 });
 
 test("completed harness output keeps one continuous transcript scroll", async ({ page }, testInfo) => {
-  test.skip(!["desktop", "webkit"].includes(testInfo.project.name), "Harness completion needs one desktop interaction run.");
+  test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile harness projects.");
   const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";
   const harnessTurnId = "c9745e80-4444-4555-8666-777788889999";
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/harnesses/harness-completion/skills")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        name: "review",
+        path: "/workspace/.agents/skills/review/SKILL.md",
+        source: "project",
+      }]) });
+      return;
+    }
     if (path.endsWith("/harnesses")) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
         ...entity,
@@ -975,7 +1812,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
         enabled: true,
         privacy: { local_only: true, permits_sensitive_data: true },
         native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
-        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0", live_command_output: true },
+        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0", live_command_output: true, planning_mode: true, goal_monitoring: true, skill_invocation: true, modes: ["default", "plan"] },
       }]) });
       return;
     }
@@ -1005,8 +1842,9 @@ test("completed harness output keeps one continuous transcript scroll", async ({
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      (globalThis as typeof globalThis & { __harnessTurnRequest?: unknown }).__harnessTurnRequest = JSON.parse(String(init?.body ?? "{}"));
       const encoder = new TextEncoder();
-      const output = "Completed command output remains expanded so the transcript cannot shrink beneath the reader.\n".repeat(80);
+      const output = "Completed command output stays available behind its disclosure without creating a second transcript scroll.\n".repeat(80);
       const answer = "Verification completed successfully. The operator remains in control of the next action.\n\n".repeat(30);
       const frames: unknown[] = [
         { type: "started", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", session_id: "chat-harness-completion", turn_id: "chat-turn-completion" },
@@ -1038,29 +1876,64 @@ test("completed harness output keeps one continuous transcript scroll", async ({
 
   await openWorkspace(page, "/?view=chat", "Workbench");
   await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  await page.getByLabel("Chat harness mode", { exact: true }).selectOption("plan");
   const composer = page.getByPlaceholder("Ask about this project…");
   await expect(composer).toBeEnabled();
-  await composer.fill("Run the verification.");
+  await composer.fill("$rev");
+  await expect(page.getByRole("listbox", { name: "Available skills" })).toBeVisible();
+  await expect(page.getByRole("option", { name: /\$review/ })).toBeVisible();
+  const autocompleteAccessibility = await new AxeBuilder({ page }).include(".chat-composer").analyze();
+  expect(autocompleteAccessibility.violations).toEqual([]);
+  await page.getByRole("option", { name: /\$review/ }).click();
+  await expect(composer).toHaveValue("$review");
+  await composer.fill("$review Run the verification.");
   await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __harnessTurnRequest?: { harness_mode?: string } }).__harnessTurnRequest?.harness_mode)).toBe("plan");
+  expect(await page.evaluate(() => (globalThis as typeof globalThis & { __harnessTurnRequest?: { harness_skill?: unknown } }).__harnessTurnRequest?.harness_skill)).toEqual({
+    name: "review",
+    path: "/workspace/.agents/skills/review/SKILL.md",
+  });
   const activity = page.locator("details.harness-activity-card", { hasText: "Run verification" });
-  await expect(activity).toHaveAttribute("open", "");
+  await expect(activity).not.toHaveAttribute("open", "");
   await expect(activity.getByText("completed", { exact: true })).toBeVisible({ timeout: 5_000 });
   await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 5_000 });
+  await activity.locator(":scope > summary").click();
   await expect(activity).toHaveAttribute("open", "");
   const chatScroll = page.locator(".chat-scroll");
   const commandOutput = activity.locator(".harness-output pre");
   await expect.poll(() => commandOutput.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(2);
   await commandOutput.hover();
   const outerBefore = await chatScroll.evaluate((element) => element.scrollTop);
-  await page.mouse.wheel(0, 500);
-  await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(outerBefore + 2);
+  if (!testInfo.project.name.startsWith("mobile-webkit")) {
+    await page.mouse.wheel(0, 500);
+    await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(outerBefore + 2);
+  }
+  const completedMessage = page.locator(".chat-message.assistant").filter({ hasText: "Verification completed successfully" });
+  const forkAction = completedMessage.getByRole("button", { name: "Fork conversation here" });
+  await expect(completedMessage.locator("header").getByRole("button", { name: "Fork conversation here" })).toHaveCount(0);
+  await expect(forkAction.locator("xpath=..")).toHaveClass(/chat-message-actions/);
+  await completedMessage.hover();
+  await expect(completedMessage.locator(".chat-message-actions")).toHaveCSS("opacity", "1");
+  if (testInfo.project.name.startsWith("mobile-")) {
+    const bounds = await forkAction.boundingBox();
+    expect(bounds?.width).toBeGreaterThanOrEqual(44);
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+  }
 });
 
 test("the workbench expands to the full viewport and restores in place", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/?view=chat", "Workbench");
 
-  await page.getByRole("button", { name: "Enter full screen workbench" }).click();
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  if (mobile) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: "Enter focus mode" }).click();
+  } else {
+    await page.getByRole("button", { name: "More Workbench actions" }).click();
+    await page.getByRole("menuitem", { name: /Enter focus mode/ }).click();
+  }
   const workbench = page.locator(".sessions-page.full-screen");
   await expect(workbench).toBeVisible();
   const geometry = await workbench.evaluate((element) => {
@@ -1080,7 +1953,7 @@ test("the workbench expands to the full viewport and restores in place", async (
   expect(Math.abs(geometry.bottom)).toBeLessThanOrEqual(1);
   await expect(page.getByRole("heading", { name: "Workbench" })).toBeHidden();
 
-  for (const [tabName, contentSelector] of [
+  const fullScreenViews = [
     ["Terminal", ".persistent-terminal"],
     ["Workspace code editor", ".persistent-code-editor"],
     ["Project browser", ".persistent-browser"],
@@ -1089,8 +1962,11 @@ test("the workbench expands to the full viewport and restores in place", async (
     ["Project notes", ".notes-panel"],
     ["Autonomous missions", ".agents-page"],
     ["Activity history", ".workbench-activity-stack"],
-  ] as const) {
-    await page.getByRole("tab", { name: tabName, exact: true }).click();
+  ] as const;
+  for (const [tabName, contentSelector] of mobile
+    ? fullScreenViews.filter(([tabName]) => tabName === "Analyst chat")
+    : fullScreenViews) {
+    if (!mobile) await page.getByRole("tab", { name: tabName, exact: true }).click();
     const content = page.locator(contentSelector);
     await expect(content).toBeVisible();
     const bounds = await content.evaluate((element) => {
@@ -1108,14 +1984,20 @@ test("the workbench expands to the full viewport and restores in place", async (
   }
 
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("button", { name: "Enter full screen workbench" })).toBeVisible();
+  if (mobile) await expect(page.getByRole("button", { name: "More workbench views" })).toBeVisible();
+  else await expect(page.getByRole("button", { name: "More Workbench actions" })).toBeVisible();
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
 });
 
-test("the code editor keeps its caret and syntax layers aligned while typing", async ({ page }) => {
+test("the code editor keeps its caret and syntax layers aligned while typing", async ({ page }, testInfo) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await page.goto("/?view=code");
-  await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 15_000 });
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(".code-editor-panel")).toBeVisible();
+  } else {
+    await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 15_000 });
+  }
   await page.evaluate(() => document.fonts.ready);
   await page.getByRole("button", { name: "New file", exact: true }).first().click();
   const filePath = page.getByRole("textbox", { name: "File path" });
@@ -1126,19 +2008,59 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(filePath).toHaveValue("example.c");
   await expect(page.locator(".code-mirror-host")).toHaveAttribute("data-language-ready", "example.c");
 
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    const panel = page.locator(".code-editor-panel");
+    await expect(panel).toHaveClass(/has-buffer/);
+    await expect(page.getByRole("complementary", { name: "Editor files" })).toBeHidden();
+    await expect(page.locator(".code-editor-mobile-title")).toHaveText("Code");
+    for (const name of ["More editor actions", "Show editor files", "Save"]) {
+      const control = page.getByRole("button", { name, exact: true });
+      await expect(control).toBeVisible();
+      const box = await control.boundingBox();
+      expect(box?.height, name).toBeGreaterThanOrEqual(44);
+    }
+    const controls = await page.locator(".code-editor-toolbar input:visible, .code-editor-toolbar button:visible, .code-editor-toolbar .code-editor-dirty:visible").evaluateAll((elements) => elements.map((element) => {
+      const box = element.getBoundingClientRect();
+      return { label: element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName, left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+    }));
+    for (let left = 0; left < controls.length; left += 1) {
+      for (let right = left + 1; right < controls.length; right += 1) {
+        const a = controls[left];
+        const b = controls[right];
+        const intersects = a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1;
+        expect(intersects, `${a.label} overlaps ${b.label}`).toBe(false);
+      }
+    }
+    const viewport = await page.evaluate(() => ({ client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }));
+    expect(viewport.scroll).toBeLessThanOrEqual(viewport.client);
+
+    await page.getByRole("button", { name: "More editor actions" }).click();
+    await expect(page.getByLabel("Editor options")).toBeVisible();
+    await page.getByRole("button", { name: "Show editor files" }).click();
+    await expect(page.getByRole("complementary", { name: "Editor files" })).toBeVisible();
+    await page.getByRole("button", { name: "Hide editor files" }).click();
+    await expect(page.getByRole("complementary", { name: "Editor files" })).toBeHidden();
+    await page.screenshot({ path: testInfo.outputPath("mobile-code-editor.png"), fullPage: true });
+  }
+
   const inputSurface = page.getByRole("textbox", { name: "Code editor" });
   await inputSurface.click({ force: true });
   const editor = inputSurface.locator("..").locator("..");
-  await page.keyboard.type("#include <stdio.h>", { delay: 10 });
+  const enterText = (text: string) => testInfo.project.name.startsWith("mobile-")
+    ? page.keyboard.insertText(text)
+    : page.keyboard.type(text, { delay: 10 });
+  await enterText("#include <stdio.h>");
   await page.keyboard.press("Enter");
   await expect(page.locator(".cm-line")).toHaveCount(2);
+  await inputSurface.click({ force: true });
+  await page.keyboard.press("End");
   await page.keyboard.press("Enter");
   await expect(page.locator(".cm-line")).toHaveCount(3);
-  await page.keyboard.type("int main(void) ", { delay: 10 });
+  await enterText("int main(void) ");
   await page.keyboard.insertText("{");
   await page.keyboard.press("Enter");
   await expect(page.locator(".cm-line")).toHaveCount(4);
-  await page.keyboard.type("  return 0;", { delay: 10 });
+  await enterText("  return 0;");
   await page.keyboard.press("Enter");
   await expect(page.locator(".cm-line")).toHaveCount(5);
   await page.keyboard.insertText("}");
@@ -1216,10 +2138,12 @@ test("settings shows the live Kali preparation stage instead of a passive runtim
     "aria-valuetext",
     "Downloading the official Kali base image.",
   );
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
+  await expect(page.getByText("Downloading and installing the pinned Kali toolset", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Preparing Kali…" })).toBeDisabled();
 });
 
-test("terminal and notes keep a visible focused caret", async ({ page }) => {
+test("terminal and notes keep a visible focused caret", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
@@ -1231,7 +2155,12 @@ test("terminal and notes keep a visible focused caret", async ({ page }) => {
   await terminalInput.click({ force: true });
   await expect(terminalInput).toBeFocused();
 
-  await page.getByRole("tab", { name: "Project notes", exact: true }).click();
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Notes/ }).click();
+  } else {
+    await page.getByRole("tab", { name: "Project notes", exact: true }).click();
+  }
   await page.getByRole("button", { name: "New note", exact: true }).click();
   const noteBody = page.getByRole("textbox", { name: "Note body" });
   await noteBody.click();
@@ -1408,7 +2337,7 @@ for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
   test(`critical workspaces meet automated accessibility checks in ${theme} mode`, async ({ page }) => {
     test.setTimeout(60_000);
     await openWorkspace(page, "/", "Workbench");
-    await page.evaluate((value) => localStorage.setItem("nebula.theme", value), theme);
+    await setTheme(page, theme);
     for (const [, route, heading] of workspaces) {
       await openWorkspace(page, route, heading);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
@@ -1450,50 +2379,63 @@ for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
   });
 }
 
-test("Zero materialization respects the reduced-motion preference", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Motion behavior only needs one browser project.");
-  await page.emulateMedia({ reducedMotion: "no-preference" });
+test("Zero is a palette variant without blocking route or overlay motion", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Theme geometry only needs one browser project.");
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
 
-  const materialized = await page.locator(".zero-route-flare").evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { name: style.animationName, duration: style.animationDuration };
-  });
-  expect(materialized.name).toContain("zero-materialize");
-  expect(Number.parseFloat(materialized.duration)).toBeGreaterThanOrEqual(.3);
-  expect(await page.locator(".app-shell").evaluate((element) => getComputedStyle(element, "::after").animationName)).toBe("none");
+  await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(0);
   expect(await page.locator("body").evaluate((element) => ({
     bodyBefore: getComputedStyle(element, "::before").animationName,
     bodyAfter: getComputedStyle(element, "::after").animationName,
-    shellBefore: getComputedStyle(document.querySelector(".app-shell")!, "::before").animationName,
-  }))).toEqual({ bodyBefore: "none", bodyAfter: "none", shellBefore: "none" });
+  }))).toEqual({ bodyBefore: "none", bodyAfter: "none" });
+
+  const zeroGeometry = await page.locator(".app-shell").evaluate((shell) => {
+    const rect = (selector: string) => {
+      const bounds = shell.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    };
+    return { nav: rect(".side-nav"), top: rect(".top-bar"), main: rect(".main-content") };
+  });
 
   await page.getByRole("button", { name: "Search commands" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
-  expect(await page.locator(".command-palette").evaluate((element) => getComputedStyle(element).animationName)).toContain("zero-dialog-materialize");
+  expect(await page.locator(".command-palette").evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
 
   await page.keyboard.press("Escape");
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const reduced = await page.locator(".zero-route-flare").evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { name: style.animationName, transform: style.transform, clipPath: style.clipPath };
+  await setTheme(page, "dark");
+  const darkGeometry = await page.locator(".app-shell").evaluate((shell) => {
+    const rect = (selector: string) => {
+      const bounds = shell.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    };
+    return { nav: rect(".side-nav"), top: rect(".top-bar"), main: rect(".main-content") };
   });
-  expect(reduced).toEqual({ name: "none", transform: "none", clipPath: "none" });
+  expect(darkGeometry).toEqual(zeroGeometry);
 });
 
 test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ page }, testInfo) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
 
   await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
-  await expect(page.getByRole("complementary", { name: "Primary navigation" })).toHaveCount(1);
   await expect(page.locator("main#main-content")).toHaveCount(1);
-  for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
-    await expect(page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: label, exact: true })).toBeVisible();
+  if (mobile) {
+    await expect(page.getByRole("complementary", { name: "Primary navigation" })).toBeHidden();
+    const navigation = page.getByRole("navigation", { name: "Mobile operator navigation" });
+    await expect(navigation).toBeVisible();
+    for (const label of ["Chat", "Open conversations", "Activity", "More workbench views"]) {
+      await expect(navigation.getByRole("button", { name: label, exact: true })).toBeVisible();
+    }
+  } else {
+    await expect(page.getByRole("complementary", { name: "Primary navigation" })).toHaveCount(1);
+    for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
+      await expect(page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: label, exact: true })).toBeVisible();
+    }
   }
 
-  const geometry = await page.locator(".app-shell").evaluate((shell) => {
+  const geometry = await page.locator(".app-shell").evaluate((shell, mobileView) => {
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     const bounds = (selector: string) => {
       const rect = shell.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
@@ -1503,9 +2445,9 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
       viewport,
       shellOverflow: document.documentElement.scrollWidth > viewport.width || document.documentElement.scrollHeight > viewport.height,
       main: bounds(".main-content"),
-      navigation: bounds(".side-nav"),
+      navigation: bounds(mobileView ? ".mobile-companion-nav" : ".side-nav"),
     };
-  });
+  }, mobile);
   expect(geometry.shellOverflow).toBe(false);
   for (const surface of [geometry.main, geometry.navigation]) {
     expect(surface.left).toBeGreaterThanOrEqual(0);
@@ -1516,7 +2458,9 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
     expect(surface.height).toBeGreaterThan(0);
   }
 
-  const workbenchLink = page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: "Workbench", exact: true });
+  const workbenchLink = mobile
+    ? page.getByRole("navigation", { name: "Mobile operator navigation" }).getByRole("button", { name: "Chat", exact: true })
+    : page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: "Workbench", exact: true });
   await workbenchLink.focus();
   const focusStyle = await workbenchLink.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -1531,14 +2475,14 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
     await expect(page).toHaveScreenshot("workbench-zero-responsive.png", { fullPage: true });
   }
 
-  const terminal = page.locator(".persistent-terminal");
-  await expect(terminal).toBeVisible();
-  await terminal.evaluate((element) => { (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal = element; });
+  const persistentSurface = mobile ? page.locator(".sessions-page") : page.locator(".persistent-terminal");
+  await expect(persistentSurface).toBeVisible();
+  await persistentSurface.evaluate((element) => { (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal = element; });
   await page.getByRole("button", { name: "Search commands" }).click();
   await page.getByRole("textbox", { name: "Search commands" }).fill("dark theme");
   await page.getByRole("option", { name: /Use dark theme/ }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  expect(await terminal.evaluate((element) => (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal === element)).toBe(true);
+  expect(await persistentSurface.evaluate((element) => (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal === element)).toBe(true);
 });
 
 for (const [name, route, heading] of workspaces) {
@@ -1616,6 +2560,7 @@ test("advanced settings keeps the binary inventory collapsed until requested", a
 });
 
 test("tool follow-up runtime lives in Settings and its Workbench toggles persist", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "narrow", "Compact Workbench toolbar toggles are intentionally desktop-only.");
   let postToolConfig = {
     suggest_next_steps: false,
     take_notes: false,
@@ -1663,6 +2608,8 @@ test("tool follow-up runtime lives in Settings and its Workbench toggles persist
 
   await openWorkspace(page, "/", "Workbench");
   await expect(page.getByRole("combobox", { name: "Post-tool analysis backend" })).toHaveCount(0);
+  await page.getByRole("button", { name: "More Workbench actions" }).click();
+  await page.getByRole("menuitem", { name: "Tool assistance" }).click();
   const suggestions = page.getByRole("checkbox", { name: "Suggest next steps" });
   await suggestions.click();
   await expect(suggestions).toBeChecked();
@@ -1681,7 +2628,8 @@ test("tool follow-up runtime lives in Settings and its Workbench toggles persist
   if (testInfo.project.name === "desktop") await expect(panel).toHaveScreenshot("tool-follow-up-settings.png");
 });
 
-test("tool follow-up toggles explain missing runtime setup", async ({ page }) => {
+test("tool follow-up toggles explain missing runtime setup", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "narrow", "Compact Workbench toolbar toggles are intentionally desktop-only.");
   let postToolConfig = {
     suggest_next_steps: false,
     take_notes: false,
@@ -1707,6 +2655,8 @@ test("tool follow-up toggles explain missing runtime setup", async ({ page }) =>
   });
 
   await openWorkspace(page, "/", "Workbench");
+  await page.getByRole("button", { name: "More Workbench actions" }).click();
+  await page.getByRole("menuitem", { name: "Tool assistance" }).click();
   const notes = page.getByRole("checkbox", { name: "Take notes" });
   await notes.click();
 
@@ -1723,7 +2673,7 @@ test("appearance variants preserve each critical workspace hierarchy", async ({ 
   test.setTimeout(60_000);
   for (const theme of ["light", "high-contrast"] as const) {
     await openWorkspace(page, "/", "Workbench");
-    await page.evaluate((value) => localStorage.setItem("nebula.theme", value), theme);
+    await setTheme(page, theme);
     for (const [name, route, heading] of workspaces) {
       await openWorkspace(page, route, heading);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
@@ -1733,6 +2683,7 @@ test("appearance variants preserve each critical workspace hierarchy", async ({ 
 });
 
 test("audit every primary workspace view", async ({ page }, testInfo) => {
+  test.setTimeout(150_000);
   if (testInfo.project.name === "desktop") {
     await page.setViewportSize({ width: 1756, height: 1194 });
   }
@@ -1769,23 +2720,27 @@ test("audit every primary workspace view", async ({ page }, testInfo) => {
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
   };
 
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   await openWorkspace(page, "/", "Workbench");
-  for (const [name, label] of [
-    ["workbench-terminal", "Terminal"],
-    ["workbench-browser", "Project browser"],
-    ["workbench-assistant", "Analyst chat"],
-    ["workbench-files", "Workspace files"],
-    ["workbench-notes", "Project notes"],
-    ["workbench-missions", "Autonomous missions"],
-    ["workbench-activity", "Activity history"],
+  for (const [name, label, view] of [
+    ["workbench-terminal", "Terminal", "terminal"],
+    ["workbench-code", "Workspace code editor", "code"],
+    ["workbench-browser", "Project browser", "browser"],
+    ["workbench-assistant", "Analyst chat", "chat"],
+    ["workbench-files", "Workspace files", "workspace"],
+    ["workbench-notes", "Project notes", "notes"],
+    ["workbench-missions", "Autonomous missions", "missions"],
+    ["workbench-activity", "Activity history", "activity"],
   ] as const) {
-    await page.getByRole("tab", { name: label, exact: true }).click();
+    if (mobile) await openWorkspace(page, `/?view=${view}`, "Workbench");
+    else await page.getByRole("tab", { name: label, exact: true }).click();
     await capture(name);
   }
 
   for (const [name, route, heading] of [
     ["findings", "/findings", "Findings"],
     ["reports", "/reports", "Reports"],
+    ["library", "/library", "Library"],
   ] as const) {
     await openWorkspace(page, route, heading);
     await capture(name);
@@ -1806,8 +2761,249 @@ test("audit every primary workspace view", async ({ page }, testInfo) => {
   for (const [name, label] of [
     ["settings-setup", "Setup"],
     ["settings-advanced", "Advanced settings"],
+    ["settings-diagnostics", "Diagnostics settings and recent errors"],
   ] as const) {
     await page.getByRole("link", { name: label, exact: true }).click();
     await capture(name);
+  }
+
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  for (const [name, label] of [
+    ["settings-models", "Models"],
+    ["settings-automation", "Automation"],
+    ["settings-project-policy", "Project Policy"],
+    ["settings-identity-security", "Identity & Security"],
+    ["settings-release", "Release"],
+  ] as const) {
+    await page.locator("details.settings-group > summary", { hasText: label }).click();
+    await expect(page.locator("details.settings-group[open]")).toHaveCount(1);
+    await capture(name);
+  }
+
+  await page.locator("details.settings-group > summary", { hasText: "Models" }).click();
+  const addProvider = page.getByRole("button", { name: "Add provider" });
+  if (await addProvider.isEnabled()) {
+    await addProvider.click();
+    await expect(page.getByRole("dialog", { name: "Add model provider" })).toBeVisible();
+    await capture("dialog-provider");
+  }
+});
+
+test("mobile Workbench navigation has one authority and no duplicate tab strip", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) > 760, "Mobile navigation contract");
+  await openWorkspace(page, "/?view=activity", "Workbench");
+
+  await expect(page.locator(".session-tabs")).toBeHidden();
+  const navigation = page.getByRole("navigation", { name: "Mobile operator navigation" });
+  await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
+  await expect(navigation.getByRole("button", { name: "Activity" })).toHaveAttribute("aria-current", "page");
+
+  await navigation.getByRole("button", { name: "More workbench views" }).click();
+  await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
+  await expect(navigation.getByRole("button", { name: "More workbench views" })).toHaveAttribute("aria-current", "page");
+  await expect(navigation.getByRole("button", { name: "Activity" })).not.toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".session-toolbar")).toBeHidden();
+  await expect(page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: "Enter focus mode" })).toBeVisible();
+
+  await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Terminal/ }).click();
+  await expect(page).toHaveURL(/view=terminal/);
+  await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Screenshot" })).toBeVisible();
+  await expect(page.getByText("Continue this view on desktop", { exact: true })).toHaveCount(0);
+  await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
+  await expect(navigation.getByRole("button", { name: "More workbench views" })).toHaveAttribute("aria-current", "page");
+
+  await navigation.getByRole("button", { name: "More workbench views" }).click();
+  await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Code/ }).click();
+  await expect(page).toHaveURL(/view=code/);
+  await expect(page.locator(".code-editor-panel")).toBeVisible();
+
+  await navigation.getByRole("button", { name: "More workbench views" }).click();
+  await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Browser/ }).click();
+  await expect(page).toHaveURL(/view=browser/);
+  await expect(page.getByText("Browse from this device", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Web address" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add to Sources" })).toBeVisible();
+});
+
+test("Assistant session details are optional and persist as a shell preference", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) <= 1000, "The inspector is a wide-screen disclosure.");
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await expect(page.getByRole("complementary", { name: "Session inspector" })).toHaveCount(0);
+  await page.getByRole("button", { name: "More Workbench actions" }).click();
+  await page.getByRole("menuitem", { name: /Show session details/ }).click();
+  await expect(page.getByRole("complementary", { name: "Session inspector" })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("nebula.session-inspector.open"))).toBe("true");
+  await page.reload();
+  await expect(page.getByRole("complementary", { name: "Session inspector" })).toBeVisible();
+  await page.getByRole("button", { name: "More Workbench actions" }).click();
+  await page.getByRole("menuitem", { name: /Hide session details/ }).click();
+  expect(await page.evaluate(() => localStorage.getItem("nebula.session-inspector.open"))).toBe("false");
+});
+
+test("audit primary mutation dialogs through the shared dialog contract", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const captureDialog = async (name: string, opener: ReturnType<Page["getByRole"]>, dialogName: string) => {
+    await opener.scrollIntoViewIfNeeded();
+    await opener.click();
+    const dialog = page.getByRole("dialog", { name: dialogName, exact: true });
+    await expect(dialog).toBeVisible();
+    await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+    const bounds = await dialog.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight };
+    });
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.top).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth + 1);
+    expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight + 1);
+    await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect.poll(() => opener.evaluate((element) => element === document.activeElement)).toBe(true);
+  };
+
+  await openWorkspace(page, "/findings", "Findings");
+  await captureDialog("dialog-finding", page.getByRole("button", { name: "New finding" }), "Create candidate finding");
+
+  await openWorkspace(page, "/reports", "Reports");
+  await captureDialog("dialog-report", page.getByRole("button", { name: "New report" }), "New report");
+
+  await openWorkspace(page, "/project?view=assets", "Assets");
+  await captureDialog("dialog-asset", page.getByRole("button", { name: "Add asset" }), "Add asset");
+
+  await openWorkspace(page, "/project?view=evidence", "Evidence");
+  await captureDialog("dialog-evidence", page.getByRole("button", { name: "Add evidence" }), "Add evidence");
+
+  await openWorkspace(page, "/project?view=sources", "Knowledge");
+  await captureDialog("dialog-source-url", page.getByRole("button", { name: "Add URL" }), "Add source from URL");
+
+  await openWorkspace(page, "/settings#models-settings", "Settings");
+  await captureDialog("dialog-provider", page.getByRole("button", { name: "Add provider" }), "Add model provider");
+
+  await openWorkspace(page, "/settings#automation-settings", "Settings");
+  await captureDialog("dialog-grok", page.getByRole("button", { name: "Add Grok" }), "Add Grok ACP");
+  await captureDialog("dialog-codex", page.getByRole("button", { name: "Add Codex" }), "Add Codex");
+  await captureDialog("dialog-mcp", page.getByRole("button", { name: "Add MCP server" }), "Add MCP server");
+
+  await openWorkspace(page, "/settings#identity-security-settings", "Settings");
+  await captureDialog("dialog-operator", page.getByRole("button", { name: "Add operator" }), "Add operator");
+});
+
+test("product typography and touch contracts hold on primary surfaces", async ({ page }) => {
+  for (const [, route, heading] of workspaces) {
+    await openWorkspace(page, route, heading);
+    await expect.poll(() => page.evaluate(async () => {
+      const [uiFaces, monoFaces] = await Promise.all([
+        document.fonts.load('13px "Geist Variable"', "Nebula interface"),
+        document.fonts.load('12px "Geist Mono Variable"', "sha256:0123456789abcdef"),
+      ]);
+      await document.fonts.ready;
+      return uiFaces.length > 0 && monoFaces.length > 0;
+    })).toBe(true);
+    const typography = await page.locator("body").evaluate((body) => {
+      const visible = (element: HTMLElement) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
+      const checks: Array<[string, number]> = [
+        ["small, .eyebrow, .section-kicker, .count-badge, .status-badge, .data-table th", 11],
+        [".panel-header p, .section-heading p, .empty-state p, .provider-message", 12],
+        ["button, input, textarea, select, .text-link", 13],
+      ];
+      const scaleViolations = checks.flatMap(([selector, minimum]) => [...document.querySelectorAll<HTMLElement>(selector)]
+        .filter(visible)
+        .filter((element) => Number.parseFloat(getComputedStyle(element).fontSize) + .01 < minimum)
+        .map((element) => `${selector}: ${element.className || element.tagName}=${getComputedStyle(element).fontSize}`));
+      const weightViolations = [...document.querySelectorAll<HTMLElement>("body *")]
+        .filter(visible)
+        .filter((element) => ![400, 500, 600, 700].includes(Number.parseInt(getComputedStyle(element).fontWeight, 10)))
+        .map((element) => `${element.className || element.tagName}=${getComputedStyle(element).fontWeight}`);
+      const uiFamily = getComputedStyle(body).fontFamily;
+      const monoProbe = document.createElement("code");
+      monoProbe.textContent = "font-probe";
+      body.append(monoProbe);
+      const monoFamily = getComputedStyle(monoProbe).fontFamily;
+      monoProbe.remove();
+      return { scaleViolations, weightViolations, uiFamily, monoFamily };
+    });
+    expect(typography.scaleViolations, `${route} violates the semantic type scale`).toEqual([]);
+    expect(typography.weightViolations, `${route} uses a weight outside the four-role typography contract`).toEqual([]);
+    expect(typography.uiFamily).toContain("Geist Variable");
+    expect(typography.monoFamily).toContain("Geist Mono Variable");
+  }
+
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    await openWorkspace(page, "/?view=activity", "Workbench");
+    const undersized = await page.locator(".mobile-companion-nav button, .settings-tabs a, .page .icon-button").evaluateAll((elements) => elements
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && getComputedStyle(element).display !== "none";
+      })
+      .filter((element) => element.getBoundingClientRect().width < 43.5 || element.getBoundingClientRect().height < 43.5)
+      .map((element) => `${element.tagName.toLowerCase()}.${(element as HTMLElement).className}`));
+    expect(undersized, "Mobile primary controls must provide 44px touch targets").toEqual([]);
+  }
+});
+
+test("shared actions keep sleek geometry without weakening touch targets", async ({ page }) => {
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  for (const [route, name] of [["/findings", "New finding"], ["/?view=chat", "New chat"]] as const) {
+    await openWorkspace(page, route, route === "/findings" ? "Findings" : "Workbench");
+    const action = page.getByRole("button", { name, exact: true }).first();
+    await expect(action).toBeVisible();
+    const resting = await action.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        width: rect.width,
+        height: rect.height,
+        radius: Number.parseFloat(style.borderRadius),
+        fontSize: Number.parseFloat(style.fontSize),
+        shadow: style.boxShadow,
+      };
+    });
+    expect(resting.height).toBeGreaterThanOrEqual(mobile ? 43.5 : 33.5);
+    expect(resting.height).toBeLessThanOrEqual(mobile ? 44.5 : 36.5);
+    expect(resting.radius).toBeLessThanOrEqual(8);
+    expect(resting.fontSize).toBeGreaterThanOrEqual(13);
+    expect(resting.shadow).toBe("none");
+
+    await action.hover();
+    const hovered = await action.boundingBox();
+    expect(hovered?.width).toBeCloseTo(resting.width, 1);
+    expect(hovered?.height).toBeCloseTo(resting.height, 1);
+  }
+});
+
+test("calm structure avoids duplicate hierarchy and decorative nesting", async ({ page }) => {
+  for (const [, route, heading] of workspaces) {
+    await openWorkspace(page, route, heading);
+    const contract = await page.locator("body").evaluate(() => {
+      const visible = (element: HTMLElement) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
+      const primaryActions = [...document.querySelectorAll<HTMLElement>(".top-bar-page-actions .button.primary, .page > .page-header .button.primary")].filter(visible);
+      const activePrimaryNavigation = [...document.querySelectorAll<HTMLElement>(".side-nav .nav-item.active, .mobile-companion-nav [aria-current='page']")].filter(visible);
+      const nestedFrames = [...document.querySelectorAll<HTMLElement>(".standard-empty-state, .data-panel, .session-workspace, .settings-group-body")]
+        .filter(visible)
+        .flatMap((element) => {
+          let ancestor = element.parentElement;
+          let frames = 0;
+          while (ancestor && ancestor.matches("#main-content *")) {
+            const style = getComputedStyle(ancestor);
+            if ([style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth].some((width) => Number.parseFloat(width) > 0)) frames += 1;
+            ancestor = ancestor.parentElement;
+          }
+          return frames > 1 ? [`${element.className || element.tagName}: ${frames} bordered ancestors`] : [];
+        });
+      return { primaryActions: primaryActions.length, activePrimaryNavigation: activePrimaryNavigation.length, nestedFrames };
+    });
+    expect(contract.primaryActions, `${route} exposes duplicate primary actions`).toBeLessThanOrEqual(1);
+    expect(contract.activePrimaryNavigation, `${route} exposes duplicate active primary navigation`).toBeLessThanOrEqual(1);
+    expect(contract.nestedFrames, `${route} contains decorative frame nesting`).toEqual([]);
   }
 });

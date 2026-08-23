@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#020203" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/nebula-icon.svg" />
     <meta
       name="description"
       content="Nebula 3 local-first security engagement workspace"
@@ -11,12 +14,12 @@
     <title>Nebula 3</title>
     <!-- Critical launch visuals stay inline so they paint before the application bundle. -->
     <style>
-      :root {
+      :root[data-theme="zero"] {
         background: #020203;
         color-scheme: dark;
       }
 
-      body {
+      :root[data-theme="zero"] body {
         margin: 0;
         background: #020203;
       }
@@ -35,7 +38,7 @@
         color: #f8f9fb;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         opacity: 1;
-        transition: opacity 420ms cubic-bezier(.4, 0, .2, 1), visibility 420ms;
+        transition: opacity 160ms cubic-bezier(.4, 0, .2, 1), visibility 160ms;
       }
 
       #nebula-boot::before {
@@ -64,6 +67,7 @@
       #nebula-boot.nebula-boot--leaving {
         visibility: hidden;
         opacity: 0;
+        pointer-events: none;
       }
 
       .nebula-boot__frame {

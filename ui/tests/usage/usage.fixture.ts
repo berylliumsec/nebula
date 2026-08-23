@@ -104,7 +104,7 @@ export const test = base.extend<Record<string, never>, WorkerFixtures>({
     const page = await context.newPage();
     await page.addInitScript(() => {
       localStorage.setItem("nebula.theme", "zero");
-      localStorage.setItem("nebula.conversations.expanded", "true");
+      localStorage.setItem("nebula.conversations.open", "true");
     });
     try {
       await use(page);
@@ -164,7 +164,10 @@ export async function openProject(
   await page.addInitScript((projectId) => localStorage.setItem("nebula.engagement", projectId), project.id);
   await page.goto(`${core.origin}${route}#token=${encodeURIComponent(core.token)}`);
   await expect(page.getByRole("button", { name: "Switch project" })).toContainText(project.name, { timeout: 20_000 });
-  await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+  // Diagnostics can degrade independently without making the selected project
+  // or its operator workflow unavailable. Require an explicit usable Core
+  // state while continuing to reject starting and failed states.
+  await expect(page.getByRole("button", { name: /Nebula Core (?:ready|degraded)/ })).toBeVisible({ timeout: 20_000 });
   await page.evaluate(() => document.fonts.ready);
 }
 

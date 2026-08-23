@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nebula Product Quality"
+  short_description: "Gate Nebula UX changes with real workflows"
+  default_prompt: "Use $nebula-product-quality to implement and validate this Nebula product change end to end."

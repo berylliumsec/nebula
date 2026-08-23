@@ -93,7 +93,7 @@ class WorkspaceResetStatus(NebulaModel):
     can_reset: bool
     active_terminal_count: int = Field(ge=0)
     active_execution_count: int = Field(ge=0)
-    reason_code: Literal["workspace_busy"] | None = None
+    reason_code: Literal["workspace_busy", "linked_workspace"] | None = None
     detail: str
 
 
@@ -543,6 +543,12 @@ class WorkspaceService:
         self, engagement_id: str, request: WorkspaceResetRequest
     ) -> WorkspaceResetResult:
         engagement = self.store.get(Engagement, engagement_id)
+        if engagement.workspace_path:
+            raise ExecutionServiceError(
+                "linked_workspace",
+                "linked host folders cannot be reset from Nebula",
+                status_code=409,
+            )
         if request.engagement_name != engagement.name:
             raise ExecutionServiceError(
                 "confirmation_mismatch",
@@ -592,7 +598,16 @@ class WorkspaceService:
     def reset_status(
         self, engagement_id: str, *, active_terminal_count: int = 0
     ) -> WorkspaceResetStatus:
-        self.store.get(Engagement, engagement_id)
+        engagement = self.store.get(Engagement, engagement_id)
+        if engagement.workspace_path:
+            return WorkspaceResetStatus(
+                engagement_id=engagement_id,
+                can_reset=False,
+                active_terminal_count=active_terminal_count,
+                active_execution_count=0,
+                reason_code="linked_workspace",
+                detail="This project uses a linked host folder. Nebula will never reset or bulk-delete it.",
+            )
         active_execution_count = 0
         offset = 0
         while True:

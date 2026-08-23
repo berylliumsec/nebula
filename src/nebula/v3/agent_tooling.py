@@ -99,6 +99,41 @@ class ToolMissionSupervisor:
         )
         tasks: list[PlannedTask] = []
         previous_stage: list[str] = []
+        explicit_stages = context.get("stages")
+        if isinstance(explicit_stages, list) and explicit_stages:
+            names = list(selected)
+            risks = [self.specs[name].risk_class for name in names]
+            risk = max(risks, key=_RISK_PRIORITY.__getitem__)
+            for item in explicit_stages:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title", "")).strip()
+                stage_objective = str(item.get("objective", "")).strip()
+                if not title or not stage_objective:
+                    continue
+                task = PlannedTask(
+                    role=role_for_tool(names[0]),
+                    title=title,
+                    instructions=(
+                        f"Overall objective: {objective}\n"
+                        f"Current stage: {stage_objective}\n"
+                        f"Capabilities available: {', '.join(names)}\n"
+                        f"Hard scope: {scope_summary}"
+                    ),
+                    depends_on=previous_stage,
+                    delegation_depth=1,
+                    risk_class=risk,
+                    allowed_tools=frozenset(names),
+                )
+                tasks.append(task)
+                previous_stage = [task.id]
+            if not tasks:
+                raise MissionError("operator-authored mission stages are empty")
+            return MissionPlan(
+                summary="Execute the operator-authored mission stages in order",
+                rationale="The Core preserved explicit stage boundaries while retaining the frozen tool contract.",
+                tasks=tasks,
+            )
         for role, names in role_groups.items():
             risks = [self.specs[name].risk_class for name in names]
             risk = max(risks, key=_RISK_PRIORITY.__getitem__)

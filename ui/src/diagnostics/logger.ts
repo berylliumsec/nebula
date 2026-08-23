@@ -8,6 +8,7 @@ import type {
   DiagnosticStatus,
 } from "./types";
 import { diagnosticFeatures } from "./types";
+import { randomId } from "../randomId";
 
 const DEFAULT_SETTINGS: DiagnosticSettings = {
   schema: "nebula.diagnostics-settings/v1",
@@ -127,7 +128,7 @@ function isTauri(): boolean {
 }
 
 function identifier(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
+  return `${prefix}_${randomId().replaceAll("-", "")}`;
 }
 
 export function newOperationId(): string {

@@ -4,13 +4,19 @@ import { logDiagnostic } from "./logger";
 interface ErrorBoundaryState {
   failed: boolean;
   errorId?: string;
+  failureKind?: "stale_bundle" | "render";
+}
+
+export function isStaleBundleImportError(error: unknown): boolean {
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed|loading (?:css )?chunk \S+ failed|chunkloaderror|unable to preload css/i.test(detail);
 }
 
 export class DiagnosticErrorBoundary extends Component<PropsWithChildren, ErrorBoundaryState> {
   state: ErrorBoundaryState = { failed: false };
 
-  static getDerivedStateFromError(): ErrorBoundaryState {
-    return { failed: true };
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return { failed: true, failureKind: isStaleBundleImportError(error) ? "stale_bundle" : "render" };
   }
 
   componentDidCatch(error: Error, _information: ErrorInfo): void {
@@ -28,6 +34,17 @@ export class DiagnosticErrorBoundary extends Component<PropsWithChildren, ErrorB
 
   render(): ReactNode {
     if (!this.state.failed) return this.props.children;
+    if (this.state.failureKind === "stale_bundle") {
+      return (
+        <main className="diagnostic-fatal" role="alert">
+          <h1>Nebula was updated</h1>
+          <p>This tab is using an older interface bundle. Reload to continue with the latest version. Saved projects, chats, and evidence are unaffected.</p>
+          <div>
+            <button type="button" className="button primary" onClick={() => window.location.reload()}>Reload Nebula</button>
+          </div>
+        </main>
+      );
+    }
     return (
       <main className="diagnostic-fatal" role="alert">
         <h1>The workspace could not be displayed</h1>
@@ -41,4 +58,3 @@ export class DiagnosticErrorBoundary extends Component<PropsWithChildren, ErrorB
     );
   }
 }
-

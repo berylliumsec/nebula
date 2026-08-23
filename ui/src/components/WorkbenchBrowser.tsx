@@ -316,7 +316,71 @@ export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenF
     }
   };
 
-  if (!desktop) return <div className="browser-unavailable empty-state"><Globe2 size={26} /><strong>Browser is available in the Nebula desktop app</strong><p>Native child webviews are intentionally unavailable in the browser-development workspace.</p></div>;
+  const normalizedWebAddress = () => {
+    try { return normalizeBrowserInput(activeTab?.address ?? ""); }
+    catch (caught) {
+      // diagnostic-expected: local operator input validation is presented inline.
+      setError(errorMessage(caught));
+      return undefined;
+    }
+  };
+
+  const openWebAddress = (event: FormEvent) => {
+    event.preventDefault();
+    setError(undefined);
+    setNotice(undefined);
+    const url = normalizedWebAddress();
+    if (!url) return;
+    updateTab(activeId, { address: url, url });
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      setError("The browser blocked the new tab. Allow pop-ups for Nebula and try again.");
+      return;
+    }
+    setNotice({ kind: "info", message: "Opened the page in a separate browser tab." });
+  };
+
+  const addWebAddressToKnowledge = async () => {
+    if (addingKnowledge) return;
+    setError(undefined);
+    setNotice(undefined);
+    const url = normalizedWebAddress();
+    if (!url) return;
+    updateTab(activeId, { address: url, url });
+    setAddingKnowledge(true);
+    try {
+      const created = await onAddKnowledgeUrl(url);
+      setNotice({ kind: "knowledge", message: `${created.name} is ready for cited retrieval.`, sourceId: created.id });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.workbench_browser.web_knowledge_ingest_failed", "A browser URL could not be added to Project Sources.", caught, "workbench_browser");
+      setError(errorMessage(caught));
+    } finally {
+      setAddingKnowledge(false);
+    }
+  };
+
+  if (!desktop) return <div className="workbench-browser web-browser-fallback">
+    {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
+    {notice && <div className="browser-notice" role="status">
+      {notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : <Check size={14} />}
+      <span>{notice.message}</span>
+      {notice.kind === "knowledge" && <Link to={`/project?view=sources&source=${encodeURIComponent(notice.sourceId)}`}>View source <ExternalLink size={12} /></Link>}
+      <button type="button" aria-label="Dismiss browser notice" onClick={() => setNotice(undefined)}><X size={14} /></button>
+    </div>}
+    <div className="browser-surface">
+      <div className="browser-start">
+        <Globe2 size={34} />
+        <strong>Browse from this device</strong>
+        <p>The isolated embedded webview is a desktop-app capability. From the web interface, open a page in a separate tab or add its URL directly to Project Sources.</p>
+        <form onSubmit={openWebAddress}>
+          <Search size={16} />
+          <input aria-label="Web address" autoFocus={active} value={activeTab?.address ?? ""} placeholder="Search or enter an address" onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} />
+          <button className="button primary" type="submit">Open</button>
+        </form>
+        <button className="button secondary" type="button" disabled={addingKnowledge || !activeTab?.address.trim()} onClick={() => void addWebAddressToKnowledge()}>{addingKnowledge ? <LoaderCircle className="spin" size={15} /> : <BookPlus size={15} />} Add to Sources</button>
+      </div>
+    </div>
+  </div>;
 
   return (
     <div className="workbench-browser">

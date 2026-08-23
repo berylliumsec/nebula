@@ -3,21 +3,25 @@
 from __future__ import annotations
 
 from .diagnostics import record_caught_exception
+from .code_completion import complete as complete_code
 
 import asyncio
 import base64
 import binascii
+import hashlib
 import hmac
+import ipaddress
 import json
+import os
 import re
 import secrets
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Literal, Mapping
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import (
     Depends,
@@ -67,6 +71,7 @@ from .chat import (
     ChatResponseMessage,
     ChatService,
 )
+from .chat_media import MAX_CHAT_IMAGE_BYTES, ChatImageError, validate_chat_image
 from .container_terminal import (
     ContainerTerminalCapacity,
     ContainerTerminalCapabilities,
@@ -153,6 +158,7 @@ from .domain import (
     NebulaModel,
     OperationEvent,
     OperatorProfile,
+    PairedDeviceSession,
     OperatorExecution,
     OperatorExecutionStatus,
     Observation,
@@ -238,6 +244,8 @@ from .harnesses import (
     HarnessError,
     HarnessRuntimeService,
     HarnessSessionActivity,
+    HarnessSkillInvocation,
+    HarnessSkillSummary,
     HarnessStateError,
     HarnessUnavailableError,
     harness_catalog,
@@ -409,6 +417,17 @@ class EventAppendRequest(NebulaModel):
     idempotency_key: str | None = Field(default=None, max_length=300)
 
 
+class CodeCompletionRequest(NebulaModel):
+    engagement_id: str = Field(min_length=1, max_length=200)
+    path: str = Field(min_length=1, max_length=4096)
+    source: str = Field(max_length=1_048_576)
+    offset: int = Field(ge=0, le=1_048_576)
+
+
+class CodeCompletionResponse(NebulaModel):
+    items: list[dict[str, Any]] = Field(default_factory=list, max_length=30)
+
+
 class EventList(NebulaModel):
     events: list[RunEvent]
     next_sequence: int
@@ -483,6 +502,59 @@ def _observation_dependencies(
 class ChatSessionRenameRequest(NebulaModel):
     title: str = Field(min_length=1, max_length=300)
     expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ChatSessionForkRequest(NebulaModel):
+    through_message_id: str = Field(min_length=1, max_length=200)
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class ChatImageUploadRequest(NebulaModel):
+    engagement_id: str = Field(min_length=1, max_length=200)
+    filename: str = Field(min_length=1, max_length=1_024)
+    media_type: str = Field(pattern=r"^image/(?:png|jpeg|webp)$")
+    content_base64: str = Field(
+        min_length=1, max_length=4 * ((MAX_CHAT_IMAGE_BYTES + 2) // 3)
+    )
+
+
+class ChatImageUploadResponse(NebulaModel):
+    artifact_id: str
+    preview_artifact_id: str
+    media_type: str
+    width: int
+    height: int
+
+
+class PairingCreateRequest(NebulaModel):
+    name: str = Field(default="Mobile device", min_length=1, max_length=200)
+
+
+class PairingCreateResponse(NebulaModel):
+    secret: str
+    confirmation_code: str
+    expires_at: datetime
+
+
+class PairingRedeemRequest(NebulaModel):
+    secret: str = Field(min_length=20, max_length=500)
+    confirmation_code: str = Field(pattern=r"^[0-9]{6}$")
+    name: str = Field(default="Mobile device", min_length=1, max_length=200)
+
+
+class PairedDeviceResponse(NebulaModel):
+    id: str
+    name: str
+    created_at: datetime
+    last_used_at: datetime
+    idle_expires_at: datetime
+    absolute_expires_at: datetime
+    current: bool = False
+
+
+class PairingRedeemResponse(NebulaModel):
+    device: PairedDeviceResponse
+    csrf_token: str
 
 
 class ProviderCapabilityVerifyRequest(NebulaModel):
@@ -569,6 +641,11 @@ class LibraryIngestRequest(NebulaModel):
     )
 
 
+class MissionStageRequest(NebulaModel):
+    title: str = Field(min_length=1, max_length=300)
+    objective: str = Field(min_length=1, max_length=10_000)
+
+
 class MissionStartRequest(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
     name: str = Field(min_length=1, max_length=300)
@@ -579,6 +656,11 @@ class MissionStartRequest(NebulaModel):
     harness_session_id: str | None = Field(default=None, min_length=1, max_length=200)
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
     model: str | None = Field(default=None, min_length=1, max_length=500)
+    harness_reasoning_effort: str | None = Field(default=None, max_length=100)
+    harness_service_tier: str | None = Field(default=None, max_length=100)
+    stages: list[MissionStageRequest] = Field(default_factory=list, max_length=12)
+    scheduled_for: datetime | None = None
+    repeat_interval_seconds: int | None = Field(default=None, ge=3_600, le=31_536_000)
     max_duration_seconds: int = Field(
         default=900, ge=1, le=MAX_API_MISSION_DURATION_SECONDS
     )
@@ -592,6 +674,10 @@ class MissionStartRequest(NebulaModel):
 
     @model_validator(mode="after")
     def runtime_is_discriminated(self) -> "MissionStartRequest":
+        if self.repeat_interval_seconds is not None and self.scheduled_for is None:
+            raise ValueError("repeating missions require an initial scheduled time")
+        if self.scheduled_for is not None and self.scheduled_for.tzinfo is None:
+            raise ValueError("scheduled mission time must include a timezone")
         if self.backend == RunBackend.NATIVE:
             if not self.provider_id or not self.model:
                 raise ValueError("native missions require provider_id and model")
@@ -599,6 +685,8 @@ class MissionStartRequest(NebulaModel):
                 raise ValueError(
                     "native missions cannot include harness runtime fields"
                 )
+            if self.harness_reasoning_effort or self.harness_service_tier:
+                raise ValueError("native missions cannot include harness runtime options")
         elif not self.harness_profile_id or self.provider_id:
             raise ValueError(
                 "harness missions require harness_profile_id and no provider_id"
@@ -608,6 +696,10 @@ class MissionStartRequest(NebulaModel):
 
 class HarnessSteerRequest(NebulaModel):
     text: str = Field(min_length=1, max_length=20_000)
+
+
+class MissionRetryRequest(NebulaModel):
+    allow_cloud_tool_results: bool = False
 
 
 class HarnessCheckpointRewindRequest(NebulaModel):
@@ -828,6 +920,7 @@ def create_app(
     allow_browser_diagnostic_events: bool = False,
     knowledge_index: KnowledgeIndex | None = None,
     knowledge_url_fetcher: Callable[[str], FetchedUrlDocument] | None = None,
+    allow_insecure_device_pairing: bool = False,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -1063,6 +1156,7 @@ def create_app(
             provider_factory=chat_provider_factory,
             operator_id=active_operator_id,
             knowledge_index=knowledge_index,
+            artifact_store=artifact_store,
         )
 
     if harness_runtime.knowledge_retriever is None:
@@ -1340,6 +1434,7 @@ def create_app(
     app.state.allow_unauthenticated = allow_unauthenticated
     app.state.diagnostics = diagnostics
     app.state.allow_browser_diagnostic_events = allow_browser_diagnostic_events
+    app.state.allow_insecure_device_pairing = allow_insecure_device_pairing
     app.state.mission_service = missions
     app.state.harness_runtime_service = harness_runtime
     app.state.mcp_probe_service = mcp_probes
@@ -1694,6 +1789,7 @@ def create_app(
                         "method": request.method,
                         "route": route_template,
                         "http_status": status_code,
+                        "device_id": getattr(request.state, "auth_device_id", None),
                     },
                 )
             else:
@@ -1709,6 +1805,7 @@ def create_app(
                         "method": request.method,
                         "route": route_template,
                         "http_status": status_code,
+                        "device_id": getattr(request.state, "auth_device_id", None),
                     },
                 )
             if feature not in {"api", "diagnostics"}:
@@ -1725,6 +1822,7 @@ def create_app(
                             "method": request.method,
                             "route": route_template,
                             "http_status": status_code,
+                            "device_id": getattr(request.state, "auth_device_id", None),
                         },
                     )
                 elif not request.state.diagnostic_error_recorded:
@@ -1743,18 +1841,50 @@ def create_app(
                             "method": request.method,
                             "route": route_template,
                             "http_status": status_code,
+                            "device_id": getattr(request.state, "auth_device_id", None),
                         },
                     )
             response.headers["X-Request-ID"] = request_id
             return response
 
     bearer = HTTPBearer(auto_error=False)
+    pending_pairings: dict[str, dict[str, Any]] = {}
 
-    async def require_auth(
+    def _device_for_token(raw_token: str | None) -> PairedDeviceSession | None:
+        if not raw_token:
+            return None
+        digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        for device in store.list_entities(PairedDeviceSession, limit=1_000):
+            if hmac.compare_digest(device.token_sha256, digest):
+                now = utc_now()
+                if (
+                    device.revoked_at is not None
+                    or now >= device.idle_expires_at
+                    or now >= device.absolute_expires_at
+                ):
+                    return None
+                return device
+        return None
+
+    def _cookie_websocket_authenticated(websocket: WebSocket) -> bool:
+        device = _device_for_token(websocket.cookies.get("nebula_device"))
+        host = websocket.headers.get("host", "")
+        origin = websocket.headers.get("origin", "")
+        parsed = urlsplit(f"//{host}")
+        scheme = "https" if websocket.url.scheme == "wss" else "http"
+        return bool(
+            device
+            and host
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+            and origin
+            and hmac.compare_digest(origin, f"{scheme}://{host}")
+        )
+
+    async def require_bearer_auth(
         credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     ) -> str:
-        if allow_unauthenticated:
-            return "unauthenticated-local-mode"
         if (
             credentials is None
             or credentials.scheme.lower() != "bearer"
@@ -1762,10 +1892,209 @@ def create_app(
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="valid bearer token required",
+                detail="local bearer authentication required",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         return credentials.credentials
+
+    async def require_auth(
+        request: Request,
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    ) -> str:
+        if allow_unauthenticated:
+            return "unauthenticated-local-mode"
+        if (
+            credentials is not None
+            and credentials.scheme.lower() == "bearer"
+            and hmac.compare_digest(credentials.credentials, token)
+        ):
+            return credentials.credentials
+        device = _device_for_token(request.cookies.get("nebula_device"))
+        if device is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="valid bearer token required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        request.state.auth_device_id = device.id
+        host_header = request.headers.get("host", "")
+        parsed_host = urlsplit(f"//{host_header}")
+        if (
+            not host_header
+            or not parsed_host.hostname
+            or parsed_host.username
+            or parsed_host.password
+            or parsed_host.path
+            or parsed_host.query
+            or parsed_host.fragment
+        ):
+            raise HTTPException(status_code=400, detail="invalid paired-device Host header")
+        expected_origin = f"{request.url.scheme}://{host_header}"
+        origin = request.headers.get("origin")
+        if origin and not hmac.compare_digest(origin, expected_origin):
+            raise HTTPException(status_code=403, detail="paired-device origin validation failed")
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            csrf = request.headers.get("X-Nebula-CSRF")
+            cookie_csrf = request.cookies.get("nebula_csrf")
+            digest = hashlib.sha256((csrf or "").encode("utf-8")).hexdigest()
+            if not csrf or not cookie_csrf or not hmac.compare_digest(csrf, cookie_csrf) or not hmac.compare_digest(digest, device.csrf_sha256):
+                raise HTTPException(status_code=403, detail="paired-device CSRF validation failed")
+            if not origin:
+                raise HTTPException(status_code=403, detail="paired-device mutation requires Origin")
+        now = utc_now()
+        if (now - device.last_used_at).total_seconds() >= 300:
+            store.update(
+                PairedDeviceSession,
+                device.id,
+                {
+                    "last_used_at": now,
+                    "idle_expires_at": min(now + timedelta(days=30), device.absolute_expires_at),
+                },
+                expected_revision=device.revision,
+            )
+        return f"device:{device.id}"
+
+    def _device_response(
+        device: PairedDeviceSession, *, current_id: str | None = None
+    ) -> PairedDeviceResponse:
+        return PairedDeviceResponse(
+            id=device.id,
+            name=device.name,
+            created_at=device.created_at,
+            last_used_at=device.last_used_at,
+            idle_expires_at=device.idle_expires_at,
+            absolute_expires_at=device.absolute_expires_at,
+            current=device.id == current_id,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/auth/pairings",
+        response_model=PairingCreateResponse,
+        tags=["authentication"],
+        dependencies=[Depends(require_bearer_auth)],
+    )
+    async def create_device_pairing(
+        request: Request, body: PairingCreateRequest
+    ) -> PairingCreateResponse:
+        host = request.client.host if request.client else ""
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost"
+        if not loopback:
+            raise HTTPException(
+                status_code=403,
+                detail="new device pairings may be created only from the local machine",
+            )
+        secret = secrets.token_urlsafe(32)
+        digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        expires_at = utc_now() + timedelta(minutes=5)
+        pending_pairings[digest] = {
+            "name": body.name,
+            "confirmation_code": code,
+            "expires_at": expires_at,
+        }
+        return PairingCreateResponse(
+            secret=secret,
+            confirmation_code=code,
+            expires_at=expires_at,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/auth/pairings/redeem",
+        response_model=PairingRedeemResponse,
+        tags=["authentication"],
+    )
+    async def redeem_device_pairing(
+        request: Request, response: Response, body: PairingRedeemRequest
+    ) -> PairingRedeemResponse:
+        if request.url.scheme != "https" and not allow_insecure_device_pairing:
+            raise HTTPException(status_code=400, detail="device pairing requires HTTPS")
+        digest = hashlib.sha256(body.secret.encode("utf-8")).hexdigest()
+        pending = pending_pairings.pop(digest, None)
+        if (
+            pending is None
+            or utc_now() >= pending["expires_at"]
+            or not hmac.compare_digest(body.confirmation_code, pending["confirmation_code"])
+        ):
+            raise HTTPException(status_code=401, detail="pairing secret is invalid or expired")
+        raw_token = secrets.token_urlsafe(32)
+        csrf = secrets.token_urlsafe(32)
+        now = utc_now()
+        device = store.create(
+            PairedDeviceSession(
+                name=body.name or pending["name"],
+                token_sha256=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+                csrf_sha256=hashlib.sha256(csrf.encode("utf-8")).hexdigest(),
+                created_at=now,
+                last_used_at=now,
+                idle_expires_at=now + timedelta(days=30),
+                absolute_expires_at=now + timedelta(days=90),
+                metadata={"client": request.headers.get("user-agent", "")[:500]},
+            )
+        )
+        secure = request.url.scheme == "https"
+        response.set_cookie(
+            "nebula_device",
+            raw_token,
+            max_age=90 * 24 * 60 * 60,
+            secure=secure,
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
+        response.set_cookie(
+            "nebula_csrf",
+            csrf,
+            max_age=90 * 24 * 60 * 60,
+            secure=secure,
+            httponly=False,
+            samesite="strict",
+            path="/",
+        )
+        return PairingRedeemResponse(
+            device=_device_response(device, current_id=device.id),
+            csrf_token=csrf,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/auth/devices",
+        response_model=list[PairedDeviceResponse],
+        tags=["authentication"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_paired_devices(request: Request) -> list[PairedDeviceResponse]:
+        current = _device_for_token(request.cookies.get("nebula_device"))
+        return [
+            _device_response(device, current_id=current.id if current else None)
+            for device in store.list_entities(PairedDeviceSession, limit=1_000)
+            if device.revoked_at is None
+        ]
+
+    @app.delete(
+        f"{API_PREFIX}/auth/devices/{{device_id}}",
+        status_code=204,
+        tags=["authentication"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def revoke_paired_device(
+        device_id: str, request: Request, response: Response
+    ) -> Response:
+        device = store.get(PairedDeviceSession, device_id)
+        current = _device_for_token(request.cookies.get("nebula_device"))
+        if device.revoked_at is None:
+            store.update(
+                PairedDeviceSession,
+                device.id,
+                {"revoked_at": utc_now()},
+                expected_revision=device.revision,
+            )
+        if current is not None and current.id == device.id:
+            response.delete_cookie("nebula_device", path="/")
+            response.delete_cookie("nebula_csrf", path="/")
+        response.status_code = 204
+        return response
 
     @app.exception_handler(NotFoundError)
     async def not_found_handler(request: Request, exc: NotFoundError) -> JSONResponse:
@@ -2394,6 +2723,21 @@ def create_app(
         return await harness_runtime.health(profile_id)
 
     @app.get(
+        f"{API_PREFIX}/harnesses/{{profile_id}}/skills",
+        response_model=list[HarnessSkillSummary],
+        tags=["harnesses"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_harness_skills(
+        profile_id: str,
+        engagement_id: str = Query(min_length=1, max_length=200),
+    ) -> list[HarnessSkillSummary]:
+        return harness_runtime.available_skills(
+            engagement_id=engagement_id,
+            profile_id=profile_id,
+        )
+
+    @app.get(
         f"{API_PREFIX}/harness-sessions/{{session_id}}/activity",
         response_model=HarnessSessionActivity,
         tags=["harnesses"],
@@ -2537,7 +2881,8 @@ def create_app(
             return
         supplied = protocol_token or supplied
         if not allow_unauthenticated and (
-            not supplied or not hmac.compare_digest(supplied, token)
+            (not supplied or not hmac.compare_digest(supplied, token))
+            and not _cookie_websocket_authenticated(websocket)
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
             return
@@ -3170,7 +3515,8 @@ def create_app(
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
-            not supplied or not hmac.compare_digest(supplied, token)
+            (not supplied or not hmac.compare_digest(supplied, token))
+            and not _cookie_websocket_authenticated(websocket)
         ):
             emit_diagnostic(
                 "warning",
@@ -3836,7 +4182,8 @@ def create_app(
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
-            not supplied or not hmac.compare_digest(supplied, token)
+            (not supplied or not hmac.compare_digest(supplied, token))
+            and not _cookie_websocket_authenticated(websocket)
         ):
             emit_diagnostic(
                 "warning",
@@ -4117,6 +4464,46 @@ def create_app(
         return require_execution_ai_service().dismiss_suggestion(draft_id)
 
     @app.get(
+        f"{API_PREFIX}/workspace-folders",
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_host_workspace_folders(
+        path: str | None = Query(default=None, max_length=4096),
+    ) -> dict[str, Any]:
+        requested = Path(path).expanduser() if path else Path.home()
+        if not requested.is_absolute():
+            raise HTTPException(status_code=422, detail="folder path must be absolute")
+        try:
+            current = requested.resolve(strict=True)
+        except OSError as exc:
+            raise HTTPException(status_code=404, detail="folder is unavailable") from exc
+        if not current.is_dir():
+            raise HTTPException(status_code=422, detail="selected path is not a folder")
+        directories: list[dict[str, str]] = []
+        try:
+            with os.scandir(current) as entries:
+                for entry in sorted(entries, key=lambda item: item.name.casefold()):
+                    if len(directories) >= 500:
+                        break
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            directories.append(
+                                {"name": entry.name, "path": str(current / entry.name)}
+                            )
+                    except OSError:
+                        continue
+        except OSError as exc:
+            raise HTTPException(status_code=403, detail="folder cannot be listed") from exc
+        parent = None if current.parent == current else str(current.parent)
+        return {
+            "path": str(current),
+            "parent": parent,
+            "directories": directories,
+            "truncated": len(directories) >= 500,
+        }
+
+    @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace",
         response_model=WorkspaceListing,
         tags=["workspace"],
@@ -4130,6 +4517,17 @@ def create_app(
     ) -> WorkspaceListing:
         return require_workspace_service().list(
             engagement_id, path, offset=offset, limit=limit
+        )
+
+    @app.post(
+        f"{API_PREFIX}/code/completions",
+        response_model=CodeCompletionResponse,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def code_completions(request: CodeCompletionRequest) -> CodeCompletionResponse:
+        return CodeCompletionResponse(
+            items=complete_code(request.source, request.path, request.offset)
         )
 
     @app.get(
@@ -5244,6 +5642,11 @@ def create_app(
                 profile_id=request.harness_profile_id or "",
                 model=request.model,
                 budget=budget,
+                reasoning_effort=request.harness_reasoning_effort,
+                service_tier=request.harness_service_tier,
+                stages=[item.model_dump(mode="json") for item in request.stages],
+                scheduled_for=request.scheduled_for,
+                repeat_interval_seconds=request.repeat_interval_seconds,
                 harness_session_id=request.harness_session_id,
                 mcp_server_ids=request.mcp_server_ids,
                 actor_id=operator_id,
@@ -5255,6 +5658,9 @@ def create_app(
             objective=request.objective,
             provider_id=request.provider_id or "",
             model=request.model or "",
+            stages=[item.model_dump(mode="json") for item in request.stages],
+            scheduled_for=request.scheduled_for,
+            repeat_interval_seconds=request.repeat_interval_seconds,
             budget=budget,
             tool_names=command_tools,
             mcp_server_ids=request.mcp_server_ids,
@@ -5282,6 +5688,67 @@ def create_app(
             reason=request.reason,
             actor_id=operator_id,
         )
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/retry",
+        response_model=AgentRun,
+        status_code=202,
+        tags=["runs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def retry_mission(run_id: str, request: MissionRetryRequest) -> AgentRun:
+        prior = store.get(AgentRun, run_id)
+        if prior.status not in {
+            RunStatus.COMPLETE,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+            RunStatus.INTERRUPTED,
+        }:
+            raise ConflictError("only terminal missions can be retried")
+        remote_mcp = prior.runtime_snapshot.get("remote_mcp_confirmed") is True
+        if remote_mcp and not request.allow_cloud_tool_results:
+            raise HTTPException(
+                status_code=409,
+                detail="retry requires renewed confirmation for remote MCP result transfer",
+            )
+        stages = prior.metadata.get("stages")
+        stages = stages if isinstance(stages, list) else []
+        name = str(prior.metadata.get("name") or prior.objective)
+        operator_id = active_operator_id()
+        if prior.backend == RunBackend.HARNESS:
+            options = prior.runtime_snapshot.get("runtime_options")
+            options = options if isinstance(options, dict) else {}
+            created = await harness_runtime.start_mission(
+                engagement_id=prior.engagement_id,
+                name=name,
+                objective=prior.objective,
+                profile_id=prior.harness_profile_id or "",
+                model=prior.supervisor_model,
+                budget=prior.budget,
+                reasoning_effort=options.get("reasoning_effort"),
+                service_tier=options.get("service_tier"),
+                stages=stages,
+                retry_of_run_id=prior.id,
+                mcp_server_ids=list(prior.runtime_snapshot.get("mcp_server_ids") or []),
+                actor_id=operator_id,
+                allow_remote_mcp=request.allow_cloud_tool_results,
+            )
+        else:
+            created = await missions.start_mission(
+                engagement_id=prior.engagement_id,
+                name=name,
+                objective=prior.objective,
+                provider_id=prior.supervisor_provider_id or "",
+                model=prior.supervisor_model or "",
+                budget=prior.budget,
+                stages=stages,
+                retry_of_run_id=prior.id,
+                tool_names=list(prior.metadata.get("command_tool_names") or []),
+                mcp_server_ids=list(prior.runtime_snapshot.get("mcp_server_ids") or []),
+                allow_cloud_tool_results=request.allow_cloud_tool_results,
+                actor_id=operator_id,
+            )
+        return created
 
     @app.delete(
         f"{API_PREFIX}/runs/{{run_id}}",
@@ -5887,6 +6354,80 @@ def create_app(
         return list(await asyncio.gather(*(checked(profile) for profile in profiles)))
 
     @app.post(
+        f"{API_PREFIX}/chat/images",
+        response_model=ChatImageUploadResponse,
+        status_code=201,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def upload_chat_image(request: ChatImageUploadRequest) -> ChatImageUploadResponse:
+        if artifact_store is None:
+            raise HTTPException(status_code=503, detail="chat images require an artifact store")
+        store.get(Engagement, request.engagement_id)
+        try:
+            raw = base64.b64decode(request.content_base64, validate=True)
+            image = await asyncio.to_thread(validate_chat_image, raw, request.media_type)
+        except (binascii.Error, ValueError, ChatImageError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        original = artifact_store.put_bytes(
+            image.original,
+            engagement_id=request.engagement_id,
+            filename=request.filename,
+            media_type=image.media_type,
+            source="chat-upload",
+            metadata={"sensitive": True, "chat_image_original": True},
+        )
+        original = store.create(original)
+        extension = "png" if image.preview_media_type == "image/png" else "jpg"
+        preview = artifact_store.put_bytes(
+            image.preview,
+            engagement_id=request.engagement_id,
+            filename=f"preview-{original.id}.{extension}",
+            media_type=image.preview_media_type,
+            source="chat-image-preview",
+            parent_artifact_id=original.id,
+            metadata={
+                "chat_image_preview": True,
+                "metadata_stripped": True,
+                "width": image.width,
+                "height": image.height,
+            },
+        )
+        preview = store.create(preview)
+        return ChatImageUploadResponse(
+            artifact_id=original.id,
+            preview_artifact_id=preview.id,
+            media_type=image.media_type,
+            width=image.width,
+            height=image.height,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/chat/images/{{artifact_id}}/preview",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def preview_chat_image(artifact_id: str) -> FileResponse:
+        if artifact_store is None:
+            raise HTTPException(status_code=503, detail="chat images require an artifact store")
+        artifact = store.get(Artifact, artifact_id)
+        if artifact.metadata.get("chat_image_preview") is not True:
+            raise HTTPException(status_code=404, detail="chat image preview is unavailable")
+        path = artifact_store.path_for(artifact)
+        if not path.is_file() or not artifact_store.verify(artifact):
+            raise ArtifactStoreError("chat image preview failed integrity verification")
+        return FileResponse(
+            path,
+            media_type=artifact.media_type,
+            content_disposition_type="inline",
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Security-Policy": "sandbox; default-src 'none'",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.post(
         f"{API_PREFIX}/chat/completions",
         response_model=ChatCompletionResponse,
         tags=["chat"],
@@ -5932,6 +6473,14 @@ def create_app(
                 include_knowledge=request.include_knowledge,
                 allow_cloud_knowledge=request.allow_cloud_knowledge,
                 max_artifact_queries=request.max_artifact_queries,
+                harness_mode=request.harness_mode,
+                harness_reasoning_effort=request.harness_reasoning_effort,
+                harness_service_tier=request.harness_service_tier,
+                harness_skill=(
+                    HarnessSkillInvocation.model_validate(request.harness_skill)
+                    if request.harness_skill is not None
+                    else None
+                ),
             )
             harness_runtime.start_chat_turn(harness_turn.id)
 
@@ -6343,6 +6892,34 @@ def create_app(
             expected_revision=request.expected_revision or current.revision,
         )
 
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/fork",
+        response_model=ChatSession,
+        status_code=201,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def fork_chat_session(
+        session_id: str, request: ChatSessionForkRequest
+    ) -> ChatSession:
+        source = store.get(ChatSession, session_id)
+        harness_session_id: str | None = None
+        if source.backend == ChatBackend.HARNESS:
+            if not source.harness_session_id:
+                raise HarnessStateError(
+                    "harness conversation has no vendor session to branch"
+                )
+            harness_session_id = harness_runtime.fork_session(
+                source.harness_session_id,
+                reason=f"conversation fork through {request.through_message_id}",
+            ).id
+        return chat_service().fork_session(
+            session_id,
+            through_message_id=request.through_message_id,
+            title=request.title,
+            harness_session_id=harness_session_id,
+        )
+
     @app.delete(
         f"{API_PREFIX}/chat-sessions/{{session_id}}",
         status_code=204,
@@ -6599,7 +7176,8 @@ def create_app(
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
-            not supplied or not hmac.compare_digest(supplied, token)
+            (not supplied or not hmac.compare_digest(supplied, token))
+            and not _cookie_websocket_authenticated(websocket)
         ):
             emit_diagnostic(
                 "warning",
@@ -7283,6 +7861,24 @@ def _register_crud_routes(
                             }
                         ),
                     }
+                )
+            if isinstance(entity, Engagement) and entity.workspace_path:
+                try:
+                    linked_workspace = Path(entity.workspace_path).expanduser().resolve(
+                        strict=True
+                    )
+                except OSError as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="project workspace folder does not exist or is inaccessible",
+                    ) from exc
+                if not linked_workspace.is_dir() or linked_workspace == Path("/"):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="project workspace must be an existing non-root folder",
+                    )
+                entity = entity.model_copy(
+                    update={"workspace_path": str(linked_workspace)}
                 )
             entity_validator.validate_create(entity)
             created = (
