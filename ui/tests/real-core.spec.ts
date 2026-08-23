@@ -208,6 +208,23 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     const bootstrapEngagements = await bootstrapEngagementsResponse.json() as Array<{ id: string }>;
     expect(bootstrapEngagements[0]?.id).toBeTruthy();
 
+    const configuredRuntime = process.env.NEBULA_TEST_CONTAINER_RUNTIME;
+    const configuredSocket = process.env.NEBULA_TEST_CONTAINER_SOCKET;
+    if (configuredRuntime && configuredSocket) {
+      const configuredProfile = await api.put("runner-profiles/local", { data: {
+        name: "CI rootless Podman",
+        runtime: "podman",
+        executable: configuredRuntime,
+        context: null,
+        socket: configuredSocket,
+        platform: process.arch === "arm64" ? "linux/arm64" : "linux/amd64",
+        isolation: "rootless",
+        enabled: true,
+        seccomp_profile: null,
+      } });
+      expect(configuredProfile.ok(), await configuredProfile.text()).toBe(true);
+    }
+
     // Prepare the shared runtime before opening Workbench. Otherwise its eager
     // starter terminal can legitimately win the preparation request while this
     // acceptance fixture is creating its Project.
@@ -215,7 +232,6 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     expect(setupResponse.ok()).toBe(true);
     let setup = await setupResponse.json() as any;
     if (!setup.terminal.runner_profile_id) {
-      const configuredRuntime = process.env.NEBULA_TEST_CONTAINER_RUNTIME;
       const candidate = setup.terminal.candidates.find((item: any) =>
         item.healthy && item.candidate_id && (!configuredRuntime || item.executable === configuredRuntime));
       expect(candidate, setup.terminal.detail).toBeTruthy();

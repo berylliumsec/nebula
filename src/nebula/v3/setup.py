@@ -1166,6 +1166,7 @@ class SetupService:
             existing.runtime == expected.runtime
             and existing.executable == expected.executable
             and existing.context == expected.context
+            and existing.socket == expected.socket
             and existing.platform == expected.platform
             and existing.isolation == expected.isolation
         )
