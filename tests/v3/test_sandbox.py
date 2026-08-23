@@ -171,7 +171,13 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
     workspace = runner._validate(request)
     argv = runner._argv(request, workspace)
 
-    assert argv[:3] == ["/usr/bin/podman", "run", "--rm"]
+    assert argv[:5] == [
+        "/usr/bin/podman",
+        "--events-backend=file",
+        "--cgroup-manager=cgroupfs",
+        "run",
+        "--rm",
+    ]
     assert "--name=nebula-tool" in argv
     assert "--pull=never" in argv
     assert "--read-only" in argv

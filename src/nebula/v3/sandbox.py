@@ -1380,6 +1380,20 @@ class ContainerSandboxRunner(SandboxRunner):
             argv.extend([option, self.profile.context])
         return argv
 
+    def _execution_runtime_argv(self) -> list[str]:
+        argv = self._runtime_argv()
+        if (
+            self.profile is not None
+            and self.profile.runtime_type == ContainerRuntimeType.PODMAN
+            and self.profile.platform == RunnerPlatform.LINUX
+        ):
+            # Container execution must not depend on an ambient systemd user
+            # session or journald endpoint. Keep inspection/control commands
+            # on Podman's defaults because older releases cannot apply these
+            # execution backends while serializing runtime information.
+            argv.extend(["--events-backend=file", "--cgroup-manager=cgroupfs"])
+        return argv
+
     def _validate(self, request: SandboxRequest) -> Path | None:
         workspace: Path | None = None
         if request.workspace_access != SandboxWorkspaceAccess.NONE:
@@ -1475,7 +1489,7 @@ class ContainerSandboxRunner(SandboxRunner):
             raise SandboxUnavailable("no container runtime is configured")
         limits = request.limits
         argv = [
-            *self._runtime_argv(),
+            *self._execution_runtime_argv(),
             "run",
             "--rm",
             f"--name={container_name}",
