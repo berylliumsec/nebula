@@ -77,16 +77,14 @@ jobs:
           poetry run pytest -q tests/v3/test_migrations.py
 
   rootless-podman:
-    runs-on: ubuntu-latest
+    # Keep the kernel/user-namespace integration gate off GitHub's rolling
+    # ubuntu-latest image; runner-image changes must be adopted deliberately.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          # Python 3.12.14 regressed asyncio child-process handling for
-          # daemonless Podman on the hosted Ubuntu image. Keep this real
-          # runtime gate on the last verified patch while the normal matrix
-          # continues to test package behavior on current 3.12.
-          python-version: "3.12.13"
+          python-version: "3.12"
           cache: pip
       - name: Install rootless Podman
         run: |
