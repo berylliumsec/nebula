@@ -69,6 +69,7 @@ def complete(
                 for item in names[:limit]
             ]
         except (OSError, ValueError, SyntaxError, TypeError):
+            # diagnostic-expected: optional Jedi completion falls back to lexical names.
             pass
     prefix = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", source[:offset])
     needle = prefix.group(0) if prefix else ""

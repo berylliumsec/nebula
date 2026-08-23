@@ -101,8 +101,18 @@ jobs:
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
           NEBULA_TEST_RUNTIME_IMAGE: localhost/nebula-operator-runtime:ci
-        run: >-
-          poetry run pytest -q tests/v3/test_sandbox_integration.py
+        run: |
+          sudo systemd-run --wait --pipe --collect --quiet \
+            --property=Delegate=yes \
+            --property="User=$(id -u)" \
+            --property="Group=$(id -g)" \
+            --property="WorkingDirectory=$GITHUB_WORKSPACE" \
+            --property="Environment=HOME=$HOME" \
+            --property="Environment=PATH=$PATH" \
+            --property="Environment=XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+            --property="Environment=NEBULA_TEST_CONTAINER_RUNTIME=$NEBULA_TEST_CONTAINER_RUNTIME" \
+            --property="Environment=NEBULA_TEST_RUNTIME_IMAGE=$NEBULA_TEST_RUNTIME_IMAGE" \
+            timeout 120 "$(command -v poetry)" run pytest -q tests/v3/test_sandbox_integration.py
 
   frontend:
     runs-on: ubuntu-latest

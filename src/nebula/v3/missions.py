@@ -242,6 +242,7 @@ class MissionService:
                         self._scheduled_tasks[run.id] = task
                         continue
                     except Exception as exc:
+                        # diagnostic-expected: the durable run is finalized with the safe failure.
                         self._finalize_failed(
                             run.id,
                             f"scheduled mission could not be restored: {self._safe_error(exc)}",
@@ -543,6 +544,7 @@ class MissionService:
                 self._tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
             await self._execute(run, provider)
         except asyncio.CancelledError:
+            # diagnostic-expected: cancellation is translated into durable mission state below.
             if not self._closed:
                 latest = self.store.get(AgentRun, run_id)
                 if latest.status == RunStatus.CANCELLING:
@@ -617,6 +619,7 @@ class MissionService:
                 asyncio.shield(task), timeout=self.cancellation_timeout_seconds
             )
         except asyncio.CancelledError:
+            # diagnostic-expected: operator cancellation is finalized as the requested state.
             return self._finalize_cancelled(run.id, clean_reason, actor_id)
         except asyncio.TimeoutError as caught_error:
             # CANCELLING is truthful while a provider ignores cancellation.

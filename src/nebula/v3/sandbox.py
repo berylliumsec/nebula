@@ -1233,17 +1233,18 @@ class ContainerSandboxRunner(SandboxRunner):
             if not connection_ok:
                 return False, connection_detail
 
-        info_output, info_error, return_code = await self._capture(
-            "info", "--format", "json"
-        )
+        # Request only the two fields used for admission. Some Podman builds
+        # can block while serializing the full ``info`` document to a pipe,
+        # even though the local runtime itself is healthy.
+        info_output, info_error, return_code = await self._capture_podman_health()
         if return_code != 0:
             return False, info_error or "Podman service is unavailable"
-        info = json.loads(info_output)
-        host = _mapping_get(info, "host", "Host")
-        security = _mapping_get(host, "security", "Security")
-        if _mapping_get(security, "rootless", "Rootless") is not True:
+        rootless, separator, host_os = info_output.strip().partition("|")
+        if not separator:
+            return False, "Podman service returned invalid host security metadata"
+        if rootless.strip().lower() != "true":
             return False, "Podman service is not operating in rootless mode"
-        host_os = str(_mapping_get(host, "os", "OS", "Os")).lower()
+        host_os = host_os.strip().lower()
         if host_os and host_os != "linux":
             return False, "Podman runner must execute Linux containers"
         detail = (
@@ -1252,6 +1253,33 @@ class ContainerSandboxRunner(SandboxRunner):
             else "approved local rootless Podman runner is available"
         )
         return True, detail
+
+    async def _capture_podman_health(self) -> tuple[str, str, int]:
+        """Capture fixed-size Podman admission fields without pipe races."""
+
+        process = await asyncio.create_subprocess_exec(
+            *self._runtime_argv(),
+            "info",
+            "--format",
+            "{{.Host.Security.Rootless}}|{{.Host.OS}}",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            process.kill()
+            await process.communicate()
+            raise
+        if len(stdout) > 256 or len(stderr) > 64 * 1024:
+            raise SandboxError("Podman health output exceeded its fixed limit")
+        return (
+            stdout.decode("utf-8", errors="replace").strip(),
+            stderr.decode("utf-8", errors="replace").strip(),
+            int(process.returncode or 0),
+        )
 
     async def _validate_podman_connection(self, *, machine: bool) -> tuple[bool, str]:
         assert self.profile is not None

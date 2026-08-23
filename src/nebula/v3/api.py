@@ -1997,6 +1997,7 @@ def create_app(
         try:
             loopback = ipaddress.ip_address(host).is_loopback
         except ValueError:
+            # diagnostic-expected: invalid host text is handled by the localhost fallback.
             loopback = host == "localhost"
         if not loopback:
             raise HTTPException(
@@ -4515,6 +4516,7 @@ def create_app(
                                 {"name": entry.name, "path": str(current / entry.name)}
                             )
                     except OSError:
+                        # diagnostic-expected: an unreadable entry is omitted from the bounded browser.
                         continue
         except OSError as exc:
             raise HTTPException(

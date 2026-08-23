@@ -1264,6 +1264,7 @@ class _CodexRpc:
                     raw.decode("utf-8") if isinstance(raw, bytes) else raw
                 )
             except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+                # diagnostic-expected: undecodable transport errors use the pending-request path.
                 decoded = None
             unsolicited = (
                 isinstance(decoded, dict)
@@ -1389,6 +1390,7 @@ def _discard_queued_session_replay(events: asyncio.Queue[Any]) -> None:
         try:
             events.get_nowait()
         except asyncio.QueueEmpty:
+            # diagnostic-expected: QueueEmpty terminates the non-blocking drain.
             return
 
 
@@ -3700,15 +3702,18 @@ def _harness_goal_snapshot(value: Any) -> HarnessGoalSnapshot | None:
     if not objective:
         return None
     raw_status = str(value.get("status") or "pending").lower().replace("-", "_")
-    status = {
-        "running": "running",
-        "in_progress": "running",
-        "complete": "complete",
-        "completed": "complete",
-        "blocked": "blocked",
-        "failed": "failed",
-        "pending": "pending",
-    }.get(raw_status)
+    status = cast(
+        Literal["pending", "running", "complete", "blocked", "failed"] | None,
+        {
+            "running": "running",
+            "in_progress": "running",
+            "complete": "complete",
+            "completed": "complete",
+            "blocked": "blocked",
+            "failed": "failed",
+            "pending": "pending",
+        }.get(raw_status),
+    )
     if status is None:
         return None
     progress = value.get("progress")
@@ -3718,6 +3723,9 @@ def _harness_goal_snapshot(value: Any) -> HarnessGoalSnapshot | None:
         )
     else:
         progress = None
+    elapsed_raw = value.get("elapsedMs") or value.get("elapsed_ms")
+    token_budget_raw = value.get("tokenBudget") or value.get("token_budget")
+    tokens_used_raw = value.get("tokensUsed") or value.get("tokens_used")
     return HarnessGoalSnapshot(
         objective=objective[:10_000],
         status=status,
@@ -3728,24 +3736,16 @@ def _harness_goal_snapshot(value: Any) -> HarnessGoalSnapshot | None:
             else None
         ),
         elapsed_ms=(
-            max(0, int(value.get("elapsedMs") or value.get("elapsed_ms")))
-            if isinstance(
-                value.get("elapsedMs") or value.get("elapsed_ms"), (int, float)
-            )
-            else None
+            max(0, int(elapsed_raw)) if isinstance(elapsed_raw, (int, float)) else None
         ),
         token_budget=(
-            max(0, int(value.get("tokenBudget") or value.get("token_budget")))
-            if isinstance(
-                value.get("tokenBudget") or value.get("token_budget"), (int, float)
-            )
+            max(0, int(token_budget_raw))
+            if isinstance(token_budget_raw, (int, float))
             else None
         ),
         tokens_used=(
-            max(0, int(value.get("tokensUsed") or value.get("tokens_used")))
-            if isinstance(
-                value.get("tokensUsed") or value.get("tokens_used"), (int, float)
-            )
+            max(0, int(tokens_used_raw))
+            if isinstance(tokens_used_raw, (int, float))
             else None
         ),
         child_agents=max(
@@ -3755,13 +3755,13 @@ def _harness_goal_snapshot(value: Any) -> HarnessGoalSnapshot | None:
 
 
 def _goal_item_status(goal: HarnessGoalSnapshot) -> HarnessItemStatus:
-    return {
-        "pending": "queued",
-        "running": "running",
-        "complete": "completed",
-        "blocked": "failed",
-        "failed": "failed",
-    }[goal.status]
+    if goal.status == "pending":
+        return "queued"
+    if goal.status == "running":
+        return "running"
+    if goal.status == "complete":
+        return "completed"
+    return "failed"
 
 
 class GrokAcpConnection(HarnessConnection):
@@ -3799,6 +3799,7 @@ class GrokAcpConnection(HarnessConnection):
                 "session/set_mode",
                 {"sessionId": self.external_session_id, "modeId": mode},
             )
+        # diagnostic-expected: this task is awaited, cancelled, and drained by this turn.
         request = asyncio.create_task(
             self.rpc.request(
                 "session/prompt",
@@ -3817,6 +3818,7 @@ class GrokAcpConnection(HarnessConnection):
         )
         try:
             while not request.done():
+                # diagnostic-expected: the losing event task is cancelled and drained below.
                 event_task = asyncio.create_task(self.rpc.events.get())
                 done, _ = await asyncio.wait(
                     {request, event_task}, return_when=asyncio.FIRST_COMPLETED
@@ -4116,6 +4118,7 @@ async def _grok_model_catalog(
         try:
             stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=15)
         except asyncio.TimeoutError:
+            # diagnostic-expected: optional model discovery times out to the cached catalog.
             process.kill()
             await process.wait()
             stdout = b""
@@ -4138,6 +4141,7 @@ async def _grok_model_catalog(
             raise ValueError("Grok model cache exceeds the discovery limit")
         cache = json.loads(await asyncio.to_thread(cache_path.read_text, "utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
+        # diagnostic-expected: a missing or invalid optional cache yields base model options.
         cache = {}
     catalog = cache.get("models", cache) if isinstance(cache, dict) else {}
     model_options: list[HarnessModelOptions] = []
@@ -4324,6 +4328,7 @@ class GrokAcpAdapter(HarnessAdapter):
                 ),
             )
         except Exception as exc:
+            # diagnostic-expected: probe failures are returned as the visible harness health result.
             return HarnessHealth(
                 profile_id=profile.id,
                 healthy=False,
@@ -5158,6 +5163,7 @@ class HarnessRuntimeService:
                     key=lambda item: item.name.casefold(),
                 )[:500]
             except OSError:
+                # diagnostic-expected: unavailable optional plugin roots contribute no skills.
                 installed_plugins = []
             for plugin in installed_plugins:
                 roots.extend(
@@ -5173,12 +5179,14 @@ class HarnessRuntimeService:
             try:
                 root = candidate_root.resolve(strict=True)
             except OSError:
+                # diagnostic-expected: unavailable optional skill roots are skipped.
                 continue
             if not root.is_dir():
                 continue
             try:
                 children = sorted(root.iterdir(), key=lambda item: item.name.casefold())
             except OSError:
+                # diagnostic-expected: unreadable optional skill roots are skipped.
                 continue
             for child in children[:500]:
                 if child.is_symlink() or not child.is_dir():
@@ -5187,6 +5195,7 @@ class HarnessRuntimeService:
                     entrypoint = (child / "SKILL.md").resolve(strict=True)
                     entrypoint.relative_to(root)
                 except (OSError, ValueError):
+                    # diagnostic-expected: invalid or escaping skill entries are excluded.
                     continue
                 if not entrypoint.is_file() or str(entrypoint) in seen:
                     continue
@@ -6629,6 +6638,7 @@ class HarnessRuntimeService:
             self._mission_tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
             await self._execute_mission(run_id, turn_ids)
         except asyncio.CancelledError:
+            # diagnostic-expected: cancellation before mission ownership is normal shutdown.
             return
         finally:
             self._scheduled_mission_tasks.pop(run_id, None)
