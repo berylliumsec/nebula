@@ -100,13 +100,18 @@ jobs:
       - name: Delegate required rootless cgroup controllers
         run: |
           runner_uid="$(id -u)"
-          sudo systemctl set-property --runtime \
-            "user@${runner_uid}.service" \
-            "Delegate=cpu cpuset io memory pids" \
-            CPUWeight=100
-          systemctl --user set-property --runtime user.slice CPUWeight=100
-          user_control_group="$(sudo systemctl show --property=ControlGroup --value "user@${runner_uid}.service")"
-          grep -qw cpu "/sys/fs/cgroup${user_control_group}/cgroup.controllers"
+          user_service="/sys/fs/cgroup/user.slice/user-${runner_uid}.slice/user@${runner_uid}.service"
+          for control_group in \
+            /sys/fs/cgroup/user.slice \
+            "/sys/fs/cgroup/user.slice/user-${runner_uid}.slice" \
+            "$user_service" \
+            "$user_service/user.slice"
+          do
+            test -f "$control_group/cgroup.controllers"
+            grep -qw cpu "$control_group/cgroup.controllers"
+            echo +cpu | sudo tee "$control_group/cgroup.subtree_control" >/dev/null
+          done
+          grep -qw cpu "$user_service/user.slice/cgroup.subtree_control"
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
