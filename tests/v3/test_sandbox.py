@@ -1,6 +1,5 @@
 import asyncio
 import json
-import socket
 from pathlib import Path
 
 import pytest
@@ -26,7 +25,6 @@ from nebula.v3.sandbox import (
     SandboxUnavailable,
     SandboxWorkspaceAccess,
     _read_limited_stream,
-    _runtime_environment,
 )
 
 
@@ -173,7 +171,13 @@ def test_container_argv_is_direct_and_contains_hardening_flags(tmp_path):
     workspace = runner._validate(request)
     argv = runner._argv(request, workspace)
 
-    assert argv[:3] == ["/usr/bin/podman", "run", "--rm"]
+    assert argv[:5] == [
+        "/usr/bin/podman",
+        "--events-backend=file",
+        "--cgroup-manager=cgroupfs",
+        "run",
+        "--rm",
+    ]
     assert "--name=nebula-tool" in argv
     assert "--pull=never" in argv
     assert "--read-only" in argv
@@ -507,6 +511,11 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
     available, detail = asyncio.run(runner.available())
     assert available is True
     assert "rootless Podman" in detail
+    assert runner._runtime_argv() == [
+        "/usr/bin/podman",
+        "--events-backend=file",
+        "--cgroup-manager=cgroupfs",
+    ]
 
 
 def test_container_runtime_timeout_has_actionable_health_detail(monkeypatch):
@@ -526,23 +535,6 @@ def test_container_runtime_timeout_has_actionable_health_detail(monkeypatch):
     available, detail = asyncio.run(runner.available())
     assert available is False
     assert detail == "container runtime health check failed: TimeoutError"
-
-
-def test_runtime_environment_derives_only_the_owned_local_session_bus(
-    tmp_path, monkeypatch
-):
-    runtime_directory = tmp_path / "runtime"
-    runtime_directory.mkdir()
-    bus_path = runtime_directory / "bus"
-    bus = socket.socket(socket.AF_UNIX)
-    bus.bind(str(bus_path))
-    try:
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime_directory))
-        monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "tcp:host=attacker.invalid")
-        environment = _runtime_environment()
-        assert environment["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={bus_path}"
-    finally:
-        bus.close()
 
 
 def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
