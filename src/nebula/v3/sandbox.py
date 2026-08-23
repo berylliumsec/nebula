@@ -1307,7 +1307,6 @@ class ContainerSandboxRunner(SandboxRunner):
             "list",
             "--format",
             "{{.Name}}|{{.URI}}",
-            include_context=False,
         )
         if return_code != 0:
             return False, connections_error or "Podman connection is unavailable"

@@ -516,7 +516,7 @@ def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
 
     async def capture(*arguments, include_context=True):
         assert arguments[0] == "system"
-        assert include_context is False
+        assert include_context is True
         return (
             "remote-lab|ssh://runner.example/run/podman.sock",
             "",
@@ -543,7 +543,7 @@ def test_linux_podman_named_connection_accepts_local_unix_socket(monkeypatch):
 
     async def capture(*arguments, include_context=True):
         assert arguments[0] == "system"
-        assert include_context is False
+        assert include_context is True
         return (
             "nebula-ci|unix:///run/user/1001/podman/podman.sock",
             "",
@@ -574,7 +574,7 @@ def test_linux_podman_named_connection_reports_local_catalog_miss(monkeypatch):
 
     async def capture(*arguments, include_context=True):
         assert arguments[0] == "system"
-        assert include_context is False
+        assert include_context is True
         return "other-local|unix:///run/user/1001/podman/podman.sock", "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
@@ -688,7 +688,7 @@ def test_macos_podman_machine_requires_running_rootless_loopback_connection(
             assert include_context is True
             return '[{"State":"running","Rootful":false}]', "", 0
         if arguments[0] == "system":
-            assert include_context is False
+            assert include_context is True
             return (
                 "podman-machine-default|ssh://core@127.0.0.1:51234/run/user/501/podman.sock",
                 "",
