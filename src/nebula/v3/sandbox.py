@@ -17,6 +17,7 @@ import pty
 import re
 import signal
 import struct
+import subprocess
 import termios
 import tempfile
 from abc import ABC, abstractmethod
@@ -1257,36 +1258,44 @@ class ContainerSandboxRunner(SandboxRunner):
         wait for the inspected Podman parent rather than for unrelated EOFs.
         """
 
-        with (
-            tempfile.TemporaryFile() as stdout_file,
-            tempfile.TemporaryFile() as stderr_file,
-        ):
-            process = await asyncio.create_subprocess_exec(
-                *self._runtime_argv(),
-                "info",
-                "--format",
-                "{{.Host.Security.Rootless}}",
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                env=_runtime_environment(),
-            )
-            try:
-                await asyncio.wait_for(process.wait(), timeout=30)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                process.kill()
-                await process.wait()
-                raise
-            stdout_file.seek(0)
-            stderr_file.seek(0)
-            stdout = stdout_file.read(257)
-            stderr = stderr_file.read(64 * 1024 + 1)
+        def capture() -> tuple[bytes, bytes, int]:
+            with (
+                tempfile.TemporaryFile() as stdout_file,
+                tempfile.TemporaryFile() as stderr_file,
+            ):
+                process = subprocess.Popen(
+                    [
+                        *self._runtime_argv(),
+                        "info",
+                        "--format",
+                        "{{.Host.Security.Rootless}}",
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    env=_runtime_environment(),
+                )
+                try:
+                    return_code = process.wait(timeout=30)
+                except subprocess.TimeoutExpired as exc:
+                    process.kill()
+                    process.wait()
+                    raise asyncio.TimeoutError from exc
+                stdout_file.seek(0)
+                stderr_file.seek(0)
+                return (
+                    stdout_file.read(257),
+                    stderr_file.read(64 * 1024 + 1),
+                    return_code,
+                )
+
+        stdout, stderr, return_code = await asyncio.to_thread(capture)
         if len(stdout) > 16 or len(stderr) > 64 * 1024:
             raise SandboxError("Podman health output exceeded its fixed limit")
         return (
             stdout.decode("utf-8", errors="replace").strip(),
             stderr.decode("utf-8", errors="replace").strip(),
-            int(process.returncode or 0),
+            int(return_code),
         )
 
     async def _validate_podman_connection(self, *, machine: bool) -> tuple[bool, str]:
