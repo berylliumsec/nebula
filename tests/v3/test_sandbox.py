@@ -529,6 +529,37 @@ def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
     assert "local Unix socket" in detail
 
 
+def test_linux_podman_named_connection_accepts_local_unix_socket(monkeypatch):
+    monkeypatch.delenv("CONTAINER_HOST", raising=False)
+    runner = ContainerSandboxRunner(
+        profile=RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable="/usr/bin/podman",
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+            context="nebula-ci",
+        )
+    )
+
+    async def capture(*arguments, include_context=True):
+        assert arguments[0] == "system"
+        assert include_context is False
+        return (
+            "nebula-ci|unix:///run/user/1001/podman/podman.sock",
+            "",
+            0,
+        )
+
+    async def capture_health():
+        return "true|linux", "", 0
+
+    monkeypatch.setattr(runner, "_capture", capture)
+    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
+    available, detail = asyncio.run(runner.available())
+    assert available is True
+    assert "local rootless Podman" in detail
+
+
 def test_linux_docker_rejects_remote_context_and_ambient_tcp_endpoint(monkeypatch):
     monkeypatch.delenv("DOCKER_HOST", raising=False)
     runner = ContainerSandboxRunner(

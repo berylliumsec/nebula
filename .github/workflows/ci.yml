@@ -117,9 +117,10 @@ jobs:
           systemctl --user start podman.socket
           socket_path="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
           test -S "$socket_path"
-          podman system connection add nebula-ci "unix://$socket_path"
-          podman system connection list --format '{{.Name}}|{{.URI}}'
-          podman --connection nebula-ci info --format '{{.Host.Security.Rootless}}' | grep -Fx true
+          runtime_env=(env -i "PATH=$PATH" "HOME=$HOME" "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}")
+          "${runtime_env[@]}" podman system connection add nebula-ci "unix://$socket_path"
+          "${runtime_env[@]}" podman system connection list --format '{{.Name}}|{{.URI}}'
+          "${runtime_env[@]}" podman --connection nebula-ci info --format '{{.Host.Security.Rootless}}' | grep -Fx true
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
