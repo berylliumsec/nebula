@@ -344,7 +344,7 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
     async def capture_health():
         nonlocal health_checks
         health_checks += 1
-        return "true|linux", "", 0
+        return "true", "", 0
 
     async def remove(name):
         removed.append(name)
@@ -377,7 +377,7 @@ def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
         nonlocal health_checks
         health_checks += 1
         rootless = health_checks == 1
-        return f"{str(rootless).lower()}|linux", "", 0
+        return str(rootless).lower(), "", 0
 
     async def remove(name):
         removed.append(name)
@@ -498,7 +498,7 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
     )
 
     async def capture_health():
-        return "true|linux", "", 0
+        return "true", "", 0
 
     monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
     available, detail = asyncio.run(runner.available())
@@ -663,7 +663,7 @@ def test_macos_podman_machine_requires_running_rootless_loopback_connection(
         raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
 
     async def capture_health():
-        return "true|linux", "", 0
+        return "true", "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
     monkeypatch.setattr(runner, "_capture_podman_health", capture_health)

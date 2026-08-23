@@ -98,7 +98,9 @@ jobs:
           --tag localhost/nebula-operator-runtime:ci
           .
       - name: Confirm rootless runtime after image build
-        run: timeout 10 podman info --format json >/dev/null
+        run: >-
+          timeout 10 podman info --format '{{.Host.Security.Rootless}}'
+          | grep -Fx true
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman

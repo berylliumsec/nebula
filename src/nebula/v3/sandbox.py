@@ -1240,14 +1240,8 @@ class ContainerSandboxRunner(SandboxRunner):
         info_output, info_error, return_code = await self._capture_podman_health()
         if return_code != 0:
             return False, info_error or "Podman service is unavailable"
-        rootless, separator, host_os = info_output.strip().partition("|")
-        if not separator:
-            return False, "Podman service returned invalid host security metadata"
-        if rootless.strip().lower() != "true":
+        if info_output.strip().lower() != "true":
             return False, "Podman service is not operating in rootless mode"
-        host_os = host_os.strip().lower()
-        if host_os and host_os != "linux":
-            return False, "Podman runner must execute Linux containers"
         detail = (
             "approved rootless Podman Machine runner is available"
             if self.profile.platform == RunnerPlatform.MACOS
@@ -1262,7 +1256,7 @@ class ContainerSandboxRunner(SandboxRunner):
             *self._runtime_argv(),
             "info",
             "--format",
-            "{{.Host.Security.Rootless}}|{{.Host.OS}}",
+            "{{.Host.Security.Rootless}}",
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -1276,7 +1270,7 @@ class ContainerSandboxRunner(SandboxRunner):
             process.kill()
             await process.communicate()
             raise
-        if len(stdout) > 256 or len(stderr) > 64 * 1024:
+        if len(stdout) > 16 or len(stderr) > 64 * 1024:
             raise SandboxError("Podman health output exceeded its fixed limit")
         return (
             stdout.decode("utf-8", errors="replace").strip(),
