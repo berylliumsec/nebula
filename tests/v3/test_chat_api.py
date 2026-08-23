@@ -82,8 +82,12 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
             metadata={"default_model": "model-a"},
         )
     )
-    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: ApiChatProvider(profile.id))
-    client = TestClient(create_app(store, artifact_store=artifacts, auth_token="test-token"))
+    monkeypatch.setattr(
+        chat_module, "provider_from_profile", lambda _: ApiChatProvider(profile.id)
+    )
+    client = TestClient(
+        create_app(store, artifact_store=artifacts, auth_token="test-token")
+    )
 
     image_buffer = BytesIO()
     Image.new("RGBA", (12, 8), (20, 40, 80, 220)).save(image_buffer, format="PNG")
@@ -106,7 +110,12 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     assert preview.status_code == 200
     assert preview.headers["cache-control"] == "private, no-store"
     assert preview.content.startswith(b"\x89PNG")
-    assert client.get(f"/api/v1/chat/images/{uploaded['artifact_id']}/preview", headers=_auth()).status_code == 404
+    assert (
+        client.get(
+            f"/api/v1/chat/images/{uploaded['artifact_id']}/preview", headers=_auth()
+        ).status_code
+        == 404
+    )
 
     completion = client.post(
         "/api/v1/chat/completions",
@@ -139,9 +148,7 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
 def test_device_pairing_is_single_use_cookie_authenticated_and_revocable(tmp_path):
     store = NebulaStore(tmp_path / "pairing.db")
     app = create_app(store, auth_token="test-token")
-    client = TestClient(
-        app, base_url="https://127.0.0.1", client=("127.0.0.1", 50000)
-    )
+    client = TestClient(app, base_url="https://127.0.0.1", client=("127.0.0.1", 50000))
 
     created = client.post(
         "/api/v1/auth/pairings",

@@ -226,10 +226,14 @@ class MissionService:
                     and isinstance(scheduled_for, str)
                 ):
                     try:
-                        profile = self.store.get(ProviderProfile, run.supervisor_provider_id or "")
+                        profile = self.store.get(
+                            ProviderProfile, run.supervisor_provider_id or ""
+                        )
                         provider = self.provider_factory(profile)
                         task = create_diagnostic_task(
-                            self._scheduled_execute(run.id, provider, datetime.fromisoformat(scheduled_for)),
+                            self._scheduled_execute(
+                                run.id, provider, datetime.fromisoformat(scheduled_for)
+                            ),
                             feature="missions",
                             event_code="missions.scheduled",
                             failure_message="A scheduled Mission failed before start.",
@@ -238,7 +242,10 @@ class MissionService:
                         self._scheduled_tasks[run.id] = task
                         continue
                     except Exception as exc:
-                        self._finalize_failed(run.id, f"scheduled mission could not be restored: {self._safe_error(exc)}")
+                        self._finalize_failed(
+                            run.id,
+                            f"scheduled mission could not be restored: {self._safe_error(exc)}",
+                        )
                         continue
                 if (
                     run.id in owned_run_ids
@@ -283,9 +290,13 @@ class MissionService:
             if item.get("title", "").strip() and item.get("objective", "").strip()
         ]
         if scheduled_for is not None and scheduled_for.tzinfo is None:
-            raise MissionConfigurationError("scheduled mission time must include a timezone")
+            raise MissionConfigurationError(
+                "scheduled mission time must include a timezone"
+            )
         if repeat_interval_seconds is not None and repeat_interval_seconds < 3_600:
-            raise MissionConfigurationError("repeating missions must be at least one hour apart")
+            raise MissionConfigurationError(
+                "repeating missions must be at least one hour apart"
+            )
         try:
             mcp_profiles = resolve_mcp_profiles(
                 self.store, list(dict.fromkeys(mcp_server_ids or ()))
@@ -407,10 +418,22 @@ class MissionService:
                 "analysis_only": not selected_action_tools,
                 "origin": "api",
                 **({"stages": selected_stages} if selected_stages else {}),
-                **({"scheduled_for": scheduled_for.isoformat()} if scheduled_for else {}),
-                **({"repeat_interval_seconds": repeat_interval_seconds} if repeat_interval_seconds else {}),
+                **(
+                    {"scheduled_for": scheduled_for.isoformat()}
+                    if scheduled_for
+                    else {}
+                ),
+                **(
+                    {"repeat_interval_seconds": repeat_interval_seconds}
+                    if repeat_interval_seconds
+                    else {}
+                ),
                 **({"retry_of_run_id": retry_of_run_id} if retry_of_run_id else {}),
-                **({"recurrence_of_run_id": recurrence_of_run_id} if recurrence_of_run_id else {}),
+                **(
+                    {"recurrence_of_run_id": recurrence_of_run_id}
+                    if recurrence_of_run_id
+                    else {}
+                ),
                 **({"series_id": series_id} if series_id else {}),
                 **(
                     {
@@ -677,7 +700,9 @@ class MissionService:
             if self._closed:
                 return
             self._closed = True
-            scheduled = [task for task in self._scheduled_tasks.values() if not task.done()]
+            scheduled = [
+                task for task in self._scheduled_tasks.values() if not task.done()
+            ]
             self._scheduled_tasks.clear()
             run_ids = [
                 run_id for run_id, task in self._tasks.items() if not task.done()
@@ -685,7 +710,13 @@ class MissionService:
         for task in scheduled:
             task.cancel()
         if scheduled:
-            await gather_diagnostic(*scheduled, feature="missions", event_code="missions.shutdown.scheduled", failure_message="A scheduled Mission timer did not stop cleanly.", stage="shutdown")
+            await gather_diagnostic(
+                *scheduled,
+                feature="missions",
+                event_code="missions.shutdown.scheduled",
+                failure_message="A scheduled Mission timer did not stop cleanly.",
+                stage="shutdown",
+            )
         if not run_ids:
             return
         await gather_diagnostic(
@@ -829,14 +860,17 @@ class MissionService:
             provider_id=prior.supervisor_provider_id or "",
             model=prior.supervisor_model or "",
             budget=prior.budget,
-            stages=prior.metadata.get("stages") if isinstance(prior.metadata.get("stages"), list) else [],
+            stages=prior.metadata.get("stages")
+            if isinstance(prior.metadata.get("stages"), list)
+            else [],
             scheduled_for=utc_now() + timedelta(seconds=interval),
             repeat_interval_seconds=interval,
             recurrence_of_run_id=prior.id,
             series_id=str(prior.metadata.get("series_id") or prior.id),
             tool_names=list(prior.metadata.get("command_tool_names") or []),
             mcp_server_ids=list(prior.runtime_snapshot.get("mcp_server_ids") or []),
-            allow_cloud_tool_results=prior.runtime_snapshot.get("remote_mcp_confirmed") is True,
+            allow_cloud_tool_results=prior.runtime_snapshot.get("remote_mcp_confirmed")
+            is True,
             actor_id="system",
         )
 
@@ -954,7 +988,11 @@ class MissionService:
         )
         stages = run.metadata.get("stages")
         return MissionComponents(
-            supervisor=(ExplicitStageSupervisor(stages) if isinstance(stages, list) and stages else StaticSupervisor()),
+            supervisor=(
+                ExplicitStageSupervisor(stages)
+                if isinstance(stages, list) and stages
+                else StaticSupervisor()
+            ),
             specialists={SpecialistRole.SCOPE_PLANNING: specialist},
         )
 

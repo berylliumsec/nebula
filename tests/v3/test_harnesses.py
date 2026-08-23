@@ -309,7 +309,9 @@ def test_attached_chat_context_is_handed_to_first_harness_turn(tmp_path):
     assert "pending_context_message_id" not in updated_chat.metadata
 
 
-def test_health_reconciles_a_retired_default_model_with_the_advertised_catalog(tmp_path):
+def test_health_reconciles_a_retired_default_model_with_the_advertised_catalog(
+    tmp_path,
+):
     store, _engagement, profile, _mcp, _adapter, _existing_runtime = _runtime(tmp_path)
     stale = store.update(
         HarnessProfile,
@@ -369,9 +371,7 @@ def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
         (skill.name, skill.path, skill.source)
         for skill in skills
         if skill.source == "project"
-    ] == [
-        ("review", str(skill_file.resolve()), "project")
-    ]
+    ] == [("review", str(skill_file.resolve()), "project")]
     assert all(skill.name != "escape" for skill in skills)
 
     _chat, _chat_turn, harness_turn = runtime.prepare_chat(
@@ -456,8 +456,13 @@ def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
         "reasoning_effort": "high",
         "service_tier": "fast",
     }
-    assert chat.metadata["harness_runtime_options"] == session.metadata["runtime_options"]
-    assert chat_turn.request_snapshot["harness_runtime_options"] == session.metadata["runtime_options"]
+    assert (
+        chat.metadata["harness_runtime_options"] == session.metadata["runtime_options"]
+    )
+    assert (
+        chat_turn.request_snapshot["harness_runtime_options"]
+        == session.metadata["runtime_options"]
+    )
 
     with pytest.raises(Exception, match="reasoning effort cannot change"):
         runtime.prepare_chat(

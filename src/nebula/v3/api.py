@@ -686,7 +686,9 @@ class MissionStartRequest(NebulaModel):
                     "native missions cannot include harness runtime fields"
                 )
             if self.harness_reasoning_effort or self.harness_service_tier:
-                raise ValueError("native missions cannot include harness runtime options")
+                raise ValueError(
+                    "native missions cannot include harness runtime options"
+                )
         elif not self.harness_profile_id or self.provider_id:
             raise ValueError(
                 "harness missions require harness_profile_id and no provider_id"
@@ -1928,19 +1930,32 @@ def create_app(
             or parsed_host.query
             or parsed_host.fragment
         ):
-            raise HTTPException(status_code=400, detail="invalid paired-device Host header")
+            raise HTTPException(
+                status_code=400, detail="invalid paired-device Host header"
+            )
         expected_origin = f"{request.url.scheme}://{host_header}"
         origin = request.headers.get("origin")
         if origin and not hmac.compare_digest(origin, expected_origin):
-            raise HTTPException(status_code=403, detail="paired-device origin validation failed")
+            raise HTTPException(
+                status_code=403, detail="paired-device origin validation failed"
+            )
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             csrf = request.headers.get("X-Nebula-CSRF")
             cookie_csrf = request.cookies.get("nebula_csrf")
             digest = hashlib.sha256((csrf or "").encode("utf-8")).hexdigest()
-            if not csrf or not cookie_csrf or not hmac.compare_digest(csrf, cookie_csrf) or not hmac.compare_digest(digest, device.csrf_sha256):
-                raise HTTPException(status_code=403, detail="paired-device CSRF validation failed")
+            if (
+                not csrf
+                or not cookie_csrf
+                or not hmac.compare_digest(csrf, cookie_csrf)
+                or not hmac.compare_digest(digest, device.csrf_sha256)
+            ):
+                raise HTTPException(
+                    status_code=403, detail="paired-device CSRF validation failed"
+                )
             if not origin:
-                raise HTTPException(status_code=403, detail="paired-device mutation requires Origin")
+                raise HTTPException(
+                    status_code=403, detail="paired-device mutation requires Origin"
+                )
         now = utc_now()
         if (now - device.last_used_at).total_seconds() >= 300:
             store.update(
@@ -1948,7 +1963,9 @@ def create_app(
                 device.id,
                 {
                     "last_used_at": now,
-                    "idle_expires_at": min(now + timedelta(days=30), device.absolute_expires_at),
+                    "idle_expires_at": min(
+                        now + timedelta(days=30), device.absolute_expires_at
+                    ),
                 },
                 expected_revision=device.revision,
             )
@@ -2016,9 +2033,13 @@ def create_app(
         if (
             pending is None
             or utc_now() >= pending["expires_at"]
-            or not hmac.compare_digest(body.confirmation_code, pending["confirmation_code"])
+            or not hmac.compare_digest(
+                body.confirmation_code, pending["confirmation_code"]
+            )
         ):
-            raise HTTPException(status_code=401, detail="pairing secret is invalid or expired")
+            raise HTTPException(
+                status_code=401, detail="pairing secret is invalid or expired"
+            )
         raw_token = secrets.token_urlsafe(32)
         csrf = secrets.token_urlsafe(32)
         now = utc_now()
@@ -4477,7 +4498,9 @@ def create_app(
         try:
             current = requested.resolve(strict=True)
         except OSError as exc:
-            raise HTTPException(status_code=404, detail="folder is unavailable") from exc
+            raise HTTPException(
+                status_code=404, detail="folder is unavailable"
+            ) from exc
         if not current.is_dir():
             raise HTTPException(status_code=422, detail="selected path is not a folder")
         directories: list[dict[str, str]] = []
@@ -4494,7 +4517,9 @@ def create_app(
                     except OSError:
                         continue
         except OSError as exc:
-            raise HTTPException(status_code=403, detail="folder cannot be listed") from exc
+            raise HTTPException(
+                status_code=403, detail="folder cannot be listed"
+            ) from exc
         parent = None if current.parent == current else str(current.parent)
         return {
             "path": str(current),
@@ -4525,7 +4550,9 @@ def create_app(
         tags=["workspace"],
         dependencies=[Depends(require_auth)],
     )
-    async def code_completions(request: CodeCompletionRequest) -> CodeCompletionResponse:
+    async def code_completions(
+        request: CodeCompletionRequest,
+    ) -> CodeCompletionResponse:
         return CodeCompletionResponse(
             items=complete_code(request.source, request.path, request.offset)
         )
@@ -6360,13 +6387,19 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def upload_chat_image(request: ChatImageUploadRequest) -> ChatImageUploadResponse:
+    async def upload_chat_image(
+        request: ChatImageUploadRequest,
+    ) -> ChatImageUploadResponse:
         if artifact_store is None:
-            raise HTTPException(status_code=503, detail="chat images require an artifact store")
+            raise HTTPException(
+                status_code=503, detail="chat images require an artifact store"
+            )
         store.get(Engagement, request.engagement_id)
         try:
             raw = base64.b64decode(request.content_base64, validate=True)
-            image = await asyncio.to_thread(validate_chat_image, raw, request.media_type)
+            image = await asyncio.to_thread(
+                validate_chat_image, raw, request.media_type
+            )
         except (binascii.Error, ValueError, ChatImageError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         original = artifact_store.put_bytes(
@@ -6409,10 +6442,14 @@ def create_app(
     )
     async def preview_chat_image(artifact_id: str) -> FileResponse:
         if artifact_store is None:
-            raise HTTPException(status_code=503, detail="chat images require an artifact store")
+            raise HTTPException(
+                status_code=503, detail="chat images require an artifact store"
+            )
         artifact = store.get(Artifact, artifact_id)
         if artifact.metadata.get("chat_image_preview") is not True:
-            raise HTTPException(status_code=404, detail="chat image preview is unavailable")
+            raise HTTPException(
+                status_code=404, detail="chat image preview is unavailable"
+            )
         path = artifact_store.path_for(artifact)
         if not path.is_file() or not artifact_store.verify(artifact):
             raise ArtifactStoreError("chat image preview failed integrity verification")
@@ -7864,8 +7901,8 @@ def _register_crud_routes(
                 )
             if isinstance(entity, Engagement) and entity.workspace_path:
                 try:
-                    linked_workspace = Path(entity.workspace_path).expanduser().resolve(
-                        strict=True
+                    linked_workspace = (
+                        Path(entity.workspace_path).expanduser().resolve(strict=True)
                     )
                 except OSError as exc:
                     raise HTTPException(

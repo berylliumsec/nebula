@@ -218,9 +218,13 @@ class RuntimePlatform:
     def workspace_for(self, engagement_id: str) -> Path:
         engagement = self.store.get(Engagement, engagement_id)
         if engagement.workspace_path:
-            workspace = Path(engagement.workspace_path).expanduser().resolve(strict=True)
+            workspace = (
+                Path(engagement.workspace_path).expanduser().resolve(strict=True)
+            )
             if not workspace.is_dir():
-                raise RuntimePlatformError("configured project workspace is not a directory")
+                raise RuntimePlatformError(
+                    "configured project workspace is not a directory"
+                )
             return workspace
         component = hashlib.sha256(engagement_id.encode("utf-8")).hexdigest()
         workspace = self.workspace_root / component

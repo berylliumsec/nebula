@@ -79,8 +79,16 @@ class FixtureCodexRpc:
                         ],
                         "defaultServiceTier": "default",
                         "serviceTiers": [
-                            {"id": "default", "name": "Standard", "description": "Standard speed"},
-                            {"id": "fast", "name": "Fast", "description": "Priority speed"},
+                            {
+                                "id": "default",
+                                "name": "Standard",
+                                "description": "Standard speed",
+                            },
+                            {
+                                "id": "fast",
+                                "name": "Fast",
+                                "description": "Priority speed",
+                            },
                         ],
                     },
                     {"id": "gpt-5.3-codex", "model": "gpt-5.3-codex"},
@@ -208,9 +216,45 @@ class FixtureGrokRpc:
         if method == "session/new":
             return {"sessionId": "grok-session"}
         if method == "session/prompt":
-            await self.events.put({"method": "session/update", "params": {"update": {"sessionUpdate": "current_mode_update", "currentModeId": "plan"}}})
-            await self.events.put({"method": "session/update", "params": {"update": {"sessionUpdate": "plan", "entries": [{"id": "one", "content": "Inspect", "status": "in_progress"}]}}})
-            await self.events.put({"method": "session/update", "params": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done"}}}})
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "current_mode_update",
+                            "currentModeId": "plan",
+                        }
+                    },
+                }
+            )
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "plan",
+                            "entries": [
+                                {
+                                    "id": "one",
+                                    "content": "Inspect",
+                                    "status": "in_progress",
+                                }
+                            ],
+                        }
+                    },
+                }
+            )
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "done"},
+                        }
+                    },
+                }
+            )
             await asyncio.sleep(0.02)
             return {"stopReason": "end_turn"}
         return {}
@@ -308,7 +352,9 @@ def test_grok_connection_normalizes_mode_plan_and_streamed_message():
         connection = GrokAcpConnection(
             rpc, external_session_id="grok-session", permission_handler=no_permission
         )
-        events = [event async for event in connection.run_turn("hello", model="grok-build")]
+        events = [
+            event async for event in connection.run_turn("hello", model="grok-build")
+        ]
 
         assert [event.type for event in events] == [
             "started",
@@ -376,7 +422,9 @@ def test_grok_connection_carries_selected_skill_into_prompt():
         ]
 
         assert events[-1].message == "done"
-        prompt = next(params for method, params in rpc.calls if method == "session/prompt")
+        prompt = next(
+            params for method, params in rpc.calls if method == "session/prompt"
+        )
         assert prompt["prompt"] == [
             {"type": "text", "text": "$review inspect the project"}
         ]
@@ -516,8 +564,7 @@ def test_grok_connection_separates_pre_tool_commentary_from_final_answer():
             rpc, external_session_id="grok-session", permission_handler=no_permission
         )
         events = [
-            event
-            async for event in connection.run_turn("inspect", model="grok-build")
+            event async for event in connection.run_turn("inspect", model="grok-build")
         ]
 
         assert [event.delta for event in events if event.type == "output_delta"] == [
@@ -543,7 +590,10 @@ def test_grok_connection_keeps_final_answer_before_session_metadata():
                     "params": {
                         "update": {
                             "sessionUpdate": "agent_message_chunk",
-                            "content": {"type": "text", "text": "The sibling is apple_security_rnd."},
+                            "content": {
+                                "type": "text",
+                                "text": "The sibling is apple_security_rnd.",
+                            },
                         }
                     },
                 }
@@ -569,8 +619,7 @@ def test_grok_connection_keeps_final_answer_before_session_metadata():
             permission_handler=lambda _request: None,
         )
         events = [
-            event
-            async for event in connection.run_turn("name it", model="grok-build")
+            event async for event in connection.run_turn("name it", model="grok-build")
         ]
 
         completed = next(event for event in events if event.type == "completed")
@@ -668,7 +717,7 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
                             "network_access": False,
                         }
                     },
-                }
+                },
             },
         )
         connection = await adapter.open(
@@ -754,7 +803,9 @@ def test_codex_turn_controls_use_structured_skill_and_planning_mode():
                 asyncio.get_running_loop().create_future()
             )
             future.set_result(HarnessPermissionDecision(allowed=True))
-            return PermissionTicket("approval-controls", request.vendor_request_id, future)
+            return PermissionTicket(
+                "approval-controls", request.vendor_request_id, future
+            )
 
         connection = CodexAppServerConnection(
             rpc,
@@ -800,7 +851,9 @@ def test_codex_connection_discards_session_resume_replay_before_new_turn():
                 asyncio.get_running_loop().create_future()
             )
             future.set_result(HarnessPermissionDecision(allowed=True))
-            return PermissionTicket("approval-boundary", request.vendor_request_id, future)
+            return PermissionTicket(
+                "approval-boundary", request.vendor_request_id, future
+            )
 
         connection = CodexAppServerConnection(
             rpc,
@@ -1420,9 +1473,7 @@ def test_grok_acp_rpc_reports_its_own_transport_identity():
             return b""
 
     async def scenario() -> None:
-        rpc = _AcpRpc(
-            process=SimpleNamespace(stdout=ClosedStdout(), stderr=None)
-        )
+        rpc = _AcpRpc(process=SimpleNamespace(stdout=ClosedStdout(), stderr=None))
 
         await rpc._reader()
 

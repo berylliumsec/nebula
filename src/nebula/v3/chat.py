@@ -170,9 +170,7 @@ class ChatCompletionRequest(NebulaModel):
     harness_reasoning_effort: str | None = Field(
         default=None, min_length=1, max_length=100
     )
-    harness_service_tier: str | None = Field(
-        default=None, min_length=1, max_length=100
-    )
+    harness_service_tier: str | None = Field(default=None, min_length=1, max_length=100)
     harness_skill: dict[str, str] | None = None
     stream: bool = False
 
@@ -518,18 +516,27 @@ class ChatService:
         self.knowledge_index = knowledge_index
         self.artifact_store = artifact_store
 
-    def _model_content(self, message: ChatRequestMessage, engagement_id: str | None) -> str | list[dict[str, Any]]:
+    def _model_content(
+        self, message: ChatRequestMessage, engagement_id: str | None
+    ) -> str | list[dict[str, Any]]:
         images = [block for block in message.content_blocks if block.type == "image"]
         if not images:
             return message.content
         if self.artifact_store is None or not engagement_id:
-            raise ChatConfigurationError("image messages require durable artifact storage")
+            raise ChatConfigurationError(
+                "image messages require durable artifact storage"
+            )
         parts: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
         for block in images:
             assert block.artifact_id is not None
             artifact = self.store.get(Artifact, block.artifact_id)
-            if artifact.engagement_id != engagement_id or artifact.metadata.get("chat_image_original") is not True:
-                raise ChatConfigurationError("chat image does not belong to this project")
+            if (
+                artifact.engagement_id != engagement_id
+                or artifact.metadata.get("chat_image_original") is not True
+            ):
+                raise ChatConfigurationError(
+                    "chat image does not belong to this project"
+                )
             preview_id = block.metadata.get("preview_artifact_id")
             preview = (
                 self.store.get(Artifact, preview_id)
@@ -553,7 +560,9 @@ class ChatService:
                 or preview.metadata.get("chat_image_preview") is not True
                 or preview.metadata.get("metadata_stripped") is not True
             ):
-                raise ChatConfigurationError("validated metadata-stripped chat image preview is unavailable")
+                raise ChatConfigurationError(
+                    "validated metadata-stripped chat image preview is unavailable"
+                )
             data = self.artifact_store.read(preview)
             parts.append(
                 {
@@ -639,12 +648,17 @@ class ChatService:
                 f"provider {request.provider_id!r} is disabled"
             )
         provider = self.provider_factory(profile)
-        if any(
-            block.type == "image"
-            for message in request.messages
-            for block in message.content_blocks
-        ) and not profile.capabilities.vision:
-            raise ChatConfigurationError("the selected provider/model is not verified for vision input")
+        if (
+            any(
+                block.type == "image"
+                for message in request.messages
+                for block in message.content_blocks
+            )
+            and not profile.capabilities.vision
+        ):
+            raise ChatConfigurationError(
+                "the selected provider/model is not verified for vision input"
+            )
 
         session: ChatSession | None = None
         pending_session: ChatSession | None = None
@@ -2042,8 +2056,9 @@ class ChatService:
         stored: list[ChatMessage], incoming: list[ChatRequestMessage]
     ) -> tuple[list[ChatRequestMessage], list[ChatRequestMessage]]:
         durable = [
-            ChatRequestMessage(role=message.role, content=message.content)
-            .model_copy(update={"content_blocks": message.content_blocks})
+            ChatRequestMessage(role=message.role, content=message.content).model_copy(
+                update={"content_blocks": message.content_blocks}
+            )
             for message in stored
         ]
         if len(incoming) >= len(durable) and incoming[: len(durable)] == durable:

@@ -237,7 +237,9 @@ def _openai_chat_message(message: ModelMessage) -> dict[str, Any]:
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:{part.get('media_type')};base64,{part.get('data')}"},
+                    "image_url": {
+                        "url": f"data:{part.get('media_type')};base64,{part.get('data')}"
+                    },
                 }
             )
         elif part.get("type") == "text":
@@ -578,7 +580,9 @@ class OpenAIResponsesProvider(ModelProvider):
     def _payload(self, request: ModelRequest, model: str) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
-            "input": [_openai_responses_message(message) for message in request.messages],
+            "input": [
+                _openai_responses_message(message) for message in request.messages
+            ],
         }
         for result in request.tool_results:
             payload["input"].extend(

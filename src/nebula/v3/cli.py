@@ -266,8 +266,12 @@ def serve(
             help="Process-only diagnostics level override (debug, info, warning, error, critical).",
         ),
     ] = None,
-    tls_cert: Annotated[Path | None, typer.Option(help="TLS certificate chain for HTTPS.")] = None,
-    tls_key: Annotated[Path | None, typer.Option(help="TLS private key for HTTPS.")] = None,
+    tls_cert: Annotated[
+        Path | None, typer.Option(help="TLS certificate chain for HTTPS.")
+    ] = None,
+    tls_key: Annotated[
+        Path | None, typer.Option(help="TLS private key for HTTPS.")
+    ] = None,
     allow_insecure_device_pairing: Annotated[
         bool,
         typer.Option(hidden=True, help="Permit paired-device cookies without HTTPS."),
@@ -291,7 +295,9 @@ def serve(
         )
     if (tls_cert is None) != (tls_key is None):
         raise typer.BadParameter("--tls-cert and --tls-key must be supplied together")
-    if tls_cert is not None and (not tls_cert.is_file() or not tls_key or not tls_key.is_file()):
+    if tls_cert is not None and (
+        not tls_cert.is_file() or not tls_key or not tls_key.is_file()
+    ):
         raise typer.BadParameter("TLS certificate and key must be readable files")
     if handshake_stdout:
         if not _is_loopback(host):
@@ -400,7 +406,9 @@ def serve(
                 "url": f"{scheme}://{display_host}:{port}",
                 "token": None if allow_unauthenticated_remote else auth_token,
                 "local_only": _is_loopback(host),
-                "authentication": "disabled" if allow_unauthenticated_remote else "bearer",
+                "authentication": "disabled"
+                if allow_unauthenticated_remote
+                else "bearer",
             }
         )
         if allow_unauthenticated_remote:
@@ -472,11 +480,22 @@ def serve(
 def ui(
     data_dir: Annotated[Path | None, typer.Option()] = None,
     no_browser: Annotated[bool, typer.Option()] = False,
-    port: Annotated[int, typer.Option(min=0, max=65535, help="Listening port (0 chooses a free port).")] = 0,
-    lan: Annotated[bool, typer.Option(help="Serve the workspace to paired LAN devices.")] = False,
-    host: Annotated[str | None, typer.Option(help="LAN bind address (defaults to 0.0.0.0).")] = None,
-    tls_cert: Annotated[Path | None, typer.Option(help="Trusted LAN TLS certificate chain.")] = None,
-    tls_key: Annotated[Path | None, typer.Option(help="Trusted LAN TLS private key.")] = None,
+    port: Annotated[
+        int,
+        typer.Option(min=0, max=65535, help="Listening port (0 chooses a free port)."),
+    ] = 0,
+    lan: Annotated[
+        bool, typer.Option(help="Serve the workspace to paired LAN devices.")
+    ] = False,
+    host: Annotated[
+        str | None, typer.Option(help="LAN bind address (defaults to 0.0.0.0).")
+    ] = None,
+    tls_cert: Annotated[
+        Path | None, typer.Option(help="Trusted LAN TLS certificate chain.")
+    ] = None,
+    tls_key: Annotated[
+        Path | None, typer.Option(help="Trusted LAN TLS private key.")
+    ] = None,
     allow_insecure_lan: Annotated[
         bool,
         typer.Option(help="Explicitly allow unencrypted LAN access (unsafe)."),

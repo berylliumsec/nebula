@@ -1217,7 +1217,9 @@ class _CodexRpc:
                 while line := await self.process.stdout.readline():
                     await self._dispatch_frame(line)
             else:
-                raise HarnessTransportError(f"{self.transport_name} output is unavailable")
+                raise HarnessTransportError(
+                    f"{self.transport_name} output is unavailable"
+                )
             if self._closing:
                 return
             raise HarnessTransportError(f"{self.transport_name} transport closed")
@@ -1424,9 +1426,7 @@ class CodexAppServerConnection(HarnessConnection):
         _discard_queued_session_replay(self.rpc.events)
         turn_input: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         if skill is not None:
-            turn_input.append(
-                {"type": "skill", "name": skill.name, "path": skill.path}
-            )
+            turn_input.append({"type": "skill", "name": skill.name, "path": skill.path})
         turn_params: dict[str, Any] = {
             "threadId": self.external_session_id,
             "input": turn_input,
@@ -1767,7 +1767,9 @@ class CodexAppServerConnection(HarnessConnection):
                 continue
             if method in {"turn/goal/updated", "item/goal/updated", "goal/updated"}:
                 goal = _harness_goal_snapshot(
-                    params.get("goal") if isinstance(params.get("goal"), dict) else params
+                    params.get("goal")
+                    if isinstance(params.get("goal"), dict)
+                    else params
                 )
                 if goal is not None:
                     yield HarnessEvent(
@@ -2384,13 +2386,19 @@ class CodexAppServerAdapter(HarnessAdapter):
                         if not isinstance(option, dict):
                             continue
                         effort = option.get("reasoningEffort")
-                        if not isinstance(effort, str) or not effort or len(effort) > 100:
+                        if (
+                            not isinstance(effort, str)
+                            or not effort
+                            or len(effort) > 100
+                        ):
                             continue
                         effort_options.append(
                             HarnessRuntimeOption(
                                 id=effort,
                                 label=effort.replace("_", " ").title(),
-                                description=str(option.get("description") or "")[:1_000],
+                                description=str(option.get("description") or "")[
+                                    :1_000
+                                ],
                             )
                         )
                     service_tiers = []
@@ -2398,13 +2406,19 @@ class CodexAppServerAdapter(HarnessAdapter):
                         if not isinstance(option, dict):
                             continue
                         tier_id = option.get("id")
-                        if not isinstance(tier_id, str) or not tier_id or len(tier_id) > 100:
+                        if (
+                            not isinstance(tier_id, str)
+                            or not tier_id
+                            or len(tier_id) > 100
+                        ):
                             continue
                         service_tiers.append(
                             HarnessRuntimeOption(
                                 id=tier_id,
                                 label=str(option.get("name") or tier_id)[:200],
-                                description=str(option.get("description") or "")[:1_000],
+                                description=str(option.get("description") or "")[
+                                    :1_000
+                                ],
                             )
                         )
                     default_effort = item.get("defaultReasoningEffort")
@@ -2414,7 +2428,9 @@ class CodexAppServerAdapter(HarnessAdapter):
                             model=model,
                             reasoning_efforts=effort_options,
                             default_reasoning_effort=(
-                                default_effort if isinstance(default_effort, str) else None
+                                default_effort
+                                if isinstance(default_effort, str)
+                                else None
                             ),
                             service_tiers=service_tiers,
                             default_service_tier=(
@@ -3654,19 +3670,24 @@ def _acp_plan_entries(value: Any) -> list[HarnessPlanEntry]:
             title = str(raw.get("content") or raw.get("title") or raw.get("text") or "")
             entry_id = str(raw.get("id") or index)
             raw_status = str(raw.get("status") or "pending").lower()
-            status = cast(Literal["pending", "in_progress", "completed", "blocked"], {
-                "inprogress": "in_progress",
-                "in-progress": "in_progress",
-                "in_progress": "in_progress",
-                "done": "completed",
-                "complete": "completed",
-                "completed": "completed",
-                "blocked": "blocked",
-            }.get(raw_status, "pending"))
+            status = cast(
+                Literal["pending", "in_progress", "completed", "blocked"],
+                {
+                    "inprogress": "in_progress",
+                    "in-progress": "in_progress",
+                    "in_progress": "in_progress",
+                    "done": "completed",
+                    "complete": "completed",
+                    "completed": "completed",
+                    "blocked": "blocked",
+                }.get(raw_status, "pending"),
+            )
         else:
             continue
         if title.strip():
-            result.append(HarnessPlanEntry(id=entry_id[:200], title=title[:2_000], status=status))
+            result.append(
+                HarnessPlanEntry(id=entry_id[:200], title=title[:2_000], status=status)
+            )
     return result
 
 
@@ -3692,7 +3713,9 @@ def _harness_goal_snapshot(value: Any) -> HarnessGoalSnapshot | None:
         return None
     progress = value.get("progress")
     if isinstance(progress, int | float):
-        progress = max(0.0, min(1.0, float(progress / 100 if progress > 1 else progress)))
+        progress = max(
+            0.0, min(1.0, float(progress / 100 if progress > 1 else progress))
+        )
     else:
         progress = None
     return HarnessGoalSnapshot(
@@ -3706,20 +3729,28 @@ def _harness_goal_snapshot(value: Any) -> HarnessGoalSnapshot | None:
         ),
         elapsed_ms=(
             max(0, int(value.get("elapsedMs") or value.get("elapsed_ms")))
-            if isinstance(value.get("elapsedMs") or value.get("elapsed_ms"), (int, float))
+            if isinstance(
+                value.get("elapsedMs") or value.get("elapsed_ms"), (int, float)
+            )
             else None
         ),
         token_budget=(
             max(0, int(value.get("tokenBudget") or value.get("token_budget")))
-            if isinstance(value.get("tokenBudget") or value.get("token_budget"), (int, float))
+            if isinstance(
+                value.get("tokenBudget") or value.get("token_budget"), (int, float)
+            )
             else None
         ),
         tokens_used=(
             max(0, int(value.get("tokensUsed") or value.get("tokens_used")))
-            if isinstance(value.get("tokensUsed") or value.get("tokens_used"), (int, float))
+            if isinstance(
+                value.get("tokensUsed") or value.get("tokens_used"), (int, float)
+            )
             else None
         ),
-        child_agents=max(0, int(value.get("childAgents") or value.get("child_agents") or 0)),
+        child_agents=max(
+            0, int(value.get("childAgents") or value.get("child_agents") or 0)
+        ),
     )
 
 
@@ -3812,14 +3843,18 @@ class GrokAcpConnection(HarnessConnection):
                         vendor=HarnessKind.GROK_ACP,
                         title="Grok ACP activity",
                         summary=f"Unhandled Grok ACP event: {method or 'unknown'}",
-                        payload=_bounded({"method": method, "params": params}, limit=8_000),
+                        payload=_bounded(
+                            {"method": method, "params": params}, limit=8_000
+                        ),
                     )
                     continue
                 update: dict[str, Any] = (
                     params["update"] if isinstance(params.get("update"), dict) else {}
                 )
                 kind = str(update.get("sessionUpdate") or update.get("type") or "")
-                item_id = str(update.get("toolCallId") or update.get("id") or kind or "activity")
+                item_id = str(
+                    update.get("toolCallId") or update.get("id") or kind or "activity"
+                )
                 if kind == "agent_message_chunk":
                     delta = _acp_text(update.get("content"))
                     if delta:
@@ -3863,10 +3898,14 @@ class GrokAcpConnection(HarnessConnection):
                         item_status="streaming",
                         title="Plan",
                         plan=plan,
-                        payload={"plan": [entry.model_dump(mode="json") for entry in plan]},
+                        payload={
+                            "plan": [entry.model_dump(mode="json") for entry in plan]
+                        },
                     )
                 elif kind in {"current_mode_update", "mode"}:
-                    mode = str(update.get("currentModeId") or update.get("mode") or "")[:100]
+                    mode = str(update.get("currentModeId") or update.get("mode") or "")[
+                        :100
+                    ]
                     yield HarnessEvent(
                         type="item_upsert",
                         vendor=HarnessKind.GROK_ACP,
@@ -3952,15 +3991,22 @@ class GrokAcpConnection(HarnessConnection):
                     item_id="assistant-message",
                     delta=delta,
                 )
-            stop_reason = str(result.get("stopReason") or "end_turn") if isinstance(result, dict) else "end_turn"
+            stop_reason = (
+                str(result.get("stopReason") or "end_turn")
+                if isinstance(result, dict)
+                else "end_turn"
+            )
             if stop_reason in {"cancelled", "canceled"}:
-                yield HarnessEvent(type="interrupted", vendor=HarnessKind.GROK_ACP, message=stop_reason)
+                yield HarnessEvent(
+                    type="interrupted", vendor=HarnessKind.GROK_ACP, message=stop_reason
+                )
                 return
             yield HarnessEvent(
                 type="completed",
                 vendor=HarnessKind.GROK_ACP,
                 external_session_id=self.external_session_id,
-                message="".join(message_parts) or (str(result.get("text") or "") if isinstance(result, dict) else ""),
+                message="".join(message_parts)
+                or (str(result.get("text") or "") if isinstance(result, dict) else ""),
                 payload={"stop_reason": stop_reason},
             )
         finally:
@@ -3979,8 +4025,12 @@ class GrokAcpConnection(HarnessConnection):
                 vendor_request_id=str(raw.get("id")),
                 category="permission",
                 vendor_name="session/request_permission",
-                tool_name=str(params.get("toolCall", {}).get("title") or "tool") if isinstance(params.get("toolCall"), dict) else "tool",
-                arguments=_bounded(params.get("toolCall") or {}, limit=MAX_TOOL_ARGUMENT_TEXT),
+                tool_name=str(params.get("toolCall", {}).get("title") or "tool")
+                if isinstance(params.get("toolCall"), dict)
+                else "tool",
+                arguments=_bounded(
+                    params.get("toolCall") or {}, limit=MAX_TOOL_ARGUMENT_TEXT
+                ),
                 rationale=str(params.get("reason") or "") or None,
             )
         )
@@ -3998,16 +4048,42 @@ class GrokAcpConnection(HarnessConnection):
             )
         decision = await ticket.decision
         allow_option = next(
-            (item for item in options if isinstance(item, dict) and "allow" in str(item.get("kind") or item.get("name") or item.get("optionId") or "").lower()),
+            (
+                item
+                for item in options
+                if isinstance(item, dict)
+                and "allow"
+                in str(
+                    item.get("kind") or item.get("name") or item.get("optionId") or ""
+                ).lower()
+            ),
             options[0] if decision.allowed and options else None,
         )
         deny_option = next(
-            (item for item in options if isinstance(item, dict) and any(word in str(item.get("kind") or item.get("name") or item.get("optionId") or "").lower() for word in ("deny", "reject"))),
+            (
+                item
+                for item in options
+                if isinstance(item, dict)
+                and any(
+                    word
+                    in str(
+                        item.get("kind")
+                        or item.get("name")
+                        or item.get("optionId")
+                        or ""
+                    ).lower()
+                    for word in ("deny", "reject")
+                )
+            ),
             options[-1] if options else None,
         )
         selected = allow_option if decision.allowed else deny_option
         option_id = selected.get("optionId") if isinstance(selected, dict) else None
-        result = {"outcome": {"outcome": "selected", "optionId": option_id}} if option_id else {"outcome": {"outcome": "cancelled"}}
+        result = (
+            {"outcome": {"outcome": "selected", "optionId": option_id}}
+            if option_id
+            else {"outcome": {"outcome": "cancelled"}}
+        )
         await self.rpc.respond(raw.get("id"), result)
 
     async def steer(self, text: str) -> None:
@@ -4016,7 +4092,9 @@ class GrokAcpConnection(HarnessConnection):
 
     async def interrupt(self) -> None:
         if self.active:
-            await self.rpc.notify("session/cancel", {"sessionId": self.external_session_id})
+            await self.rpc.notify(
+                "session/cancel", {"sessionId": self.external_session_id}
+            )
 
     async def close(self) -> None:
         await self.rpc.close()
@@ -4044,7 +4122,11 @@ async def _grok_model_catalog(
         if process.returncode == 0:
             for line in stdout.decode("utf-8", errors="replace").splitlines():
                 match = re.match(r"^\s*[*-]\s+([^\s]+)(?:\s+.*)?$", line)
-                if match and len(match.group(1)) <= 500 and match.group(1) not in models:
+                if (
+                    match
+                    and len(match.group(1)) <= 500
+                    and match.group(1) not in models
+                ):
                     models.append(match.group(1))
     if not models and profile.default_model:
         models = [profile.default_model]
@@ -4068,7 +4150,11 @@ async def _grok_model_catalog(
                 if not isinstance(option, dict):
                     continue
                 effort_id = option.get("id")
-                if not isinstance(effort_id, str) or not effort_id or len(effort_id) > 100:
+                if (
+                    not isinstance(effort_id, str)
+                    or not effort_id
+                    or len(effort_id) > 100
+                ):
                     continue
                 efforts.append(
                     HarnessRuntimeOption(
@@ -4077,7 +4163,9 @@ async def _grok_model_catalog(
                         description=str(option.get("description") or "")[:1_000],
                     )
                 )
-        default_effort = info.get("reasoning_effort") if isinstance(info, dict) else None
+        default_effort = (
+            info.get("reasoning_effort") if isinstance(info, dict) else None
+        )
         model_options.append(
             HarnessModelOptions(
                 model=model,
@@ -4106,7 +4194,9 @@ class GrokAcpAdapter(HarnessAdapter):
             raise HarnessConfigurationError("Grok executable is required")
         executable = Path(profile.executable)
         if not executable.is_absolute() or not executable.is_file():
-            raise HarnessConfigurationError("Grok executable must be an existing absolute file")
+            raise HarnessConfigurationError(
+                "Grok executable must be an existing absolute file"
+            )
         command = [str(executable), "agent"]
         if session is not None:
             command.extend(["--model", session.model])
@@ -4135,7 +4225,10 @@ class GrokAcpAdapter(HarnessAdapter):
                 "initialize",
                 {
                     "protocolVersion": 1,
-                    "clientInfo": {"name": "nebula-core", "version": ADAPTER_CONTRACT_VERSION},
+                    "clientInfo": {
+                        "name": "nebula-core",
+                        "version": ADAPTER_CONTRACT_VERSION,
+                    },
                     "clientCapabilities": {
                         "fs": {"readTextFile": False, "writeTextFile": False},
                         "terminal": False,
@@ -4145,19 +4238,34 @@ class GrokAcpAdapter(HarnessAdapter):
             timeout=15,
         )
         if not isinstance(result, dict):
-            raise HarnessTransportError("Grok ACP initialize returned an invalid result")
+            raise HarnessTransportError(
+                "Grok ACP initialize returned an invalid result"
+            )
         methods: list[Any] = (
             result["authMethods"] if isinstance(result.get("authMethods"), list) else []
         )
         cached = next(
-            (item for item in methods if (item == "cached_token" or isinstance(item, dict) and item.get("id") == "cached_token")),
+            (
+                item
+                for item in methods
+                if (
+                    item == "cached_token"
+                    or isinstance(item, dict)
+                    and item.get("id") == "cached_token"
+                )
+            ),
             None,
         )
         if methods and cached is None:
-            raise HarnessConfigurationError("Grok ACP did not advertise cached_token authentication")
+            raise HarnessConfigurationError(
+                "Grok ACP did not advertise cached_token authentication"
+            )
         try:
             await asyncio.wait_for(
-                rpc.request("authenticate", {"methodId": "cached_token", "_meta": {"headless": True}}),
+                rpc.request(
+                    "authenticate",
+                    {"methodId": "cached_token", "_meta": {"headless": True}},
+                ),
                 timeout=30,
             )
         except HarnessTransportError as exc:
@@ -4166,7 +4274,9 @@ class GrokAcpAdapter(HarnessAdapter):
             ) from exc
         return result
 
-    async def probe(self, profile: HarnessProfile, credential_store: CredentialStore) -> HarnessHealth:
+    async def probe(
+        self, profile: HarnessProfile, credential_store: CredentialStore
+    ) -> HarnessHealth:
         del credential_store
         rpc: _AcpRpc | None = None
         try:
@@ -4205,7 +4315,9 @@ class GrokAcpAdapter(HarnessAdapter):
                     subagent_activity=True,
                     models=models,
                     model_options=model_options,
-                    supported_native_capabilities=_supported_native_capabilities(self.kind),
+                    supported_native_capabilities=_supported_native_capabilities(
+                        self.kind
+                    ),
                     adapter_version=ADAPTER_CONTRACT_VERSION + "/grok-acp-v1",
                     protocol_version=str(initialize.get("protocolVersion") or "1"),
                     checked_at=utc_now(),
@@ -4228,14 +4340,22 @@ class GrokAcpAdapter(HarnessAdapter):
         try:
             await self._initialize(rpc)
             mcp_servers = [
-                {"name": profile.name, "command": profile.command, "args": list(profile.arguments)}
+                {
+                    "name": profile.name,
+                    "command": profile.command,
+                    "args": list(profile.arguments),
+                }
                 for profile in request.mcp_profiles
                 if profile.transport == McpTransport.STDIO and profile.command
             ]
             if request.session.external_session_id:
                 await rpc.request(
                     "session/load",
-                    {"sessionId": request.session.external_session_id, "cwd": str(request.workspace), "mcpServers": mcp_servers},
+                    {
+                        "sessionId": request.session.external_session_id,
+                        "cwd": str(request.workspace),
+                        "mcpServers": mcp_servers,
+                    },
                 )
                 external_session_id = request.session.external_session_id
             else:
@@ -4243,8 +4363,12 @@ class GrokAcpAdapter(HarnessAdapter):
                     "session/new",
                     {"cwd": str(request.workspace), "mcpServers": mcp_servers},
                 )
-                if not isinstance(result, dict) or not isinstance(result.get("sessionId"), str):
-                    raise HarnessTransportError("Grok ACP session/new omitted sessionId")
+                if not isinstance(result, dict) or not isinstance(
+                    result.get("sessionId"), str
+                ):
+                    raise HarnessTransportError(
+                        "Grok ACP session/new omitted sessionId"
+                    )
                 external_session_id = result["sessionId"]
             return GrokAcpConnection(
                 rpc,
@@ -4868,7 +4992,14 @@ class HarnessRuntimeService:
         self.store.update(
             AgentRun,
             run.id,
-            {"status": RunStatus.INTERRUPTED, "completed_at": utc_now(), "metadata": {**run.metadata, "recovery_detail": "Scheduled harness turns were unavailable after restart."}},
+            {
+                "status": RunStatus.INTERRUPTED,
+                "completed_at": utc_now(),
+                "metadata": {
+                    **run.metadata,
+                    "recovery_detail": "Scheduled harness turns were unavailable after restart.",
+                },
+            },
             expected_revision=run.revision,
         )
 
@@ -4903,13 +5034,19 @@ class HarnessRuntimeService:
                     expected_revision=turn.revision,
                 )
                 self._interrupt_owner(turn)
-        scheduled_tasks = [task for task in self._scheduled_mission_tasks.values() if not task.done()]
+        scheduled_tasks = [
+            task for task in self._scheduled_mission_tasks.values() if not task.done()
+        ]
         self._scheduled_mission_tasks.clear()
         for task in scheduled_tasks:
             task.cancel()
         tasks = [
             task
-            for task in (*self._mission_tasks.values(), *self._chat_turn_tasks.values(), *scheduled_tasks)
+            for task in (
+                *self._mission_tasks.values(),
+                *self._chat_turn_tasks.values(),
+                *scheduled_tasks,
+            )
             if not task.done()
         ]
         for task in tasks:
@@ -5181,7 +5318,10 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError(
                 "harness sessions require an explicit model or profile default"
             )
-        if profile.capabilities.models and selected_model not in profile.capabilities.models:
+        if (
+            profile.capabilities.models
+            and selected_model not in profile.capabilities.models
+        ):
             raise HarnessConfigurationError(
                 f"model {selected_model!r} is not advertised by this harness profile"
             )
@@ -5200,12 +5340,16 @@ class HarnessRuntimeService:
             model_options.default_service_tier if model_options else None
         )
         advertised_efforts = {
-            item.id for item in (model_options.reasoning_efforts if model_options else [])
+            item.id
+            for item in (model_options.reasoning_efforts if model_options else [])
         }
         advertised_tiers = {
             item.id for item in (model_options.service_tiers if model_options else [])
         }
-        if resolved_reasoning_effort and resolved_reasoning_effort not in advertised_efforts:
+        if (
+            resolved_reasoning_effort
+            and resolved_reasoning_effort not in advertised_efforts
+        ):
             raise HarnessConfigurationError(
                 f"reasoning effort {resolved_reasoning_effort!r} is not advertised for {selected_model!r}"
             )
@@ -5506,7 +5650,9 @@ class HarnessRuntimeService:
                 )
             session = self.store.get(HarnessSession, chat.harness_session_id or "")
             existing_options = session.metadata.get("runtime_options")
-            frozen_options = existing_options if isinstance(existing_options, dict) else {}
+            frozen_options = (
+                existing_options if isinstance(existing_options, dict) else {}
+            )
             if (
                 harness_reasoning_effort
                 and harness_reasoning_effort != frozen_options.get("reasoning_effort")
@@ -5514,9 +5660,8 @@ class HarnessRuntimeService:
                 raise HarnessStateError(
                     "reasoning effort cannot change within a durable harness session"
                 )
-            if (
-                harness_service_tier
-                and harness_service_tier != frozen_options.get("service_tier")
+            if harness_service_tier and harness_service_tier != frozen_options.get(
+                "service_tier"
             ):
                 raise HarnessStateError(
                     "speed cannot change within a durable harness session"
@@ -5564,17 +5709,19 @@ class HarnessRuntimeService:
                     harness_session_id, engagement_id, profile_id, model
                 )
                 existing_options = session.metadata.get("runtime_options")
-                frozen_options = existing_options if isinstance(existing_options, dict) else {}
+                frozen_options = (
+                    existing_options if isinstance(existing_options, dict) else {}
+                )
                 if (
                     harness_reasoning_effort
-                    and harness_reasoning_effort != frozen_options.get("reasoning_effort")
+                    and harness_reasoning_effort
+                    != frozen_options.get("reasoning_effort")
                 ):
                     raise HarnessStateError(
                         "selected effort does not match the existing harness session"
                     )
-                if (
-                    harness_service_tier
-                    and harness_service_tier != frozen_options.get("service_tier")
+                if harness_service_tier and harness_service_tier != frozen_options.get(
+                    "service_tier"
                 ):
                     raise HarnessStateError(
                         "selected speed does not match the existing harness session"
@@ -5706,7 +5853,9 @@ class HarnessRuntimeService:
                 "knowledge_access": knowledge_access,
                 "harness_mode": harness_mode,
                 "harness_skill": (
-                    harness_skill.model_dump(mode="json") if harness_skill is not None else None
+                    harness_skill.model_dump(mode="json")
+                    if harness_skill is not None
+                    else None
                 ),
                 "citations": [
                     item.model_dump(mode="json") for item in (citations or [])
@@ -6270,7 +6419,9 @@ class HarnessRuntimeService:
             )
             frozen_options = session.metadata.get("runtime_options")
             frozen_options = frozen_options if isinstance(frozen_options, dict) else {}
-            if reasoning_effort and reasoning_effort != frozen_options.get("reasoning_effort"):
+            if reasoning_effort and reasoning_effort != frozen_options.get(
+                "reasoning_effort"
+            ):
                 raise HarnessConfigurationError(
                     "reasoning effort cannot change within an existing harness session"
                 )
@@ -6317,11 +6468,18 @@ class HarnessRuntimeService:
             if item.get("title", "").strip() and item.get("objective", "").strip()
         ]
         if scheduled_for is not None and scheduled_for.tzinfo is None:
-            raise HarnessConfigurationError("scheduled mission time must include a timezone")
+            raise HarnessConfigurationError(
+                "scheduled mission time must include a timezone"
+            )
         if repeat_interval_seconds is not None and repeat_interval_seconds < 3_600:
-            raise HarnessConfigurationError("repeating missions must be at least one hour apart")
+            raise HarnessConfigurationError(
+                "repeating missions must be at least one hour apart"
+            )
         stage_prompts = selected_stages or [
-            {"title": name.strip() if name and name.strip() else "Mission", "objective": objective.strip()}
+            {
+                "title": name.strip() if name and name.strip() else "Mission",
+                "objective": objective.strip(),
+            }
         ]
         runtime_options = session.metadata.get("runtime_options")
         run = AgentRun(
@@ -6343,7 +6501,9 @@ class HarnessRuntimeService:
                 "remote_mcp_confirmed": allow_remote_mcp,
                 "command_runtime_snapshot": oci_snapshot,
                 "native_capabilities": session.metadata.get("native_capabilities", {}),
-                "runtime_options": runtime_options if isinstance(runtime_options, dict) else {},
+                "runtime_options": runtime_options
+                if isinstance(runtime_options, dict)
+                else {},
             },
             budget=budget,
             metadata={
@@ -6352,10 +6512,22 @@ class HarnessRuntimeService:
                 "analysis_only": False,
                 "forked_from_harness_session_id": forked_from_session_id,
                 **({"stages": selected_stages} if selected_stages else {}),
-                **({"scheduled_for": scheduled_for.isoformat()} if scheduled_for else {}),
-                **({"repeat_interval_seconds": repeat_interval_seconds} if repeat_interval_seconds else {}),
+                **(
+                    {"scheduled_for": scheduled_for.isoformat()}
+                    if scheduled_for
+                    else {}
+                ),
+                **(
+                    {"repeat_interval_seconds": repeat_interval_seconds}
+                    if repeat_interval_seconds
+                    else {}
+                ),
                 **({"retry_of_run_id": retry_of_run_id} if retry_of_run_id else {}),
-                **({"recurrence_of_run_id": recurrence_of_run_id} if recurrence_of_run_id else {}),
+                **(
+                    {"recurrence_of_run_id": recurrence_of_run_id}
+                    if recurrence_of_run_id
+                    else {}
+                ),
                 **({"series_id": series_id} if series_id else {}),
                 "total_tasks": len(stage_prompts),
                 "completed_tasks": 0,
@@ -6421,7 +6593,9 @@ class HarnessRuntimeService:
         )
         if scheduled_for is not None and scheduled_for > utc_now():
             task = create_diagnostic_task(
-                self._scheduled_mission_execute(run.id, [turn.id for turn in turns], scheduled_for),
+                self._scheduled_mission_execute(
+                    run.id, [turn.id for turn in turns], scheduled_for
+                ),
                 feature="harnesses",
                 event_code="harnesses.scheduled_mission",
                 failure_message="A scheduled harness Mission failed before start.",
@@ -6446,7 +6620,10 @@ class HarnessRuntimeService:
             delay = max(0.0, (scheduled_for - utc_now()).total_seconds())
             if delay:
                 await asyncio.sleep(delay)
-            if self._closed or self.store.get(AgentRun, run_id).status != RunStatus.QUEUED:
+            if (
+                self._closed
+                or self.store.get(AgentRun, run_id).status != RunStatus.QUEUED
+            ):
                 return
             self._scheduled_mission_tasks.pop(run_id, None)
             self._mission_tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
@@ -6529,7 +6706,9 @@ class HarnessRuntimeService:
             budget=prior.budget,
             reasoning_effort=options.get("reasoning_effort"),
             service_tier=options.get("service_tier"),
-            stages=prior.metadata.get("stages") if isinstance(prior.metadata.get("stages"), list) else [],
+            stages=prior.metadata.get("stages")
+            if isinstance(prior.metadata.get("stages"), list)
+            else [],
             scheduled_for=utc_now() + timedelta(seconds=interval),
             repeat_interval_seconds=interval,
             recurrence_of_run_id=prior.id,
@@ -6554,15 +6733,23 @@ class HarnessRuntimeService:
         active = self._active.get(session_id)
         if active is not None:
             await active.connection.interrupt()
-        task = self._mission_tasks.get(run.id) or self._scheduled_mission_tasks.get(run.id)
+        task = self._mission_tasks.get(run.id) or self._scheduled_mission_tasks.get(
+            run.id
+        )
         if task is not None and not task.done():
             task.cancel()
-        for turn in self.store.list_entities(HarnessTurn, engagement_id=run.engagement_id, limit=1_000):
+        for turn in self.store.list_entities(
+            HarnessTurn, engagement_id=run.engagement_id, limit=1_000
+        ):
             if turn.run_id == run.id and turn.status == HarnessTurnStatus.QUEUED:
                 self.store.update(
                     HarnessTurn,
                     turn.id,
-                    {"status": HarnessTurnStatus.CANCELLED, "completed_at": utc_now(), "error": reason[:1_000]},
+                    {
+                        "status": HarnessTurnStatus.CANCELLED,
+                        "completed_at": utc_now(),
+                        "error": reason[:1_000],
+                    },
                     expected_revision=turn.revision,
                 )
         latest = self.store.get(AgentRun, run.id)
@@ -7342,7 +7529,9 @@ class HarnessRuntimeService:
         plan: list[HarnessPlanEntry] = []
         goal: HarnessGoalSnapshot | None = None
         if turn is not None:
-            for event in self.activity_events(turn.id, after_sequence=0, limit=1_000).events:
+            for event in self.activity_events(
+                turn.id, after_sequence=0, limit=1_000
+            ).events:
                 if event.mode:
                     mode = event.mode
                 if event.item_kind == "plan":
@@ -9653,12 +9842,20 @@ class HarnessRuntimeService:
                     and stage_index < stage_count - 1
                 ):
                     prior_summaries = run.metadata.get("stage_summaries")
-                    summaries = list(prior_summaries) if isinstance(prior_summaries, list) else []
-                    summaries.append({
-                        "title": turn.metadata.get("mission_stage_title", f"Stage {stage_index + 1}"),
-                        "summary": final_summary,
-                        "harness_turn_id": turn.id,
-                    })
+                    summaries = (
+                        list(prior_summaries)
+                        if isinstance(prior_summaries, list)
+                        else []
+                    )
+                    summaries.append(
+                        {
+                            "title": turn.metadata.get(
+                                "mission_stage_title", f"Stage {stage_index + 1}"
+                            ),
+                            "summary": final_summary,
+                            "harness_turn_id": turn.id,
+                        }
+                    )
                     self.store.update_with_event(
                         AgentRun,
                         run.id,

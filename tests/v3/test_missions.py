@@ -42,7 +42,9 @@ def _auth():
     return {"Authorization": "Bearer test-token"}
 
 
-def test_scheduled_native_mission_survives_service_restart_and_can_be_cancelled(tmp_path):
+def test_scheduled_native_mission_survives_service_restart_and_can_be_cancelled(
+    tmp_path,
+):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "scheduled.db")
         engagement = store.create(Engagement(name="Scheduled mission"))
@@ -60,7 +62,12 @@ def test_scheduled_native_mission_survives_service_restart_and_can_be_cancelled(
             objective="Review the bounded scope",
             provider_id=profile.id,
             model="security-model",
-            budget=RunBudget(max_duration_seconds=30, max_tokens=2_000, max_tool_calls=0, max_delegation_depth=0),
+            budget=RunBudget(
+                max_duration_seconds=30,
+                max_tokens=2_000,
+                max_tool_calls=0,
+                max_delegation_depth=0,
+            ),
             scheduled_for=scheduled_for,
             repeat_interval_seconds=86_400,
         )
@@ -76,7 +83,9 @@ def test_scheduled_native_mission_survives_service_restart_and_can_be_cancelled(
         )
         await restored.startup()
         assert run.id in restored._scheduled_tasks
-        cancelled = await restored.stop_mission(run.id, reason="Schedule no longer needed")
+        cancelled = await restored.stop_mission(
+            run.id, reason="Schedule no longer needed"
+        )
         assert cancelled.status == RunStatus.CANCELLED
         await restored.shutdown()
 

@@ -119,9 +119,7 @@ class HarnessKind(StringEnum):
     CLAUDE_AGENT_SDK = "claude_agent_sdk"
 
 
-PROVIDED_HARNESS_KINDS = frozenset(
-    {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}
-)
+PROVIDED_HARNESS_KINDS = frozenset({HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP})
 
 
 class HarnessConnectionMode(StringEnum):
@@ -1206,7 +1204,10 @@ class HarnessModelOptions(NebulaModel):
     def defaults_are_advertised(self) -> "HarnessModelOptions":
         efforts = {item.id for item in self.reasoning_efforts}
         tiers = {item.id for item in self.service_tiers}
-        if self.default_reasoning_effort and self.default_reasoning_effort not in efforts:
+        if (
+            self.default_reasoning_effort
+            and self.default_reasoning_effort not in efforts
+        ):
             raise ValueError("default reasoning effort must be advertised")
         if self.default_service_tier and self.default_service_tier not in tiers:
             raise ValueError("default service tier must be advertised")
@@ -1242,7 +1243,9 @@ class HarnessCapabilities(NebulaModel):
         default_factory=list, max_length=64
     )
     models: list[str] = Field(default_factory=list, max_length=256)
-    model_options: list[HarnessModelOptions] = Field(default_factory=list, max_length=256)
+    model_options: list[HarnessModelOptions] = Field(
+        default_factory=list, max_length=256
+    )
     harness_version: str | None = Field(default=None, max_length=200)
     adapter_version: str | None = Field(default=None, max_length=200)
     protocol_version: str | None = Field(default=None, max_length=200)
@@ -1342,7 +1345,10 @@ class HarnessProfile(Entity):
                 raise ValueError("spawned harnesses cannot define endpoint")
             if self.transport != HarnessTransport.STDIO:
                 raise ValueError("spawned harnesses must use stdio")
-            if self.kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP} and not self.executable:
+            if (
+                self.kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}
+                and not self.executable
+            ):
                 raise ValueError("spawned command harnesses require executable")
             if self.auth_mode == HarnessAuthMode.ENDPOINT_BEARER:
                 raise ValueError("spawned harnesses cannot use endpoint bearer auth")
