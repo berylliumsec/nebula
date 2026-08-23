@@ -45,6 +45,7 @@ vi.mock("../state/WorkspaceContext", () => ({
 describe("NewMissionButton", () => {
   it("submits frozen harness options, durable stages, and a recurring schedule", async () => {
     const user = userEvent.setup();
+    const scheduledLocal = "2026-08-24T09:30";
     startMission.mockClear();
     render(<DialogProvider><NewMissionButton /></DialogProvider>);
     const trigger = await screen.findByRole("button", { name: "Automate task" });
@@ -60,7 +61,7 @@ describe("NewMissionButton", () => {
     await user.click(screen.getByRole("button", { name: "Add stage" }));
     const stageObjectives = screen.getAllByLabelText("Objective");
     await user.type(stageObjectives[1], "Verify the strongest observation");
-    fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "2026-08-24T09:30" } });
+    fireEvent.change(screen.getByLabelText("Start time"), { target: { value: scheduledLocal } });
     await user.selectOptions(screen.getByLabelText("Repeat"), "86400");
     const dialog = within(screen.getByRole("dialog"));
     await waitFor(() => expect(dialog.getByRole("button", { name: "Automate task" })).toBeEnabled());
@@ -73,7 +74,7 @@ describe("NewMissionButton", () => {
       harnessReasoningEffort: "high",
       harnessServiceTier: "priority",
       stages: [{ title: "Stage 1", objective: "Verify the strongest observation" }],
-      scheduledFor: "2026-08-24T13:30:00.000Z",
+      scheduledFor: new Date(`${scheduledLocal}:00`).toISOString(),
       repeatIntervalSeconds: 86_400,
     }));
   });
