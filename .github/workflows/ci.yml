@@ -118,6 +118,7 @@ jobs:
           socket_path="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
           test -S "$socket_path"
           podman system connection add nebula-ci "unix://$socket_path"
+          podman system connection list --format '{{.Name}}|{{.URI}}'
           podman --connection nebula-ci info --format '{{.Host.Security.Rootless}}' | grep -Fx true
       - name: Exercise real disposable execution and workspace persistence
         env:
