@@ -1250,26 +1250,37 @@ class ContainerSandboxRunner(SandboxRunner):
         return True, detail
 
     async def _capture_podman_health(self) -> tuple[str, str, int]:
-        """Capture the fixed-size Podman admission fields without pipe races."""
+        """Capture fixed-size admission fields without inherited-pipe races.
 
-        process = await asyncio.create_subprocess_exec(
-            *self._runtime_argv(),
-            "info",
-            "--format",
-            "{{.Host.Security.Rootless}}",
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_runtime_environment(),
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=30
+        Rootless Podman may create a pause process which retains inherited pipe
+        descriptors. Redirecting the scalar result to regular files lets us
+        wait for the inspected Podman parent rather than for unrelated EOFs.
+        """
+
+        with (
+            tempfile.TemporaryFile() as stdout_file,
+            tempfile.TemporaryFile() as stderr_file,
+        ):
+            process = await asyncio.create_subprocess_exec(
+                *self._runtime_argv(),
+                "info",
+                "--format",
+                "{{.Host.Security.Rootless}}",
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                env=_runtime_environment(),
             )
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            process.kill()
-            await process.communicate()
-            raise
+            try:
+                await asyncio.wait_for(process.wait(), timeout=30)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                process.kill()
+                await process.wait()
+                raise
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            stdout = stdout_file.read(257)
+            stderr = stderr_file.read(64 * 1024 + 1)
         if len(stdout) > 16 or len(stderr) > 64 * 1024:
             raise SandboxError("Podman health output exceeded its fixed limit")
         return (
