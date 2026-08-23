@@ -96,6 +96,7 @@ class EntityRow(Base):
     __table_args__ = (
         Index("ix_entities_kind_engagement", "kind", "engagement_id"),
         Index("ix_entities_engagement_updated", "engagement_id", "updated_at"),
+        Index("ix_entities_kind_updated", "kind", "updated_at"),
     )
 
     id: Mapped[str] = mapped_column(String(200), primary_key=True)

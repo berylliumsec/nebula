@@ -12,6 +12,7 @@ interface Props {
   providers: ProviderHealth[];
   harnesses: HarnessProfile[];
   onRun: (candidate: FencedRunCandidate) => void;
+  triggerVariant?: "icon" | "menu";
 }
 
 const EMPTY: PostToolAssistantConfig = { suggestNextSteps: false, takeNotes: false, backendKind: "provider", cloudConfirmed: false };
@@ -44,13 +45,14 @@ function analysisRuntimeStatus(config: PostToolAssistantConfig, providers: Provi
   return { ready: true };
 }
 
-export function PostToolAssistant({ api, engagementId, providers, harnesses, onRun }: Props) {
+export function PostToolAssistant({ api, engagementId, providers, harnesses, onRun, triggerVariant = "icon" }: Props) {
   const [config, setConfig] = useState<PostToolAssistantConfig>(EMPTY);
   const [result, setResult] = useState<GeneratedDraft>();
   const [expanded, setExpanded] = useState(false);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [savingToggle, setSavingToggle] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
   const [feedback, setFeedback] = useState<ToolFeedback>();
   const [feedbackPosition, setFeedbackPosition] = useState({ top: 18, right: 18 });
   const togglesRef = useRef<HTMLDivElement>(null);
@@ -90,6 +92,21 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
       globalThis.removeEventListener("scroll", positionFeedback, true);
     };
   }, [feedback, positionFeedback]);
+
+  useEffect(() => {
+    if (!controlsOpen) return;
+    const close = (event: MouseEvent | globalThis.KeyboardEvent) => {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      if (event instanceof MouseEvent && togglesRef.current?.contains(event.target as Node)) return;
+      setControlsOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [controlsOpen]);
 
   useEffect(() => {
     const backendId = config.backendKind === "harness" ? config.harnessProfileId : config.providerId;
@@ -183,10 +200,17 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
   };
 
   return <>
-    <div className="post-tool-toggles" aria-label="Post-tool assistance" ref={togglesRef}>
-      <label title="Suggest next steps"><input aria-label="Suggest next steps" type="checkbox" checked={config.suggestNextSteps} disabled={savingToggle} onChange={() => void toggle("suggestNextSteps")} /><span>Suggest next steps</span></label>
-      <label title="Take notes"><input aria-label="Take notes" type="checkbox" checked={config.takeNotes} disabled={savingToggle} onChange={() => void toggle("takeNotes")} /><span>Take notes</span></label>
-      {busy && <LoaderCircle className="spin" size={13} aria-label="Analyzing tool result" />}
+    <div className="post-tool-menu" ref={togglesRef}>
+      <button className={triggerVariant === "menu" ? "workbench-menu-item" : "icon-button subtle"} type="button" role={triggerVariant === "menu" ? "menuitem" : undefined} aria-label="Tool assistance" title="Tool assistance" aria-expanded={controlsOpen} aria-controls="post-tool-assistance-menu" onClick={() => setControlsOpen((open) => !open)}>
+        {busy ? <LoaderCircle className="spin" size={16} aria-label="Analyzing tool result" /> : <Sparkles size={16} aria-hidden="true" />}
+        {triggerVariant === "menu" && <span><strong>Tool assistance</strong><small>Suggestions and project notes</small></span>}
+        {(config.suggestNextSteps || config.takeNotes) && <span className="status-dot healthy" aria-label="Tool assistance enabled" />}
+      </button>
+      {controlsOpen && <div className="post-tool-menu-panel" id="post-tool-assistance-menu" role="group" aria-label="Post-tool assistance">
+        <header><strong>Tool assistance</strong><small>Optional follow-up after completed work</small></header>
+        <label><span><strong>Suggest next steps</strong><small>Propose a reviewed follow-up action</small></span><input aria-label="Suggest next steps" type="checkbox" checked={config.suggestNextSteps} disabled={savingToggle} onChange={() => void toggle("suggestNextSteps")} /></label>
+        <label><span><strong>Take notes</strong><small>Draft a project note from the result</small></span><input aria-label="Take notes" type="checkbox" checked={config.takeNotes} disabled={savingToggle} onChange={() => void toggle("takeNotes")} /></label>
+      </div>}
     </div>
     {feedback && createPortal(<div className={`post-tool-feedback ${feedback.kind}`} style={feedbackPosition} role={feedback.kind === "success" ? "status" : "alert"} aria-live={feedback.kind === "success" ? "polite" : "assertive"}>
       <span className="post-tool-feedback-icon" aria-hidden="true">{feedback.kind === "success" ? <Check size={15} /> : <CircleAlert size={15} />}</span>

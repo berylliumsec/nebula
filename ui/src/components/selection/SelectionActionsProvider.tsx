@@ -96,6 +96,13 @@ export function SelectionActionsProvider({
     const read = (event: Event) => {
       if (event instanceof KeyboardEvent && event.key === "Escape") return;
       if (popoverRef.current?.contains(event.target as Node | null)) return;
+      if (
+        event.target instanceof Element
+        && event.target.closest("[data-selection-actions-disabled]")
+      ) {
+        setDraft(undefined);
+        return;
+      }
       const next = isSelectableTextControl(event.target)
         ? readTextControlSelection(event.target, domOptions)
         : readDomSelection(document.getSelection(), domOptions);

@@ -12,6 +12,7 @@ import { ModalSurface } from "./DialogSystem";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { visibleSource } from "./assistantCode";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { randomId } from "../randomId";
 
 interface ExecutionReviewDialogProps {
   api: ApiClient;
@@ -45,7 +46,7 @@ export function ExecutionReviewDialog({
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string>();
-  const idempotencyKey = useRef(globalThis.crypto.randomUUID());
+  const idempotencyKey = useRef(randomId());
   const runtimeCapability = capabilities?.runtimes.find((item) => item.language === candidate.language);
   const ports = parsePorts(portText);
   const network: ExecutionNetworkRequest = mode === "none"

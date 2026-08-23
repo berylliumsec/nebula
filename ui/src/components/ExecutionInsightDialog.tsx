@@ -10,6 +10,7 @@ import type {
 } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { aiRuntimeLabel, aiRuntimeOptions } from "./aiRuntimes";
+import { ModalSurface } from "./DialogSystem";
 
 type InsightAction = "draft" | "chat";
 
@@ -167,8 +168,7 @@ export function ExecutionInsightDialog({
   };
 
   return (
-    <div className="dialog-backdrop">
-      <form className="provider-dialog execution-insight-dialog" role="dialog" aria-modal="true" aria-labelledby="execution-insight-title" onSubmit={(event) => void submit(event)}>
+      <ModalSurface as="form" className="provider-dialog execution-insight-dialog" labelledBy="execution-insight-title" onClose={() => { if (!busy) onClose(); }} onSubmit={(event) => void submit(event)}>
         <header><div><small>Operator-triggered · bounded redacted context</small><h2 id="execution-insight-title">{action === "draft" ? "Draft execution note" : "Discuss execution in chat"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close execution action" disabled={busy} onClick={onClose}><X size={17} /></button></header>
         {!draft?.content ? <>
           <p className="provider-dialog-note">No request is made until you submit this dialog. The selected AI runtime receives only these categories:</p>
@@ -188,7 +188,6 @@ export function ExecutionInsightDialog({
         </section>}
         {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         <footer>{draft?.content ? <><button className="button danger" type="button" disabled={busy} onClick={() => void reject()}>Reject draft</button><button className="button primary" type="button" disabled={busy || !content?.title.trim()} onClick={() => void accept()}>{busy ? <LoaderCircle className="spin" size={15} /> : <NotebookPen size={15} />} Accept as observation</button></> : <><button className="button secondary" type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={!canSubmit}>{busy ? <LoaderCircle className="spin" size={15} /> : action === "draft" ? <NotebookPen size={15} /> : <MessageSquare size={15} />} {busy ? action === "draft" ? "Generating…" : "Attaching…" : action === "draft" ? "Generate draft" : "Create chat"}</button></>}</footer>
-      </form>
-    </div>
+      </ModalSurface>
   );
 }

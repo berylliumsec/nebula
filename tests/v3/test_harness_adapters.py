@@ -32,10 +32,15 @@ from nebula.v3.harnesses import (
     ClaudeAgentSdkConnection,
     CodexAppServerAdapter,
     CodexAppServerConnection,
+    GrokAcpAdapter,
+    GrokAcpConnection,
     HarnessConfigurationError,
+    HarnessSkillInvocation,
     HarnessPermissionDecision,
     PermissionTicket,
+    _AcpRpc,
     _CodexRpc,
+    _harness_goal_snapshot,
     _codex_thread_config,
 )
 
@@ -63,7 +68,21 @@ class FixtureCodexRpc:
         if method == "model/list":
             return {
                 "data": [
-                    {"id": "gpt-5.4", "model": "gpt-5.4", "isDefault": True},
+                    {
+                        "id": "gpt-5.4",
+                        "model": "gpt-5.4",
+                        "isDefault": True,
+                        "defaultReasoningEffort": "medium",
+                        "supportedReasoningEfforts": [
+                            {"reasoningEffort": "low", "description": "Faster"},
+                            {"reasoningEffort": "medium", "description": "Balanced"},
+                        ],
+                        "defaultServiceTier": "default",
+                        "serviceTiers": [
+                            {"id": "default", "name": "Standard", "description": "Standard speed"},
+                            {"id": "fast", "name": "Fast", "description": "Priority speed"},
+                        ],
+                    },
                     {"id": "gpt-5.3-codex", "model": "gpt-5.3-codex"},
                     {"id": "internal", "model": "internal", "hidden": True},
                 ],
@@ -169,6 +188,51 @@ class FixtureCodexAdapter(CodexAppServerAdapter):
         return self.rpc
 
 
+class FixtureGrokRpc:
+    def __init__(self) -> None:
+        self.events: asyncio.Queue[dict[str, Any] | BaseException] = asyncio.Queue()
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.notifications: list[tuple[str, dict[str, Any] | None]] = []
+        self.closed = False
+
+    async def request(self, method: str, params: dict[str, Any]) -> Any:
+        self.calls.append((method, params))
+        if method == "initialize":
+            return {
+                "protocolVersion": 1,
+                "agentInfo": {"name": "grok", "version": "1.0.5"},
+                "authMethods": [{"id": "cached_token", "name": "Cached login"}],
+            }
+        if method == "authenticate":
+            return {}
+        if method == "session/new":
+            return {"sessionId": "grok-session"}
+        if method == "session/prompt":
+            await self.events.put({"method": "session/update", "params": {"update": {"sessionUpdate": "current_mode_update", "currentModeId": "plan"}}})
+            await self.events.put({"method": "session/update", "params": {"update": {"sessionUpdate": "plan", "entries": [{"id": "one", "content": "Inspect", "status": "in_progress"}]}}})
+            await self.events.put({"method": "session/update", "params": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done"}}}})
+            await asyncio.sleep(0.02)
+            return {"stopReason": "end_turn"}
+        return {}
+
+    async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+        self.notifications.append((method, params))
+
+    async def respond(self, _request_id: Any, _result: dict[str, Any]) -> None:
+        return None
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FixtureGrokAdapter(GrokAcpAdapter):
+    def __init__(self, rpc: FixtureGrokRpc) -> None:
+        self.rpc = rpc
+
+    async def _connect(self, *_args: Any, **_kwargs: Any) -> Any:
+        return self.rpc
+
+
 def _mcp_profile() -> McpServerProfile:
     return McpServerProfile(
         id="mcp-a",
@@ -195,11 +259,350 @@ def test_codex_probe_discovers_selectable_models():
 
         assert health.healthy is True
         assert health.capabilities.models == ["gpt-5.4", "gpt-5.3-codex"]
+        options = health.capabilities.model_options[0]
+        assert options.default_reasoning_effort == "medium"
+        assert [item.id for item in options.reasoning_efforts] == ["low", "medium"]
+        assert options.default_service_tier == "default"
+        assert [item.id for item in options.service_tiers] == ["default", "fast"]
         assert [method for method, _ in rpc.calls] == ["initialize", "model/list"]
         assert rpc.calls[0][1]["capabilities"] == {"requestAttestation": False}
         assert rpc.closed is True
 
     asyncio.run(scenario())
+
+
+def test_grok_probe_negotiates_cached_token_without_credentials():
+    async def scenario() -> None:
+        rpc = FixtureGrokRpc()
+        adapter = FixtureGrokAdapter(rpc)
+        profile = HarnessProfile(
+            id="grok-a",
+            name="Grok",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+        )
+
+        health = await adapter.probe(profile, CredentialStore())
+
+        assert health.healthy is True
+        assert health.harness_version == "1.0.5"
+        assert health.capabilities.plans is True
+        assert health.capabilities.skill_invocation is True
+        assert [method for method, _ in rpc.calls] == ["initialize", "authenticate"]
+        assert rpc.calls[1][1] == {
+            "methodId": "cached_token",
+            "_meta": {"headless": True},
+        }
+        assert rpc.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_grok_connection_normalizes_mode_plan_and_streamed_message():
+    async def scenario() -> None:
+        rpc = FixtureGrokRpc()
+
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = GrokAcpConnection(
+            rpc, external_session_id="grok-session", permission_handler=no_permission
+        )
+        events = [event async for event in connection.run_turn("hello", model="grok-build")]
+
+        assert [event.type for event in events] == [
+            "started",
+            "item_upsert",
+            "item_upsert",
+            "message_delta",
+            "completed",
+        ]
+        assert events[1].mode == "plan"
+        assert events[2].plan[0].status == "in_progress"
+        assert events[-1].message == "done"
+        await connection.interrupt()
+        assert rpc.notifications == []
+
+    asyncio.run(scenario())
+
+
+def test_grok_connection_reuses_one_acp_transport_for_sequential_turns():
+    async def scenario() -> None:
+        rpc = FixtureGrokRpc()
+
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = GrokAcpConnection(
+            rpc, external_session_id="grok-session", permission_handler=no_permission
+        )
+
+        first = [
+            event async for event in connection.run_turn("first", model="grok-build")
+        ]
+        second = [
+            event async for event in connection.run_turn("second", model="grok-build")
+        ]
+
+        assert first[-1].type == "completed"
+        assert first[-1].message == "done"
+        assert second[-1].type == "completed"
+        assert second[-1].message == "done"
+        assert [method for method, _ in rpc.calls].count("session/prompt") == 2
+
+    asyncio.run(scenario())
+
+
+def test_grok_connection_carries_selected_skill_into_prompt():
+    async def scenario() -> None:
+        rpc = FixtureGrokRpc()
+
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = GrokAcpConnection(
+            rpc, external_session_id="grok-session", permission_handler=no_permission
+        )
+        events = [
+            event
+            async for event in connection.run_turn(
+                "inspect the project",
+                model="grok-build",
+                skill=HarnessSkillInvocation(
+                    name="review",
+                    path="/workspace/.grok/skills/review/SKILL.md",
+                ),
+            )
+        ]
+
+        assert events[-1].message == "done"
+        prompt = next(params for method, params in rpc.calls if method == "session/prompt")
+        assert prompt["prompt"] == [
+            {"type": "text", "text": "$review inspect the project"}
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_grok_connection_discards_session_load_replay_before_new_turn():
+    async def scenario() -> None:
+        rpc = FixtureGrokRpc()
+        await rpc.events.put(
+            {
+                "method": "session/update",
+                "params": {
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "old answer"},
+                    }
+                },
+            }
+        )
+
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = GrokAcpConnection(
+            rpc, external_session_id="grok-session", permission_handler=no_permission
+        )
+        events = [
+            event
+            async for event in connection.run_turn(
+                "explain the result",
+                model="grok-build",
+            )
+        ]
+
+        assert [event.delta for event in events if event.type == "message_delta"] == [
+            "done"
+        ]
+        assert events[-1].message == "done"
+
+    asyncio.run(scenario())
+
+
+def test_grok_connection_bounds_verbose_tool_titles_before_activity_ingestion():
+    class VerboseToolRpc(FixtureGrokRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method != "session/prompt":
+                return await super().request(method, params)
+            self.calls.append((method, params))
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": "verbose-tool",
+                            "title": "Execute `" + ("x" * 6_000),
+                        }
+                    },
+                }
+            )
+            await asyncio.sleep(0.02)
+            return {"stopReason": "end_turn"}
+
+    async def scenario() -> None:
+        rpc = VerboseToolRpc()
+
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = GrokAcpConnection(
+            rpc, external_session_id="grok-session", permission_handler=no_permission
+        )
+        events = [
+            event async for event in connection.run_turn("hello", model="grok-build")
+        ]
+
+        tool = next(event for event in events if event.type == "tool_started")
+        assert tool.tool_name is not None
+        assert len(tool.tool_name) == 1_000
+        assert tool.tool_name.startswith("Execute `")
+
+    asyncio.run(scenario())
+
+
+def test_grok_connection_separates_pre_tool_commentary_from_final_answer():
+    class CommentaryRpc(FixtureGrokRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method != "session/prompt":
+                return await super().request(method, params)
+            self.calls.append((method, params))
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "I'll inspect it."},
+                        }
+                    },
+                }
+            )
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": "tool-1",
+                            "title": "Inspect",
+                        }
+                    },
+                }
+            )
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "The result is clear."},
+                        }
+                    },
+                }
+            )
+            await asyncio.sleep(0.02)
+            return {"stopReason": "end_turn"}
+
+    async def scenario() -> None:
+        rpc = CommentaryRpc()
+
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = GrokAcpConnection(
+            rpc, external_session_id="grok-session", permission_handler=no_permission
+        )
+        events = [
+            event
+            async for event in connection.run_turn("inspect", model="grok-build")
+        ]
+
+        assert [event.delta for event in events if event.type == "output_delta"] == [
+            "I'll inspect it."
+        ]
+        assert [event.delta for event in events if event.type == "message_delta"] == [
+            "The result is clear."
+        ]
+        assert events[-1].message == "The result is clear."
+
+    asyncio.run(scenario())
+
+
+def test_grok_connection_keeps_final_answer_before_session_metadata():
+    class MetadataAfterAnswerRpc(FixtureGrokRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method != "session/prompt":
+                return await super().request(method, params)
+            self.calls.append((method, params))
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "The sibling is apple_security_rnd."},
+                        }
+                    },
+                }
+            )
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "available_commands_update",
+                            "availableCommands": [],
+                        }
+                    },
+                }
+            )
+            await asyncio.sleep(0.02)
+            return {"stopReason": "end_turn"}
+
+    async def scenario() -> None:
+        connection = GrokAcpConnection(
+            MetadataAfterAnswerRpc(),
+            external_session_id="grok-session",
+            permission_handler=lambda _request: None,
+        )
+        events = [
+            event
+            async for event in connection.run_turn("name it", model="grok-build")
+        ]
+
+        completed = next(event for event in events if event.type == "completed")
+        assert completed.message == "The sibling is apple_security_rnd."
+        assert any(
+            event.type == "message_delta"
+            and event.delta == "The sibling is apple_security_rnd."
+            for event in events
+        )
+        assert not any(event.stream == "commentary" for event in events)
+
+    asyncio.run(scenario())
+
+
+def test_goal_snapshots_are_normalized_only_from_advertised_state():
+    goal = _harness_goal_snapshot(
+        {
+            "objective": "Ship the adapter",
+            "status": "in-progress",
+            "progress": 50,
+            "currentStep": "Run compatibility tests",
+            "tokensUsed": 12,
+            "childAgents": 2,
+        }
+    )
+    assert goal is not None
+    assert goal.status == "running"
+    assert goal.progress == 0.5
+    assert goal.current_step == "Run compatibility tests"
+    assert goal.tokens_used == 12
+    assert goal.child_agents == 2
+    assert _harness_goal_snapshot({"status": "running"}) is None
 
 
 def test_claude_probe_offers_stable_model_aliases(monkeypatch):
@@ -251,6 +654,10 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
             harness_profile_id=profile.id,
             model="gpt-test",
             metadata={
+                "runtime_options": {
+                    "reasoning_effort": "high",
+                    "service_tier": "fast",
+                },
                 "command_runtime_snapshot": {
                     "schema": "nebula.harness-command-runtime/v1",
                     "runtime_digest": "sha256:" + "a" * 64,
@@ -298,6 +705,8 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert rpc.calls[0][1]["capabilities"]["experimentalApi"] is True
         assert rpc.calls[0][1]["capabilities"]["mcpServerOpenaiFormElicitation"] is True
         _validate("v2/ThreadStartParams.json", rpc.calls[1][1])
+        assert rpc.calls[1][1]["reasoningEffort"] == "high"
+        assert rpc.calls[1][1]["serviceTier"] == "fast"
         _validate("v2/TurnStartParams.json", rpc.calls[2][1])
         assert rpc.calls[2][1]["summary"] == "auto"
         assert [event.type for event in events] == [
@@ -332,6 +741,81 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert '"name":"knowledge.search"' in instructions
         assert '"source":"nebula_core_gateway"' in instructions
         _validate("CommandExecutionRequestApprovalResponse.json", rpc.responses[0][1])
+
+    asyncio.run(scenario())
+
+
+def test_codex_turn_controls_use_structured_skill_and_planning_mode():
+    async def scenario() -> None:
+        rpc = FixtureCodexRpc()
+
+        async def permission(request):
+            future: asyncio.Future[HarnessPermissionDecision] = (
+                asyncio.get_running_loop().create_future()
+            )
+            future.set_result(HarnessPermissionDecision(allowed=True))
+            return PermissionTicket("approval-controls", request.vendor_request_id, future)
+
+        connection = CodexAppServerConnection(
+            rpc,
+            external_session_id="thread-fixture",
+            permission_handler=permission,
+        )
+        events = [
+            event
+            async for event in connection.run_turn(
+                "inspect",
+                model="gpt-test",
+                mode="plan",
+                skill=HarnessSkillInvocation(
+                    name="review",
+                    path="/workspace/.codex/skills/review/SKILL.md",
+                ),
+            )
+        ]
+        assert events[-1].message == "done"
+        turn = next(params for method, params in rpc.calls if method == "turn/start")
+        assert turn["collaborationMode"] == {"mode": "plan"}
+        assert turn["input"][-1] == {
+            "type": "skill",
+            "name": "review",
+            "path": "/workspace/.codex/skills/review/SKILL.md",
+        }
+
+    asyncio.run(scenario())
+
+
+def test_codex_connection_discards_session_resume_replay_before_new_turn():
+    async def scenario() -> None:
+        rpc = FixtureCodexRpc()
+        await rpc.events.put(
+            {
+                "method": "item/agentMessage/delta",
+                "params": {"delta": "old answer", "itemId": "old-message"},
+            }
+        )
+
+        async def permission(request):
+            future: asyncio.Future[HarnessPermissionDecision] = (
+                asyncio.get_running_loop().create_future()
+            )
+            future.set_result(HarnessPermissionDecision(allowed=True))
+            return PermissionTicket("approval-boundary", request.vendor_request_id, future)
+
+        connection = CodexAppServerConnection(
+            rpc,
+            external_session_id="thread-fixture",
+            permission_handler=permission,
+        )
+        events = [
+            event
+            async for event in connection.run_turn("new question", model="gpt-test")
+        ]
+
+        assert "old answer" not in "".join(
+            event.delta or "" for event in events if event.type == "message_delta"
+        )
+        assert events[-1].message == "done"
 
     asyncio.run(scenario())
 
@@ -897,6 +1381,71 @@ def test_codex_rpc_rejects_malformed_and_uncorrelated_messages():
             assert "uncorrelatable" in str(exc)
         else:
             raise AssertionError("uncorrelated app-server response was accepted")
+
+    asyncio.run(scenario())
+
+
+def test_codex_rpc_reader_survives_one_invalid_frame():
+    class FixtureStdout:
+        def __init__(self) -> None:
+            self.lines = iter(
+                [
+                    b'{"id":"not-an-integer","result":{}}\n',
+                    b'{"method":"session/update","params":{"update":{"sessionUpdate":"plan"}}}\n',
+                    b"",
+                ]
+            )
+
+        async def readline(self) -> bytes:
+            return next(self.lines)
+
+    async def scenario() -> None:
+        rpc = _CodexRpc(process=SimpleNamespace(stdout=FixtureStdout(), stderr=None))
+
+        await rpc._reader()
+
+        recovered = await rpc.events.get()
+        closed = await rpc.events.get()
+        assert isinstance(recovered, dict)
+        assert recovered["method"] == "session/update"
+        assert isinstance(closed, Exception)
+        assert "transport closed" in str(closed)
+
+    asyncio.run(scenario())
+
+
+def test_grok_acp_rpc_reports_its_own_transport_identity():
+    class ClosedStdout:
+        async def readline(self) -> bytes:
+            return b""
+
+    async def scenario() -> None:
+        rpc = _AcpRpc(
+            process=SimpleNamespace(stdout=ClosedStdout(), stderr=None)
+        )
+
+        await rpc._reader()
+
+        closed = await rpc.events.get()
+        assert isinstance(closed, Exception)
+        assert str(closed) == "Grok ACP transport closed"
+        assert "Codex" not in str(closed)
+
+    asyncio.run(scenario())
+
+
+def test_codex_rpc_malformed_frame_fails_an_affected_request_without_stopping_reader():
+    async def scenario() -> None:
+        rpc = _CodexRpc()
+        pending = asyncio.get_running_loop().create_future()
+        rpc._pending[1] = pending
+
+        await rpc._dispatch_frame(b"not-json\n")
+
+        with pytest.raises(Exception, match="malformed JSON"):
+            await pending
+        rejected = await rpc.events.get()
+        assert isinstance(rejected, Exception)
 
     asyncio.run(scenario())
 

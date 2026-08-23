@@ -159,6 +159,29 @@ describe("ApiClient", () => {
     });
   });
 
+  it("summarizes validation arrays without copying oversized inputs into the error", async () => {
+    const client = new ApiClient({
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({
+          detail: [{
+            type: "string_too_long",
+            loc: ["response", "summary"],
+            msg: "String should have at most 4000 characters",
+            input: "x".repeat(8_000),
+          }],
+        }), { status: 422, headers: { "x-request-id": "req_validation" } }),
+      ),
+    });
+
+    const error = await client.health().catch((value) => value);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toBe(
+      "The supplied summary exceeded its validated length limit. Reference: req_validation.",
+    );
+    expect(error.message).not.toContain("x".repeat(100));
+  });
+
   it("preserves the Core diagnosis instead of inventing an interface error", async () => {
     const envelope = {
       detail: "Harness transport failed.",
@@ -1107,9 +1130,11 @@ describe("ApiClient", () => {
         controller.close();
       },
     });
+    document.cookie = "nebula_csrf=paired-csrf-token; path=/";
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(stream, { status: 200 }));
     const client = new ApiClient({
       baseUrl: "http://127.0.0.1:8765",
-      fetch: vi.fn<typeof fetch>().mockResolvedValue(new Response(stream, { status: 200 })),
+      fetch: fetchMock,
     });
     const events: Array<{ type: string; phase?: string; harnessSessionId?: string; previousSessionId?: string }> = [];
 
@@ -1118,6 +1143,8 @@ describe("ApiClient", () => {
       harnessSessionId: "session-old",
       engagementId: "engagement-1",
       model: "model-1",
+      harnessReasoningEffort: "high",
+      harnessServiceTier: "fast",
       messages: [{ role: "user", content: "work in parallel" }],
     }, (event) => events.push(event));
 
@@ -1131,6 +1158,14 @@ describe("ApiClient", () => {
       harnessTurnId: "turn-1",
       message: { content: "complete" },
     });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      harness_reasoning_effort: "high",
+      harness_service_tier: "fast",
+    });
+    const headers = new Headers(fetchMock.mock.calls[0][1]?.headers);
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("X-Nebula-CSRF")).toBe("paired-csrf-token");
+    document.cookie = "nebula_csrf=; Max-Age=0; path=/";
   });
 
   it("loads durable chat session summaries and ordered messages", async () => {
@@ -1328,7 +1363,18 @@ describe("ApiClient", () => {
           web_search: true,
           subagents: true,
         },
-        capabilities: { checked_at: entity.updated_at, harness_version: "0.144.0", models: ["gpt-test", "gpt-next"] },
+        capabilities: {
+          checked_at: entity.updated_at,
+          harness_version: "0.144.0",
+          models: ["gpt-test", "gpt-next"],
+          model_options: [{
+            model: "gpt-test",
+            reasoning_efforts: [{ id: "high", label: "High", description: "Quality first" }],
+            default_reasoning_effort: "high",
+            service_tiers: [{ id: "fast", label: "Fast", description: "Priority processing" }],
+            default_service_tier: "fast",
+          }],
+        },
       }]), { status: 200 });
       if (path.endsWith("/mcp-servers")) return new Response(JSON.stringify([{
         ...entity,
@@ -1351,6 +1397,7 @@ describe("ApiClient", () => {
         model: "gpt-test",
         status: "idle",
         mcp_server_ids: ["mcp-1"],
+        metadata: { runtime_options: { reasoning_effort: "high", service_tier: "fast" } },
         last_activity_at: entity.updated_at,
       }]), { status: 200 });
       if (path.endsWith("/harness-sessions/session-1/activity")) return new Response(JSON.stringify({
@@ -1399,6 +1446,13 @@ describe("ApiClient", () => {
     expect(harness).toMatchObject({
       version: "0.144.0",
       models: ["gpt-test", "gpt-next"],
+      modelOptions: [{
+        model: "gpt-test",
+        defaultReasoningEffort: "high",
+        reasoningEfforts: [{ id: "high", label: "High" }],
+        defaultServiceTier: "fast",
+        serviceTiers: [{ id: "fast", label: "Fast" }],
+      }],
       localOnly: false,
       permitsSensitiveData: true,
       nativeCapabilities: {
@@ -1409,7 +1463,7 @@ describe("ApiClient", () => {
       },
     });
     expect(server).toMatchObject({ required: true, tools: [{ name: "read_file", readOnly: true }] });
-    expect(session).toMatchObject({ harnessProfileId: "harness-1", mcpServerIds: ["mcp-1"] });
+    expect(session).toMatchObject({ harnessProfileId: "harness-1", mcpServerIds: ["mcp-1"], reasoningEffort: "high", serviceTier: "fast" });
     expect(activity).toMatchObject({ sessionId: "session-1", busy: true, live: true, turnId: "turn-1", turnStatus: "running" });
     expect(run).toMatchObject({ backend: "harness", harnessSessionId: "session-1" });
     const missionBody = JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/missions"))?.[1]?.body));
@@ -1422,24 +1476,24 @@ describe("ApiClient", () => {
     expect(missionBody).not.toHaveProperty("provider_id");
   });
 
-  it("omits legacy Claude profiles from the provided harnesses", async () => {
+  it("includes Grok ACP while omitting legacy Claude profiles from the provided harnesses", async () => {
     const entity = { created_at: "2026-07-14T10:00:00Z", updated_at: "2026-07-14T10:00:00Z", revision: 1 };
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([{
+    const profile = {
       ...entity,
-      id: "legacy-claude",
-      name: "Legacy Claude",
-      kind: "claude_agent_sdk",
       connection_mode: "spawn",
       transport: "stdio",
       auth_mode: "existing_session",
       enabled: true,
       privacy: { local_only: false, permits_sensitive_data: false },
       native_capabilities: { workspace_access: "none" },
-      capabilities: { checked_at: entity.updated_at, models: ["sonnet"] },
-    }]), { status: 200 }));
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([
+      { ...profile, id: "legacy-claude", name: "Legacy Claude", kind: "claude_agent_sdk", capabilities: { checked_at: entity.updated_at, models: ["sonnet"] } },
+      { ...profile, id: "grok-1", name: "Grok", kind: "grok_acp", capabilities: { checked_at: entity.updated_at, models: ["grok-build"] } },
+    ]), { status: 200 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
 
-    await expect(client.listHarnesses()).resolves.toEqual([]);
+    await expect(client.listHarnesses()).resolves.toMatchObject([{ id: "grok-1", kind: "grok_acp", models: ["grok-build"] }]);
   });
 
   it("assembles every paginated terminal result byte and acknowledges raw access", async () => {

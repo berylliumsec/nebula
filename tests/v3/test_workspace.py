@@ -102,6 +102,39 @@ def test_workspace_lists_previews_downloads_and_rejects_symlinks(tmp_path):
         assert escaped.json()["code"] == "workspace_path_invalid"
 
 
+def test_host_workspace_folder_browser_lists_only_directories(tmp_path):
+    _store, _artifacts, _platform, _workspace, _engagement, client = _services(tmp_path)
+    selectable = tmp_path / "selectable-project"
+    selectable.mkdir()
+    (tmp_path / "ordinary-file.txt").write_text("not a folder", encoding="utf-8")
+
+    response = client.get(
+        "/api/v1/workspace-folders",
+        params={"path": str(tmp_path)},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 200
+    listing = response.json()
+    assert listing["path"] == str(tmp_path.resolve())
+    assert listing["parent"] == str(tmp_path.resolve().parent)
+    assert listing["truncated"] is False
+    assert {"name": "selectable-project", "path": str(selectable.resolve())} in listing[
+        "directories"
+    ]
+    assert "ordinary-file.txt" not in {
+        directory["name"] for directory in listing["directories"]
+    }
+
+    unavailable = client.get(
+        "/api/v1/workspace-folders",
+        params={"path": str(tmp_path / "missing")},
+        headers=AUTH,
+    )
+    assert unavailable.status_code == 404
+    assert unavailable.json()["detail"] == "folder is unavailable"
+
+
 def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
     store, artifacts, platform, workspace, engagement, client = _services(tmp_path)
     root = platform.workspace_for(engagement.id)

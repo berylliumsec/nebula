@@ -240,6 +240,12 @@ def _include_referenced_globals(
                     for citation in entity.citations
                     if citation.artifact_id
                 )
+                for block in entity.content_blocks:
+                    if block.artifact_id:
+                        artifact_ids.add(block.artifact_id)
+                    preview_id = block.metadata.get("preview_artifact_id")
+                    if isinstance(preview_id, str):
+                        artifact_ids.add(preview_id)
             elif isinstance(entity, KnowledgeSource) and entity.artifact_id:
                 artifact_ids.add(entity.artifact_id)
             elif isinstance(entity, ScopeImport):

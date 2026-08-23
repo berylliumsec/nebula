@@ -61,6 +61,7 @@ describe("PostToolAssistant", () => {
     const { api, setPostToolAssistant } = apiFor(config);
     render(<PostToolAssistant api={api} engagementId="project-1" providers={[]} harnesses={[harness]} onRun={vi.fn()} />);
 
+    await user.click(screen.getByRole("button", { name: "Tool assistance" }));
     const suggestions = await screen.findByRole("checkbox", { name: "Suggest next steps" });
     expect(screen.queryByRole("combobox", { name: /analysis backend/i })).toBeNull();
     await user.click(suggestions);
@@ -88,6 +89,7 @@ describe("PostToolAssistant", () => {
     const { api, setPostToolAssistant } = apiFor(config);
     render(<PostToolAssistant api={api} engagementId="project-1" providers={[]} harnesses={[harness]} onRun={vi.fn()} />);
 
+    await user.click(screen.getByRole("button", { name: "Tool assistance" }));
     const notes = await screen.findByRole("checkbox", { name: "Take notes" });
     await user.click(notes);
 

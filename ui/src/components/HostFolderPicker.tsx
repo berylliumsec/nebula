@@ -1,0 +1,99 @@
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ArrowUp, ChevronRight, Folder, FolderOpen, LoaderCircle, Server, X } from "lucide-react";
+import type { ApiClient } from "../api/client";
+import { ModalSurface } from "./DialogSystem";
+
+interface FolderListing {
+  path: string;
+  parent?: string;
+  directories: Array<{ name: string; path: string }>;
+  truncated: boolean;
+}
+
+export function HostFolderPicker({ api, value, onSelect }: {
+  api?: ApiClient;
+  value?: string;
+  onSelect: (path: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [listing, setListing] = useState<FolderListing>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>();
+  const browseButtonRef = useRef<HTMLButtonElement>(null);
+  const folderListRef = useRef<HTMLDivElement>(null);
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const selectButtonRef = useRef<HTMLButtonElement>(null);
+
+  const load = async (path?: string, moveFocus = false) => {
+    if (!api) return;
+    setLoading(true);
+    setError(undefined);
+    try {
+      setListing(await api.listHostWorkspaceFolders(path));
+      if (moveFocus) requestAnimationFrame(() => {
+        const firstFolder = folderListRef.current?.querySelector<HTMLButtonElement>("button");
+        if (firstFolder) firstFolder.focus();
+        else selectButtonRef.current?.focus();
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Folder could not be listed.");
+      requestAnimationFrame(() => retryButtonRef.current?.focus());
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openBrowser = () => {
+    setOpen(true);
+    void load(value?.trim() || listing?.path);
+  };
+
+  const closeBrowser = () => {
+    setOpen(false);
+    setError(undefined);
+    requestAnimationFrame(() => browseButtonRef.current?.focus());
+  };
+
+  const selectCurrentFolder = () => {
+    if (!listing || listing.path === "/") return;
+    onSelect(listing.path);
+    closeBrowser();
+  };
+
+  return <div className="host-folder-picker">
+    <button ref={browseButtonRef} className="button secondary" type="button" disabled={!api || loading} onClick={openBrowser}>
+      {loading ? <LoaderCircle className="spin" size={14} /> : <FolderOpen size={14} />} Browse folders
+    </button>
+    {!open && error && <small role="alert">{error}</small>}
+    {open && createPortal(
+      <ModalSurface labelledBy="host-folder-dialog-title" className="host-folder-dialog" onClose={closeBrowser}>
+        <header>
+          <div>
+            <span className="host-folder-dialog-kicker"><Server size={14} /> Nebula host</span>
+            <h2 id="host-folder-dialog-title">Choose project folder</h2>
+            <p>This folder becomes the shared working directory for Grok, Codex, and Kali.</p>
+          </div>
+          <button className="icon-button subtle" type="button" aria-label="Close folder browser" onClick={closeBrowser}><X size={18} /></button>
+        </header>
+        <div className="host-folder-location">
+          <span>Current folder</span>
+          <code title={listing?.path}>{(listing?.path ?? value?.trim()) || "Loading home folder…"}</code>
+        </div>
+        <div ref={folderListRef} className="host-folder-list" aria-busy={loading}>
+          {loading && <div className="host-folder-state" role="status"><LoaderCircle className="spin" size={20} /><span>Loading folders…</span></div>}
+          {!loading && error && <div className="host-folder-state error" role="alert"><strong>Folder unavailable</strong><span>{error}</span><button ref={retryButtonRef} className="button secondary" type="button" onClick={() => void load(listing?.path, true)}>Try again</button></div>}
+          {!loading && !error && listing?.directories.map((directory) => <button type="button" key={directory.path} title={directory.path} onClick={() => void load(directory.path, true)}><Folder size={18} /><span>{directory.name}</span><ChevronRight size={16} /></button>)}
+          {!loading && !error && listing && !listing.directories.length && <div className="host-folder-state"><FolderOpen size={20} /><span>This folder has no child folders.</span></div>}
+        </div>
+        {listing?.truncated && <small className="host-folder-truncated">Showing the first 500 folders.</small>}
+        <footer>
+          <button className="button secondary" type="button" disabled={!listing?.parent || loading} onClick={() => void load(listing?.parent, true)}><ArrowUp size={16} /> Up one level</button>
+          <span>{listing?.path === "/" ? "The filesystem root cannot be used as a project folder." : "Select the folder shown above."}</span>
+          <button ref={selectButtonRef} className="button primary" type="button" disabled={!listing || listing.path === "/" || loading} onClick={selectCurrentFolder}>Select folder</button>
+        </footer>
+      </ModalSurface>,
+      document.body,
+    )}
+  </div>;
+}

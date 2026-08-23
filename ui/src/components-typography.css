@@ -1,0 +1,243 @@
+/* Shared component typography. Scale values live in tokens.css. */
+
+body { font-size: var(--type-body); line-height: var(--leading-ui); }
+
+/* Shared component anatomy */
+.page { max-width: var(--content-track); }
+.sessions-page.full-screen { width: auto; max-width: none; margin: 0; }
+.panel { border-radius: var(--radius-panel); }
+.button { min-height: var(--control-height); border-radius: var(--radius-control); }
+.icon-button { border-radius: var(--radius-control); }
+.page-header { gap: var(--space-6); }
+.page-header > div:first-child { min-width: 0; }
+.page-header p { max-width: var(--reading-track); }
+
+.surface-notice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+  padding: 10px var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--status-info) 34%, var(--border-soft));
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--status-info-surface);
+}
+.surface-notice > svg { color: var(--status-info); }
+.surface-notice-copy { display: grid; min-width: 0; gap: 2px; }
+.surface-notice-copy strong { font-size: var(--type-control); }
+.surface-notice-copy span { color: var(--muted-strong); font-size: var(--type-secondary); line-height: var(--leading-ui); overflow-wrap: anywhere; }
+.surface-notice-actions { display: flex; align-items: center; gap: var(--space-2); }
+.surface-notice-actions a { color: var(--blue); font-size: var(--type-control); font-weight: var(--weight-semibold); }
+.surface-notice.tone-warning { border-color: color-mix(in srgb, var(--status-warning) 40%, var(--border-soft)); background: var(--status-warning-surface); }
+.surface-notice.tone-warning > svg { color: var(--status-warning); }
+.surface-notice.tone-actionable-error { border-color: color-mix(in srgb, var(--status-error) 44%, var(--border-soft)); background: var(--status-error-surface); }
+.surface-notice.tone-actionable-error > svg,
+.surface-notice.tone-blocking-error > svg { color: var(--status-error); }
+.surface-notice.tone-blocking-error { border-color: var(--status-error); background: var(--status-blocking-surface); }
+
+.standard-empty-state { min-height: 180px; padding: var(--space-6); }
+.standard-empty-state.compact { min-height: 150px; }
+.standard-empty-state > p { max-width: 44ch; }
+.empty-state-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); margin-top: var(--space-4); }
+
+/* Existing dialogs share the same bounded anatomy during the migration. */
+:where(.provider-dialog, .modal-surface) {
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow);
+  overscroll-behavior: contain;
+}
+.modal-surface.provider-dialog { width: min(var(--dialog-track), calc(100vw - 32px)); }
+:where(.provider-dialog, .modal-surface) > header {
+  min-height: 60px;
+}
+:where(.provider-dialog, .modal-surface) > footer {
+  min-height: 60px;
+}
+:where(.provider-dialog, .modal-surface) > footer .button { min-height: var(--control-height); }
+
+/* Primary reading content */
+.page-header p,
+.confirmation-message,
+.chat-message p,
+.assistant-markdown,
+.assistant-streaming-text,
+.resource-description,
+.report-document p,
+.report-document li { font-size: var(--type-reading); line-height: var(--leading-body); }
+
+/* Controls and primary labels */
+.button,
+button,
+.text-link,
+.nav-item,
+.settings-tabs a,
+.settings-tabs > span,
+input,
+textarea,
+select,
+.chat-context-bar select,
+.chat-context-bar input:not([type="checkbox"]),
+.chat-composer textarea,
+.session-tabs button,
+.data-table td,
+.data-table button,
+.chat-message header strong { font-size: var(--type-control); }
+
+/* Supporting copy */
+.panel-header p,
+.section-heading p,
+.event-list p,
+.callout p,
+.empty-state p,
+.provider-message,
+.artifact-body > p,
+.source-list p,
+.chat-settings-popover > header,
+.chat-context-bar > label,
+.chat-knowledge-toggle > span,
+.chat-knowledge-toggle small,
+.chat-harness-mcp,
+.chat-message header span,
+.chat-context-attachment strong,
+.chat-context-attachment p,
+.assistant-markdown table { font-size: var(--type-secondary); line-height: var(--leading-ui); }
+
+/* Metadata remains compact, but never drops below 11px. */
+small,
+kbd,
+.eyebrow,
+.section-kicker,
+.count-badge,
+.status-badge,
+.risk-badge,
+.exposure-badge,
+.lifecycle-badge,
+.citation-chip,
+.chat-context-attachment small,
+.chat-harness-progress strong,
+.chat-harness-progress small,
+.chat-harness-progress code,
+.chat-harness-progress > .harness-steer-button,
+.data-table th,
+.table-footer,
+.event-list small { font-size: var(--type-meta); line-height: var(--leading-ui); }
+
+/* Legacy compact labels that previously rendered at 9–10px. */
+.mobile-more-sheet > div small,
+.terminal-start-detail,
+.terminal-capture-feedback { font-size: var(--type-meta); }
+.mobile-companion-nav button { font-size: var(--type-control); }
+
+/* Explicit hierarchy prevents browser-default Markdown heading jumps. */
+.page-header h1 { font-size: var(--type-title-lg); line-height: 1.12; }
+.panel-header h2,
+.section-heading h2 { font-size: var(--type-title-sm); line-height: 1.3; }
+.assistant-markdown h1 { margin: 22px 0 10px; font-size: 20px; line-height: 1.3; }
+.assistant-markdown h2 { margin: 20px 0 9px; font-size: var(--type-title-md); line-height: 1.35; }
+.assistant-markdown h3 { margin: 18px 0 8px; font-size: var(--type-title-sm); line-height: 1.4; }
+.assistant-markdown h4,
+.assistant-markdown h5,
+.assistant-markdown h6 { margin: 16px 0 7px; font-size: var(--type-body); line-height: 1.4; }
+
+.assistant-code-block pre,
+.assistant-inert-fence,
+.assistant-code-block > header > span { font-size: var(--type-secondary); }
+
+/* Larger labels must compress without pushing their owning workbench surface. */
+.session-toolbar { min-width: 0; }
+.session-toolbar .session-tabs { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.session-toolbar .session-tabs::-webkit-scrollbar { display: none; }
+.session-list nav > button { line-height: 1.3; }
+
+/* Responsive containment invariants */
+.execution-history,
+.execution-history-layout,
+.execution-history-layout > *,
+.workbench-activity-stack { width: 100%; min-width: 0; max-width: 100%; }
+.execution-history-toolbar > * { min-width: 0; max-width: 100%; }
+.execution-history-toolbar input,
+.execution-history-toolbar select { width: 100%; min-width: 0; }
+
+@media (max-width: 1000px) {
+  .settings-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
+  .settings-tabs a { min-width: 0; justify-content: center; text-align: center; }
+  .settings-group,
+  .settings-section { scroll-margin-top: 76px; }
+}
+
+@media (max-width: 760px) {
+  :root {
+    --type-body: 14px;
+    --type-control: 13px;
+  }
+
+  :root .page :is(input:not([type="checkbox"]):not([type="radio"]), textarea, select) { font-size: 16px; }
+
+  .session-toolbar { justify-content: flex-end; min-height: var(--touch-target); }
+  .session-toolbar .session-tabs { display: none; }
+  .settings-tabs { position: sticky; top: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
+  .settings-tabs a { min-height: var(--touch-target); padding-inline: 4px; }
+  .toolbar-page-actions .button.mobile-icon-action { display: inline-flex; width: var(--touch-target); flex: 0 0 var(--touch-target); padding: 0; }
+  .toolbar-page-actions .button.mobile-icon-action > span { display: none; }
+  .settings-group,
+  .settings-section { scroll-margin-top: 72px; }
+
+  .surface-notice {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    margin-inline: 10px;
+  }
+  .surface-notice > svg { margin-top: 2px; }
+  .surface-notice-actions { grid-column: 2; justify-content: space-between; }
+  .surface-notice-actions .icon-button { width: var(--touch-target); height: var(--touch-target); flex: 0 0 var(--touch-target); }
+
+  .dialog-backdrop:has(> :where(.provider-dialog, .modal-surface):not(.terminal-screenshot-dialog)) {
+    align-items: end;
+    padding: var(--space-2);
+  }
+  :where(.provider-dialog, .modal-surface):not(.terminal-screenshot-dialog) {
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - 16px);
+    border-radius: var(--radius-sheet);
+  }
+  :where(.provider-dialog, .modal-surface) > footer {
+    padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+  }
+  :where(.provider-dialog, .modal-surface) > footer .button { min-height: var(--touch-target); }
+  .host-folder-dialog > footer .button { min-height: 48px; }
+
+  .settings-page,
+  .settings-detail,
+  .settings-group,
+  .settings-group-body,
+  .settings-section,
+  .post-tool-settings-panel,
+  .post-tool-settings-fields,
+  .post-tool-settings-intro > div,
+  .runner-layout,
+  .runner-form { min-width: 0; max-width: 100%; }
+  .settings-page { overflow-x: clip; }
+  .settings-group-body { padding-inline: var(--space-3); }
+  .settings-group-body :where(p, small, strong, code) { overflow-wrap: anywhere; }
+
+  .execution-history { overflow: clip; }
+  .execution-history-toolbar { align-items: stretch; }
+  .execution-history-toolbar label { width: 100%; flex: 1 1 140px; }
+
+  .post-tool-settings-fields { grid-template-columns: minmax(0, 1fr); }
+  .post-tool-cloud-consent { grid-column: 1; }
+  .post-tool-settings-panel > footer { align-items: stretch; flex-direction: column; }
+  .post-tool-settings-panel > footer > span { margin-right: 0; }
+  .post-tool-settings-panel > footer > .button { width: 100%; white-space: nowrap; }
+}
+
+@media (max-width: 360px) {
+  .settings-tabs a { font-size: var(--type-meta); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+}

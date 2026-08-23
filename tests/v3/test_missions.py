@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import time
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,12 +13,15 @@ from nebula.v3.domain import (
     Engagement,
     ProviderProfile,
     RiskClass,
+    RunBudget,
+    RunBackend,
     RunStatus,
     ScopePolicy,
     Task,
     TaskStatus,
     ToolCall,
     ToolCallStatus,
+    utc_now,
 )
 from nebula.v3.missions import MissionService
 from nebula.v3.providers import (
@@ -36,6 +40,79 @@ from nebula.v3.storage import ConflictError, NebulaStore
 
 def _auth():
     return {"Authorization": "Bearer test-token"}
+
+
+def test_scheduled_native_mission_survives_service_restart_and_can_be_cancelled(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "scheduled.db")
+        engagement = store.create(Engagement(name="Scheduled mission"))
+        profile = _profile(store)
+        provider = RecordingProvider(profile)
+        scheduled_for = utc_now() + timedelta(days=1)
+        first = MissionService(
+            store,
+            checkpoint_path=tmp_path / "scheduled-checkpoints.db",
+            provider_factory=lambda selected: provider,
+        )
+        run = await first.start_mission(
+            engagement_id=engagement.id,
+            name="Daily review",
+            objective="Review the bounded scope",
+            provider_id=profile.id,
+            model="security-model",
+            budget=RunBudget(max_duration_seconds=30, max_tokens=2_000, max_tool_calls=0, max_delegation_depth=0),
+            scheduled_for=scheduled_for,
+            repeat_interval_seconds=86_400,
+        )
+        assert store.get(AgentRun, run.id).status == RunStatus.QUEUED
+        assert run.id in first._scheduled_tasks
+        await first.shutdown()
+        assert store.get(AgentRun, run.id).status == RunStatus.QUEUED
+
+        restored = MissionService(
+            store,
+            checkpoint_path=tmp_path / "scheduled-checkpoints.db",
+            provider_factory=lambda selected: provider,
+        )
+        await restored.startup()
+        assert run.id in restored._scheduled_tasks
+        cancelled = await restored.stop_mission(run.id, reason="Schedule no longer needed")
+        assert cancelled.status == RunStatus.CANCELLED
+        await restored.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_native_startup_leaves_scheduled_harness_missions_for_harness_runtime(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "cross-runtime-schedule.db")
+        engagement = store.create(Engagement(name="Harness schedule ownership"))
+        scheduled = store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="Remain owned by the harness runtime",
+                backend=RunBackend.HARNESS,
+                status=RunStatus.QUEUED,
+                harness_profile_id="harness-profile",
+                supervisor_model="harness-model",
+                metadata={
+                    "origin": "api",
+                    "scheduled_for": (utc_now() + timedelta(days=1)).isoformat(),
+                },
+            )
+        )
+        service = MissionService(
+            store,
+            checkpoint_path=tmp_path / "cross-runtime-checkpoints.db",
+        )
+
+        await service.startup()
+
+        assert store.get(AgentRun, scheduled.id).status == RunStatus.QUEUED
+        assert store.replay_events(scheduled.id) == []
+        await service.shutdown()
+
+    asyncio.run(scenario())
 
 
 def _profile(store, *, enabled=True, models=None):
@@ -333,7 +410,7 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
             headers=_auth(),
             json=_start_payload(engagement, profile),
         )
-        assert response.status_code == 202
+        assert response.status_code == 202, response.text
         queued = response.json()
         assert queued["status"] == "queued"
         assert queued["supervisor_provider_id"] == profile.id
@@ -387,6 +464,60 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
             ).status_code
             == 404
         )
+
+
+def test_api_retry_creates_a_new_audited_run_with_frozen_runtime(tmp_path):
+    store = NebulaStore(tmp_path / "retry.db")
+    engagement = store.create(Engagement(name="Mission retry"))
+    profile = _profile(store)
+    provider = RecordingProvider(profile)
+    service = MissionService(
+        store,
+        checkpoint_path=tmp_path / "retry-checkpoints.db",
+        provider_factory=lambda selected: provider,
+    )
+    original = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Recheck the bounded scope",
+            status=RunStatus.INTERRUPTED,
+            supervisor_provider_id=profile.id,
+            supervisor_model="security-model",
+            budget=RunBudget(
+                max_duration_seconds=60,
+                max_tokens=100,
+                max_tool_calls=0,
+                max_concurrency=1,
+                max_delegation_depth=0,
+            ),
+            runtime_snapshot={"mcp_server_ids": [], "remote_mcp_confirmed": False},
+            metadata={
+                "name": "Interrupted review",
+                "stages": [
+                    {"title": "Verify", "objective": "Verify the strongest observation"}
+                ],
+            },
+        )
+    )
+
+    with TestClient(
+        create_app(store, auth_token="test-token", mission_service=service)
+    ) as client:
+        response = client.post(
+            f"/api/v1/runs/{original.id}/retry",
+            headers=_auth(),
+            json={},
+        )
+        assert response.status_code == 202, response.text
+        retried = response.json()
+        assert retried["id"] != original.id
+        assert retried["supervisor_provider_id"] == profile.id
+        assert retried["supervisor_model"] == "security-model"
+        assert retried["metadata"]["retry_of_run_id"] == original.id
+        assert retried["metadata"]["stages"] == original.metadata["stages"]
+        _wait_for_status(client, retried["id"], "complete")
+
+    assert store.get(AgentRun, original.id).status == RunStatus.INTERRUPTED
 
 
 def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):

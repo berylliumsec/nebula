@@ -3,6 +3,8 @@ import type { HarnessActivityEvent, HarnessSessionActivity } from "../api/types"
 import {
   finalAssistantContent,
   groupHarnessActivityItems,
+  harnessActivityItemTier,
+  harnessActivityTier,
   harnessCostLabel,
   isSameHarnessSessionActivity,
   isTimelineActivity,
@@ -11,6 +13,7 @@ import {
   reduceHarnessActivity,
   shouldShowActivityItem,
   shouldShowActivityKind,
+  summarizeHarnessActivity,
 } from "./harnessActivity";
 
 function activity(
@@ -58,6 +61,150 @@ describe("harness activity presentation", () => {
   it("preserves useful observable work", () => {
     expect(isTimelineActivity(activity("item_upsert", { type: "commandExecution" }))).toBe(true);
     expect(isTimelineActivity(activity("notice", { severity: "warning" }))).toBe(true);
+  });
+
+  it("shows commentary, tools, and operator-action states", () => {
+    expect(isTimelineActivity({
+      ...activity("output_delta"),
+      itemKind: "reasoning",
+      title: "Commentary",
+    })).toBe(true);
+    expect(isTimelineActivity({
+      ...activity("tool_started"),
+      itemKind: "tool",
+    })).toBe(true);
+    expect(isTimelineActivity(activity("approval_required"))).toBe(true);
+    expect(isTimelineActivity(activity("interaction"))).toBe(true);
+    expect(isTimelineActivity(activity("checkpoint"))).toBe(true);
+    expect(isTimelineActivity(activity("error"))).toBe(true);
+    expect(isTimelineActivity({
+      ...activity("item_upsert"),
+      itemKind: "plan",
+      itemStatus: "failed",
+    })).toBe(true);
+  });
+
+  it("routes lifecycle context to details and unknown protocol traffic to diagnostics", () => {
+    expect(isTimelineActivity(activity("notice", {
+      method: "_x.ai/session_notification",
+    }))).toBe(false);
+    expect(harnessActivityTier(activity("notice", { method: "_x.ai/session_notification" }))).toBe("diagnostics");
+    expect(harnessActivityTier({ ...activity("item_upsert"), itemKind: "plan" })).toBe("details");
+    expect(harnessActivityTier({ ...activity("item_upsert"), itemKind: "mode" })).toBe("details");
+    expect(harnessActivityTier({ ...activity("item_upsert"), itemKind: "goal" })).toBe("details");
+    expect(harnessActivityTier({ ...activity("item_upsert"), itemKind: "hook" })).toBe("details");
+    expect(harnessActivityTier(activity("usage"))).toBe("details");
+    expect(isTimelineActivity(activity("usage"))).toBe(true);
+  });
+
+  it("applies the sparse timeline consistently to Codex", () => {
+    expect(isTimelineActivity({
+      ...activity("notice", { method: "thread/status/changed" }),
+      vendor: "codex_app_server",
+    })).toBe(false);
+    expect(harnessActivityTier({
+      ...activity("item_upsert"),
+      vendor: "codex_app_server",
+      itemKind: "plan",
+    })).toBe("details");
+    expect(isTimelineActivity({
+      ...activity("output_delta"),
+      vendor: "codex_app_server",
+      itemKind: "reasoning",
+      title: "Commentary",
+    })).toBe(true);
+    expect(isTimelineActivity({
+      ...activity("tool_started"),
+      vendor: "codex_app_server",
+      itemKind: "command",
+    })).toBe(true);
+    expect(isTimelineActivity({
+      ...activity("approval_required"),
+      vendor: "codex_app_server",
+    })).toBe(true);
+  });
+
+  it("creates the same calm turn summary for either vendor", () => {
+    const items: Parameters<typeof summarizeHarnessActivity>[0] = [
+      {
+        assistantId: "assistant-1",
+        key: "commentary",
+        kind: "reasoning" as const,
+        type: "output_delta",
+        vendor: "grok_acp" as const,
+        status: "completed",
+        title: "Commentary",
+        sequence: 1,
+        streams: { commentary: "Checking the workspace." },
+        payload: {},
+        artifactIds: [],
+      },
+      {
+        assistantId: "assistant-1",
+        key: "command",
+        kind: "command" as const,
+        type: "tool_completed",
+        vendor: "codex_app_server" as const,
+        status: "completed",
+        title: "Run tests",
+        sequence: 2,
+        streams: {},
+        payload: {},
+        artifactIds: [],
+      },
+      {
+        assistantId: "assistant-1",
+        key: "usage",
+        type: "usage",
+        vendor: "codex_app_server" as const,
+        title: "Usage",
+        sequence: 3,
+        streams: {},
+        payload: {},
+        artifactIds: [],
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          reasoningTokens: 0,
+          costUsd: 0,
+          durationMs: 3200,
+          turnCount: 1,
+          modelUsage: {},
+          rateLimit: {},
+        },
+      },
+    ];
+
+    expect(items.map(harnessActivityItemTier)).toEqual(["transcript", "transcript", "details"]);
+    expect(summarizeHarnessActivity(items)).toBe("1 action · commentary · 3.2s");
+  });
+
+  it("keeps negotiated mode, plan, and goal state on normalized activity items", () => {
+    const [item] = reduceHarnessActivity([], {
+      ...activity("item_upsert"),
+      sequence: 3,
+      vendor: "codex_app_server",
+      harnessTurnId: "turn-controls",
+      itemId: "turn-plan",
+      itemKind: "plan",
+      mode: "plan",
+      plan: [{ id: "step-1", title: "Inspect", status: "in_progress" }],
+      goal: {
+        objective: "Ship the adapter",
+        status: "running",
+        progress: 0.5,
+        childAgents: 1,
+      },
+      title: "Plan",
+    }, "assistant-controls");
+
+    expect(item.mode).toBe("plan");
+    expect(item.plan?.[0].status).toBe("in_progress");
+    expect(item.goal?.objective).toBe("Ship the adapter");
   });
 
   it("does not erase streamed assistant text with an empty durable frame", () => {
