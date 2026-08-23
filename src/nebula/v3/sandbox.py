@@ -1233,6 +1233,24 @@ class ContainerSandboxRunner(SandboxRunner):
             if not connection_ok:
                 return False, connection_detail
 
+        if (
+            self.profile.platform == RunnerPlatform.LINUX
+            and self.profile.context is None
+        ):
+            version_output, version_error, return_code = await self._capture(
+                "--version"
+            )
+            if return_code != 0:
+                return False, version_error or "Podman executable is unavailable"
+            if not version_output.strip().lower().startswith("podman version "):
+                return (
+                    False,
+                    "configured Podman executable returned invalid version metadata",
+                )
+            if os.geteuid() == 0:
+                return False, "Podman must be invoked by a non-root operator"
+            return True, "approved local rootless Podman runner is available"
+
         info_output, info_error, return_code = await self._capture(
             "info", "--format", "json"
         )
