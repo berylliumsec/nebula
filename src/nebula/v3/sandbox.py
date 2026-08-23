@@ -1301,13 +1301,11 @@ class ContainerSandboxRunner(SandboxRunner):
 
     async def _validate_podman_connection(self, *, machine: bool) -> tuple[bool, str]:
         assert self.profile is not None
-        connections_output, connections_error, return_code = await self._capture(
-            "system",
-            "connection",
-            "list",
-            "--format",
-            "{{.Name}}|{{.URI}}",
-        )
+        (
+            connections_output,
+            connections_error,
+            return_code,
+        ) = await self._capture_podman_connections()
         if return_code != 0:
             return False, connections_error or "Podman connection is unavailable"
         uri = None
@@ -1336,6 +1334,36 @@ class ContainerSandboxRunner(SandboxRunner):
             )
             return False, f"Podman connection must {expected}"
         return True, "Podman connection is local"
+
+    async def _capture_podman_connections(self) -> tuple[str, str, int]:
+        """Capture the local client catalog without remote-context side effects."""
+
+        assert self.profile is not None
+        process = await asyncio.create_subprocess_exec(
+            str(self.profile.executable),
+            "system",
+            "connection",
+            "list",
+            "--format",
+            "{{.Name}}|{{.URI}}",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            process.kill()
+            await process.communicate()
+            raise
+        if len(stdout) > 64 * 1024 or len(stderr) > 64 * 1024:
+            raise SandboxError("Podman connection catalog exceeded its fixed limit")
+        return (
+            stdout.decode("utf-8", errors="replace").strip(),
+            stderr.decode("utf-8", errors="replace").strip(),
+            int(process.returncode or 0),
+        )
 
     async def _capture(
         self, *arguments: str, include_context: bool = True
