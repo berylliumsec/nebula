@@ -330,9 +330,9 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
 
     async def capture(*arguments):
         nonlocal health_checks
-        if arguments == ("--version",):
+        if arguments == ("info", "--format", "json"):
             health_checks += 1
-            return "podman version 4.9.3", "", 0
+            return '{"host":{"security":{"rootless":true},"os":"linux"}}', "", 0
         if arguments == ("ps", "--all", "--format", "{{.Names}}"):
             return (
                 "nebula-terminal-good123\n"
@@ -366,11 +366,16 @@ def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
 
     async def capture(*arguments):
         nonlocal health_checks
-        if arguments == ("--version",):
+        if arguments == ("info", "--format", "json"):
             health_checks += 1
-            if health_checks == 1:
-                return "podman version 4.9.3", "", 0
-            return "", "Podman became unavailable", 1
+            rootless = health_checks == 1
+            return (
+                json.dumps(
+                    {"host": {"security": {"rootless": rootless}, "os": "linux"}}
+                ),
+                "",
+                0,
+            )
         if arguments == ("ps", "--all", "--format", "{{.Names}}"):
             return "nebula-terminal-orphan\n", "", 0
         raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
@@ -493,8 +498,8 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
     )
 
     async def capture(*arguments):
-        assert arguments == ("--version",)
-        return "podman version 4.9.3", "", 0
+        assert arguments == ("info", "--format", "json")
+        return '{"host":{"security":{"rootless":true},"os":"linux"}}', "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
     available, detail = asyncio.run(runner.available())

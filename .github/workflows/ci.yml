@@ -77,7 +77,7 @@ jobs:
           poetry run pytest -q tests/v3/test_migrations.py
 
   rootless-podman:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -101,16 +101,8 @@ jobs:
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
           NEBULA_TEST_RUNTIME_IMAGE: localhost/nebula-operator-runtime:ci
-        run: |
-          sudo systemd-run --wait --pipe --collect --quiet \
-            --property=Delegate=yes \
-            --property="User=$(id -u)" \
-            --property="WorkingDirectory=$GITHUB_WORKSPACE" \
-            --property="Environment=HOME=$HOME" \
-            --property="Environment=PATH=$PATH" \
-            --property="Environment=NEBULA_TEST_CONTAINER_RUNTIME=$NEBULA_TEST_CONTAINER_RUNTIME" \
-            --property="Environment=NEBULA_TEST_RUNTIME_IMAGE=$NEBULA_TEST_RUNTIME_IMAGE" \
-            "$(command -v poetry)" run pytest -q tests/v3/test_sandbox_integration.py
+        run: >-
+          poetry run pytest -q tests/v3/test_sandbox_integration.py
 
   frontend:
     runs-on: ubuntu-latest
