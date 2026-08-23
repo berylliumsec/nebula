@@ -97,20 +97,22 @@ jobs:
           --file tests/v3/integration/Containerfile.operator-runtime
           --tag localhost/nebula-operator-runtime:ci
           .
+      - name: Delegate required rootless cgroup controllers
+        run: |
+          runner_uid="$(id -u)"
+          sudo systemctl set-property --runtime \
+            "user@${runner_uid}.service" \
+            "Delegate=cpu cpuset io memory pids" \
+            CPUWeight=100
+          systemctl --user set-property --runtime user.slice CPUWeight=100
+          user_control_group="$(sudo systemctl show --property=ControlGroup --value "user@${runner_uid}.service")"
+          grep -qw cpu "/sys/fs/cgroup${user_control_group}/cgroup.controllers"
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
           NEBULA_TEST_RUNTIME_IMAGE: localhost/nebula-operator-runtime:ci
-        run: |
-          sudo systemd-run --scope --quiet --property=Delegate=yes -- \
-            timeout 120 runuser --user "$(id -un)" -- \
-            env \
-              "HOME=$HOME" \
-              "PATH=$PATH" \
-              "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
-              "NEBULA_TEST_CONTAINER_RUNTIME=$NEBULA_TEST_CONTAINER_RUNTIME" \
-              "NEBULA_TEST_RUNTIME_IMAGE=$NEBULA_TEST_RUNTIME_IMAGE" \
-              "$(command -v poetry)" run pytest -q tests/v3/test_sandbox_integration.py
+        run: >-
+          poetry run pytest -q tests/v3/test_sandbox_integration.py
 
   frontend:
     runs-on: ubuntu-latest
