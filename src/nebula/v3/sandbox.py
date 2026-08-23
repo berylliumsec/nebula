@@ -2746,9 +2746,28 @@ def _runtime_environment() -> dict[str, str]:
         "HOME",
         "XDG_RUNTIME_DIR",
     }
-    return {
+    environment = {
         name: value for name in retained if (value := os.environ.get(name)) is not None
     }
+    runtime_directory = environment.get("XDG_RUNTIME_DIR")
+    if runtime_directory:
+        try:
+            resolved_runtime = Path(runtime_directory).resolve(strict=True)
+            session_bus = (resolved_runtime / "bus").resolve(strict=True)
+            if (
+                resolved_runtime.is_dir()
+                and session_bus.parent == resolved_runtime
+                and session_bus.is_socket()
+                and session_bus.stat().st_uid == os.getuid()
+            ):
+                # Podman uses the local user session bus for rootless cgroup and
+                # event state. Derive the address from the already-retained
+                # runtime directory instead of trusting an ambient endpoint.
+                environment["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={session_bus}"
+        except OSError:
+            # diagnostic-expected: a host without a local session bus remains valid.
+            pass
+    return environment
 
 
 __all__ = [
