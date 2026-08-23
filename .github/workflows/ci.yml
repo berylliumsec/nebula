@@ -77,9 +77,7 @@ jobs:
           poetry run pytest -q tests/v3/test_migrations.py
 
   rootless-podman:
-    # Keep the kernel/user-namespace integration gate off GitHub's rolling
-    # ubuntu-latest image; runner-image changes must be adopted deliberately.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -99,31 +97,12 @@ jobs:
           --file tests/v3/integration/Containerfile.operator-runtime
           --tag localhost/nebula-operator-runtime:ci
           .
-      - name: Diagnose rootless sandbox constraint compatibility
-        shell: bash
-        run: |
-          set +e
-          workspace="$RUNNER_TEMP/nebula-runtime-probe"
-          mkdir -p "$workspace"
-          chmod 0777 "$workspace"
-          runtime=(podman run --rm --pull=never --cap-drop=ALL --security-opt=no-new-privileges --network=none)
-          echo probe=hardening
-          timeout 8 "${runtime[@]}" localhost/nebula-operator-runtime:ci /bin/true
-          echo exit=$?
-          echo probe=resources
-          timeout 8 "${runtime[@]}" --cpus=1 --memory=512m --pids-limit=128 --user=65532:65532 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m --read-only localhost/nebula-operator-runtime:ci /bin/true
-          echo exit=$?
-          echo probe=workspace
-          timeout 8 "${runtime[@]}" --cpus=1 --memory=512m --pids-limit=128 --user=65532:65532 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m --read-only --mount="type=bind,src=$workspace,dst=/workspace" --workdir=/workspace localhost/nebula-operator-runtime:ci /bin/true
-          echo exit=$?
-          echo probe=interactive
-          printf "print('probe-ok')\n" | timeout 8 "${runtime[@]}" --cpus=1 --memory=512m --pids-limit=128 --user=65532:65532 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m --read-only --interactive --mount="type=bind,src=$workspace,dst=/workspace" --workdir=/workspace localhost/nebula-operator-runtime:ci /usr/local/bin/python -E -s -u
-          echo exit=$?
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
           NEBULA_TEST_RUNTIME_IMAGE: localhost/nebula-operator-runtime:ci
         run: >-
+          systemd-run --user --scope --quiet --property=Delegate=yes --
           poetry run pytest -q tests/v3/test_sandbox_integration.py
 
   frontend:
