@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
 import pytest
 
 from nebula.v3.sandbox import (
     ContainerSandboxRunner,
+    ContainerRuntimeType,
+    RunnerIsolationMode,
+    RunnerPlatform,
+    RunnerProfile,
     SandboxLimits,
     SandboxNetwork,
     SandboxRequest,
@@ -16,21 +21,38 @@ from nebula.v3.sandbox import (
 
 RUNTIME = os.getenv("NEBULA_TEST_CONTAINER_RUNTIME")
 IMAGE = os.getenv("NEBULA_TEST_RUNTIME_IMAGE")
+CONTEXT = os.getenv("NEBULA_TEST_CONTAINER_CONTEXT")
 pytestmark = pytest.mark.skipif(
     not (RUNTIME and IMAGE),
     reason="a real rootless runtime and operator-runtime image are required",
 )
 
 
+def _runner(tmp_path: Path) -> ContainerSandboxRunner:
+    profile = (
+        RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable=Path(RUNTIME),
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+            context=CONTEXT,
+        )
+        if RUNTIME and CONTEXT
+        else None
+    )
+    return ContainerSandboxRunner(
+        runtime=None if profile else RUNTIME,
+        profile=profile,
+        allow_unpinned_images=True,
+        workspace_roots=[tmp_path],
+    )
+
+
 def test_real_rootless_runtime_streams_raw_code_and_persists_only_workspace(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir(mode=0o777)
     workspace.chmod(0o777)
-    runner = ContainerSandboxRunner(
-        runtime=RUNTIME,
-        allow_unpinned_images=True,
-        workspace_roots=[tmp_path],
-    )
+    runner = _runner(tmp_path)
     chunks: list[tuple[str, bytes]] = []
 
     async def capture(channel: str, payload: bytes) -> None:
@@ -92,11 +114,7 @@ def test_real_rootless_runtime_opens_and_removes_container_terminal(tmp_path):
     workspace = tmp_path / "terminal-workspace"
     workspace.mkdir(mode=0o777)
     workspace.chmod(0o777)
-    runner = ContainerSandboxRunner(
-        runtime=RUNTIME,
-        allow_unpinned_images=True,
-        workspace_roots=[tmp_path],
-    )
+    runner = _runner(tmp_path)
 
     async def scenario() -> None:
         available, detail = await runner.available()

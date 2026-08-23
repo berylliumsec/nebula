@@ -112,9 +112,17 @@ jobs:
             echo +cpu | sudo tee "$control_group/cgroup.subtree_control" >/dev/null
           done
           grep -qw cpu "$user_service/user.slice/cgroup.subtree_control"
+      - name: Bind rootless Podman to a local Unix connection
+        run: |
+          systemctl --user start podman.socket
+          socket_path="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+          test -S "$socket_path"
+          podman system connection add nebula-ci "unix://$socket_path"
+          podman --connection nebula-ci info --format '{{.Host.Security.Rootless}}' | grep -Fx true
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
+          NEBULA_TEST_CONTAINER_CONTEXT: nebula-ci
           NEBULA_TEST_RUNTIME_IMAGE: localhost/nebula-operator-runtime:ci
         run: >-
           poetry run pytest -q tests/v3/test_sandbox_integration.py
