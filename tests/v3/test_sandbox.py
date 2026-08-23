@@ -560,6 +560,30 @@ def test_linux_podman_named_connection_accepts_local_unix_socket(monkeypatch):
     assert "local rootless Podman" in detail
 
 
+def test_linux_podman_named_connection_reports_local_catalog_miss(monkeypatch):
+    monkeypatch.delenv("CONTAINER_HOST", raising=False)
+    runner = ContainerSandboxRunner(
+        profile=RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable="/usr/bin/podman",
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+            context="nebula-ci",
+        )
+    )
+
+    async def capture(*arguments, include_context=True):
+        assert arguments[0] == "system"
+        assert include_context is False
+        return "other-local|unix:///run/user/1001/podman/podman.sock", "", 0
+
+    monkeypatch.setattr(runner, "_capture", capture)
+    available, detail = asyncio.run(runner.available())
+    assert available is False
+    assert "'nebula-ci' was not found" in detail
+    assert "available: other-local" in detail
+
+
 def test_linux_docker_rejects_remote_context_and_ambient_tcp_endpoint(monkeypatch):
     monkeypatch.delenv("DOCKER_HOST", raising=False)
     runner = ContainerSandboxRunner(

@@ -1312,12 +1312,23 @@ class ContainerSandboxRunner(SandboxRunner):
         if return_code != 0:
             return False, connections_error or "Podman connection is unavailable"
         uri = None
+        available_names: list[str] = []
         for line in connections_output.splitlines()[:100]:
             name, separator, candidate_uri = line.partition("|")
-            if separator and name == self.profile.context:
+            if not separator:
+                continue
+            available_names.append(name)
+            if name == self.profile.context:
                 uri = candidate_uri
                 break
-        valid = isinstance(uri, str) and (
+        if uri is None:
+            catalog = ", ".join(available_names[:10]) or "none"
+            return (
+                False,
+                f"Configured Podman connection {self.profile.context!r} was not found "
+                f"in the local client catalog (available: {catalog})",
+            )
+        valid = (
             _is_local_machine_endpoint(uri) if machine else _is_local_unix_endpoint(uri)
         )
         if not valid:
