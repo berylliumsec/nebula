@@ -325,7 +325,7 @@ test("12 build sign off and export a report", async ({ page, core }) => {
 test("13 configure models identity and appearance", async ({ page, core }) => {
   const project = await createScenarioProject(core, "Settings Review");
   await openProject(page, core, project, "/settings");
-  await expect(page.getByRole("heading", { name: "Ready to work" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Readiness" })).toBeVisible();
   await beat(page);
   await page.getByRole("link", { name: "Advanced settings" }).click();
 

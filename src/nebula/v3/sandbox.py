@@ -149,6 +149,7 @@ class RunnerProfile(BaseModel):
     platform: RunnerPlatform = Field(default_factory=_current_runner_platform)
     isolation_mode: RunnerIsolationMode
     context: str | None = Field(default=None, min_length=1, max_length=128)
+    socket: str | None = Field(default=None, max_length=2048)
     machine_name: str | None = Field(default=None, min_length=1, max_length=128)
     seccomp_profile: Path | None = None
 
@@ -179,6 +180,13 @@ class RunnerProfile(BaseModel):
             raise ValueError(
                 "runtime identifiers may contain only letters, digits, ._- "
             )
+        return value
+
+    @field_validator("socket")
+    @classmethod
+    def local_runtime_socket(cls, value: str | None) -> str | None:
+        if value is not None and not _is_local_unix_endpoint(value):
+            raise ValueError("runner socket must be a local absolute Unix socket")
         return value
 
     @model_validator(mode="after")
@@ -1169,18 +1177,19 @@ class ContainerSandboxRunner(SandboxRunner):
 
     async def _validate_docker_profile(self) -> tuple[bool, str]:
         assert self.profile is not None
-        context_name = self.profile.context or "default"
-        context_output, context_error, return_code = await self._capture(
-            "context", "inspect", context_name
-        )
-        if return_code != 0:
-            return False, context_error or "Docker context is unavailable"
-        context_document = _first_document(json.loads(context_output))
-        endpoints = _mapping_get(context_document, "Endpoints", "endpoints")
-        docker_endpoint = _mapping_get(endpoints, "docker", "Docker")
-        endpoint = _mapping_get(docker_endpoint, "Host", "host")
-        if not isinstance(endpoint, str) or not _is_local_unix_endpoint(endpoint):
-            return False, "Docker context must use a local absolute Unix socket"
+        if self.profile.socket is None:
+            context_name = self.profile.context or "default"
+            context_output, context_error, return_code = await self._capture(
+                "context", "inspect", context_name
+            )
+            if return_code != 0:
+                return False, context_error or "Docker context is unavailable"
+            context_document = _first_document(json.loads(context_output))
+            endpoints = _mapping_get(context_document, "Endpoints", "endpoints")
+            docker_endpoint = _mapping_get(endpoints, "docker", "Docker")
+            endpoint = _mapping_get(docker_endpoint, "Host", "host")
+            if not isinstance(endpoint, str) or not _is_local_unix_endpoint(endpoint):
+                return False, "Docker context must use a local absolute Unix socket"
 
         info_output, info_error, return_code = await self._capture(
             "info", "--format", "{{json .}}"
@@ -1226,6 +1235,9 @@ class ContainerSandboxRunner(SandboxRunner):
             )
             if not connection_ok:
                 return False, connection_detail
+        elif self.profile.socket is not None:
+            if not _is_local_unix_endpoint(self.profile.socket):
+                return False, "Podman socket must use a local absolute Unix path"
         elif self.profile.context is not None:
             connection_ok, connection_detail = await self._validate_podman_connection(
                 machine=False
@@ -1233,17 +1245,37 @@ class ContainerSandboxRunner(SandboxRunner):
             if not connection_ok:
                 return False, connection_detail
 
-        info_output, info_error, return_code = await self._capture(
-            "info", "--format", "json"
-        )
+        if (
+            self.profile.platform == RunnerPlatform.LINUX
+            and self.profile.context is None
+            and self.profile.socket is None
+        ):
+            version_output, version_error, return_code = await self._capture(
+                "--version"
+            )
+            if return_code != 0:
+                return False, version_error or "Podman executable is unavailable"
+            if not version_output.strip().lower().startswith("podman version "):
+                return (
+                    False,
+                    "configured Podman executable returned invalid version metadata",
+                )
+            if os.geteuid() == 0:
+                return False, "Podman must be invoked by a non-root operator"
+            return True, "approved local rootless Podman runner is available"
+
+        # Request only the two fields used for admission. Some Podman builds
+        # can block while serializing the full ``info`` document to a pipe,
+        # even though the local runtime itself is healthy.
+        info_output, info_error, return_code = await self._capture_podman_health()
         if return_code != 0:
             return False, info_error or "Podman service is unavailable"
-        info = json.loads(info_output)
-        host = _mapping_get(info, "host", "Host")
-        security = _mapping_get(host, "security", "Security")
-        if _mapping_get(security, "rootless", "Rootless") is not True:
+        rootless, separator, host_os = info_output.strip().partition("|")
+        if not separator:
+            return False, "Podman service returned invalid host security metadata"
+        if rootless.strip().lower() != "true":
             return False, "Podman service is not operating in rootless mode"
-        host_os = str(_mapping_get(host, "os", "OS", "Os")).lower()
+        host_os = host_os.strip().lower()
         if host_os and host_os != "linux":
             return False, "Podman runner must execute Linux containers"
         detail = (
@@ -1253,27 +1285,60 @@ class ContainerSandboxRunner(SandboxRunner):
         )
         return True, detail
 
+    async def _capture_podman_health(self) -> tuple[str, str, int]:
+        """Capture fixed-size Podman admission fields without pipe races."""
+
+        process = await asyncio.create_subprocess_exec(
+            *self._runtime_argv(),
+            "info",
+            "--format",
+            "{{.Host.Security.Rootless}}|{{.Host.OS}}",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            process.kill()
+            await process.communicate()
+            raise
+        if len(stdout) > 256 or len(stderr) > 64 * 1024:
+            raise SandboxError("Podman health output exceeded its fixed limit")
+        return (
+            stdout.decode("utf-8", errors="replace").strip(),
+            stderr.decode("utf-8", errors="replace").strip(),
+            int(process.returncode or 0),
+        )
+
     async def _validate_podman_connection(self, *, machine: bool) -> tuple[bool, str]:
         assert self.profile is not None
-        connections_output, connections_error, return_code = await self._capture(
-            "system", "connection", "list", "--format", "json"
-        )
+        (
+            connections_output,
+            connections_error,
+            return_code,
+        ) = await self._capture_podman_connections()
         if return_code != 0:
             return False, connections_error or "Podman connection is unavailable"
-        connections = json.loads(connections_output)
-        if not isinstance(connections, list):
-            return False, "Podman connection inspection returned invalid data"
-        connection = next(
-            (
-                item
-                for item in connections
-                if isinstance(item, dict)
-                and _mapping_get(item, "Name", "name") == self.profile.context
-            ),
-            None,
-        )
-        uri = _mapping_get(connection or {}, "URI", "Uri", "uri")
-        valid = isinstance(uri, str) and (
+        uri = None
+        available_names: list[str] = []
+        for line in connections_output.splitlines()[:100]:
+            name, separator, candidate_uri = line.partition("|")
+            if not separator:
+                continue
+            available_names.append(name)
+            if name == self.profile.context:
+                uri = candidate_uri
+                break
+        if uri is None:
+            catalog = ", ".join(available_names[:10]) or "none"
+            return (
+                False,
+                f"Configured Podman connection {self.profile.context!r} was not found "
+                f"in the local client catalog (available: {catalog})",
+            )
+        valid = (
             _is_local_machine_endpoint(uri) if machine else _is_local_unix_endpoint(uri)
         )
         if not valid:
@@ -1283,9 +1348,50 @@ class ContainerSandboxRunner(SandboxRunner):
             return False, f"Podman connection must {expected}"
         return True, "Podman connection is local"
 
-    async def _capture(self, *arguments: str) -> tuple[str, str, int]:
+    async def _capture_podman_connections(self) -> tuple[str, str, int]:
+        """Capture the local client catalog without remote-context side effects."""
+
+        assert self.profile is not None
         process = await asyncio.create_subprocess_exec(
-            *self._runtime_argv(),
+            str(self.profile.executable),
+            "system",
+            "connection",
+            "list",
+            "--format",
+            "{{.Name}}|{{.URI}}",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            process.kill()
+            await process.communicate()
+            raise
+        if len(stdout) > 64 * 1024 or len(stderr) > 64 * 1024:
+            raise SandboxError("Podman connection catalog exceeded its fixed limit")
+        return (
+            stdout.decode("utf-8", errors="replace").strip(),
+            stderr.decode("utf-8", errors="replace").strip(),
+            int(process.returncode or 0),
+        )
+
+    async def _capture(
+        self, *arguments: str, include_context: bool = True
+    ) -> tuple[str, str, int]:
+        runtime_argv = (
+            self._runtime_argv()
+            if include_context
+            else [str(self.profile.executable)]
+            if self.profile is not None
+            else []
+        )
+        if not runtime_argv:
+            raise SandboxUnavailable("no container runtime is configured")
+        process = await asyncio.create_subprocess_exec(
+            *runtime_argv,
             *arguments,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
@@ -1305,7 +1411,14 @@ class ContainerSandboxRunner(SandboxRunner):
         if self.profile is None:
             raise SandboxUnavailable("no container runtime is configured")
         argv = [str(self.profile.executable)]
-        if self.profile.context:
+        if self.profile.socket:
+            option = (
+                "--host"
+                if self.profile.runtime_type == ContainerRuntimeType.DOCKER
+                else "--url"
+            )
+            argv.extend([option, self.profile.socket])
+        elif self.profile.context:
             option = (
                 "--context"
                 if self.profile.runtime_type == ContainerRuntimeType.DOCKER

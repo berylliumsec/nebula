@@ -330,9 +330,9 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
 
     async def capture(*arguments):
         nonlocal health_checks
-        if arguments == ("info", "--format", "json"):
+        if arguments == ("--version",):
             health_checks += 1
-            return '{"host":{"security":{"rootless":true},"os":"linux"}}', "", 0
+            return "podman version 4.9.3", "", 0
         if arguments == ("ps", "--all", "--format", "{{.Names}}"):
             return (
                 "nebula-terminal-good123\n"
@@ -366,16 +366,11 @@ def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
 
     async def capture(*arguments):
         nonlocal health_checks
-        if arguments == ("info", "--format", "json"):
+        if arguments == ("--version",):
             health_checks += 1
-            rootless = health_checks == 1
-            return (
-                json.dumps(
-                    {"host": {"security": {"rootless": rootless}, "os": "linux"}}
-                ),
-                "",
-                0,
-            )
+            if health_checks == 1:
+                return "podman version 4.9.3", "", 0
+            return "", "Podman became unavailable", 1
         if arguments == ("ps", "--all", "--format", "{{.Names}}"):
             return "nebula-terminal-orphan\n", "", 0
         raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
@@ -484,6 +479,14 @@ def test_runner_profiles_require_supported_explicit_runtime_combinations():
             platform=RunnerPlatform.LINUX,
             isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
         )
+    with pytest.raises(ValidationError, match="local absolute Unix socket"):
+        RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable="/usr/bin/podman",
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+            socket="ssh://runner.example/run/podman.sock",
+        )
 
 
 def test_linux_rootless_podman_profile_is_certified(monkeypatch):
@@ -498,13 +501,39 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
     )
 
     async def capture(*arguments):
-        assert arguments == ("info", "--format", "json")
-        return '{"host":{"security":{"rootless":true},"os":"linux"}}', "", 0
+        assert arguments == ("--version",)
+        return "podman version 4.9.3", "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
     available, detail = asyncio.run(runner.available())
     assert available is True
     assert "rootless Podman" in detail
+
+
+def test_linux_rootless_podman_socket_is_certified(monkeypatch):
+    monkeypatch.delenv("CONTAINER_HOST", raising=False)
+    runner = ContainerSandboxRunner(
+        profile=RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable="/usr/bin/podman",
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+            socket="unix:///run/user/1001/podman/podman.sock",
+        )
+    )
+
+    async def capture_health():
+        return "true|linux", "", 0
+
+    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
+    available, detail = asyncio.run(runner.available())
+    assert available is True
+    assert "local rootless Podman" in detail
+    assert runner._runtime_argv() == [
+        "/usr/bin/podman",
+        "--url",
+        "unix:///run/user/1001/podman/podman.sock",
+    ]
 
 
 def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
@@ -519,18 +548,68 @@ def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
         )
     )
 
-    async def capture(*arguments):
-        assert arguments[0] == "system"
+    async def capture_connections():
         return (
-            '[{"Name":"remote-lab","URI":"ssh://runner.example/run/podman.sock"}]',
+            "remote-lab|ssh://runner.example/run/podman.sock",
             "",
             0,
         )
 
-    monkeypatch.setattr(runner, "_capture", capture)
+    monkeypatch.setattr(runner, "_capture_podman_connections", capture_connections)
     available, detail = asyncio.run(runner.available())
     assert available is False
     assert "local Unix socket" in detail
+
+
+def test_linux_podman_named_connection_accepts_local_unix_socket(monkeypatch):
+    monkeypatch.delenv("CONTAINER_HOST", raising=False)
+    runner = ContainerSandboxRunner(
+        profile=RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable="/usr/bin/podman",
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+            context="nebula-ci",
+        )
+    )
+
+    async def capture_connections():
+        return (
+            "nebula-ci|unix:///run/user/1001/podman/podman.sock",
+            "",
+            0,
+        )
+
+    async def capture_health():
+        return "true|linux", "", 0
+
+    monkeypatch.setattr(runner, "_capture_podman_connections", capture_connections)
+    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
+    available, detail = asyncio.run(runner.available())
+    assert available is True
+    assert "local rootless Podman" in detail
+
+
+def test_linux_podman_named_connection_reports_local_catalog_miss(monkeypatch):
+    monkeypatch.delenv("CONTAINER_HOST", raising=False)
+    runner = ContainerSandboxRunner(
+        profile=RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable="/usr/bin/podman",
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+            context="nebula-ci",
+        )
+    )
+
+    async def capture_connections():
+        return "other-local|unix:///run/user/1001/podman/podman.sock", "", 0
+
+    monkeypatch.setattr(runner, "_capture_podman_connections", capture_connections)
+    available, detail = asyncio.run(runner.available())
+    assert available is False
+    assert "'nebula-ci' was not found" in detail
+    assert "available: other-local" in detail
 
 
 def test_linux_docker_rejects_remote_context_and_ambient_tcp_endpoint(monkeypatch):
@@ -632,18 +711,25 @@ def test_macos_podman_machine_requires_running_rootless_loopback_connection(
         )
     )
 
-    async def capture(*arguments):
+    async def capture(*arguments, include_context=True):
         if arguments[0] == "machine":
+            assert include_context is True
             return '[{"State":"running","Rootful":false}]', "", 0
-        if arguments[0] == "system":
-            return (
-                '[{"Name":"podman-machine-default","URI":"ssh://core@127.0.0.1:51234/run/user/501/podman.sock"}]',
-                "",
-                0,
-            )
-        return '{"host":{"security":{"rootless":true},"os":"linux"}}', "", 0
+        raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
+
+    async def capture_connections():
+        return (
+            "podman-machine-default|ssh://core@127.0.0.1:51234/run/user/501/podman.sock",
+            "",
+            0,
+        )
+
+    async def capture_health():
+        return "true|linux", "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
+    monkeypatch.setattr(runner, "_capture_podman_connections", capture_connections)
+    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
     available, detail = asyncio.run(runner.available())
     assert available is True
     assert "Podman Machine" in detail

@@ -13,6 +13,7 @@ export interface EngagementSummary {
   clientName?: string;
   status: "draft" | "active" | "paused" | "complete" | "archived";
   tags: string[];
+  workspacePath?: string;
   createdAt: string;
   updatedAt: string;
   scopeAssetCount: number;
@@ -24,6 +25,7 @@ export interface EngagementCreateRequest {
   clientName?: string;
   status?: EngagementSummary["status"];
   tags?: string[];
+  workspacePath?: string;
 }
 
 export interface AgentRunSummary {
@@ -49,6 +51,16 @@ export interface AgentRunSummary {
   backend?: "native" | "harness";
   harnessProfileId?: Identifier;
   harnessSessionId?: Identifier;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  objective?: string;
+  finalSummary?: string;
+  retryOfRunId?: Identifier;
+  remoteMcpConfirmed?: boolean;
+  scheduledFor?: string;
+  repeatIntervalSeconds?: number;
+  stages?: Array<{ title: string; objective: string }>;
 }
 
 export interface MissionCreateRequest {
@@ -61,6 +73,11 @@ export interface MissionCreateRequest {
   harnessSessionId?: Identifier;
   mcpServerIds?: Identifier[];
   model?: string;
+  harnessReasoningEffort?: string;
+  harnessServiceTier?: string;
+  stages?: Array<{ title: string; objective: string }>;
+  scheduledFor?: string;
+  repeatIntervalSeconds?: number;
   maxDurationSeconds?: number;
   maxTokens?: number;
   maxCostUsd?: number;
@@ -361,6 +378,7 @@ export interface FindingCreateRequest {
   assetIds?: Identifier[];
   cveIds?: string[];
   cweIds?: string[];
+  sourceRunId?: Identifier;
 }
 
 export interface FindingUpdateRequest {
@@ -404,6 +422,7 @@ export interface ReportCreateRequest {
   findingIds?: string[];
   observationIds?: string[];
   noteTransforms?: ReportNoteTransform[];
+  sourceRunId?: Identifier;
 }
 
 export interface ReportUpdateRequest {
@@ -443,7 +462,7 @@ export interface WritingTransformRequest {
   providerId?: Identifier;
   harnessProfileId?: Identifier;
   model: string;
-  purpose: "note" | "report_summary" | "report_section";
+  purpose: "note" | "report_summary" | "report_section" | "code_suggestion";
   instruction: string;
   sourceText: string;
   cloudConfirmed?: boolean;
@@ -453,6 +472,12 @@ export interface WritingTransformResponse {
   content: string;
   provenance: AIWritingProvenance;
   usage: ChatUsage;
+}
+
+export interface CodeCompletionItem {
+  label: string;
+  type?: string;
+  detail?: string;
 }
 
 export interface ObservationSummary {
@@ -749,6 +774,28 @@ export interface ChatMessage {
   id?: Identifier;
   role: ChatRole;
   content: string;
+  contentBlocks?: ChatContentBlock[];
+}
+
+export interface ChatContentBlock {
+  type: "text" | "code" | "image" | "artifact" | "citation" | "activity";
+  text?: string;
+  language?: string;
+  artifactId?: Identifier;
+  mediaType?: string;
+  alt?: string;
+  activityId?: Identifier;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PairedDevice {
+  id: Identifier;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string;
+  idleExpiresAt: string;
+  absoluteExpiresAt: string;
+  current: boolean;
 }
 
 export interface ChatContextAttachment {
@@ -804,14 +851,33 @@ export type HarnessActivityItemKind =
   | "subagent"
   | "hook"
   | "review"
-  | "compaction";
+  | "compaction"
+  | "mode"
+  | "goal";
+
+export interface HarnessPlanEntry {
+  id: string;
+  title: string;
+  status: "pending" | "in_progress" | "completed" | "blocked";
+}
+
+export interface HarnessGoalSnapshot {
+  objective: string;
+  status: "pending" | "running" | "complete" | "blocked" | "failed";
+  progress?: number;
+  currentStep?: string;
+  elapsedMs?: number;
+  tokenBudget?: number;
+  tokensUsed?: number;
+  childAgents: number;
+}
 
 export interface HarnessActivityEvent {
-  schemaVersion: "nebula.harness-activity/v1";
+  schemaVersion: "nebula.harness-activity/v1" | "nebula.harness-activity/v2";
   id?: Identifier;
   sequence?: number;
   type: string;
-  vendor?: "codex_app_server" | "claude_agent_sdk";
+  vendor?: "codex_app_server" | "claude_agent_sdk" | "grok_acp";
   harnessSessionId?: Identifier;
   harnessTurnId?: Identifier;
   externalSessionId?: string;
@@ -830,6 +896,9 @@ export interface HarnessActivityEvent {
   artifactIds: Identifier[];
   payload: Record<string, unknown>;
   occurredAt?: string;
+  mode?: string;
+  plan?: HarnessPlanEntry[];
+  goal?: HarnessGoalSnapshot;
 }
 
 export interface HarnessActivityEventPage {
@@ -873,6 +942,10 @@ export interface ChatCompletionRequest {
   toolsEnabled?: boolean;
   maxArtifactQueries?: number;
   allowCloudToolResults?: boolean;
+  harnessMode?: string;
+  harnessReasoningEffort?: string;
+  harnessServiceTier?: string;
+  harnessSkill?: HarnessSkillInvocation;
 }
 
 export interface ChatCompletionResponse {
@@ -1050,6 +1123,8 @@ export interface ChatSessionSummary {
   providerId?: Identifier;
   harnessProfileId?: Identifier;
   harnessSessionId?: Identifier;
+  parentSessionId?: Identifier;
+  forkedFromMessageId?: Identifier;
   model?: string;
   toolsEnabled: boolean;
   createdAt: string;
@@ -1061,7 +1136,7 @@ export interface HarnessProfile {
   id: Identifier;
   name: string;
   // Claude remains a wire-compatible legacy value but is not a provided harness.
-  kind: "codex_app_server" | "claude_agent_sdk";
+  kind: "codex_app_server" | "claude_agent_sdk" | "grok_acp";
   connectionMode: "spawn" | "endpoint";
   transport: "stdio" | "unix" | "websocket";
   executable?: string;
@@ -1070,6 +1145,7 @@ export interface HarnessProfile {
   secretRef?: string;
   defaultModel?: string;
   models: string[];
+  modelOptions?: HarnessModelOptions[];
   enabled: boolean;
   localOnly: boolean;
   permitsSensitiveData: boolean;
@@ -1081,10 +1157,28 @@ export interface HarnessProfile {
   revision: number;
 }
 
+export interface HarnessRuntimeOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface HarnessModelOptions {
+  model: string;
+  reasoningEfforts: HarnessRuntimeOption[];
+  defaultReasoningEffort?: string;
+  serviceTiers: HarnessRuntimeOption[];
+  defaultServiceTier?: string;
+}
+
 export interface HarnessCapabilities {
   activityReplay: boolean;
   reasoningSummaries: boolean;
   plans: boolean;
+  planningMode: boolean;
+  goalMonitoring: boolean;
+  skillInvocation: boolean;
+  modes: string[];
   liveCommandOutput: boolean;
   fileDiffs: boolean;
   detailedUsage: boolean;
@@ -1095,6 +1189,15 @@ export interface HarnessCapabilities {
   checkpointRewind: boolean;
   steering: boolean;
   interruption: boolean;
+}
+
+export interface HarnessSkillInvocation {
+  name: string;
+  path: string;
+}
+
+export interface HarnessSkillSummary extends HarnessSkillInvocation {
+  source: "project" | "installed";
 }
 
 export interface HarnessInteraction {
@@ -1155,6 +1258,8 @@ export interface HarnessSessionSummary {
   engagementId: Identifier;
   harnessProfileId: Identifier;
   model: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
   status:
     | "starting"
     | "idle"
@@ -1185,6 +1290,9 @@ export interface HarnessSessionActivity {
   startedAt?: string;
   lastActivityAt: string;
   detail: string;
+  mode?: string;
+  plan?: HarnessPlanEntry[];
+  goal?: HarnessGoalSnapshot;
 }
 
 export interface ChatSessionRenameRequest {
@@ -1197,6 +1305,7 @@ export interface PersistedChatMessage extends ChatMessage {
   engagementId: Identifier;
   sessionId: Identifier;
   sequence: number;
+  sourceMessageId?: Identifier;
   providerId?: Identifier;
   model?: string;
   usage?: ChatUsage;
@@ -1753,7 +1862,7 @@ export interface WorkspaceResetStatus {
   canReset: boolean;
   activeTerminalCount: number;
   activeExecutionCount: number;
-  reasonCode?: "workspace_busy";
+  reasonCode?: "workspace_busy" | "linked_workspace";
   detail: string;
 }
 
@@ -1776,6 +1885,7 @@ export type RunEventKind =
   | "run.failed"
   | "run.cancelled"
   | "run.status_changed"
+  | "stage.completed"
   | "task.created"
   | "task.started"
   | "task.turn_completed"

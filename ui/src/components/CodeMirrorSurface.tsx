@@ -3,6 +3,7 @@ import { bracketMatching, defaultHighlightStyle, indentOnInput, StreamLanguage, 
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { dropCursor, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
 import { useEffect, useRef } from "react";
+import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 
 interface CodeMirrorSurfaceProps {
   active: boolean;
@@ -10,6 +11,8 @@ interface CodeMirrorSurfaceProps {
   onChange(value: string): void;
   onCursorChange(line: number, column: number): void;
   onSave(): void;
+  onSelectionChange?(text: string): void;
+  completionSource?(context: CompletionContext): Promise<CompletionResult | null>;
   value: string;
 }
 
@@ -55,7 +58,7 @@ async function languageForPath(path: string): Promise<Extension> {
 
 const nebulaTheme = EditorView.theme({
   "&": { width: "100%", height: "100%", color: "var(--text)", backgroundColor: "var(--canvas)", fontSize: "13px" },
-  ".cm-scroller": { overflow: "auto", fontFamily: "var(--mono)", lineHeight: "1.5" },
+  ".cm-scroller": { overflow: "auto", fontFamily: "var(--font-mono)", lineHeight: "1.5" },
   ".cm-content": { minHeight: "100%", caretColor: "var(--text-strong)", fontFamily: "inherit", padding: "10px 0", outline: "none" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text-strong)" },
   "&.cm-focused": { outline: "none" },
@@ -67,16 +70,18 @@ const nebulaTheme = EditorView.theme({
   ".cm-searchMatch": { backgroundColor: "var(--yellow-muted)", outline: "1px solid var(--yellow)" },
 });
 
-export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, onSave, value }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, onSave, onSelectionChange, completionSource, value }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCursorChangeRef = useRef(onCursorChange);
   const onSaveRef = useRef(onSave);
+  const onSelectionChangeRef = useRef(onSelectionChange);
   onChangeRef.current = onChange;
   onCursorChangeRef.current = onCursorChange;
   onSaveRef.current = onSave;
+  onSelectionChangeRef.current = onSelectionChange;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -116,11 +121,14 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
           languageRef.current.of([]),
           EditorView.contentAttributes.of({ "aria-label": "Code editor", spellcheck: "false" }),
           keymap.of([{ key: "Mod-s", run: () => { onSaveRef.current(); return true; } }]),
+          autocompletion({ activateOnTyping: true, maxRenderedOptions: 30, override: completionSource ? [(context) => completionSource(context)] : undefined }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
             if (update.selectionSet || update.docChanged) {
               const position = update.state.doc.lineAt(update.state.selection.main.head);
               onCursorChangeRef.current(position.number, update.state.selection.main.head - position.from + 1);
+              const range = update.state.selection.main;
+              onSelectionChangeRef.current?.(update.state.sliceDoc(range.from, range.to));
             }
           }),
         ],

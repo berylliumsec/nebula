@@ -9,6 +9,7 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception, record_diagnostic
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -16,15 +17,19 @@ import re
 from collections.abc import AsyncIterator, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, StringConstraints, field_validator, model_validator
+
+from .artifacts import ArtifactStore
 
 from .domain import (
     Approval,
     ApprovalStatus,
+    Artifact,
     ChatCitation,
+    ChatContentBlock,
     ChatBackend,
     ChatMessage,
     ChatRole,
@@ -114,13 +119,20 @@ logger = logging.getLogger(__name__)
 class ChatRequestMessage(NebulaModel):
     role: ChatRole
     content: str = Field(min_length=1, max_length=100_000)
+    content_blocks: list[ChatContentBlock] = Field(default_factory=list, max_length=64)
 
 
 class ChatContextAttachment(NebulaModel):
     source_kind: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9._-]+$")
     source_id: str | None = Field(default=None, max_length=200)
     source_label: str = Field(min_length=1, max_length=500)
-    text: str = Field(min_length=1, max_length=20_000)
+    # Attachment integrity covers the exact operator-selected UTF-8 text. The
+    # shared NebulaModel default trims strings, so opt this field out or Core
+    # would compare the browser's hash against a silently modified value.
+    text: Annotated[
+        str,
+        StringConstraints(strip_whitespace=False, min_length=1, max_length=20_000),
+    ]
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     truncated: bool = False
 
@@ -152,6 +164,14 @@ class ChatCompletionRequest(NebulaModel):
     tools_enabled: bool = False
     max_artifact_queries: int = Field(default=20, ge=0, le=200)
     allow_cloud_tool_results: bool = False
+    # Optional vendor-native turn controls.  They are validated again against
+    # the negotiated profile in HarnessRuntime.prepare_chat.
+    harness_mode: str | None = Field(default=None, min_length=1, max_length=100)
+    harness_reasoning_effort: str | None = Field(
+        default=None, min_length=1, max_length=100
+    )
+    harness_service_tier: str | None = Field(default=None, min_length=1, max_length=100)
+    harness_skill: dict[str, str] | None = None
     stream: bool = False
 
     @model_validator(mode="after")
@@ -486,6 +506,7 @@ class ChatService:
         provider_factory: Callable[[ProviderProfile], ModelProvider] | None = None,
         operator_id: Callable[[], str] | None = None,
         knowledge_index: KnowledgeIndex | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self.store = store
         self.tool_platform = tool_platform
@@ -493,6 +514,65 @@ class ChatService:
         self.provider_factory = provider_factory or provider_from_profile
         self.operator_id = operator_id or (lambda: "system")
         self.knowledge_index = knowledge_index
+        self.artifact_store = artifact_store
+
+    def _model_content(
+        self, message: ChatRequestMessage, engagement_id: str | None
+    ) -> str | list[dict[str, Any]]:
+        images = [block for block in message.content_blocks if block.type == "image"]
+        if not images:
+            return message.content
+        if self.artifact_store is None or not engagement_id:
+            raise ChatConfigurationError(
+                "image messages require durable artifact storage"
+            )
+        parts: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
+        for block in images:
+            assert block.artifact_id is not None
+            artifact = self.store.get(Artifact, block.artifact_id)
+            if (
+                artifact.engagement_id != engagement_id
+                or artifact.metadata.get("chat_image_original") is not True
+            ):
+                raise ChatConfigurationError(
+                    "chat image does not belong to this project"
+                )
+            preview_id = block.metadata.get("preview_artifact_id")
+            preview = (
+                self.store.get(Artifact, preview_id)
+                if isinstance(preview_id, str)
+                else next(
+                    (
+                        candidate
+                        for candidate in self.store.list_entities(
+                            Artifact, engagement_id=engagement_id, limit=1_000
+                        )
+                        if candidate.parent_artifact_id == artifact.id
+                        and candidate.metadata.get("chat_image_preview") is True
+                    ),
+                    None,
+                )
+            )
+            if (
+                preview is None
+                or preview.engagement_id != engagement_id
+                or preview.parent_artifact_id != artifact.id
+                or preview.metadata.get("chat_image_preview") is not True
+                or preview.metadata.get("metadata_stripped") is not True
+            ):
+                raise ChatConfigurationError(
+                    "validated metadata-stripped chat image preview is unavailable"
+                )
+            data = self.artifact_store.read(preview)
+            parts.append(
+                {
+                    "type": "image",
+                    "media_type": preview.media_type,
+                    "data": base64.b64encode(data).decode("ascii"),
+                    "alt": block.alt,
+                }
+            )
+        return parts
 
     def prepare(self, request: ChatCompletionRequest) -> PreparedChat:
         """Synchronous compatibility wrapper for non-ASGI callers and tests."""
@@ -568,6 +648,17 @@ class ChatService:
                 f"provider {request.provider_id!r} is disabled"
             )
         provider = self.provider_factory(profile)
+        if (
+            any(
+                block.type == "image"
+                for message in request.messages
+                for block in message.content_blocks
+            )
+            and not profile.capabilities.vision
+        ):
+            raise ChatConfigurationError(
+                "the selected provider/model is not verified for vision input"
+            )
 
         session: ChatSession | None = None
         pending_session: ChatSession | None = None
@@ -581,6 +672,7 @@ class ChatService:
                 content=_content_with_selected_context(
                     last.content, request.context_attachments
                 ),
+                content_blocks=last.content_blocks,
             )
 
         if request.session_id:
@@ -734,7 +826,10 @@ class ChatService:
             model=selected_model,
             instructions=instructions,
             messages=[
-                ModelMessage(role=message.role.value, content=message.content)
+                ModelMessage(
+                    role=message.role.value,
+                    content=self._model_content(message, engagement_id),
+                )
                 for message in model_messages
             ],
             max_output_tokens=resolve_context_limits(
@@ -1794,6 +1889,84 @@ class ChatService:
         session = self.store.get(ChatSession, session_id)
         return self._session_messages(session)
 
+    def fork_session(
+        self,
+        session_id: str,
+        *,
+        through_message_id: str,
+        title: str | None = None,
+        harness_session_id: str | None = None,
+    ) -> ChatSession:
+        """Create an independent transcript branch with explicit provenance."""
+
+        source = self.store.get(ChatSession, session_id)
+        if self.pending_turn(session_id) is not None:
+            raise ChatHistoryConflict(
+                "conversation cannot be forked while a response is active"
+            )
+        messages = self._session_messages(source)
+        boundary = next(
+            (message for message in messages if message.id == through_message_id), None
+        )
+        if boundary is None:
+            raise ChatHistoryConflict(
+                "fork message does not belong to the selected conversation"
+            )
+        if source.backend == ChatBackend.HARNESS and not harness_session_id:
+            raise ChatConfigurationError(
+                "harness conversation forks require an independent harness session"
+            )
+        fork = self.store.create(
+            ChatSession(
+                id=str(uuid4()),
+                engagement_id=source.engagement_id,
+                title=(title or f"{source.title} (fork)")[:300],
+                backend=source.backend,
+                provider_profile_id=source.provider_profile_id,
+                harness_profile_id=source.harness_profile_id,
+                harness_session_id=(
+                    harness_session_id
+                    if source.backend == ChatBackend.HARNESS
+                    else None
+                ),
+                model=source.model,
+                parent_session_id=source.id,
+                forked_from_message_id=boundary.id,
+                metadata={
+                    **source.metadata,
+                    "forked_from_session_id": source.id,
+                    "forked_from_message_id": boundary.id,
+                    "workspace_is_shared": True,
+                    "harness_context_handoff_pending": (
+                        source.backend == ChatBackend.HARNESS
+                    ),
+                },
+            )
+        )
+        for message in messages:
+            if message.sequence > boundary.sequence:
+                break
+            self.store.create(
+                ChatMessage(
+                    id=str(uuid4()),
+                    engagement_id=fork.engagement_id,
+                    session_id=fork.id,
+                    sequence=message.sequence,
+                    role=message.role,
+                    content=message.content,
+                    content_blocks=message.content_blocks,
+                    source_message_id=message.id,
+                    provider_profile_id=message.provider_profile_id,
+                    model=message.model,
+                    usage=message.usage,
+                    finish_reason=message.finish_reason,
+                    provider_request_id=message.provider_request_id,
+                    citations=message.citations,
+                    metadata={**message.metadata, "fork_source_message_id": message.id},
+                )
+            )
+        return fork
+
     def context_status(self, session_id: str) -> ContextStatus:
         session = self.store.get(ChatSession, session_id)
         if session.provider_profile_id is None:
@@ -1883,7 +2056,9 @@ class ChatService:
         stored: list[ChatMessage], incoming: list[ChatRequestMessage]
     ) -> tuple[list[ChatRequestMessage], list[ChatRequestMessage]]:
         durable = [
-            ChatRequestMessage(role=message.role, content=message.content)
+            ChatRequestMessage(role=message.role, content=message.content).model_copy(
+                update={"content_blocks": message.content_blocks}
+            )
             for message in stored
         ]
         if len(incoming) >= len(durable) and incoming[: len(durable)] == durable:
@@ -2525,6 +2700,7 @@ class ChatService:
                 sequence=start + index,
                 role=message.role,
                 content=message.content,
+                content_blocks=message.content_blocks,
                 metadata=(
                     _context_attachment_metadata(prepared.context_attachments)
                     if index == len(prepared.new_messages) - 1
@@ -2574,6 +2750,7 @@ class ChatService:
                 sequence=start + index,
                 role=message.role,
                 content=message.content,
+                content_blocks=message.content_blocks,
                 metadata=(
                     _context_attachment_metadata(prepared.context_attachments)
                     if index == len(prepared.new_messages) - 1

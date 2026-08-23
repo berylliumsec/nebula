@@ -105,10 +105,18 @@ describe("WorkbenchBrowser", () => {
     vi.restoreAllMocks();
   });
 
-  it("explains that native browsing is desktop-only in the web workspace", () => {
-    renderBrowser();
-    expect(screen.getByRole("strong")).toHaveTextContent("Browser is available in the Nebula desktop app");
-    expect(screen.getByText(/Native child webviews are intentionally unavailable/)).toBeVisible();
+  it("opens web addresses externally and can add them directly to Project Sources", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    const { onAddKnowledgeUrl } = renderBrowser();
+    const address = screen.getByRole("textbox", { name: "Web address" });
+    fireEvent.change(address, { target: { value: "docs.example.com/guide" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(open).toHaveBeenCalledWith("https://docs.example.com/guide", "_blank", "noopener,noreferrer");
+    expect(screen.getByRole("status")).toHaveTextContent("Opened the page in a separate browser tab.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add to Sources" }));
+    await waitFor(() => expect(onAddKnowledgeUrl).toHaveBeenCalledWith("https://docs.example.com/guide"));
+    expect(screen.getByRole("status")).toHaveTextContent("Guide is ready for cited retrieval.");
   });
 
   it("adds the final URL of the current page to Project Sources and links to it", async () => {

@@ -97,9 +97,31 @@ jobs:
           --file tests/v3/integration/Containerfile.operator-runtime
           --tag localhost/nebula-operator-runtime:ci
           .
+      - name: Delegate required rootless cgroup controllers
+        run: |
+          runner_uid="$(id -u)"
+          user_service="/sys/fs/cgroup/user.slice/user-${runner_uid}.slice/user@${runner_uid}.service"
+          for control_group in \
+            /sys/fs/cgroup/user.slice \
+            "/sys/fs/cgroup/user.slice/user-${runner_uid}.slice" \
+            "$user_service" \
+            "$user_service/user.slice"
+          do
+            test -f "$control_group/cgroup.controllers"
+            grep -qw cpu "$control_group/cgroup.controllers"
+            echo +cpu | sudo tee "$control_group/cgroup.subtree_control" >/dev/null
+          done
+          grep -qw cpu "$user_service/user.slice/cgroup.subtree_control"
+      - name: Bind rootless Podman to a local Unix connection
+        run: |
+          systemctl --user start podman.socket
+          socket_path="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+          test -S "$socket_path"
+          podman --url "unix://$socket_path" info --format '{{.Host.Security.Rootless}}' | grep -Fx true
       - name: Exercise real disposable execution and workspace persistence
         env:
           NEBULA_TEST_CONTAINER_RUNTIME: /usr/bin/podman
+          NEBULA_TEST_CONTAINER_SOCKET: unix:///run/user/1001/podman/podman.sock
           NEBULA_TEST_RUNTIME_IMAGE: localhost/nebula-operator-runtime:ci
         run: >-
           poetry run pytest -q tests/v3/test_sandbox_integration.py
@@ -127,7 +149,7 @@ jobs:
       - run: poetry install --only main --no-interaction
         working-directory: .
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run lint --if-present
       - run: npm run audit:diagnostics
       - run: npm test -- --testTimeout=15000
@@ -142,12 +164,16 @@ jobs:
         working-directory: .
         run: |
           podman pull docker.io/kalilinux/kali-rolling:latest
+          systemctl --user start podman.socket
+          socket_path="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+          test -S "$socket_path"
           repository_digest="$(podman image inspect docker.io/kalilinux/kali-rolling:latest --format '{{index .RepoDigests 0}}')"
           image_digest="${repository_digest##*@}"
           source_reference="docker.io/kalilinux/kali-rolling@${image_digest}"
           derived_tag="localhost/nebula-kali-headless:v4-${image_digest#sha256:}"
           echo "NEBULA_KALI_SOURCE_IMAGE=${source_reference}" >> "${GITHUB_ENV}"
           echo "NEBULA_TEST_CONTAINER_RUNTIME=/usr/bin/podman" >> "${GITHUB_ENV}"
+          echo "NEBULA_TEST_CONTAINER_SOCKET=unix://${socket_path}" >> "${GITHUB_ENV}"
           podman build \
             --build-arg "KALI_SOURCE=${source_reference}" \
             --file tests/v3/integration/Containerfile.real-core-runtime \

@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import zipfile
+from datetime import timedelta
 from collections.abc import AsyncIterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,6 +17,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from nebula.v3.api import create_app
+from nebula.v3.automation_runtime import AutomationRuntimeUnavailable
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatService
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
@@ -36,8 +38,10 @@ from nebula.v3.domain import (
     HarnessInteraction,
     HarnessInteractionKind,
     HarnessInteractionStatus,
+    HarnessModelOptions,
     HarnessNativeCapabilities,
     HarnessProfile,
+    HarnessRuntimeOption,
     HarnessSession,
     HarnessSessionStatus,
     HarnessTurn,
@@ -69,6 +73,7 @@ from nebula.v3.harnesses import (
     HarnessPermissionRequest,
     HarnessInteractionRequest,
     HarnessRuntimeService,
+    HarnessSkillInvocation,
     HarnessTransportError,
 )
 from nebula.v3.exporter import export_engagement
@@ -182,6 +187,23 @@ class FailingOpenAdapter(FakeAdapter):
         raise HarnessTransportError("harness launch failed token=do-not-store")
 
 
+class RefreshedCatalogAdapter(FakeAdapter):
+    async def probe(
+        self, profile: HarnessProfile, credential_store: CredentialStore
+    ) -> HarnessHealth:
+        del credential_store
+        return HarnessHealth(
+            profile_id=profile.id,
+            healthy=True,
+            kind=profile.kind,
+            harness_version="fixture-2",
+            capabilities=HarnessCapabilities(
+                models=["current-model", "alternate-model"],
+                checked_at=utc_now(),
+            ),
+        )
+
+
 def _runtime(tmp_path: Path, *, fail: bool = False):
     store = NebulaStore(tmp_path / "nebula.db")
     engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
@@ -287,6 +309,254 @@ def test_attached_chat_context_is_handed_to_first_harness_turn(tmp_path):
     assert "pending_context_message_id" not in updated_chat.metadata
 
 
+def test_health_reconciles_a_retired_default_model_with_the_advertised_catalog(
+    tmp_path,
+):
+    store, _engagement, profile, _mcp, _adapter, _existing_runtime = _runtime(tmp_path)
+    stale = store.update(
+        HarnessProfile,
+        profile.id,
+        {"default_model": "retired-model"},
+        expected_revision=profile.revision,
+    )
+    adapter = RefreshedCatalogAdapter()
+    runtime = HarnessRuntimeService(
+        store,
+        credential_store=CredentialStore(),
+        workspace_resolver=lambda _: tmp_path,
+        adapter_factory=lambda _: adapter,
+    )
+
+    result = asyncio.run(runtime.health(stale.id))
+
+    assert result.capabilities.models == ["current-model", "alternate-model"]
+    persisted = store.get(HarnessProfile, stale.id)
+    assert persisted.default_model == "current-model"
+    assert persisted.capabilities.models == ["current-model", "alternate-model"]
+
+
+def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    skill_dir = tmp_path / ".agents" / "skills" / "review"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text("---\nname: review\n---\n", encoding="utf-8")
+    outside = tmp_path / "outside-skill"
+    outside.mkdir()
+    (outside / "SKILL.md").write_text("outside", encoding="utf-8")
+    (tmp_path / ".agents" / "skills" / "escape").symlink_to(outside)
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "native_capabilities": profile.native_capabilities.model_copy(
+                update={"skills": True}
+            ),
+            "capabilities": profile.capabilities.model_copy(
+                update={
+                    "skill_invocation": True,
+                    "planning_mode": True,
+                    "modes": ["default", "plan"],
+                }
+            ),
+        },
+        expected_revision=profile.revision,
+    )
+
+    skills = runtime.available_skills(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+    )
+    assert [
+        (skill.name, skill.path, skill.source)
+        for skill in skills
+        if skill.source == "project"
+    ] == [("review", str(skill_file.resolve()), "project")]
+    assert all(skill.name != "escape" for skill in skills)
+
+    _chat, _chat_turn, harness_turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Review this project",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        harness_mode="plan",
+        harness_skill=HarnessSkillInvocation(
+            name="review",
+            path=str(skill_file.resolve()),
+        ),
+    )
+    assert harness_turn.metadata["harness_mode"] == "plan"
+    assert harness_turn.metadata["harness_skill"] == {
+        "name": "review",
+        "path": str(skill_file.resolve()),
+    }
+
+    with pytest.raises(HarnessConfigurationError, match="not available"):
+        runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model="test-model",
+            prompt="Read an arbitrary path",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            harness_skill=HarnessSkillInvocation(
+                name="outside",
+                path=str((outside / "SKILL.md").resolve()),
+            ),
+        )
+
+
+def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "capabilities": profile.capabilities.model_copy(
+                update={
+                    "models": ["test-model"],
+                    "model_options": [
+                        HarnessModelOptions(
+                            model="test-model",
+                            reasoning_efforts=[
+                                HarnessRuntimeOption(id="low", label="Low"),
+                                HarnessRuntimeOption(id="high", label="High"),
+                            ],
+                            default_reasoning_effort="low",
+                            service_tiers=[
+                                HarnessRuntimeOption(id="default", label="Standard"),
+                                HarnessRuntimeOption(id="fast", label="Fast"),
+                            ],
+                            default_service_tier="default",
+                        )
+                    ],
+                }
+            )
+        },
+        expected_revision=profile.revision,
+    )
+
+    chat, chat_turn, harness_turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Use the selected runtime",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        harness_reasoning_effort="high",
+        harness_service_tier="fast",
+    )
+    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    assert session.metadata["runtime_options"] == {
+        "reasoning_effort": "high",
+        "service_tier": "fast",
+    }
+    assert (
+        chat.metadata["harness_runtime_options"] == session.metadata["runtime_options"]
+    )
+    assert (
+        chat_turn.request_snapshot["harness_runtime_options"]
+        == session.metadata["runtime_options"]
+    )
+
+    with pytest.raises(Exception, match="reasoning effort cannot change"):
+        runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model="test-model",
+            prompt="Change effort",
+            chat_session_id=chat.id,
+            harness_session_id=session.id,
+            mcp_server_ids=[],
+            harness_reasoning_effort="low",
+            harness_service_tier="fast",
+        )
+
+
+def test_grok_skill_catalog_discovers_bundled_and_installed_plugin_skills(
+    tmp_path, monkeypatch
+):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    fake_home = tmp_path / "home"
+    bundled = fake_home / ".grok" / "bundled" / "skills" / "review"
+    plugin = (
+        fake_home
+        / ".grok"
+        / "installed-plugins"
+        / "example-plugin"
+        / "workflow-skills"
+        / "plan"
+    )
+    bundled.mkdir(parents=True)
+    plugin.mkdir(parents=True)
+    (bundled / "SKILL.md").write_text("bundled", encoding="utf-8")
+    (plugin / "SKILL.md").write_text("plugin", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "kind": HarnessKind.GROK_ACP,
+            "native_capabilities": profile.native_capabilities.model_copy(
+                update={"skills": True}
+            ),
+            "capabilities": profile.capabilities.model_copy(
+                update={"skill_invocation": True}
+            ),
+        },
+        expected_revision=profile.revision,
+    )
+
+    skills = runtime.available_skills(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+    )
+
+    assert [(skill.name, skill.source) for skill in skills] == [
+        ("review", "installed"),
+        ("plan", "installed"),
+    ]
+
+
+def test_activity_replay_bounds_legacy_verbose_tool_summaries(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    _chat, _chat_turn, turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Replay legacy activity",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    store.append_operation_event(
+        turn.id,
+        "harness_turn",
+        engagement.id,
+        "harness.item_upsert",
+        {
+            "type": "item_upsert",
+            "item_id": "legacy-tool",
+            "item_kind": "tool",
+            "item_status": "running",
+            "summary": "chat · MCP grok/" + ("s" * 6_000),
+            "tool_name": "Execute `" + ("x" * 6_000),
+            "payload": {},
+        },
+    )
+
+    replayed = runtime.activity_events(turn.id).events
+
+    assert len(replayed) == 1
+    assert len(replayed[0].summary or "") == 4_000
+    assert len(replayed[0].tool_name or "") == 1_000
+
+
 def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, mcp, adapter, runtime = _runtime(tmp_path)
@@ -378,6 +648,7 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
             == "https://mcp.invalid/api"
         )
         assert len(adapter.opens) == 1
+        assert adapter.opens[0].workspace == tmp_path
         assert adapter.opens[0].mcp_profiles == ()
         assert set(adapter.opens[0].gateway_config) == {"nebula"}
 
@@ -433,7 +704,7 @@ def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_
             range(1, replay.next_sequence + 1)
         )
         assert {event.schema_version for event in replay.events} == {
-            "nebula.harness-activity/v1"
+            "nebula.harness-activity/v2"
         }
         after_first = runtime.activity_events(harness_turn.id, after_sequence=1)
         assert all((event.sequence or 0) > 1 for event in after_first.events)
@@ -661,6 +932,84 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
     asyncio.run(scenario())
 
 
+def test_harness_mission_executes_operator_stages_sequentially(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+        run = await runtime.start_mission(
+            engagement_id=engagement.id,
+            name="Staged review",
+            objective="Assess the target and preserve review boundaries",
+            profile_id=profile.id,
+            model="test-model",
+            budget=RunBudget(max_duration_seconds=10),
+            stages=[
+                {"title": "Inventory", "objective": "Enumerate the bounded target"},
+                {"title": "Verify", "objective": "Verify the strongest observation"},
+            ],
+        )
+        await runtime._mission_tasks[run.id]
+
+        finished = store.get(AgentRun, run.id)
+        assert finished.status == RunStatus.COMPLETE
+        assert finished.metadata["total_tasks"] == 2
+        assert finished.metadata["completed_tasks"] == 2
+        turns = sorted(
+            (
+                item
+                for item in store.list_entities(
+                    HarnessTurn, engagement_id=engagement.id, limit=1_000
+                )
+                if item.run_id == run.id
+            ),
+            key=lambda item: item.metadata["mission_stage_index"],
+        )
+        assert [item.metadata["mission_stage_title"] for item in turns] == [
+            "Inventory",
+            "Verify",
+        ]
+        assert all(item.status == HarnessTurnStatus.COMPLETE for item in turns)
+        event_types = [event.event_type for event in store.replay_events(run.id)]
+        assert event_types.count("stage.completed") == 1
+        assert event_types.count("run.completed") == 1
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_scheduled_harness_mission_survives_runtime_restart(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _mcp, adapter, runtime = _runtime(tmp_path)
+        run = await runtime.start_mission(
+            engagement_id=engagement.id,
+            name="Weekly harness review",
+            objective="Review the bounded target",
+            profile_id=profile.id,
+            model="test-model",
+            budget=RunBudget(max_duration_seconds=30),
+            scheduled_for=utc_now() + timedelta(days=1),
+            repeat_interval_seconds=604_800,
+        )
+        assert run.id in runtime._scheduled_mission_tasks
+        await runtime.shutdown()
+        assert store.get(AgentRun, run.id).status == RunStatus.QUEUED
+
+        restored = HarnessRuntimeService(
+            store,
+            credential_store=CredentialStore(),
+            workspace_resolver=lambda _: tmp_path,
+            adapter_factory=lambda _: adapter,
+        )
+        await restored.startup()
+        assert run.id in restored._scheduled_mission_tasks
+        cancelled = await restored.stop(
+            run.id, reason="Schedule revoked", actor_id="operator"
+        )
+        assert cancelled.status == RunStatus.CANCELLED
+        await restored.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_parallel_work_uses_independent_harness_sessions(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
@@ -729,6 +1078,28 @@ def test_harness_session_freezes_native_capabilities(tmp_path):
     )
 
     assert session.metadata["native_capabilities"] == configured.model_dump(mode="json")
+
+
+def test_harness_session_does_not_require_unprepared_optional_command_runtime(tmp_path):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+
+    class UnpreparedCommands:
+        def chat_components(self, *, engagement_id: str):
+            del engagement_id
+            raise AutomationRuntimeUnavailable("Kali image is still preparing")
+
+    unprepared = UnpreparedCommands()
+    unprepared.store = store  # type: ignore[attr-defined]
+    runtime.bind_automation_tool_platform(unprepared)  # type: ignore[arg-type]
+
+    session = runtime.create_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+    )
+
+    assert session.metadata["command_runtime_enabled"] is False
+    assert "command_runtime_snapshot" not in session.metadata
 
 
 def test_harness_profiles_reject_unsupported_or_secret_bearing_native_tools():
@@ -1879,7 +2250,10 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
     with TestClient(app) as client:
         catalog = client.get("/api/v1/harness-catalog", headers=headers)
         assert catalog.status_code == 200
-        assert [item["kind"] for item in catalog.json()] == ["codex_app_server"]
+        assert [item["kind"] for item in catalog.json()] == [
+            "codex_app_server",
+            "grok_acp",
+        ]
         health = client.post(f"/api/v1/harnesses/{profile.id}/health", headers=headers)
         assert health.status_code == 200
         assert health.json()["harness_version"] == "fixture-1"
@@ -1914,7 +2288,7 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         assert replay.json()["events"]
         assert replay.json()["events"][0]["sequence"] == 1
         assert replay.json()["events"][0]["schema_version"] == (
-            "nebula.harness-activity/v1"
+            "nebula.harness-activity/v2"
         )
 
         sessions = client.get(

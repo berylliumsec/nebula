@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Play, ShieldCheck, Square, Trash2, Wrench, X } from "lucide-react";
+import { ListTodo, Play, Plus, RotateCcw, ShieldCheck, Square, Trash2, Wrench, X } from "lucide-react";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import type { HarnessProfile, HarnessSessionSummary, McpServerProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
-import { useConfirmation } from "./DialogSystem";
+import { ModalSurface, useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "./InlineValidationNotice";
 
@@ -33,6 +33,11 @@ export function NewMissionButton({ className = "button primary", children, showS
   const [providerId, setProviderId] = useState("");
   const provider = availableProviders.find((item) => item.id === providerId);
   const [model, setModel] = useState("");
+  const [harnessReasoningEffort, setHarnessReasoningEffort] = useState("");
+  const [harnessServiceTier, setHarnessServiceTier] = useState("");
+  const [stages, setStages] = useState<Array<{ title: string; objective: string }>>([]);
+  const [scheduledFor, setScheduledFor] = useState("");
+  const [repeatIntervalSeconds, setRepeatIntervalSeconds] = useState(0);
   const [durationMinutes, setDurationMinutes] = useState(60);
   const [maxTokens, setMaxTokens] = useState(20_000);
   const [maxCost, setMaxCost] = useState(10);
@@ -51,6 +56,7 @@ export function NewMissionButton({ className = "button primary", children, showS
   const runtimeDefaultAppliedRef = useRef(false);
   const selectedHarness = harnesses.find((item) => item.id === harnessId);
   const attachedHarnessSession = harnessSessions.find((item) => item.id === harnessSessionId);
+  const selectedModelOptions = selectedHarness?.modelOptions?.find((item) => item.model === model);
   const modelOptions = [...new Set([
     ...(runtimeKind === "native"
       ? provider?.models ?? []
@@ -104,7 +110,16 @@ export function NewMissionButton({ className = "button primary", children, showS
     const harness = harnesses.find((item) => item.id === (attached?.harnessProfileId ?? harnessId));
     if (attached) setHarnessId(attached.harnessProfileId);
     setModel(attached?.model ?? harness?.models[0] ?? "");
+    const options = harness?.modelOptions?.find((item) => item.model === (attached?.model ?? harness?.models[0] ?? ""));
+    setHarnessReasoningEffort(attached?.reasoningEffort ?? options?.defaultReasoningEffort ?? "");
+    setHarnessServiceTier(attached?.serviceTier ?? options?.defaultServiceTier ?? "");
   }, [harnessId, harnessSessionId, harnessSessions, harnesses, runtimeKind]);
+
+  useEffect(() => {
+    if (runtimeKind !== "harness" || harnessSessionId) return;
+    setHarnessReasoningEffort(selectedModelOptions?.defaultReasoningEffort ?? "");
+    setHarnessServiceTier(selectedModelOptions?.defaultServiceTier ?? "");
+  }, [harnessSessionId, runtimeKind, selectedModelOptions]);
 
   useEffect(() => {
     let active = true;
@@ -138,6 +153,8 @@ export function NewMissionButton({ className = "button primary", children, showS
   const automaticTools = useMemo(() => providerSupportsTools && runtimeReady
     ? ["run_command", "process_io"]
     : [], [providerSupportsTools, runtimeReady]);
+  const harnessHasNativeShell = runtimeKind === "harness" && selectedHarness?.nativeCapabilities?.shell === true;
+  const runtimeCanExecute = harnessHasNativeShell || automaticTools.length > 0 || selectedMcpIds.length > 0;
   const toolSelectionMessage = toolVerificationBusy
     ? `Checking tool support for ${model.trim()}…`
     : toolPreparation === "preparing"
@@ -218,6 +235,20 @@ export function NewMissionButton({ className = "button primary", children, showS
       setValidationError("Select a model for this mission.");
       return;
     }
+    const cleanStages = stages.map((stage) => ({ title: stage.title.trim(), objective: stage.objective.trim() }));
+    if (cleanStages.some((stage) => !stage.title || !stage.objective)) {
+      setValidationError("Every mission stage needs both a name and an objective.");
+      return;
+    }
+    const scheduledDate = scheduledFor ? new Date(scheduledFor) : undefined;
+    if (scheduledDate && (Number.isNaN(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now())) {
+      setValidationError("Choose a future start time for scheduled work.");
+      return;
+    }
+    if (repeatIntervalSeconds && !scheduledDate) {
+      setValidationError("Choose a start time before enabling a repeating schedule.");
+      return;
+    }
     if (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 60) {
       setValidationError("Duration must be a whole number from 1 to 60 minutes.");
       return;
@@ -283,6 +314,11 @@ export function NewMissionButton({ className = "button primary", children, showS
         harnessSessionId: harnessSessionId || undefined,
         mcpServerIds: harnessSessionId ? [] : selectedMcpIds,
         model: cleanModel,
+        harnessReasoningEffort: harnessReasoningEffort || undefined,
+        harnessServiceTier: harnessServiceTier || undefined,
+        stages: cleanStages,
+        scheduledFor: scheduledDate?.toISOString(),
+        repeatIntervalSeconds: repeatIntervalSeconds || undefined,
         maxDurationSeconds: durationMinutes * 60,
         maxTokens,
         maxCostUsd: maxCost,
@@ -290,10 +326,13 @@ export function NewMissionButton({ className = "button primary", children, showS
         maxToolCalls,
         maxConcurrency: 1,
         allowCloudToolResults,
-      } : { engagementId: engagement.id, name: cleanName, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, maxToolCalls: automaticTools.length || selectedMcpIds.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
+      } : { engagementId: engagement.id, name: cleanName, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, stages: cleanStages, scheduledFor: scheduledDate?.toISOString(), repeatIntervalSeconds: repeatIntervalSeconds || undefined, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, maxToolCalls: automaticTools.length || selectedMcpIds.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
       setOpen(false);
       setName("");
       setObjective("");
+      setStages([]);
+      setScheduledFor("");
+      setRepeatIntervalSeconds(0);
       setMaxToolCalls(0);
       setMaxConcurrency(1);
     } catch (startError) {
@@ -308,19 +347,25 @@ export function NewMissionButton({ className = "button primary", children, showS
     <button className={className} type="button" disabled={previewMode || !engagement || (availableProviders.length === 0 && harnesses.length === 0)} title={availableProviders.length || harnesses.length ? undefined : "Add an enabled provider or agent harness before automating a task"} onClick={openMission}>{children ?? <><Play size={16} /> Automate task</>}</button>
     {showSetupGuidance && harnessesLoaded && availableProviders.length === 0 && harnesses.length === 0 && <span className="mission-runtime-setup" role="status"><span>Missions need an enabled model provider or agent harness with a verified model.</span><a href="/settings#models-settings">Configure runtime</a></span>}
     {open && createPortal(
-      <div className="dialog-backdrop">
-        <form noValidate className="provider-dialog resource-dialog mission-dialog" role="dialog" aria-modal="true" aria-labelledby="mission-dialog-title" onSubmit={(event) => void submit(event)}>
+        <ModalSurface as="form" noValidate className="provider-dialog resource-dialog mission-dialog" labelledBy="mission-dialog-title" onClose={() => { if (!saving && !toolVerificationBusy && toolPreparation !== "preparing") setOpen(false); }} onSubmit={(event) => void submit(event)}>
           <header>
-            <div><small>{automaticTools.length || selectedMcpIds.length ? "Supervised automation" : "Analysis-only automation"}</small><h2 id="mission-dialog-title">Automate task</h2></div>
+            <div><small>{runtimeCanExecute ? "Supervised security automation" : "Analysis-only automation"}</small><h2 id="mission-dialog-title">Automate task</h2></div>
             <button className="icon-button subtle" type="button" aria-label="Close automation dialog" onClick={() => setOpen(false)}><X size={17} /></button>
           </header>
           <label>Mission name<input required autoFocus maxLength={300} value={name} placeholder="Quarterly perimeter review" onChange={(event) => { setName(event.target.value); setError(undefined); }} /></label>
           <label>Objective<textarea required rows={5} value={objective} placeholder="Describe the outcome you want Nebula to produce…" onChange={(event) => { setObjective(event.target.value); setError(undefined); }} /></label>
           <details className="provider-advanced mission-advanced">
             <summary>Advanced</summary>
-            <label>Runtime<select aria-label="Mission runtime" value={runtimeKind} onChange={(event) => { const next = event.target.value as "native" | "harness"; runtimeDefaultAppliedRef.current = true; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "native") selectProvider(providerId || availableProviders[0]?.id || ""); }}><option value="native">Native mission</option><option value="harness">Agent harness</option></select></label>
+            <label>Runtime<select aria-label="Mission runtime" value={runtimeKind} onChange={(event) => { const next = event.target.value as "native" | "harness"; runtimeDefaultAppliedRef.current = true; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "native") selectProvider(providerId || availableProviders[0]?.id || ""); }}><option value="native" disabled={availableProviders.length === 0}>Native mission{availableProviders.length === 0 ? " · unavailable" : ""}</option><option value="harness" disabled={harnesses.length === 0}>Agent harness{harnesses.length === 0 ? " · unavailable" : ""}</option></select></label>
             {runtimeKind === "native" ? <label>Provider<select value={providerId} onChange={(event) => { selectProvider(event.target.value); setError(undefined); }}>{availableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label> : <><label>Harness<select aria-label="Mission harness" value={harnessId} disabled={Boolean(harnessSessionId)} onChange={(event) => { setHarnessId(event.target.value); setError(undefined); }}>{harnesses.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Session<select aria-label="Harness session" value={harnessSessionId} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">Start a new session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.model} · {item.status}</option>)}</select></label></>}
             <label>Model<select required value={model} disabled={Boolean(harnessSessionId) || !modelOptions.length} onChange={(event) => { setModel(event.target.value); setError(undefined); }}><option value="">{modelOptions.length ? "Select model" : runtimeKind === "harness" ? "Run a harness check to discover models" : "Run provider health check to discover models"}</option>{modelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+            {runtimeKind === "harness" && (selectedModelOptions?.reasoningEfforts.length || harnessReasoningEffort) ? <label>Effort<select aria-label="Mission harness effort" value={harnessReasoningEffort} disabled={Boolean(harnessSessionId)} onChange={(event) => setHarnessReasoningEffort(event.target.value)}><option value="">Harness default</option>{harnessReasoningEffort && !selectedModelOptions?.reasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{selectedModelOptions?.reasoningEfforts.map((item) => <option value={item.id} title={item.description || undefined} key={item.id}>{item.label}</option>)}</select></label> : null}
+            {runtimeKind === "harness" && (selectedModelOptions?.serviceTiers.length || harnessServiceTier) ? <label>Speed<select aria-label="Mission harness speed" value={harnessServiceTier} disabled={Boolean(harnessSessionId)} onChange={(event) => setHarnessServiceTier(event.target.value)}><option value="">Harness default</option>{harnessServiceTier && !selectedModelOptions?.serviceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{selectedModelOptions?.serviceTiers.map((item) => <option value={item.id} title={item.description || undefined} key={item.id}>{item.label}</option>)}</select></label> : null}
+            <section className="mission-stage-builder" aria-labelledby="mission-stages-title">
+              <header><div><ListTodo size={15} /><span><strong id="mission-stages-title">Stages</strong><small>Optional checkpoints executed in order with a durable result per stage.</small></span></div><button className="button quiet" type="button" disabled={stages.length >= 12} onClick={() => setStages((current) => [...current, { title: `Stage ${current.length + 1}`, objective: "" }])}><Plus size={14} /> Add stage</button></header>
+              {stages.map((stage, index) => <fieldset className="mission-stage" key={index}><legend>Stage {index + 1}</legend><label>Name<input value={stage.title} maxLength={300} onChange={(event) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} /></label><label>Objective<textarea rows={3} value={stage.objective} maxLength={10_000} onChange={(event) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, objective: event.target.value } : item))} /></label><button className="icon-button subtle danger" type="button" aria-label={`Remove stage ${index + 1}`} onClick={() => setStages((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button></fieldset>)}
+            </section>
+            <section className="mission-schedule" aria-labelledby="mission-schedule-title"><header><strong id="mission-schedule-title">Schedule</strong><small>Core owns the start time; scheduled work survives page closure and Core restarts.</small></header><div className="resource-form-grid"><label>Start time<input type="datetime-local" value={scheduledFor} min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)} onChange={(event) => setScheduledFor(event.target.value)} /></label><label>Repeat<select value={repeatIntervalSeconds} disabled={!scheduledFor} onChange={(event) => setRepeatIntervalSeconds(Number(event.target.value))}><option value={0}>Do not repeat</option><option value={86400}>Daily</option><option value={604800}>Weekly</option></select></label></div>{repeatIntervalSeconds > 0 && <small>Each occurrence becomes a new audited Mission. It never reuses an uncertain in-flight run.</small>}</section>
             {(runtimeKind === "native" || !harnessSessionId) && <fieldset className="mission-tools"><legend>MCP servers · all agent runtimes</legend>{mcpServers.length ? mcpServers.map((server) => <label className="provider-consent" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span><strong>{server.name}</strong><small>{server.transport} · {server.tools.length} discovered tools · Core artifact capture</small></span></label>) : <p>No enabled MCP profiles. Add one in Settings if this mission needs external tools.</p>}</fieldset>}
             <div className="resource-form-grid">
               <label>Duration (minutes)<input type="number" min={1} max={60} value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))} /></label>
@@ -329,19 +374,20 @@ export function NewMissionButton({ className = "button primary", children, showS
               <label>Retries<input type="number" min={0} max={2} value={maxRetries} onChange={(event) => setMaxRetries(Number(event.target.value))} /></label>
             </div>
             <section className="mission-tool-selection">
-              <header><div><Wrench size={15} /><span><strong>Command runtime</strong><small>Bash and process I/O are fixed capabilities in every prepared agent session.</small></span></div><span>{automaticTools.length ? "Ready" : "Analysis only"}</span></header>
-              {runtimeReady && providerSupportsTools && automaticTools.length
+              <header><div><Wrench size={15} /><span><strong>Command runtime</strong><small>{harnessHasNativeShell ? "The selected harness owns its frozen shell capability." : "Bash and process I/O use Nebula's pinned automation runtime."}</small></span></div><span>{harnessHasNativeShell ? "Harness native" : automaticTools.length ? "Ready" : "Analysis only"}</span></header>
+              {harnessHasNativeShell
+                ? <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>Native shell access is available through the selected harness and remains governed by its saved capability profile.</p></div>
+                : runtimeReady && providerSupportsTools && automaticTools.length
                 ? <fieldset className="resource-checklist automatic-tool-list"><legend>Automatically enabled capabilities</legend>{automaticTools.map((name) => <div key={name}><ShieldCheck size={15} /><span><strong>{name}</strong><small>{name === "run_command" ? "session-scoped Bash · project networking optional" : "poll, stdin, and termination"}</small></span></div>)}</fieldset>
                 : <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>{toolPreparation === "unavailable" ? toolPreparationDetail : toolSelectionMessage}</p></div>}
               {(automaticTools.length > 0 || selectedMcpIds.length > 0 || runtimeKind === "harness") && <div className="resource-form-grid"><label>Maximum execution calls<input type="number" min={1} max={100} value={maxToolCalls} onChange={(event) => setMaxToolCalls(Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
             </section>
-            <p className="provider-dialog-note">{automaticTools.length || selectedMcpIds.length ? "Core applies scope, budgets, capture, and approvals." : "Analysis only · no execution tools"}</p>
+            <p className="provider-dialog-note">{runtimeCanExecute ? "Core applies scope, budgets, capture, and approvals." : "Analysis only · no execution tools"}</p>
           </details>
           {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
           {validationError && <InlineValidationNotice message={validationError} />}
           <footer><button className="button secondary" type="button" onClick={() => setOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || toolPreparation === "preparing" || toolVerificationBusy}>{toolPreparation === "preparing" ? "Checking runtime…" : toolVerificationBusy ? "Checking model…" : saving ? "Starting…" : "Automate task"}</button></footer>
-        </form>
-      </div>,
+        </ModalSurface>,
       document.body,
     )}
   </>;
@@ -401,4 +447,34 @@ export function DeleteMissionButton({ className = "button quiet danger" }: { cla
     }
   };
   return <span className="mission-stop-control"><button className={className} type="button" disabled={disabled || deleting} title={!run ? "No mission selected" : !terminalStatuses.has(run.status) ? "Stop the mission before deleting it" : undefined} onClick={() => void remove()}><Trash2 size={14} /> {deleting ? "Deleting…" : "Delete mission"}</button>{error && <DiagnosticErrorNotice error={error} fallback="The mission could not be deleted." compact />}</span>;
+}
+
+export function RetryMissionButton({ className = "button secondary" }: { className?: string }) {
+  const confirm = useConfirmation();
+  const { previewMode, retryMission, run } = useWorkspace();
+  const [retrying, setRetrying] = useState(false);
+  const [error, setError] = useState<string>();
+  const eligible = Boolean(run && terminalStatuses.has(run.status));
+  const retry = async () => {
+    if (!run) return;
+    const accepted = await confirm({
+      title: "Start a new Mission from this one?",
+      message: run.remoteMcpConfirmed
+        ? "Nebula will create a new audited run with the same frozen runtime, stages, and MCP servers. Remote MCP result transfer must be authorized again. The interrupted run remains unchanged."
+        : "Nebula will create a new audited run with the same frozen runtime, stages, and limits. The original run remains unchanged.",
+      confirmLabel: "Start retry",
+    });
+    if (!accepted) return;
+    setRetrying(true);
+    setError(undefined);
+    try {
+      await retryMission(run.id, run.remoteMcpConfirmed === true);
+    } catch (retryError) {
+      void logCaughtDiagnostic("interface.mission_controls.retry_failed", "A Mission retry failed.", retryError, "mission_controls");
+      setError(retryError instanceof Error ? retryError.message : "Could not retry the Mission.");
+    } finally {
+      setRetrying(false);
+    }
+  };
+  return <span className="mission-stop-control"><button className={className} type="button" disabled={previewMode || !eligible || retrying} onClick={() => void retry()}><RotateCcw size={14} /> {retrying ? "Starting…" : "Retry mission"}</button>{error && <DiagnosticErrorNotice error={error} fallback="The Mission could not be retried." compact />}</span>;
 }

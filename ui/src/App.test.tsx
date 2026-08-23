@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { DialogProvider } from "./components/DialogSystem";
@@ -16,6 +16,7 @@ vi.mock("./components/CodeMirrorSurface", () => ({
 function renderApp(route = "/") {
   return render(
     <MemoryRouter initialEntries={[route]}>
+      <LocationProbe />
       <ThemeProvider>
         <WorkspaceProvider>
           <DialogProvider>
@@ -25,6 +26,11 @@ function renderApp(route = "/") {
       </ThemeProvider>
     </MemoryRouter>,
   );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="router-location" hidden>{`${location.pathname}${location.search}${location.hash}`}</output>;
 }
 
 function selectElementText(element: HTMLElement) {
@@ -65,28 +71,29 @@ describe("Nebula workspace", () => {
     expect(screen.getByText("Terminal and Code become available as soon as Nebula finishes creating or loading a project.")).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "Terminal" }));
     await user.click(screen.getByRole("tab", { name: "Workspace code editor" }));
-    expect(localStorage.getItem("nebula.workbench.view")).toBe("code");
+    expect(screen.getByTestId("router-location")).toHaveTextContent("/?view=code");
+    expect(localStorage.getItem("nebula.workbench.view")).toBeNull();
   });
 
   it("opens the Workbench full screen and exits with Escape", async () => {
     const user = userEvent.setup();
     renderApp();
     const workbench = document.querySelector(".sessions-page");
-    const toggle = await screen.findByRole("button", { name: "Enter full screen workbench" });
-
-    await user.click(toggle);
+    await user.click(await screen.findByRole("button", { name: "More Workbench actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /Enter focus mode/ }));
     expect(workbench).toHaveClass("full-screen");
-    expect(screen.getByRole("button", { name: "Exit full screen workbench" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Exit full screen workbench" })).toBeVisible();
 
     await user.keyboard("{Escape}");
     expect(workbench).not.toHaveClass("full-screen");
-    expect(screen.getByRole("button", { name: "Enter full screen workbench" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "More Workbench actions" })).toBeVisible();
   });
 
   it("uses Zero as the first-run theme while preserving explicit preferences", async () => {
     const firstRender = renderApp();
     expect(document.documentElement).toHaveAttribute("data-theme", "zero");
-    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
+    expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
+    expect(screen.getByRole("complementary", { name: "Primary navigation" })).toHaveAttribute("data-shell", "shared");
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
     expect(localStorage.getItem("nebula.theme")).toBeNull();
 
@@ -95,6 +102,12 @@ describe("Nebula workspace", () => {
     renderApp();
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
+
+    act(() => {
+      localStorage.setItem("nebula.theme", "high-contrast");
+      window.dispatchEvent(new StorageEvent("storage", { key: "nebula.theme", oldValue: "light", newValue: "high-contrast" }));
+    });
+    expect(document.documentElement).toHaveAttribute("data-theme", "high-contrast");
   });
 
   it("restores legacy mission links to the Workbench mission view", async () => {
@@ -139,10 +152,10 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: /Zero/ })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("renders the contextual Zero shell only for the restored Zero preference", async () => {
+  it("keeps the shared shell when restoring Zero or conventional preferences", async () => {
     localStorage.setItem("nebula.theme", "zero");
     const firstRender = renderApp();
-    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
+    expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Primary navigation" }).querySelector('a[href="/project"]')).toBeInTheDocument();
 
@@ -186,7 +199,8 @@ describe("Nebula workspace", () => {
     const user = userEvent.setup();
     renderApp("/settings");
     expect(await screen.findByRole("link", { name: "Advanced settings" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("heading", { name: "Model providers" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Operator profiles" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Model providers" })).not.toBeVisible();
     expect(screen.getByRole("heading", { name: "Diagnostics", hidden: true })).not.toBeVisible();
 
     await user.click(screen.getByRole("link", { name: "Diagnostics settings and recent errors" }));
@@ -278,13 +292,16 @@ describe("Nebula workspace", () => {
     expect(await screen.findByRole("tab", { name: "Analyst chat" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("No conversation open")).toBeVisible();
     expect(screen.queryByRole("textbox", { name: "Message the analyst assistant" })).not.toBeInTheDocument();
-    expect(screen.getByText("New conversation").closest("button")).not.toHaveClass("active");
-    expect(screen.getByText("None selected")).toBeVisible();
+    expect(screen.queryByLabelText("Conversations")).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "More Workbench actions" }));
+    expect(screen.getByRole("menuitem", { name: /Show session details/ })).toBeVisible();
+    await user.keyboard("{Escape}");
     expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/chat/completions") && init?.method === "POST")).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Start new chat" }));
     expect(screen.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
-    expect(screen.getByText("New conversation").closest("button")).toHaveClass("active");
+    expect(screen.getByTestId("router-location")).toHaveTextContent("/?view=chat");
   });
 
   it("streams analyst chat with explicit provider/model selection and cloud knowledge consent", async () => {
@@ -354,7 +371,7 @@ describe("Nebula workspace", () => {
     renderApp("/sessions");
     await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }));
     await user.click(screen.getByRole("button", { name: "New chat" }));
-    await user.click(screen.getByText("Assistant settings"));
+    await user.click(screen.getByRole("button", { name: "Assistant settings" }));
     expect(await screen.findByRole("combobox", { name: "Chat provider" })).toHaveValue("provider-1");
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Chat model" })).toHaveValue("model-1"));
     expect(screen.getByRole("option", { name: "model-2" })).toBeVisible();
@@ -439,7 +456,14 @@ describe("Nebula workspace", () => {
     await user.click(await screen.findByRole("button", { name: "Ask Nebula" }));
 
     expect(await screen.findByRole("tab", { name: "Analyst chat" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("group", { name: "Selected context attachment" })).toHaveTextContent("Selection review");
+    const attachment = screen.getByRole("group", { name: "Selected context attachment" });
+    expect(attachment).toHaveTextContent("Project selection");
+    expect(within(attachment).queryByText("Selection review", { selector: "p" })).toBeNull();
+    const expandQuote = within(attachment).getByRole("button", { name: "Expand quoted context" });
+    expect(expandQuote).toHaveAttribute("aria-expanded", "false");
+    await user.click(expandQuote);
+    expect(within(attachment).getByText("Selection review", { selector: "p" })).toBeVisible();
+    expect(within(attachment).getByRole("button", { name: "Collapse quoted context" })).toHaveAttribute("aria-expanded", "true");
     const composer = screen.getByRole("textbox", { name: "Message the analyst assistant" });
     expect(composer).toHaveValue("");
     expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/completions"))).toBe(false);
@@ -458,7 +482,15 @@ describe("Nebula workspace", () => {
       truncated: false,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     })]);
-    expect(body.messages).toEqual([{ role: "user", content: "Explain this project title." }]);
+    expect(body.messages).toEqual([{
+      role: "user",
+      content: "Explain this project title.",
+      content_blocks: [{
+        type: "text",
+        text: "Explain this project title.",
+        metadata: {},
+      }],
+    }]);
   });
 
   it("captures selected text as a saved note without unmounting Workbench", async () => {
@@ -538,14 +570,20 @@ describe("Nebula workspace", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    renderApp("/sessions");
+    const rendered = renderApp("/sessions");
 
     await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }));
+    expect(screen.queryByLabelText("Conversations")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show conversations" }));
     const conversationPanel = await screen.findByLabelText("Conversations");
-    await user.click(screen.getByRole("button", { name: "Expand conversations panel" }));
-    expect(conversationPanel.closest(".session-layout")).toHaveClass("conversation-panel-expanded");
-    expect(localStorage.getItem("nebula.conversations.expanded")).toBe("true");
-    await user.click((await screen.findByText("Saved context")).closest("button")!);
+    expect(conversationPanel.closest(".session-layout")).toHaveClass("conversation-panel-open");
+    expect(localStorage.getItem("nebula.conversations.open")).toBe("true");
+    expect(await screen.findByTitle("Saved context")).toBeVisible();
+    expect(await screen.findByText("Port retained")).toBeVisible();
+    expect(screen.getByTestId("router-location")).toHaveTextContent(/session=session-1/);
+    rendered.unmount();
+    renderApp("/sessions");
+    expect(await screen.findByLabelText("Conversations")).toBeVisible();
     expect(await screen.findByText("Port retained")).toBeVisible();
     const transcript = screen.getByText("Port retained").closest(".chat-scroll")!;
     const transcriptMutations: MutationRecord[] = [];
@@ -559,7 +597,13 @@ describe("Nebula workspace", () => {
     expect(screen.queryByRole("heading", { name: "Working memory" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/sessions/session-1/context"))).toBe(false);
     expect(screen.queryByRole("button", { name: "Save Assistant Response" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Rename conversation Saved context" }));
+    for (const forkButton of screen.getAllByRole("button", { name: "Fork conversation here" })) {
+      expect(forkButton.closest(".chat-message-actions")).not.toBeNull();
+      expect(forkButton.closest("header")).toBeNull();
+    }
+    await user.click(screen.getByRole("button", { name: "More actions for Saved context" }));
+    const savedContextMenu = screen.getByRole("menu", { name: "Actions for Saved context" });
+    await user.click(within(savedContextMenu).getByRole("menuitem", { name: "Rename" }));
     const renameInput = screen.getByRole("textbox", { name: "Rename conversation Saved context" });
     await user.clear(renameInput);
     await user.type(renameInput, "Port review");
@@ -567,11 +611,14 @@ describe("Nebula workspace", () => {
     expect(await screen.findByTitle("Port review")).toBeVisible();
     const renameCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");
     expect(JSON.parse(String(renameCall?.[1]?.body))).toEqual({ title: "Port review", expected_revision: 1 });
-    await user.click(screen.getByRole("button", { name: "Delete conversation Port review" }));
+    await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
+    const portReviewMenu = screen.getByRole("menu", { name: "Actions for Port review" });
+    await user.click(within(portReviewMenu).getByRole("menuitem", { name: "Delete" }));
     const dialog = screen.getByRole("dialog", { name: "Delete Port review?" });
     await user.click(within(dialog).getByRole("button", { name: "Delete conversation" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete conversation Port review" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "More actions for Port review" })).not.toBeInTheDocument());
     expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "DELETE")).toBe(true);
+    expect(new URLSearchParams(window.location.search).get("session")).toBeNull();
   });
 
   it("deletes every saved Assistant conversation after one confirmation", async () => {
@@ -597,9 +644,11 @@ describe("Nebula workspace", () => {
     const user = userEvent.setup();
     renderApp("/sessions");
 
+    await user.click(await screen.findByRole("button", { name: "Show conversations" }));
     expect(await screen.findByText("First conversation")).toBeVisible();
     expect(screen.getByText("Second conversation")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Delete all conversations" }));
+    await user.click(screen.getByRole("button", { name: "More conversation actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete all conversations" }));
     const dialog = screen.getByRole("dialog", { name: "Delete all conversations?" });
     expect(dialog).toHaveTextContent("including every message and saved working memory");
     await user.click(within(dialog).getByRole("button", { name: "Delete all conversations" }));
@@ -607,7 +656,8 @@ describe("Nebula workspace", () => {
     await waitFor(() => expect(screen.queryByText("First conversation")).not.toBeInTheDocument());
     expect(screen.queryByText("Second conversation")).not.toBeInTheDocument();
     expect(deleted).toEqual(new Set(["session-1", "session-2"]));
-    expect(screen.getByRole("button", { name: "Delete all conversations" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "More conversation actions" }));
+    expect(screen.getByRole("menuitem", { name: "Delete all conversations" })).toBeDisabled();
   });
 
   it("starts Terminal automatically inside the reviewed container boundary", async () => {
@@ -701,6 +751,15 @@ describe("Nebula workspace", () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (url.pathname.endsWith("/workspace-folders")) {
+        const path = url.searchParams.get("path") ?? "/home/agent";
+        return new Response(JSON.stringify({
+          path,
+          parent: path === "/home/agent" ? "/home" : "/home/agent",
+          directories: path === "/home/agent" ? [{ name: "apple_bug_bounty_program", path: "/home/agent/apple_bug_bounty_program" }] : [],
+          truncated: false,
+        }), { status: 200 });
+      }
       if (url.pathname.endsWith("/engagements")) {
         if (init?.method === "POST") {
           const body = JSON.parse(String(init.body));
@@ -721,11 +780,17 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("button", { name: "New project" }));
     await user.type(screen.getByRole("textbox", { name: "Name" }), "New engagement");
     await user.type(screen.getByRole("textbox", { name: "Client name" }), "New client");
+    await user.click(screen.getByRole("button", { name: "Browse folders" }));
+    const folderDialog = await screen.findByRole("dialog", { name: "Choose project folder" });
+    await user.click(within(folderDialog).getByRole("button", { name: "apple_bug_bounty_program" }));
+    expect(within(folderDialog).getByText("/home/agent/apple_bug_bounty_program")).toBeVisible();
+    await user.click(within(folderDialog).getByRole("button", { name: "Select folder" }));
+    expect(screen.getByRole("textbox", { name: "Project folder" })).toHaveValue("/home/agent/apple_bug_bounty_program");
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(await screen.findByTitle("New engagement")).toBeVisible();
     const createCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith("/api/v1/engagements") && init?.method === "POST");
-    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ name: "New engagement", client_name: "New client", status: "draft" });
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ name: "New engagement", client_name: "New client", status: "draft", workspace_path: "/home/agent/apple_bug_bounty_program" });
   });
 
   it("searches, creates, and inspects assets", async () => {

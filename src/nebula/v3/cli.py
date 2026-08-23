@@ -266,6 +266,22 @@ def serve(
             help="Process-only diagnostics level override (debug, info, warning, error, critical).",
         ),
     ] = None,
+    tls_cert: Annotated[
+        Path | None, typer.Option(help="TLS certificate chain for HTTPS.")
+    ] = None,
+    tls_key: Annotated[
+        Path | None, typer.Option(help="TLS private key for HTTPS.")
+    ] = None,
+    allow_insecure_device_pairing: Annotated[
+        bool,
+        typer.Option(hidden=True, help="Permit paired-device cookies without HTTPS."),
+    ] = False,
+    allow_unauthenticated_remote: Annotated[
+        bool,
+        typer.Option(
+            help="Explicitly expose the complete API without authentication (unsafe)."
+        ),
+    ] = False,
 ) -> None:
     """Run the versioned REST/WebSocket API."""
 
@@ -273,6 +289,16 @@ def serve(
         raise typer.BadParameter(
             "remote binding is disabled by default; pass --allow-remote after configuring perimeter controls"
         )
+    if allow_unauthenticated_remote and (not allow_remote or _is_loopback(host)):
+        raise typer.BadParameter(
+            "--allow-unauthenticated-remote requires an explicit remote --allow-remote binding"
+        )
+    if (tls_cert is None) != (tls_key is None):
+        raise typer.BadParameter("--tls-cert and --tls-key must be supplied together")
+    if tls_cert is not None and (
+        not tls_cert.is_file() or not tls_key or not tls_key.is_file()
+    ):
+        raise typer.BadParameter("TLS certificate and key must be readable files")
     if handshake_stdout:
         if not _is_loopback(host):
             raise typer.BadParameter("desktop sidecars may bind only to loopback")
@@ -333,6 +359,8 @@ def serve(
             allow_remote=allow_remote,
             explicitly_enabled=allow_browser_diagnostics,
         ),
+        allow_insecure_device_pairing=allow_insecure_device_pairing,
+        allow_unauthenticated=allow_unauthenticated_remote,
     )
     try:
         bind_address = ipaddress.ip_address(host)
@@ -371,20 +399,36 @@ def serve(
         sys.stdout.flush()
     else:
         display_host = f"[{host}]" if family == socket.AF_INET6 else host
+        scheme = "https" if tls_cert is not None else "http"
         _print(
             {
                 "kind": "nebula-api-ready",
-                "url": f"http://{display_host}:{port}",
-                "token": auth_token,
+                "url": f"{scheme}://{display_host}:{port}",
+                "token": None if allow_unauthenticated_remote else auth_token,
                 "local_only": _is_loopback(host),
+                "authentication": "disabled"
+                if allow_unauthenticated_remote
+                else "bearer",
             }
         )
+        if allow_unauthenticated_remote:
+            typer.echo(
+                "WARNING: unauthenticated LAN mode grants every reachable device full Nebula access.",
+                err=True,
+            )
     if open_browser:
-        webbrowser.open(f"http://127.0.0.1:{port}/#token={auth_token}")
+        browser_scheme = "https" if tls_cert is not None else "http"
+        webbrowser.open(f"{browser_scheme}://127.0.0.1:{port}/#token={auth_token}")
     # Request summaries are emitted by the sanitizing API middleware. Raw
     # server access logs can include untrusted path/query data and stay off.
     config = uvicorn.Config(
-        api, host=host, port=port, log_level="error", access_log=False
+        api,
+        host=host,
+        port=port,
+        log_level="error",
+        access_log=False,
+        ssl_certfile=str(tls_cert) if tls_cert else None,
+        ssl_keyfile=str(tls_key) if tls_key else None,
     )
     server = uvicorn.Server(config)
     if handshake_stdout:
@@ -436,10 +480,36 @@ def serve(
 def ui(
     data_dir: Annotated[Path | None, typer.Option()] = None,
     no_browser: Annotated[bool, typer.Option()] = False,
+    port: Annotated[
+        int,
+        typer.Option(min=0, max=65535, help="Listening port (0 chooses a free port)."),
+    ] = 0,
+    lan: Annotated[
+        bool, typer.Option(help="Serve the workspace to paired LAN devices.")
+    ] = False,
+    host: Annotated[
+        str | None, typer.Option(help="LAN bind address (defaults to 0.0.0.0).")
+    ] = None,
+    tls_cert: Annotated[
+        Path | None, typer.Option(help="Trusted LAN TLS certificate chain.")
+    ] = None,
+    tls_key: Annotated[
+        Path | None, typer.Option(help="Trusted LAN TLS private key.")
+    ] = None,
+    allow_insecure_lan: Annotated[
+        bool,
+        typer.Option(help="Explicitly allow unencrypted LAN access (unsafe)."),
+    ] = False,
+    no_auth: Annotated[
+        bool,
+        typer.Option(
+            help="Disable authentication and imply LAN mode (unsafe; requires --allow-insecure-lan)."
+        ),
+    ] = False,
 ) -> None:
-    """Launch the browser workspace against a loopback-only ephemeral API."""
+    """Launch the browser workspace locally or for securely paired LAN devices."""
 
-    port = _free_port()
+    port = port or _free_port()
     token = secrets.token_urlsafe(32)
     configured_ui = os.getenv("NEBULA_V3_UI_DIR")
     frozen_root = (
@@ -459,16 +529,33 @@ def ui(
             "built browser workspace not found; run `npm --prefix ui run build` "
             "or set NEBULA_V3_UI_DIR"
         )
+    if no_auth:
+        lan = True
+    selected_host = host or ("0.0.0.0" if lan else "127.0.0.1")
+    if not lan and not _is_loopback(selected_host):
+        raise typer.BadParameter("non-loopback UI binding requires --lan")
+    if no_auth and not allow_insecure_lan:
+        raise typer.BadParameter(
+            "--no-auth implies --lan and requires --allow-insecure-lan"
+        )
+    if lan and not allow_insecure_lan and (tls_cert is None or tls_key is None):
+        raise typer.BadParameter(
+            "LAN UI requires --tls-cert and --tls-key; use --allow-insecure-lan only on a trusted test network"
+        )
     serve(
-        host="127.0.0.1",
+        host=selected_host,
         port=port,
         token=token,
         data_dir=data_dir,
-        allow_remote=False,
+        allow_remote=lan,
         allow_browser_diagnostics=False,
         handshake_stdout=False,
         static_dir=frontend,
-        open_browser=not no_browser,
+        open_browser=not no_browser and not lan,
+        tls_cert=tls_cert,
+        tls_key=tls_key,
+        allow_insecure_device_pairing=allow_insecure_lan,
+        allow_unauthenticated_remote=no_auth,
     )
 
 

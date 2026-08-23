@@ -1,7 +1,12 @@
+import base64
+from io import BytesIO
+
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import nebula.v3.chat as chat_module
 from nebula.v3.api import create_app
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompactionError, ChatService
 from nebula.v3.domain import (
     AgentRun,
@@ -11,6 +16,7 @@ from nebula.v3.domain import (
     ContextSnapshotStatus,
     ContextSourceReference,
     ChatSession,
+    ChatMessage,
     ChatTurn,
     Engagement,
     ProviderProfile,
@@ -59,6 +65,125 @@ class ApiChatProvider(ModelProvider):
 
 def _auth() -> dict[str, str]:
     return {"Authorization": "Bearer test-token"}
+
+
+def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "chat-media.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(id="eng-media", name="Media"))
+    profile = store.create(
+        ProviderProfile(
+            id="provider-media",
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            privacy={"local_only": True},
+            metadata={"default_model": "model-a"},
+        )
+    )
+    monkeypatch.setattr(
+        chat_module, "provider_from_profile", lambda _: ApiChatProvider(profile.id)
+    )
+    client = TestClient(
+        create_app(store, artifact_store=artifacts, auth_token="test-token")
+    )
+
+    image_buffer = BytesIO()
+    Image.new("RGBA", (12, 8), (20, 40, 80, 220)).save(image_buffer, format="PNG")
+    upload = client.post(
+        "/api/v1/chat/images",
+        headers=_auth(),
+        json={
+            "engagement_id": engagement.id,
+            "filename": "sample.png",
+            "media_type": "image/png",
+            "content_base64": base64.b64encode(image_buffer.getvalue()).decode(),
+        },
+    )
+    assert upload.status_code == 201
+    uploaded = upload.json()
+    preview = client.get(
+        f"/api/v1/chat/images/{uploaded['preview_artifact_id']}/preview",
+        headers=_auth(),
+    )
+    assert preview.status_code == 200
+    assert preview.headers["cache-control"] == "private, no-store"
+    assert preview.content.startswith(b"\x89PNG")
+    assert (
+        client.get(
+            f"/api/v1/chat/images/{uploaded['artifact_id']}/preview", headers=_auth()
+        ).status_code
+        == 404
+    )
+
+    completion = client.post(
+        "/api/v1/chat/completions",
+        headers=_auth(),
+        json={
+            "engagement_id": engagement.id,
+            "provider_id": profile.id,
+            "messages": [{"role": "user", "content": "fork me"}],
+        },
+    ).json()
+    session_id = completion["session_id"]
+    boundary = min(
+        store.list_entities(ChatMessage, engagement_id=engagement.id, limit=10),
+        key=lambda message: message.sequence,
+    )
+    fork = client.post(
+        f"/api/v1/chat/sessions/{session_id}/fork",
+        headers=_auth(),
+        json={"through_message_id": boundary.id, "title": "Branch"},
+    )
+    assert fork.status_code == 201
+    assert fork.json()["parent_session_id"] == session_id
+    copied = client.get(
+        f"/api/v1/chat/sessions/{fork.json()['id']}/messages", headers=_auth()
+    ).json()
+    assert len(copied) == 1
+    assert copied[0]["source_message_id"] == boundary.id
+
+
+def test_device_pairing_is_single_use_cookie_authenticated_and_revocable(tmp_path):
+    store = NebulaStore(tmp_path / "pairing.db")
+    app = create_app(store, auth_token="test-token")
+    client = TestClient(app, base_url="https://127.0.0.1", client=("127.0.0.1", 50000))
+
+    created = client.post(
+        "/api/v1/auth/pairings",
+        headers=_auth(),
+        json={"name": "Phone"},
+    )
+    assert created.status_code == 200
+    pairing = created.json()
+    redeemed = client.post(
+        "/api/v1/auth/pairings/redeem",
+        json={
+            "secret": pairing["secret"],
+            "confirmation_code": pairing["confirmation_code"],
+            "name": "Phone",
+        },
+    )
+    assert redeemed.status_code == 200
+    assert client.get("/api/v1/auth/devices").status_code == 200
+    replay = client.post(
+        "/api/v1/auth/pairings/redeem",
+        json={
+            "secret": pairing["secret"],
+            "confirmation_code": pairing["confirmation_code"],
+            "name": "Replay",
+        },
+    )
+    assert replay.status_code == 401
+    device_id = redeemed.json()["device"]["id"]
+    csrf = redeemed.json()["csrf_token"]
+    revoked = client.delete(
+        f"/api/v1/auth/devices/{device_id}",
+        headers={"X-Nebula-CSRF": csrf, "Origin": "https://127.0.0.1"},
+    )
+    assert revoked.status_code == 204
+    assert client.get("/api/v1/auth/devices").status_code == 401
 
 
 def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkeypatch):

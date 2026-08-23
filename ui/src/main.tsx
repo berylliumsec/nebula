@@ -1,8 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
+import "@fontsource-variable/geist/wght.css";
+import "@fontsource-variable/geist-mono/wght.css";
 import { App } from "./App";
 import { DialogProvider } from "./components/DialogSystem";
+import { PairingGate } from "./components/PairingGate";
 import {
   DiagnosticErrorBoundary,
   installGlobalDiagnosticHandlers,
@@ -12,12 +15,12 @@ import {
 import { isTauriRuntime } from "./api/runtime";
 import { ThemeProvider } from "./state/ThemeContext";
 import { WorkspaceProvider } from "./state/WorkspaceContext";
-import "./styles.css";
-import "./workspace.css";
-import "./refinement.css";
-import "./zero-theme.css";
+import "./ui.css";
 
 installGlobalDiagnosticHandlers();
+if (!isTauriRuntime() && "serviceWorker" in navigator && window.isSecureContext) {
+  window.addEventListener("load", () => void navigator.serviceWorker.register("/sw.js"));
+}
 if (isTauriRuntime()) {
   void nativeDiagnosticSettings().catch((error: unknown) => logDiagnostic({
     level: "error",
@@ -57,7 +60,7 @@ createRoot(root).render(
         <ThemeProvider>
           <WorkspaceProvider>
             <DialogProvider>
-              <App />
+              <PairingGate><App /></PairingGate>
             </DialogProvider>
           </WorkspaceProvider>
         </ThemeProvider>
@@ -68,12 +71,8 @@ createRoot(root).render(
 
 const bootSplash = document.getElementById("nebula-boot");
 if (bootSplash) {
-  const minimumDisplayMs = 1_100;
-  const elapsed = performance.now();
-  window.setTimeout(() => {
-    window.requestAnimationFrame(() => {
-      bootSplash.classList.add("nebula-boot--leaving");
-      window.setTimeout(() => bootSplash.remove(), 450);
-    });
-  }, Math.max(0, minimumDisplayMs - elapsed));
+  /* The static splash exists only while the JavaScript bundle is loading.
+     Animation frames can be throttled while a browser is busy or backgrounded,
+     so the handoff must not depend on them once React owns the root. */
+  bootSplash.remove();
 }

@@ -211,6 +211,82 @@ class ModelMessage(BaseModel):
     content: str | list[dict[str, Any]]
 
 
+def _openai_responses_message(message: ModelMessage) -> dict[str, Any]:
+    if isinstance(message.content, str):
+        return message.model_dump()
+    content: list[dict[str, Any]] = []
+    for part in message.content:
+        if part.get("type") == "image":
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:{part.get('media_type')};base64,{part.get('data')}",
+                }
+            )
+        elif part.get("type") == "text":
+            content.append({"type": "input_text", "text": str(part.get("text") or "")})
+    return {"role": message.role, "content": content}
+
+
+def _openai_chat_message(message: ModelMessage) -> dict[str, Any]:
+    if isinstance(message.content, str):
+        return message.model_dump()
+    content: list[dict[str, Any]] = []
+    for part in message.content:
+        if part.get("type") == "image":
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{part.get('media_type')};base64,{part.get('data')}"
+                    },
+                }
+            )
+        elif part.get("type") == "text":
+            content.append({"type": "text", "text": str(part.get("text") or "")})
+    return {"role": message.role, "content": content}
+
+
+def _anthropic_message(message: ModelMessage) -> dict[str, Any]:
+    if isinstance(message.content, str):
+        return message.model_dump()
+    content: list[dict[str, Any]] = []
+    for part in message.content:
+        if part.get("type") == "image":
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": part.get("media_type"),
+                        "data": part.get("data"),
+                    },
+                }
+            )
+        elif part.get("type") == "text":
+            content.append({"type": "text", "text": str(part.get("text") or "")})
+    return {"role": message.role, "content": content}
+
+
+def _gemini_parts(content: str | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if isinstance(content, str):
+        return [{"text": content}]
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if part.get("type") == "image":
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": part.get("media_type"),
+                        "data": part.get("data"),
+                    }
+                }
+            )
+        elif part.get("type") == "text":
+            parts.append({"text": str(part.get("text") or "")})
+    return parts
+
+
 class ToolDefinition(BaseModel):
     name: str
     description: str
@@ -504,7 +580,9 @@ class OpenAIResponsesProvider(ModelProvider):
     def _payload(self, request: ModelRequest, model: str) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
-            "input": [message.model_dump() for message in request.messages],
+            "input": [
+                _openai_responses_message(message) for message in request.messages
+            ],
         }
         for result in request.tool_results:
             payload["input"].extend(
@@ -635,7 +713,7 @@ class OpenAICompatibleProvider(ModelProvider):
         vllm_grammar = self.config.flavor == ProviderFlavor.VLLM
         payload: dict[str, Any] = {
             "model": model,
-            "messages": [message.model_dump() for message in request.messages],
+            "messages": [_openai_chat_message(message) for message in request.messages],
         }
         for result in request.tool_results:
             payload["messages"].extend(
@@ -894,7 +972,7 @@ class AnthropicProvider(ModelProvider):
             "model": model,
             "max_tokens": request.max_output_tokens or 4096,
             "messages": [
-                message.model_dump()
+                _anthropic_message(message)
                 for message in request.messages
                 if message.role != "system"
             ],
@@ -1050,11 +1128,7 @@ class GeminiProvider(ModelProvider):
             if message.role == "system":
                 continue
             role = "model" if message.role == "assistant" else "user"
-            parts = (
-                [{"text": message.content}]
-                if isinstance(message.content, str)
-                else message.content
-            )
+            parts = _gemini_parts(message.content)
             contents.append({"role": role, "parts": parts})
         for result in request.tool_results:
             contents.extend(

@@ -14,6 +14,7 @@ import { AIWritingDialog } from "./AIWritingDialog";
 import type { SelectionActionDraft } from "./selection";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { aiRuntimeOptions } from "./aiRuntimes";
+import { StandardEmptyState } from "./SurfacePrimitives";
 
 interface LinkOption {
   id: string;
@@ -305,7 +306,7 @@ export function NotesPanel({
             {evidenceOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.evidenceIds.includes(option.id)} onChange={() => toggleLink("evidenceIds", option.id)} /> {option.label}</label>)}
             {assetOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.assetIds.includes(option.id)} onChange={() => toggleLink("assetIds", option.id)} /> {option.label}</label>)}
           </details>}
-        </> : <div className="empty-state note-empty-state"><NotebookPen size={24} aria-hidden="true" /><strong>Start a project note</strong><p>Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence.</p><button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button></div>}
+        </> : <StandardEmptyState className="note-empty-state" icon={<NotebookPen size={24} aria-hidden="true" />} title="Start a project note" explanation="Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence." primaryAction={<button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button>} />}
       </section>
       {writingOpen && <AIWritingDialog
         api={api}

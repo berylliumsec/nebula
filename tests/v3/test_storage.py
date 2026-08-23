@@ -16,7 +16,15 @@ from nebula.v3.database import (
 from nebula.v3.domain import (
     AgentRun,
     Asset,
+    ChatBackend,
+    ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     Engagement,
+    HarnessSession,
+    HarnessTurn,
+    HarnessTurnOrigin,
+    HarnessTurnStatus,
     RiskClass,
     RunBudget,
     RunStatus,
@@ -322,6 +330,63 @@ def test_orm_and_database_reject_operation_event_mutation(store):
                 "UPDATE operation_events SET event_type='raw-rewrite' WHERE id=?",
                 (event.id,),
             )
+
+
+def test_delete_harness_chat_retains_immutable_operation_events(store):
+    engagement = store.create(Engagement(name="Harness chat deletion"))
+    harness_session = store.create(
+        HarnessSession(
+            engagement_id=engagement.id,
+            harness_profile_id="harness-1",
+            model="test-model",
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Delete me",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness-1",
+            harness_session_id=harness_session.id,
+            model="test-model",
+        )
+    )
+    chat_turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=chat.id,
+            backend=ChatBackend.HARNESS,
+            model="test-model",
+            status=ChatTurnStatus.COMPLETE,
+        )
+    )
+    harness_turn = store.create(
+        HarnessTurn(
+            engagement_id=engagement.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=chat.id,
+            chat_turn_id=chat_turn.id,
+            status=HarnessTurnStatus.COMPLETE,
+            prompt="test",
+        )
+    )
+    audit_event = store.append_operation_event(
+        harness_turn.id,
+        "harness_turn",
+        engagement.id,
+        "harness.completed",
+    )
+
+    store.delete_chat_session(chat.id)
+
+    with pytest.raises(NotFoundError):
+        store.get(ChatSession, chat.id)
+    with pytest.raises(NotFoundError):
+        store.get(ChatTurn, chat_turn.id)
+    with pytest.raises(NotFoundError):
+        store.get(HarnessTurn, harness_turn.id)
+    assert store.replay_operation_events(harness_turn.id) == [audit_event]
 
 
 def test_overview_counts_entities_by_engagement(store):

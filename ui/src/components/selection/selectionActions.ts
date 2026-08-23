@@ -1,3 +1,5 @@
+import { sha256Hex } from "../../sha256";
+
 export const SELECTION_TEXT_LIMIT = 20_000;
 
 export interface SelectionSource {
@@ -222,15 +224,12 @@ export async function createHashedSelectionAttachment(
   if (draft.source.id && draft.source.id.length > 200) {
     throw new Error("Selection source identifiers cannot exceed 200 characters.");
   }
-  const subtle = globalThis.crypto?.subtle;
-  if (!subtle) throw new Error("Web Crypto is required to attach selected context.");
-  const digest = new Uint8Array(await subtle.digest("SHA-256", new TextEncoder().encode(draft.text)));
   return {
     sourceKind: draft.source.kind,
     sourceId: draft.source.id,
     sourceLabel: draft.source.label,
     text: draft.text,
-    sha256: Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(""),
+    sha256: sha256Hex(draft.text),
     truncated: draft.truncated,
   };
 }
