@@ -822,7 +822,7 @@ class MissionService:
         interval = prior.metadata.get("repeat_interval_seconds")
         if not isinstance(interval, int) or interval < 3_600:
             return
-        created = await self.start_mission(
+        await self.start_mission(
             engagement_id=prior.engagement_id,
             name=str(prior.metadata.get("name") or prior.objective),
             objective=prior.objective,

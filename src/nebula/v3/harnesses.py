@@ -6520,7 +6520,7 @@ class HarnessRuntimeService:
             return
         options = prior.runtime_snapshot.get("runtime_options")
         options = options if isinstance(options, dict) else {}
-        created = await self.start_mission(
+        await self.start_mission(
             engagement_id=prior.engagement_id,
             name=str(prior.metadata.get("name") or prior.objective),
             objective=prior.objective,
