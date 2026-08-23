@@ -22,6 +22,7 @@ from nebula.v3.sandbox import (
 RUNTIME = os.getenv("NEBULA_TEST_CONTAINER_RUNTIME")
 IMAGE = os.getenv("NEBULA_TEST_RUNTIME_IMAGE")
 CONTEXT = os.getenv("NEBULA_TEST_CONTAINER_CONTEXT")
+SOCKET = os.getenv("NEBULA_TEST_CONTAINER_SOCKET")
 pytestmark = pytest.mark.skipif(
     not (RUNTIME and IMAGE),
     reason="a real rootless runtime and operator-runtime image are required",
@@ -36,8 +37,9 @@ def _runner(tmp_path: Path) -> ContainerSandboxRunner:
             platform=RunnerPlatform.LINUX,
             isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
             context=CONTEXT,
+            socket=SOCKET,
         )
-        if RUNTIME and CONTEXT
+        if RUNTIME and (CONTEXT or SOCKET)
         else None
     )
     return ContainerSandboxRunner(

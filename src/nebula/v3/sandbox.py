@@ -149,6 +149,7 @@ class RunnerProfile(BaseModel):
     platform: RunnerPlatform = Field(default_factory=_current_runner_platform)
     isolation_mode: RunnerIsolationMode
     context: str | None = Field(default=None, min_length=1, max_length=128)
+    socket: str | None = Field(default=None, max_length=2048)
     machine_name: str | None = Field(default=None, min_length=1, max_length=128)
     seccomp_profile: Path | None = None
 
@@ -179,6 +180,13 @@ class RunnerProfile(BaseModel):
             raise ValueError(
                 "runtime identifiers may contain only letters, digits, ._- "
             )
+        return value
+
+    @field_validator("socket")
+    @classmethod
+    def local_runtime_socket(cls, value: str | None) -> str | None:
+        if value is not None and not _is_local_unix_endpoint(value):
+            raise ValueError("runner socket must be a local absolute Unix socket")
         return value
 
     @model_validator(mode="after")
@@ -1169,18 +1177,19 @@ class ContainerSandboxRunner(SandboxRunner):
 
     async def _validate_docker_profile(self) -> tuple[bool, str]:
         assert self.profile is not None
-        context_name = self.profile.context or "default"
-        context_output, context_error, return_code = await self._capture(
-            "context", "inspect", context_name
-        )
-        if return_code != 0:
-            return False, context_error or "Docker context is unavailable"
-        context_document = _first_document(json.loads(context_output))
-        endpoints = _mapping_get(context_document, "Endpoints", "endpoints")
-        docker_endpoint = _mapping_get(endpoints, "docker", "Docker")
-        endpoint = _mapping_get(docker_endpoint, "Host", "host")
-        if not isinstance(endpoint, str) or not _is_local_unix_endpoint(endpoint):
-            return False, "Docker context must use a local absolute Unix socket"
+        if self.profile.socket is None:
+            context_name = self.profile.context or "default"
+            context_output, context_error, return_code = await self._capture(
+                "context", "inspect", context_name
+            )
+            if return_code != 0:
+                return False, context_error or "Docker context is unavailable"
+            context_document = _first_document(json.loads(context_output))
+            endpoints = _mapping_get(context_document, "Endpoints", "endpoints")
+            docker_endpoint = _mapping_get(endpoints, "docker", "Docker")
+            endpoint = _mapping_get(docker_endpoint, "Host", "host")
+            if not isinstance(endpoint, str) or not _is_local_unix_endpoint(endpoint):
+                return False, "Docker context must use a local absolute Unix socket"
 
         info_output, info_error, return_code = await self._capture(
             "info", "--format", "{{json .}}"
@@ -1226,6 +1235,9 @@ class ContainerSandboxRunner(SandboxRunner):
             )
             if not connection_ok:
                 return False, connection_detail
+        elif self.profile.socket is not None:
+            if not _is_local_unix_endpoint(self.profile.socket):
+                return False, "Podman socket must use a local absolute Unix path"
         elif self.profile.context is not None:
             connection_ok, connection_detail = await self._validate_podman_connection(
                 machine=False
@@ -1236,6 +1248,7 @@ class ContainerSandboxRunner(SandboxRunner):
         if (
             self.profile.platform == RunnerPlatform.LINUX
             and self.profile.context is None
+            and self.profile.socket is None
         ):
             version_output, version_error, return_code = await self._capture(
                 "--version"
@@ -1398,7 +1411,14 @@ class ContainerSandboxRunner(SandboxRunner):
         if self.profile is None:
             raise SandboxUnavailable("no container runtime is configured")
         argv = [str(self.profile.executable)]
-        if self.profile.context:
+        if self.profile.socket:
+            option = (
+                "--host"
+                if self.profile.runtime_type == ContainerRuntimeType.DOCKER
+                else "--url"
+            )
+            argv.extend([option, self.profile.socket])
+        elif self.profile.context:
             option = (
                 "--context"
                 if self.profile.runtime_type == ContainerRuntimeType.DOCKER

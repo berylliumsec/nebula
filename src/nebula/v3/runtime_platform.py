@@ -566,6 +566,9 @@ class RuntimePlatform:
             platform=host,
             isolation_mode=isolation,
             context=stored.context,
+            socket=stored.socket
+            if stored.isolation == RunnerIsolation.ROOTLESS
+            else None,
             machine_name=machine,
             seccomp_profile=(
                 Path(stored.seccomp_profile) if stored.seccomp_profile else None

@@ -479,6 +479,14 @@ def test_runner_profiles_require_supported_explicit_runtime_combinations():
             platform=RunnerPlatform.LINUX,
             isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
         )
+    with pytest.raises(ValidationError, match="local absolute Unix socket"):
+        RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable="/usr/bin/podman",
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+            socket="ssh://runner.example/run/podman.sock",
+        )
 
 
 def test_linux_rootless_podman_profile_is_certified(monkeypatch):
@@ -500,6 +508,32 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
     available, detail = asyncio.run(runner.available())
     assert available is True
     assert "rootless Podman" in detail
+
+
+def test_linux_rootless_podman_socket_is_certified(monkeypatch):
+    monkeypatch.delenv("CONTAINER_HOST", raising=False)
+    runner = ContainerSandboxRunner(
+        profile=RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable="/usr/bin/podman",
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+            socket="unix:///run/user/1001/podman/podman.sock",
+        )
+    )
+
+    async def capture_health():
+        return "true|linux", "", 0
+
+    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
+    available, detail = asyncio.run(runner.available())
+    assert available is True
+    assert "local rootless Podman" in detail
+    assert runner._runtime_argv() == [
+        "/usr/bin/podman",
+        "--url",
+        "unix:///run/user/1001/podman/podman.sock",
+    ]
 
 
 def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
