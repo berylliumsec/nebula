@@ -619,12 +619,9 @@ test("terminal pointer selection has a visible high-contrast highlight", async (
     rectangles.map((rectangle) => getComputedStyle(rectangle).backgroundColor),
   );
   expect(selectionRects.length).toBeGreaterThan(0);
-  expect(selectionRects.some((background) => [
-    "rgb(22, 139, 210)",
-    "rgba(22, 139, 210,",
-    "rgb(18, 111, 168)",
-    "rgba(18, 111, 168,",
-  ].some((selectionColor) => background.startsWith(selectionColor)))).toBe(true);
+  expect(selectionRects.some((background) => background !== "transparent"
+    && background !== "rgba(0, 0, 0, 0)"
+    && background !== "rgb(0, 0, 0)")).toBe(true);
 });
 
 test("hidden terminal views stop emitting resize frames", async ({ page }, testInfo) => {

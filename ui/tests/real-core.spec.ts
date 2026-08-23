@@ -346,6 +346,10 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     } else {
       expect(recoveredStatus.can_reset).toBe(true);
     }
+    await expect.poll(async () => {
+      const status = await api.get(`engagements/${projectId}/workspace/reset-status`);
+      return (await status.json() as { can_reset: boolean }).can_reset;
+    }, { timeout: 30_000, intervals: [250, 500, 1_000] }).toBe(true);
     await expect(page.getByText("Workspace is in use")).toHaveCount(0, { timeout: 10_000 });
     await page.locator(".workspace-reset input").fill(projectName);
     await page.getByRole("button", { name: "Reset workspace" }).click();
