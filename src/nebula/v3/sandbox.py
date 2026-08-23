@@ -1306,24 +1306,17 @@ class ContainerSandboxRunner(SandboxRunner):
             "connection",
             "list",
             "--format",
-            "json",
+            "{{.Name}}|{{.URI}}",
             include_context=False,
         )
         if return_code != 0:
             return False, connections_error or "Podman connection is unavailable"
-        connections = json.loads(connections_output)
-        if not isinstance(connections, list):
-            return False, "Podman connection inspection returned invalid data"
-        connection = next(
-            (
-                item
-                for item in connections
-                if isinstance(item, dict)
-                and _mapping_get(item, "Name", "name") == self.profile.context
-            ),
-            None,
-        )
-        uri = _mapping_get(connection or {}, "URI", "Uri", "uri")
+        uri = None
+        for line in connections_output.splitlines()[:100]:
+            name, separator, candidate_uri = line.partition("|")
+            if separator and name == self.profile.context:
+                uri = candidate_uri
+                break
         valid = isinstance(uri, str) and (
             _is_local_machine_endpoint(uri) if machine else _is_local_unix_endpoint(uri)
         )
