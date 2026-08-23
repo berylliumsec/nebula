@@ -17,10 +17,6 @@ function providerSupportsStructuredOutput(provider: ProviderHealth): boolean {
   );
 }
 
-function advertisedDefault(models: string[], candidate?: string): string {
-  return candidate && models.includes(candidate) ? candidate : models[0] ?? "";
-}
-
 export function aiRuntimeOptions(
   providers: ProviderHealth[],
   harnesses: HarnessProfile[],
@@ -37,10 +33,10 @@ export function aiRuntimeOptions(
       id: provider.id,
       name: provider.name,
       models: provider.models,
-      defaultModel: advertisedDefault(
-        provider.models,
-        provider.effectiveDefaultModel ?? provider.defaultModel,
-      ),
+      defaultModel: provider.effectiveDefaultModel
+        ?? provider.defaultModel
+        ?? provider.models[0]
+        ?? "",
       local: provider.local === true
         || provider.kind === "local"
         || provider.privacy === "local_only",
@@ -54,7 +50,7 @@ export function aiRuntimeOptions(
       id: harness.id,
       name: harness.name,
       models: harness.models,
-      defaultModel: advertisedDefault(harness.models, harness.defaultModel),
+      defaultModel: harness.defaultModel ?? harness.models[0] ?? "",
       local: harness.localOnly,
       permitsSensitiveData: harness.permitsSensitiveData,
     }));
@@ -63,20 +59,4 @@ export function aiRuntimeOptions(
 
 export function aiRuntimeLabel(runtime: AIRuntimeOption): string {
   return `${runtime.name} · ${runtime.kind === "harness" ? "Codex" : "provider"} · ${runtime.local ? "local" : "cloud"}`;
-}
-
-/** Code suggestions are opt-in: a runtime must explicitly advertise code support. */
-export function codeSuggestionRuntimeOptions(
-  providers: ProviderHealth[],
-  harnesses: HarnessProfile[],
-): AIRuntimeOption[] {
-  return aiRuntimeOptions(providers, harnesses).filter((runtime) => {
-    const source = runtime.kind === "provider"
-      ? providers.find((item) => item.id === runtime.id)?.capabilities ?? []
-      : (() => {
-          const caps = harnesses.find((item) => item.id === runtime.id)?.capabilities;
-          return caps && (caps.fileDiffs || caps.liveCommandOutput || caps.steering) ? ["code_suggestions"] : [];
-        })();
-    return source.some((value) => /code|completion|suggest/i.test(value));
-  });
 }

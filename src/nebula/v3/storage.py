@@ -805,6 +805,14 @@ class NebulaStore:
                 raise ConflictError(
                     "conversation cannot be deleted while a response is active"
                 )
+            harness_turn_ids = list(
+                session.scalars(
+                    select(EntityRow.id).where(
+                        EntityRow.kind == "harness_turns",
+                        EntityRow.payload["chat_session_id"].as_string() == session_id,
+                    )
+                )
+            )
             active_harness_turn = and_(
                 EntityRow.kind == "harness_turns",
                 EntityRow.payload["chat_session_id"].as_string() == session_id,
@@ -835,9 +843,12 @@ class NebulaStore:
                     EntityRow.payload["chat_session_id"].as_string() == session_id,
                 ),
             )
-            # Operation events are an immutable audit ledger. As with deleted
-            # missions, retain those records while removing the mutable chat,
-            # harness-turn, and interaction entities that expose them in the UI.
+            if harness_turn_ids:
+                session.execute(
+                    delete(OperationEventRow).where(
+                        OperationEventRow.operation_id.in_(harness_turn_ids)
+                    )
+                )
             session.execute(delete(EntityRow).where(owned_records))
             result = session.execute(
                 delete(EntityRow).where(

@@ -34,7 +34,7 @@ from .storage import NebulaStore
 PROMPT_VERSION = "writing-transform/v1"
 SOURCE_LIMIT = 100_000
 OUTPUT_LIMIT = 100_000
-WritingPurpose = Literal["note", "report_summary", "report_section", "code_suggestion"]
+WritingPurpose = Literal["note", "report_summary", "report_section"]
 
 
 class WritingAIError(RuntimeError):
@@ -75,11 +75,6 @@ _PURPOSE_INSTRUCTIONS: dict[str, str] = {
     "report_section": (
         "Produce only an editable report-section draft from the supplied note. Keep "
         "claims traceable to the source and do not upgrade hypotheses into verified findings."
-    ),
-    "code_suggestion": (
-        "Produce only an editable code suggestion. Preserve the source language and "
-        "style, return code without Markdown fences or commentary, and never include "
-        "secrets or mutate files. Keep the suggestion limited to the requested change."
     ),
 }
 

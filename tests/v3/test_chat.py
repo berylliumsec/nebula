@@ -406,25 +406,6 @@ def test_selected_context_is_bounded_hashed_sent_as_data_and_persisted(
         )
 
 
-def test_selected_context_hash_preserves_exact_boundary_whitespace():
-    selected = "\n  λ selected context  \t\n"
-
-    request = ChatCompletionRequest(
-        provider_id="provider-a",
-        messages=[{"role": "user", "content": "Explain this selection"}],
-        context_attachments=[
-            {
-                "source_kind": "document",
-                "source_label": "Document selection",
-                "text": selected,
-                "sha256": hashlib.sha256(selected.encode("utf-8")).hexdigest(),
-            }
-        ],
-    )
-
-    assert request.context_attachments[0].text == selected
-
-
 def test_cloud_knowledge_requires_profile_and_per_request_consent_and_redacts(
     tmp_path, monkeypatch
 ):

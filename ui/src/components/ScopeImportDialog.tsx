@@ -15,7 +15,6 @@ import type {
 } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { aiRuntimeLabel, aiRuntimeOptions } from "./aiRuntimes";
-import { ModalSurface } from "./DialogSystem";
 
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const ACCEPTED =
@@ -172,7 +171,6 @@ export function ScopeImportDialog({
   };
 
   const close = () => {
-    if (busy) return;
     if (result?.status === "ready")
       void api
         .discardScopeImport(engagementId, result.id)
@@ -188,11 +186,12 @@ export function ScopeImportDialog({
   };
 
   return (
-      <ModalSurface
-        as="form"
+    <div className="dialog-backdrop">
+      <form
         className="provider-dialog resource-dialog scope-import-dialog"
-        labelledBy="scope-import-title"
-        onClose={close}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="scope-import-title"
         onSubmit={(event) => void extract(event)}
       >
         <header>
@@ -434,6 +433,7 @@ export function ScopeImportDialog({
             </button>
           )}
         </footer>
-      </ModalSurface>
+      </form>
+    </div>
   );
 }

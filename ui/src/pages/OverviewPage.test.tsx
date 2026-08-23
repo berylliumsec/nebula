@@ -3,9 +3,8 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { DialogProvider } from "../components/DialogSystem";
 import { formatProjectModelCost, OverviewPage } from "./OverviewPage";
-/* jsdom does not resolve nested CSS imports; load the owning layers directly. */
-import "../base.css";
-import "../components-workbench.css";
+import "../styles.css";
+import "../refinement.css";
 
 vi.mock("../state/ChromeContext", () => ({
   useChrome: () => ({ setActivityOpen: vi.fn(), toolbarHost: null }),

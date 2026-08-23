@@ -23,28 +23,6 @@ export function browserSessionRequiresRelaunch(
   return !token && !development;
 }
 
-export function browserAuthorizationRecovery(hostname: string): "pair" | "relaunch" {
-  const normalized = hostname.toLocaleLowerCase().replace(/^\[|\]$/g, "");
-  return normalized === "localhost" || normalized.endsWith(".localhost") || normalized === "::1" || /^127(?:\.\d{1,3}){3}$/.test(normalized)
-    ? "relaunch"
-    : "pair";
-}
-
-export async function browserSessionIsAuthorized(normalizedBase: string): Promise<boolean> {
-  const healthUrl = normalizedBase.endsWith("/api/v1")
-    ? `${normalizedBase}/health`
-    : `${normalizedBase}/api/v1/health`;
-  try {
-    const response = await fetch(healthUrl, {
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
 let browserRuntimeToken: string | undefined;
 
 function consumeBrowserFragmentToken(): string | undefined {
@@ -109,15 +87,13 @@ export async function resolveApiRuntime(): Promise<ApiRuntime> {
   const normalizedBase = (baseUrl?.trim() || globalThis.location?.origin || "http://127.0.0.1")
     .replace(/\/+$/, "");
   if (browserSessionRequiresRelaunch(token, import.meta.env.DEV)) {
-    if (!await browserSessionIsAuthorized(normalizedBase)) {
-      return {
-        baseUrl,
-        mode: "browser",
-        state: "unavailable",
-        reason: "browser_session_token_missing",
-        message: "This browser session no longer has access to Core.",
-      };
-    }
+    return {
+      baseUrl,
+      mode: "browser",
+      state: "unavailable",
+      reason: "browser_session_token_missing",
+      message: "This browser session no longer has its one-time Core token.",
+    };
   }
   configureBrowserDiagnostics(
     normalizedBase.endsWith("/api/v1") ? normalizedBase : `${normalizedBase}/api/v1`,

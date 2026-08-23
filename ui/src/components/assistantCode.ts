@@ -1,5 +1,4 @@
 import type { ExecutionLanguage } from "../api/types";
-import { sha256Hex } from "../sha256";
 
 export const EXECUTION_LANGUAGE_ALIASES: Record<string, ExecutionLanguage> = {
   bash: "bash",
@@ -84,7 +83,8 @@ export function parseExactFences(markdown: string): FenceParseResult {
 }
 
 export async function sha256(value: string): Promise<string> {
-  return sha256Hex(value);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function utf8Length(value: string): number {

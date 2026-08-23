@@ -55,7 +55,6 @@ import type {
   HarnessTurnDetail,
   HarnessSessionActivity,
   HarnessSessionSummary,
-  HarnessSkillSummary,
   KnowledgeIngestRequest,
   KnowledgeIndexStatus,
   KnowledgeSource,
@@ -101,7 +100,6 @@ import type {
   WorkspaceUploadResult,
   WritingTransformRequest,
   WritingTransformResponse,
-  CodeCompletionItem,
 } from "./types";
 import { websocketAuthProtocol } from "./events";
 import {
@@ -199,7 +197,6 @@ interface WireEngagement extends WireEntity {
   client_name?: string | null;
   status: EngagementSummary["status"];
   tags?: string[];
-  workspace_path?: string | null;
   metadata?: JsonObject;
 }
 
@@ -213,8 +210,6 @@ interface WireAgentRun extends WireEntity {
   backend?: "native" | "harness";
   harness_profile_id?: string | null;
   harness_session_id?: string | null;
-  supervisor_model?: string | null;
-  runtime_snapshot?: JsonObject;
 }
 
 interface WireApproval extends WireEntity {
@@ -596,10 +591,10 @@ interface WireChatStreamEvent extends JsonObject {
     | "notice"
     | "done"
     | "error";
-  schema_version?: "nebula.harness-activity/v1" | "nebula.harness-activity/v2";
+  schema_version?: "nebula.harness-activity/v1";
   id?: string;
   sequence?: number;
-  vendor?: "codex_app_server" | "claude_agent_sdk" | "grok_acp";
+  vendor?: "codex_app_server" | "claude_agent_sdk";
   occurred_at?: string;
   external_session_id?: string;
   external_turn_id?: string;
@@ -624,18 +619,6 @@ interface WireChatStreamEvent extends JsonObject {
   provider_request_id?: string;
   detailed_usage?: JsonObject;
   artifact_ids?: string[];
-  mode?: string | null;
-  plan?: Array<{ id: string; title: string; status: "pending" | "in_progress" | "completed" | "blocked" }>;
-  goal?: {
-    objective: string;
-    status: "pending" | "running" | "complete" | "blocked" | "failed";
-    progress?: number | null;
-    current_step?: string | null;
-    elapsed_ms?: number | null;
-    token_budget?: number | null;
-    tokens_used?: number | null;
-    child_agents?: number;
-  } | null;
   turn_id?: string;
   tool_call_id?: string;
   capability?: string;
@@ -691,8 +674,6 @@ interface WireChatSession extends WireEntity {
   provider_profile_id?: string | null;
   harness_profile_id?: string | null;
   harness_session_id?: string | null;
-  parent_session_id?: string | null;
-  forked_from_message_id?: string | null;
   model?: string | null;
   metadata?: JsonObject;
 }
@@ -726,20 +707,9 @@ interface WireHarnessProfile extends WireEntity {
     protocol_version?: string | null;
     detail?: string | null;
     models?: string[];
-    model_options?: Array<{
-      model: string;
-      reasoning_efforts?: Array<{ id: string; label: string; description?: string }>;
-      default_reasoning_effort?: string | null;
-      service_tiers?: Array<{ id: string; label: string; description?: string }>;
-      default_service_tier?: string | null;
-    }>;
     activity_replay?: boolean;
     reasoning_summaries?: boolean;
     plans?: boolean;
-    planning_mode?: boolean;
-    goal_monitoring?: boolean;
-    skill_invocation?: boolean;
-    modes?: string[];
     live_command_output?: boolean;
     file_diffs?: boolean;
     detailed_usage?: boolean;
@@ -795,7 +765,6 @@ interface WireHarnessSession extends WireEntity {
   model: string;
   status: HarnessSessionSummary["status"];
   mcp_server_ids?: string[];
-  metadata?: JsonObject;
   last_activity_at: string;
 }
 
@@ -810,22 +779,6 @@ interface WireHarnessSessionActivity extends JsonObject {
   started_at?: string | null;
   last_activity_at: string;
   detail: string;
-  mode?: string | null;
-  plan?: Array<{
-    id: string;
-    title: string;
-    status: "pending" | "in_progress" | "completed" | "blocked";
-  }>;
-  goal?: {
-    objective: string;
-    status: "pending" | "running" | "complete" | "blocked" | "failed";
-    progress?: number | null;
-    current_step?: string | null;
-    elapsed_ms?: number | null;
-    token_budget?: number | null;
-    tokens_used?: number | null;
-    child_agents?: number;
-  } | null;
 }
 
 interface WireChatTurn extends WireEntity {
@@ -842,17 +795,6 @@ interface WirePersistedChatMessage extends WireEntity {
   sequence: number;
   role: "user" | "assistant";
   content: string;
-  content_blocks?: Array<{
-    type: "text" | "code" | "image" | "artifact" | "citation" | "activity";
-    text?: string | null;
-    language?: string | null;
-    artifact_id?: string | null;
-    media_type?: string | null;
-    alt?: string | null;
-    activity_id?: string | null;
-    metadata?: JsonObject;
-  }>;
-  source_message_id?: string | null;
   provider_profile_id?: string | null;
   model?: string | null;
   usage?: {
@@ -1309,7 +1251,6 @@ function mapEngagement(value: WireEngagement): EngagementSummary {
     clientName: value.client_name ?? undefined,
     status: value.status,
     tags: value.tags ?? [],
-    workspacePath: value.workspace_path ?? undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     scopeAssetCount: numberField(value.metadata?.scope_asset_count),
@@ -1334,19 +1275,6 @@ function mapTerminalRecordingTools(
 }
 
 function mapRun(value: WireAgentRun): AgentRunSummary {
-  const rawRuntimeOptions = value.runtime_snapshot?.runtime_options;
-  const runtimeOptions = rawRuntimeOptions && typeof rawRuntimeOptions === "object" && !Array.isArray(rawRuntimeOptions)
-    ? rawRuntimeOptions as JsonObject
-    : undefined;
-  const stages = Array.isArray(value.metadata?.stages)
-    ? value.metadata.stages.flatMap((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-        const stage = item as JsonObject;
-        return typeof stage.title === "string" && typeof stage.objective === "string"
-          ? [{ title: stage.title, objective: stage.objective }]
-          : [];
-      })
-    : [];
   return {
     id: value.id,
     engagementId: value.engagement_id,
@@ -1363,16 +1291,6 @@ function mapRun(value: WireAgentRun): AgentRunSummary {
     backend: value.backend ?? "native",
     harnessProfileId: value.harness_profile_id ?? undefined,
     harnessSessionId: value.harness_session_id ?? undefined,
-    model: value.supervisor_model ?? undefined,
-    reasoningEffort: typeof runtimeOptions?.reasoning_effort === "string" ? runtimeOptions.reasoning_effort : undefined,
-    serviceTier: typeof runtimeOptions?.service_tier === "string" ? runtimeOptions.service_tier : undefined,
-    objective: value.objective,
-    finalSummary: typeof value.metadata?.final_summary === "string" ? value.metadata.final_summary : undefined,
-    retryOfRunId: typeof value.metadata?.retry_of_run_id === "string" ? value.metadata.retry_of_run_id : undefined,
-    remoteMcpConfirmed: value.runtime_snapshot?.remote_mcp_confirmed === true,
-    scheduledFor: typeof value.metadata?.scheduled_for === "string" ? value.metadata.scheduled_for : undefined,
-    repeatIntervalSeconds: typeof value.metadata?.repeat_interval_seconds === "number" ? value.metadata.repeat_interval_seconds : undefined,
-    stages,
   };
 }
 
@@ -2285,21 +2203,7 @@ function chatRequestBody(
     engagement_id: body.engagementId,
     session_id: body.sessionId,
     model: body.model || undefined,
-    messages: body.messages.map((message) => ({
-      id: message.id,
-      role: message.role,
-      content: message.content,
-      content_blocks: (message.contentBlocks ?? []).map((block) => ({
-        type: block.type,
-        text: block.text,
-        language: block.language,
-        artifact_id: block.artifactId,
-        media_type: block.mediaType,
-        alt: block.alt,
-        activity_id: block.activityId,
-        metadata: block.metadata ?? {},
-      })),
-    })),
+    messages: body.messages,
     context_attachments: (body.contextAttachments ?? []).map((item) => ({
       source_kind: item.sourceKind,
       source_id: item.sourceId,
@@ -2315,12 +2219,6 @@ function chatRequestBody(
     tools_enabled: body.toolsEnabled ?? false,
     max_artifact_queries: body.maxArtifactQueries ?? 20,
     allow_cloud_tool_results: body.allowCloudToolResults ?? false,
-    harness_mode: body.harnessMode,
-    harness_reasoning_effort: body.harnessReasoningEffort,
-    harness_service_tier: body.harnessServiceTier,
-    harness_skill: body.harnessSkill
-      ? { name: body.harnessSkill.name, path: body.harnessSkill.path }
-      : undefined,
     stream,
   };
 }
@@ -2334,8 +2232,6 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     providerId: value.provider_profile_id ?? undefined,
     harnessProfileId: value.harness_profile_id ?? undefined,
     harnessSessionId: value.harness_session_id ?? undefined,
-    parentSessionId: value.parent_session_id ?? undefined,
-    forkedFromMessageId: value.forked_from_message_id ?? undefined,
     model: value.model ?? undefined,
     toolsEnabled: value.metadata?.tools_enabled === true,
     createdAt: value.created_at,
@@ -2357,21 +2253,6 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     secretRef: value.secret_ref ?? undefined,
     defaultModel: value.default_model ?? undefined,
     models: value.capabilities?.models ?? [],
-    modelOptions: (value.capabilities?.model_options ?? []).map((option) => ({
-      model: option.model,
-      reasoningEfforts: (option.reasoning_efforts ?? []).map((item) => ({
-        id: item.id,
-        label: item.label,
-        description: item.description ?? "",
-      })),
-      defaultReasoningEffort: option.default_reasoning_effort ?? undefined,
-      serviceTiers: (option.service_tiers ?? []).map((item) => ({
-        id: item.id,
-        label: item.label,
-        description: item.description ?? "",
-      })),
-      defaultServiceTier: option.default_service_tier ?? undefined,
-    })),
     enabled: value.enabled,
     localOnly: value.privacy?.local_only === true,
     permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
@@ -2398,10 +2279,6 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
       activityReplay: value.capabilities?.activity_replay === true,
       reasoningSummaries: value.capabilities?.reasoning_summaries === true,
       plans: value.capabilities?.plans === true,
-      planningMode: value.capabilities?.planning_mode === true,
-      goalMonitoring: value.capabilities?.goal_monitoring === true,
-      skillInvocation: value.capabilities?.skill_invocation === true,
-      modes: value.capabilities?.modes ?? [],
       liveCommandOutput: value.capabilities?.live_command_output === true,
       fileDiffs: value.capabilities?.file_diffs === true,
       detailedUsage: value.capabilities?.detailed_usage === true,
@@ -2468,18 +2345,6 @@ function mapHarnessSession(value: WireHarnessSession): HarnessSessionSummary {
     engagementId: value.engagement_id,
     harnessProfileId: value.harness_profile_id,
     model: value.model,
-    reasoningEffort: typeof value.metadata?.runtime_options === "object"
-      && value.metadata.runtime_options
-      && !Array.isArray(value.metadata.runtime_options)
-      && typeof (value.metadata.runtime_options as JsonObject).reasoning_effort === "string"
-        ? String((value.metadata.runtime_options as JsonObject).reasoning_effort)
-        : undefined,
-    serviceTier: typeof value.metadata?.runtime_options === "object"
-      && value.metadata.runtime_options
-      && !Array.isArray(value.metadata.runtime_options)
-      && typeof (value.metadata.runtime_options as JsonObject).service_tier === "string"
-        ? String((value.metadata.runtime_options as JsonObject).service_tier)
-        : undefined,
     status: value.status,
     mcpServerIds: value.mcp_server_ids ?? [],
     lastActivityAt: value.last_activity_at,
@@ -2500,18 +2365,6 @@ function mapHarnessSessionActivity(
     startedAt: value.started_at ?? undefined,
     lastActivityAt: value.last_activity_at,
     detail: value.detail,
-    mode: value.mode ?? undefined,
-    plan: value.plan ?? [],
-    goal: value.goal ? {
-      objective: value.goal.objective,
-      status: value.goal.status,
-      progress: value.goal.progress ?? undefined,
-      currentStep: value.goal.current_step ?? undefined,
-      elapsedMs: value.goal.elapsed_ms ?? undefined,
-      tokenBudget: value.goal.token_budget ?? undefined,
-      tokensUsed: value.goal.tokens_used ?? undefined,
-      childAgents: value.goal.child_agents ?? 0,
-    } : undefined,
   };
 }
 
@@ -2605,18 +2458,6 @@ function mapHarnessActivityEvent(
     artifactIds: value.artifact_ids ?? [],
     payload: value.payload ?? {},
     occurredAt: value.occurred_at,
-    mode: value.mode ?? undefined,
-    plan: value.plan ?? [],
-    goal: value.goal ? {
-      objective: value.goal.objective,
-      status: value.goal.status,
-      progress: value.goal.progress ?? undefined,
-      currentStep: value.goal.current_step ?? undefined,
-      elapsedMs: value.goal.elapsed_ms ?? undefined,
-      tokenBudget: value.goal.token_budget ?? undefined,
-      tokensUsed: value.goal.tokens_used ?? undefined,
-      childAgents: value.goal.child_agents ?? 0,
-    } : undefined,
   };
 }
 
@@ -2632,17 +2473,6 @@ function mapPersistedChatMessage(
     sequence: value.sequence,
     role: value.role,
     content: value.content,
-    contentBlocks: (value.content_blocks ?? []).map((block) => ({
-      type: block.type,
-      text: block.text ?? undefined,
-      language: block.language ?? undefined,
-      artifactId: block.artifact_id ?? undefined,
-      mediaType: block.media_type ?? undefined,
-      alt: block.alt ?? undefined,
-      activityId: block.activity_id ?? undefined,
-      metadata: block.metadata ?? {},
-    })),
-    sourceMessageId: value.source_message_id ?? undefined,
     providerId: value.provider_profile_id ?? undefined,
     model: value.model ?? undefined,
     usage: value.usage
@@ -2809,36 +2639,14 @@ async function responseError(response: Response): Promise<ApiError> {
       // Preserve a non-JSON Core/proxy response verbatim.
     }
   }
-  const validationDetail = typeof details === "object" && details && "detail" in details
-    ? details.detail
-    : undefined;
-  const validationMessage = Array.isArray(validationDetail)
-    ? validationDetail.flatMap((issue) => {
-        if (!issue || typeof issue !== "object") return [];
-        const value = issue as Record<string, unknown>;
-        const location = Array.isArray(value.loc)
-          ? value.loc.filter((part) => typeof part === "string" || typeof part === "number").at(-1)
-          : undefined;
-        const field = typeof location === "string"
-          ? location.replaceAll("_", " ")
-          : "value";
-        if (value.type === "string_too_long") {
-          return [`The supplied ${field} exceeded its validated length limit.`];
-        }
-        return typeof value.msg === "string"
-          ? [`The supplied ${field} is invalid: ${value.msg}`]
-          : [];
-      })[0]
-    : undefined;
-  const message = validationMessage ?? (
+  const message =
     typeof details === "object" && details && "message" in details
       ? String(details.message)
       : typeof details === "object" && details && "detail" in details
         ? typeof details.detail === "string"
           ? details.detail
           : JSON.stringify(details.detail)
-        : text || `Nebula API request failed (${response.status})`
-  );
+        : text || `Nebula API request failed (${response.status})`;
   return new ApiError(
     message,
     response.status,
@@ -2936,41 +2744,16 @@ export class ApiClient {
       : this.tokenSource;
   }
 
-  private authorizeHeaders(headers: Headers, method = "GET"): Headers {
-    const token = this.getToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-    if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase()) && typeof document !== "undefined") {
-      const csrf = document.cookie
-        .split("; ")
-        .find((item) => item.startsWith("nebula_csrf="))
-        ?.slice("nebula_csrf=".length);
-      if (csrf) headers.set("X-Nebula-CSRF", decodeURIComponent(csrf));
-    }
-    return headers;
-  }
-
-  completeCode(
-    engagementId: string,
-    path: string,
-    source: string,
-    offset: number,
-    signal?: AbortSignal,
-  ): Promise<CodeCompletionItem[]> {
-    return this.request<{ items: CodeCompletionItem[] }>("code/completions", {
-      method: "POST",
-      signal,
-      body: JSON.stringify({ engagement_id: engagementId, path, source, offset }),
-    }).then((value) => value.items);
-  }
-
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const token = this.getToken();
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
     if (init.body && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
-    const method = (init.method ?? "GET").toUpperCase();
-    this.authorizeHeaders(headers, method);
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
     if (!headers.has("X-Nebula-Operation-ID")) {
       headers.set("X-Nebula-Operation-ID", newOperationId());
     }
@@ -3144,11 +2927,12 @@ export class ApiClient {
   }
 
   async exportDiagnostics(signal?: AbortSignal): Promise<Blob> {
+    const token = this.getToken();
     const headers = new Headers({
       Accept: "application/zip",
       "X-Nebula-Operation-ID": newOperationId(),
     });
-    this.authorizeHeaders(headers, "POST");
+    if (token) headers.set("Authorization", `Bearer ${token}`);
     const response = await this.fetchImpl(
       `${this.baseUrl}/diagnostics/export`,
       {
@@ -3307,7 +3091,6 @@ export class ApiClient {
         client_name: body.clientName || null,
         status: body.status ?? "draft",
         tags: body.tags ?? [],
-        workspace_path: body.workspacePath?.trim() || null,
         metadata: {},
       }),
     }).then(mapEngagement);
@@ -3408,11 +3191,6 @@ export class ApiClient {
         harness_session_id: body.harnessSessionId,
         mcp_server_ids: body.mcpServerIds ?? [],
         model: body.model,
-        harness_reasoning_effort: body.harnessReasoningEffort,
-        harness_service_tier: body.harnessServiceTier,
-        stages: body.stages ?? [],
-        scheduled_for: body.scheduledFor,
-        repeat_interval_seconds: body.repeatIntervalSeconds,
         max_duration_seconds: body.maxDurationSeconds,
         max_tokens: body.maxTokens,
         max_cost_usd: body.maxCostUsd,
@@ -3422,13 +3200,6 @@ export class ApiClient {
         max_concurrency: body.maxConcurrency ?? 1,
         allow_cloud_tool_results: body.allowCloudToolResults === true,
       }),
-    }).then(mapRun);
-  }
-
-  retryMission(id: string, allowCloudToolResults = false): Promise<AgentRunSummary> {
-    return this.request<WireAgentRun>(`runs/${encodeURIComponent(id)}/retry`, {
-      method: "POST",
-      body: JSON.stringify({ allow_cloud_tool_results: allowCloudToolResults }),
     }).then(mapRun);
   }
 
@@ -3479,7 +3250,7 @@ export class ApiClient {
     return this.listAll<WireHarnessProfile>("harnesses", signal).then((items) =>
       items
         .map(mapHarnessProfile)
-        .filter((profile) => profile.kind === "codex_app_server" || profile.kind === "grok_acp"),
+        .filter((profile) => profile.kind === "codex_app_server"),
     );
   }
 
@@ -3515,17 +3286,6 @@ export class ApiClient {
         this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`),
       )
       .then(mapHarnessProfile);
-  }
-
-  listHarnessSkills(
-    id: string,
-    engagementId: string,
-    signal?: AbortSignal,
-  ): Promise<HarnessSkillSummary[]> {
-    return this.request<Array<{ name: string; path: string; source: "project" | "installed" }>>(
-      `harnesses/${encodeURIComponent(id)}/skills?engagement_id=${encodeURIComponent(engagementId)}`,
-      { signal },
-    );
   }
 
   async deleteHarness(id: string, expectedRevision: number): Promise<void> {
@@ -4187,9 +3947,7 @@ export class ApiClient {
         asset_ids: [...new Set(body.assetIds ?? [])],
         cve_ids: normalizedIdentifiers(body.cveIds),
         cwe_ids: normalizedIdentifiers(body.cweIds),
-        metadata: body.sourceRunId
-          ? { origin: "mission_operator_promotion", source_run_id: body.sourceRunId }
-          : { origin: "manual_operator_entry" },
+        metadata: { origin: "manual_operator_entry" },
       }),
     }).then(mapFinding);
   }
@@ -4297,9 +4055,7 @@ export class ApiClient {
           reportNoteTransformBody,
         ),
         artifact_ids: [],
-        metadata: body.sourceRunId
-          ? { origin: "mission_operator_promotion", source_run_id: body.sourceRunId }
-          : {},
+        metadata: {},
       }),
     }).then(mapReport);
   }
@@ -4502,7 +4258,8 @@ export class ApiClient {
       Accept: "application/zip",
       "X-Nebula-Sensitive-Data-Acknowledged": "true",
     });
-    this.authorizeHeaders(headers, "POST");
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
     const response = await this.fetchImpl(
       `${this.baseUrl}/engagements/${encodeURIComponent(engagementId)}/export-bundle`,
       { method: "POST", headers, signal, credentials: "same-origin" },
@@ -5421,24 +5178,6 @@ export class ApiClient {
     ).then(mapWorkspaceListing);
   }
 
-  listHostWorkspaceFolders(path?: string): Promise<{
-    path: string;
-    parent?: string;
-    directories: Array<{ name: string; path: string }>;
-    truncated: boolean;
-  }> {
-    const query = path ? `?path=${encodeURIComponent(path)}` : "";
-    return this.request<{
-      path: string;
-      parent?: string | null;
-      directories: Array<{ name: string; path: string }>;
-      truncated: boolean;
-    }>(`workspace-folders${query}`).then((value) => ({
-      ...value,
-      parent: value.parent ?? undefined,
-    }));
-  }
-
   previewWorkspaceFile(
     engagementId: string,
     path: string,
@@ -5487,7 +5226,7 @@ export class ApiClient {
       can_reset: boolean;
       active_terminal_count: number;
       active_execution_count: number;
-      reason_code?: "workspace_busy" | "linked_workspace";
+      reason_code?: "workspace_busy";
       detail: string;
     }>(`engagements/${encodeURIComponent(engagementId)}/workspace/reset-status`, { signal }).then((value) => ({
       engagementId: value.engagement_id,
@@ -5508,7 +5247,8 @@ export class ApiClient {
     expectedSha256?: string,
   ): Promise<WorkspaceUploadResult> {
     const headers = new Headers({ "Content-Type": "application/octet-stream" });
-    this.authorizeHeaders(headers, "PUT");
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
     if (expectedSha256) headers.set("If-Match", expectedSha256);
     const parameters = new URLSearchParams({
       path,
@@ -5616,96 +5356,6 @@ export class ApiClient {
     ).then(mapChatSession);
   }
 
-  forkChatSession(
-    sessionId: string,
-    throughMessageId: string,
-    title?: string,
-  ): Promise<ChatSessionSummary> {
-    return this.request<WireChatSession>(
-      `chat/sessions/${encodeURIComponent(sessionId)}/fork`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          through_message_id: throughMessageId,
-          title,
-        }),
-      },
-    ).then(mapChatSession);
-  }
-
-  uploadChatImage(body: {
-    engagementId: string;
-    filename: string;
-    mediaType: "image/png" | "image/jpeg" | "image/webp";
-    contentBase64: string;
-  }): Promise<{
-    artifactId: string;
-    previewArtifactId: string;
-    mediaType: string;
-    width: number;
-    height: number;
-  }> {
-    return this.request<{
-      artifact_id: string;
-      preview_artifact_id: string;
-      media_type: string;
-      width: number;
-      height: number;
-    }>("chat/images", {
-      method: "POST",
-      body: JSON.stringify({
-        engagement_id: body.engagementId,
-        filename: body.filename,
-        media_type: body.mediaType,
-        content_base64: body.contentBase64,
-      }),
-    }).then((value) => ({
-      artifactId: value.artifact_id,
-      previewArtifactId: value.preview_artifact_id,
-      mediaType: value.media_type,
-      width: value.width,
-      height: value.height,
-    }));
-  }
-
-  async fetchChatImagePreview(artifactId: string, signal?: AbortSignal): Promise<Blob> {
-    const headers = new Headers({ Accept: "image/png,image/jpeg" });
-    const token = this.getToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-    const response = await this.fetchImpl(
-      `${this.baseUrl}/chat/images/${encodeURIComponent(artifactId)}/preview`,
-      { headers, signal, credentials: "same-origin" },
-    );
-    if (!response.ok) throw await responseError(response);
-    return response.blob();
-  }
-
-  createDevicePairing(name: string): Promise<{ secret: string; confirmationCode: string; expiresAt: string }> {
-    return this.request<{ secret: string; confirmation_code: string; expires_at: string }>("auth/pairings", {
-      method: "POST",
-      body: JSON.stringify({ name }),
-    }).then((value) => ({ secret: value.secret, confirmationCode: value.confirmation_code, expiresAt: value.expires_at }));
-  }
-
-  listPairedDevices(): Promise<import("./types").PairedDevice[]> {
-    return this.request<Array<{
-      id: string; name: string; created_at: string; last_used_at: string;
-      idle_expires_at: string; absolute_expires_at: string; current: boolean;
-    }>>("auth/devices").then((items) => items.map((item) => ({
-      id: item.id,
-      name: item.name,
-      createdAt: item.created_at,
-      lastUsedAt: item.last_used_at,
-      idleExpiresAt: item.idle_expires_at,
-      absoluteExpiresAt: item.absolute_expires_at,
-      current: item.current,
-    })));
-  }
-
-  async revokePairedDevice(id: string): Promise<void> {
-    await this.request<void>(`auth/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
-  }
-
   async deleteChatSession(sessionId: string): Promise<void> {
     await this.request<void>(`chat-sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
@@ -5749,7 +5399,8 @@ export class ApiClient {
       Accept: "text/event-stream",
       "Content-Type": "application/json",
     });
-    this.authorizeHeaders(headers, "POST");
+    const token = this.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
     const response = await this.fetchImpl(
       resumeTurnId
         ? `${this.baseUrl}/chat/turns/${encodeURIComponent(resumeTurnId)}/resume`

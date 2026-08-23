@@ -65,19 +65,6 @@ export interface ResourceStatus {
 const workspaceResources: WorkspaceResource[] = ["projects", "providers", "providerCatalog", "operators", "setup", "activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "library", "reports"];
 const initialResourceStatus = Object.fromEntries(workspaceResources.map((key) => [key, { state: "loading" }])) as Record<WorkspaceResource, ResourceStatus>;
 
-function missionIdFromUrl(): string {
-  if (typeof window === "undefined") return "";
-  return new URLSearchParams(window.location.search).get("mission") ?? "";
-}
-
-function writeMissionIdToUrl(id: string, mode: "push" | "replace" = "replace") {
-  if (typeof window === "undefined") return;
-  const url = new URL(window.location.href);
-  if (id) url.searchParams.set("mission", id);
-  else url.searchParams.delete("mission");
-  window.history[mode === "push" ? "pushState" : "replaceState"]({}, "", `${url.pathname}${url.search}${url.hash}`);
-}
-
 export function evolveRunFromEvent(current: AgentRunSummary, event: RunEvent): AgentRunSummary {
   if (event.runId && event.runId !== current.id) return current;
   const base = { ...current, updatedAt: event.occurredAt };
@@ -109,15 +96,6 @@ export function evolveRunFromEvent(current: AgentRunSummary, event: RunEvent): A
   if (event.kind === "run.cancelled") return { ...base, status: "cancelled" };
   if (event.kind === "task.completed") {
     return { ...base, completedTasks: Math.min(current.totalTasks || Number.MAX_SAFE_INTEGER, current.completedTasks + 1) };
-  }
-  if (event.kind === "stage.completed") {
-    return {
-      ...base,
-      status: "running",
-      completedTasks: typeof event.payload.stage_index === "number"
-        ? event.payload.stage_index + 1
-        : current.completedTasks + 1,
-    };
   }
   return current;
 }
@@ -169,7 +147,6 @@ interface WorkspaceContextValue {
   updateObservation: (id: string, request: ObservationUpdateRequest) => Promise<ObservationSummary>;
   deleteObservation: (id: string, expectedRevision: number) => Promise<void>;
   startMission: (request: MissionCreateRequest) => Promise<AgentRunSummary>;
-  retryMission: (id: string, allowCloudToolResults?: boolean) => Promise<AgentRunSummary>;
   stopMission: (id: string, request?: RunStopRequest) => Promise<AgentRunSummary>;
   deleteMission: (id: string) => Promise<void>;
   createOperatorProfile: (request: OperatorProfileCreateRequest) => Promise<OperatorProfile>;
@@ -222,7 +199,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [attempt, setAttempt] = useState(0);
   const [selectedEngagementId, setSelectedEngagementId] = useState(() => localStorage.getItem("nebula.engagement") ?? "");
-  const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || localStorage.getItem("nebula.mission") || "");
+  const [selectedMissionId, setSelectedMissionId] = useState(() => localStorage.getItem("nebula.mission") ?? "");
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
 
   const reconnect = useCallback(() => {
@@ -359,9 +336,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
             setRuns(runResult.value.items);
             nextRun = runResult.value.items.find((item) => item.id === selectedMissionId)
               ?? runResult.value.items[runResult.value.items.length - 1];
-            const requestedMissionId = missionIdFromUrl();
-            if (nextRun && requestedMissionId !== nextRun.id) writeMissionIdToUrl(nextRun.id);
-            if (!nextRun && requestedMissionId) writeMissionIdToUrl("");
           }
           if (approvalResult.status === "fulfilled") setApprovals(approvalResult.value.items);
           if (assetResult.status === "fulfilled") setAssets(assetResult.value.items);
@@ -440,20 +414,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const selectMission = useCallback((id: string) => {
     if (!id || id === selectedMissionId) return;
     localStorage.setItem("nebula.mission", id);
-    writeMissionIdToUrl(id, "push");
     setRun(runs.find((item) => item.id === id));
     setEvents([]);
     setSelectedMissionId(id);
   }, [runs, selectedMissionId]);
-
-  useEffect(() => {
-    const onPopState = () => {
-      const id = missionIdFromUrl();
-      if (id && id !== selectedMissionId) setSelectedMissionId(id);
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [selectedMissionId]);
 
   useEffect(() => {
     if (!api || workspaceState === "failed" || !["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "")) return;
@@ -722,7 +686,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     }
     const created = await api.createMission(request);
     localStorage.setItem("nebula.mission", created.id);
-    writeMissionIdToUrl(created.id);
     setSelectedMissionId(created.id);
     setRuns((current) => [created, ...current.filter((item) => item.id !== created.id)]);
     setRun(created);
@@ -741,21 +704,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return updated;
   }, [api, coreState]);
 
-  const retryMission = useCallback(async (id: string, allowCloudToolResults = false) => {
-    if (coreState !== "online" || !api) {
-      throw new Error("Nebula Core must be online to retry a mission.");
-    }
-    const created = await api.retryMission(id, allowCloudToolResults);
-    localStorage.setItem("nebula.mission", created.id);
-    writeMissionIdToUrl(created.id);
-    setSelectedMissionId(created.id);
-    setRuns((current) => [created, ...current.filter((item) => item.id !== created.id)]);
-    setRun(created);
-    setEvents([]);
-    setAttempt((value) => value + 1);
-    return created;
-  }, [api, coreState]);
-
   const deleteMission = useCallback(async (id: string) => {
     if (coreState !== "online" || !api) {
       throw new Error("Nebula Core must be online to delete a mission.");
@@ -764,7 +712,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setRuns((current) => current.filter((item) => item.id !== id));
     if (selectedMissionId === id) {
       localStorage.removeItem("nebula.mission");
-      writeMissionIdToUrl("");
       setSelectedMissionId("");
     }
     setRun((current) => current?.id === id ? undefined : current);
@@ -961,7 +908,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       updateObservation,
       deleteObservation,
       startMission,
-      retryMission,
       stopMission,
       deleteMission,
       createOperatorProfile,
@@ -1020,7 +966,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       updateObservation,
       deleteObservation,
       startMission,
-      retryMission,
       stopMission,
       deleteMission,
       createOperatorProfile,

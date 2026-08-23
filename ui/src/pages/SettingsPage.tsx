@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Check, Contrast, KeyRound, Moon, Orbit, Pencil, Plus, RefreshCw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
 import type { LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth } from "../api/types";
-import { ModalSurface, useConfirmation } from "../components/DialogSystem";
+import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
 import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
@@ -14,8 +14,6 @@ import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, DiagnosticsPanel, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "../components/InlineValidationNotice";
-import { DevicePairingSettings } from "../components/DevicePairingSettings";
-import { ProgressState, SettingsGroup, StandardEmptyState } from "../components/SurfacePrimitives";
 
 const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "System", icon: Contrast },
@@ -32,30 +30,6 @@ const settingsSections = [
 ] as const;
 
 type SettingsSection = typeof settingsSections[number][0];
-const advancedSettingsGroups = [
-  "models-settings",
-  "automation-settings",
-  "project-policy-settings",
-  "identity-security-settings",
-  "release-settings-group",
-] as const;
-type AdvancedSettingsGroup = typeof advancedSettingsGroups[number];
-
-function elapsedLabel(startedAt: string | undefined, now: number): string | undefined {
-  if (!startedAt) return undefined;
-  const elapsedSeconds = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1_000));
-  const minutes = Math.floor(elapsedSeconds / 60);
-  const seconds = elapsedSeconds % 60;
-  return minutes ? `${minutes}m ${String(seconds).padStart(2, "0")}s elapsed` : `${seconds}s elapsed`;
-}
-
-function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSettingsGroup {
-  if (["automation-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
-  if (["project-policy-settings", "engagement-policy-settings"].includes(hash)) return "project-policy-settings";
-  if (["identity-security-settings", "operator-settings", "device-pairing-settings", "general-settings", "appearance-settings", "security-settings"].includes(hash)) return "identity-security-settings";
-  if (["release-settings-group", "release-settings"].includes(hash)) return "release-settings-group";
-  return "models-settings";
-}
 
 function sectionFromHash(): SettingsSection {
   const hash = window.location.hash.slice(1);
@@ -129,9 +103,7 @@ export function SettingsPage() {
   const [operatorBusy, setOperatorBusy] = useState<string>();
   const [operatorError, setOperatorError] = useState<string>();
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(sectionFromHash);
-  const [openAdvancedGroup, setOpenAdvancedGroup] = useState<AdvancedSettingsGroup>(advancedGroupFromHash);
   const [checkingTerminal, setCheckingTerminal] = useState(false);
-  const [preparationClock, setPreparationClock] = useState(Date.now());
   const [selectingRuntime, setSelectingRuntime] = useState<string>();
   const [setupError, setSetupError] = useState<string>();
   const [detectedLocalProviders, setDetectedLocalProviders] = useState<LocalProviderDetection[]>([]);
@@ -158,11 +130,7 @@ export function SettingsPage() {
   }, [api, workspaceState]);
 
   useEffect(() => {
-    const syncSection = () => {
-      const section = sectionFromHash();
-      setSettingsSection(section);
-      if (section === "advanced-settings") setOpenAdvancedGroup(advancedGroupFromHash());
-    };
+    const syncSection = () => setSettingsSection(sectionFromHash());
     window.addEventListener("hashchange", syncSection);
     return () => window.removeEventListener("hashchange", syncSection);
   }, []);
@@ -174,21 +142,14 @@ export function SettingsPage() {
       const target = document.getElementById(hash === "advanced-settings" ? "models-settings" : hash);
       const group = target?.matches("details") ? target as HTMLDetailsElement : target?.closest<HTMLDetailsElement>("details.settings-group");
       if (!group) return;
+      group.open = true;
       const focusTarget = target?.matches("details") ? group.querySelector<HTMLElement>("summary") : target?.querySelector<HTMLElement>("h2, h3") ?? group.querySelector<HTMLElement>("summary");
       focusTarget?.setAttribute("tabindex", "-1");
       focusTarget?.focus({ preventScroll: true });
       group.scrollIntoView?.({ block: "start" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [openAdvancedGroup, settingsSection]);
-
-  const openSettingsGroup = (id: string) => {
-    const group = id as AdvancedSettingsGroup;
-    if (!advancedSettingsGroups.includes(group)) return;
-    setOpenAdvancedGroup(group);
-    setSettingsSection("advanced-settings");
-    if (window.location.hash !== `#${group}`) window.history.replaceState(null, "", `#${group}`);
-  };
+  }, [settingsSection]);
 
   useEffect(() => {
     if (!adding || !editingProvider) return;
@@ -508,20 +469,6 @@ export function SettingsPage() {
       setCheckingTerminal(false);
     }
   };
-  const cancelImagePreparation = async () => {
-    if (!api || !setupStatus?.terminal.imagePreparation.operationId) return;
-    setCheckingTerminal(true);
-    setSetupError(undefined);
-    try {
-      await api.cancelSetupImage(setupStatus.terminal.imagePreparation.operationId);
-      await refreshSetupRuntime();
-    } catch (error) {
-      void logCaughtDiagnostic("interface.settings_page.image_preparation_cancel_failed", "Kali runtime preparation could not be cancelled.", error, "settings_page");
-      setSetupError(error instanceof Error ? error.message : "Could not cancel Kali runtime preparation.");
-    } finally {
-      setCheckingTerminal(false);
-    }
-  };
   const selectRuntime = async (candidateId: string) => {
     if (!api) return;
     setSelectingRuntime(candidateId);
@@ -557,36 +504,28 @@ export function SettingsPage() {
   const imagePreparationFailed = imagePreparation?.phase === "error" || imagePreparation?.phase === "cancelled";
   const imagePreparationIndeterminate = imagePreparation?.progressIndeterminate === true
     || imagePreparation?.progressPercent === undefined;
-  useEffect(() => {
-    if (!imagePreparationActive) return;
-    setPreparationClock(Date.now());
-    const timer = window.setInterval(() => setPreparationClock(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [imagePreparationActive]);
   return (
     <div className="page settings-page">
       <SettingsSaveFeedback />
       <PageHeader title="Settings" description="Workspace preferences." />
       <div className="settings-workspace">
-      <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); const hash = id === "advanced-settings" ? openAdvancedGroup : id; window.history.replaceState(null, "", `#${hash}`); setSettingsSection(id); }}>{label}</a>)}</nav>
+      <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); window.history.replaceState(null, "", `#${id}`); setSettingsSection(id); }}>{label}</a>)}</nav>
       <div className="settings-detail" data-section={settingsSection}>
       <section className="settings-section setup-overview" id="setup-settings">
-        <div className="section-heading"><div><h2>Readiness</h2><p>Terminal is the only required runtime. Models remain optional.</p></div></div>
+        <div className="section-heading"><div><h2>Ready to work</h2><p>Models are optional.</p></div></div>
         <div className="setup-card-grid">
           <article className="panel setup-card">
             <header><span className={`status-dot ${setupStatus?.terminal.status === "ready" ? "healthy" : ["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{setupStatus?.terminal.status === "ready" ? "Kali runtime ready" : setupStatus?.terminal.status === "detecting_runner" ? "Checking Docker or Podman…" : imagePreparationActive ? "Preparing Kali runtime…" : imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : setupStatus?.terminal.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>
-            {!imagePreparationActive && !imagePreparationFailed && <p>{setupStatus?.terminal.detail ?? (setupStatus?.terminal.status === "ready" ? "A verified local container runtime is ready for project terminals." : "Nebula checks trusted local Docker and Podman installations automatically.")}</p>}
-            {(imagePreparationActive || imagePreparationFailed) && <ProgressState
-              className="setup-preparation-progress"
-              stage={imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : "Preparing Kali runtime"}
-              detail={imagePreparation?.detail ?? setupStatus?.terminal.detail ?? "Preparing the verified project image."}
-              progressLabel="Kali runtime preparation progress"
-              elapsed={elapsedLabel(imagePreparation?.startedAt, preparationClock)}
-              progress={imagePreparationIndeterminate ? undefined : imagePreparation?.progressPercent}
-              currentAction={imagePreparation?.phase === "queued" ? "Waiting for the selected runner" : imagePreparation?.phase === "resolving_runtime" ? "Verifying the local container runtime" : imagePreparationActive ? "Downloading and installing the pinned Kali toolset" : undefined}
-              cancelAction={imagePreparationActive && imagePreparation?.canCancel ? <button className="button quiet" type="button" disabled={checkingTerminal} onClick={() => void cancelImagePreparation()}>Cancel</button> : undefined}
-              retryAction={imagePreparationFailed && imagePreparation?.canRetry ? <button className="button secondary" type="button" disabled={checkingTerminal} onClick={() => void checkTerminalSetup()}>Retry</button> : undefined}
-            />}
+            <p>{setupStatus?.terminal.detail ?? (setupStatus?.terminal.status === "ready" ? "A verified local container runtime is ready for project terminals." : "Nebula checks trusted local Docker and Podman installations automatically.")}</p>
+            {imagePreparationActive && <div
+              className={`terminal-start-progress setup-preparation-progress${imagePreparationIndeterminate ? " indeterminate" : ""}`}
+              role="progressbar"
+              aria-label="Kali runtime preparation progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={imagePreparationIndeterminate ? undefined : imagePreparation?.progressPercent}
+              aria-valuetext={setupStatus?.terminal.detail ?? "Preparing Kali runtime"}
+            ><span style={imagePreparationIndeterminate ? undefined : { width: `${imagePreparation?.progressPercent}%` }} /></div>}
             {setupStatus?.terminal.candidates.length ? <div className="setup-runtime-options" aria-label="Local container runtime choices">{setupStatus.terminal.candidates.map((candidate) => <article key={`${candidate.runtime}-${candidate.executable}`}><span><strong>{candidate.name}</strong><small>{candidate.runtime} · {candidate.platform} · {candidate.healthy ? "ready" : candidate.detail ?? "unavailable"}</small></span>{candidate.candidateId && candidate.healthy && candidate.runnerProfileId !== setupStatus.terminal.runnerProfileId ? <button className="button quiet" type="button" disabled={Boolean(selectingRuntime)} onClick={() => candidate.candidateId && void selectRuntime(candidate.candidateId)}>{selectingRuntime === candidate.candidateId ? "Selecting…" : "Use"}</button> : candidate.runnerProfileId === setupStatus.terminal.runnerProfileId ? <small><Check size={13} /> Selected</small> : null}</article>)}</div> : null}
             <button className="button secondary" type="button" disabled={checkingTerminal || imagePreparationActive || workspaceState === "starting" || workspaceState === "failed"} onClick={() => void checkTerminalSetup()}><RefreshCw className={checkingTerminal || imagePreparationActive ? "spin" : undefined} size={15} /> {imagePreparationActive ? "Preparing Kali…" : checkingTerminal ? imagePreparationFailed ? "Retrying…" : "Checking…" : imagePreparationFailed ? "Retry preparation" : "Check again"}</button>
           </article>
@@ -595,7 +534,7 @@ export function SettingsPage() {
             <p>{setupStatus?.assistant.detail ?? (providers.length ? `${providers.length} model provider${providers.length === 1 ? " is" : "s are"} configured.` : "You can use Terminal and Files now, then connect a model whenever you need the assistant.")}</p>
             {detectingLocalProviders && !detectedLocalProviders.length && <p className="setup-footnote"><RefreshCw className="spin" size={14} /> Checking Ollama, vLLM, and LM Studio…</p>}
             {unconfiguredDetectedProviders.length > 0 && <div className="setup-detected-providers" aria-label="Detected local model services">{unconfiguredDetectedProviders.map((detected) => <button className="button secondary" type="button" key={`${detected.flavor}-${detected.endpoint}`} onClick={() => openDetectedProvider(detected)}><Server size={14} /> Use {detected.displayName}{detected.models[0] ? ` · ${detected.models[0]}` : ""}</button>)}</div>}
-            <button className="button secondary" type="button" onClick={() => openSettingsGroup("models-settings")}>{providers.length ? "Manage models" : unconfiguredDetectedProviders.length ? "More providers" : "Connect a model"}</button>
+            <button className="button secondary" type="button" onClick={() => { window.history.replaceState(null, "", "#models-settings"); setSettingsSection("advanced-settings"); }}>{providers.length ? "Manage models" : unconfiguredDetectedProviders.length ? "More providers" : "Connect a model"}</button>
           </article>
         </div>
         {setupStatus?.scratchProjectId && <p className="setup-footnote"><Check size={14} /> Scratch Project is ready.</p>}
@@ -603,34 +542,44 @@ export function SettingsPage() {
         {!setupStatus && workspaceState !== "starting" && <p className="setup-footnote">Setup details are unavailable. Core reports runner status: {health?.runner ?? "unknown"}.</p>}
       </section>
       <DiagnosticsPanel hidden={settingsSection !== "diagnostics-settings"} />
-      <SettingsGroup id="models-settings" title="Models" summary={providers.length ? `${providers.filter((provider) => provider.enabled).length} enabled provider${providers.filter((provider) => provider.enabled).length === 1 ? "" : "s"}` : "Optional · no provider configured"} open={openAdvancedGroup === "models-settings"} onOpen={openSettingsGroup}>
+      <details className="settings-group" id="models-settings" open>
+        <summary><span><strong>Models</strong><small>{providers.length ? `${providers.filter((provider) => provider.enabled).length} enabled provider${providers.filter((provider) => provider.enabled).length === 1 ? "" : "s"}` : "Optional · no provider configured"}</small></span></summary>
+        <div className="settings-group-body">
       <section className="settings-section" id="provider-settings">
         <div className="section-heading"><div><h2>Model providers</h2><p>Models and capabilities</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <DiagnosticErrorNotice error={providerActionError} fallback="The provider operation could not be completed." />}
         {providers.length > 0 ? (
           <div className="provider-grid">{providers.map((provider) => <ProviderHealthCard provider={provider} preview={previewMode} busy={providerBusy === provider.id} onRefresh={refreshProvider} onReverify={reverifyProvider} onEdit={openProviderEdit} onToggle={toggleProvider} onDelete={removeProvider} key={provider.id} />)}</div>
         ) : (
-          <StandardEmptyState compact icon={<Server size={23} />} title="No provider profiles" explanation="Add a provider here, then choose its discovered model for chat or missions." />
+          <div className="empty-state compact"><Server size={23} /><strong>No provider profiles</strong><p>Add a provider profile in Core before assigning a model to a mission.</p></div>
         )}
       </section>
-      </SettingsGroup>
-      <SettingsGroup id="automation-settings" title="Automation" summary="Harnesses, follow-up, and isolated runtimes" open={openAdvancedGroup === "automation-settings"} onOpen={openSettingsGroup}>
+        </div>
+      </details>
+      <details className="settings-group" id="automation-settings">
+        <summary><span><strong>Automation</strong><small>Harnesses, follow-up, and isolated runtimes</small></span></summary>
+        <div className="settings-group-body">
       <PostToolAssistantSettings api={api} engagementId={engagement?.id} providers={providers} previewMode={previewMode} />
       <HarnessSettings />
       <AutomationRuntimeSettings />
       <RunnerSettings />
-      </SettingsGroup>
-      <SettingsGroup id="project-policy-settings" title="Project Policy" summary={engagement ? `${engagement.name} · deny network unless scoped` : "Select a project"} open={openAdvancedGroup === "project-policy-settings"} onOpen={openSettingsGroup}>
+        </div>
+      </details>
+      <details className="settings-group" id="project-policy-settings">
+        <summary><span><strong>Project Policy</strong><small>{engagement ? `${engagement.name} · deny network unless scoped` : "Select a project"}</small></span></summary>
+        <div className="settings-group-body">
       <EngagementPolicySettings />
-      </SettingsGroup>
-      <SettingsGroup id="identity-security-settings" title="Identity & Security" summary={operatorProfiles.find((profile) => profile.active)?.displayName ?? "Operator attribution and local credentials"} open={openAdvancedGroup === "identity-security-settings"} onOpen={openSettingsGroup}>
+        </div>
+      </details>
+      <details className="settings-group" id="identity-security-settings">
+        <summary><span><strong>Identity &amp; Security</strong><small>{operatorProfiles.find((profile) => profile.active)?.displayName ?? "Operator attribution and local credentials"}</small></span></summary>
+        <div className="settings-group-body">
       <section className="settings-section" id="operator-settings">
         <div className="section-heading"><div><h2>Operator profiles</h2><p>Local activity attribution</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openOperator()}><Plus size={16} /> Add operator</button></div>
         {operatorError && <DiagnosticErrorNotice error={operatorError} fallback="The operator profile operation could not be completed." />}
-        {operatorProfiles.length ? <div className="operator-profile-list">{operatorProfiles.map((profile) => <article className={profile.active ? "active" : undefined} key={profile.id}><span className="operator-profile-avatar">{profile.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "OP"}</span><div><h3 title={profile.displayName}>{profile.displayName}</h3><p title={`${profile.role || "Local operator"}${profile.email ? ` · ${profile.email}` : ""}`}>{profile.role || "Local operator"}{profile.email ? ` · ${profile.email}` : ""}</p></div>{profile.active ? <span className="operator-active"><Check size={13} /> Active</span> : <button className="button quiet" type="button" disabled={operatorBusy === profile.id} onClick={() => void activateOperator(profile)}>Activate</button>}<button className="icon-button subtle" type="button" aria-label={`Edit ${profile.displayName}`} disabled={operatorBusy === profile.id} onClick={() => openOperator(profile)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete ${profile.displayName}`} title={profile.active ? "Activate another profile before deleting this one" : operatorProfiles.length <= 1 ? "The last operator profile cannot be deleted" : "Delete operator profile"} disabled={operatorBusy === profile.id || profile.active || operatorProfiles.length <= 1} onClick={() => void removeOperator(profile)}><Trash2 size={14} /></button></article>)}</div> : <StandardEmptyState compact icon={<UserRound size={23} />} title="No durable operator profile" explanation="Create a local profile so new evidence has explicit attribution and the workspace can show who is active." />}
+        {operatorProfiles.length ? <div className="operator-profile-list">{operatorProfiles.map((profile) => <article className={profile.active ? "active" : undefined} key={profile.id}><span className="operator-profile-avatar">{profile.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "OP"}</span><div><h3 title={profile.displayName}>{profile.displayName}</h3><p title={`${profile.role || "Local operator"}${profile.email ? ` · ${profile.email}` : ""}`}>{profile.role || "Local operator"}{profile.email ? ` · ${profile.email}` : ""}</p></div>{profile.active ? <span className="operator-active"><Check size={13} /> Active</span> : <button className="button quiet" type="button" disabled={operatorBusy === profile.id} onClick={() => void activateOperator(profile)}>Activate</button>}<button className="icon-button subtle" type="button" aria-label={`Edit ${profile.displayName}`} disabled={operatorBusy === profile.id} onClick={() => openOperator(profile)}><Pencil size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Delete ${profile.displayName}`} title={profile.active ? "Activate another profile before deleting this one" : operatorProfiles.length <= 1 ? "The last operator profile cannot be deleted" : "Delete operator profile"} disabled={operatorBusy === profile.id || profile.active || operatorProfiles.length <= 1} onClick={() => void removeOperator(profile)}><Trash2 size={14} /></button></article>)}</div> : <div className="empty-state compact"><UserRound size={23} /><strong>No durable operator profile</strong><p>Create a local profile so new evidence has explicit attribution and the workspace can show who is active.</p></div>}
       </section>
       <div className="settings-bottom-grid" id="general-settings">
-        <DevicePairingSettings api={api} disabled={previewMode} />
         <section className="panel appearance-panel" id="appearance-settings">
           <header className="panel-header compact"><div><h2>Appearance</h2><p>Saved on this device</p></div><Contrast size={19} /></header>
           <div className="theme-options">
@@ -642,17 +591,22 @@ export function SettingsPage() {
         </section>
         <section className="panel secrets-panel" id="security-settings">
           <header className="panel-header compact"><div><h2>Credential references</h2><p>Secrets never enter agent context</p></div><KeyRound size={19} /></header>
-          <StandardEmptyState compact icon={<KeyRound size={23} />} title="Write-only" explanation="Secrets stay in the system vault." />
+          <div className="empty-state compact"><KeyRound size={23} /><strong>Write-only</strong><p>Secrets stay in the system vault.</p></div>
         </section>
       </div>
-      </SettingsGroup>
-      <SettingsGroup id="release-settings-group" title="Release" summary="Version and update channel" open={openAdvancedGroup === "release-settings-group"} onOpen={openSettingsGroup} bodyClassName="settings-release-body"><ReleaseSettingsPanel /></SettingsGroup>
+        </div>
+      </details>
+      <details className="settings-group" id="release-settings-group">
+        <summary><span><strong>Release</strong><small>Version and update channel</small></span></summary>
+        <div className="settings-group-body settings-release-body"><ReleaseSettingsPanel /></div>
+      </details>
       </div>
       </div>
       {adding && (selected || editingProvider) && (
-        <ModalSurface as="form" className="provider-dialog" labelledBy="provider-dialog-title" onClose={() => { if (!saving) setAdding(false); }} onSubmit={(event) => void submitProvider(event)}>
+        <div className="dialog-backdrop">
+          <form className="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title" onSubmit={(event) => void submitProvider(event)}>
             <header><div><small>Provider profile</small><h2 id="provider-dialog-title">{editingProvider ? `Edit ${editingProvider.name}` : "Add model provider"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close provider dialog" onClick={() => setAdding(false)}><X size={17} /></button></header>
-            <label>Provider type<select data-autofocus value={dialogProviderType} disabled={Boolean(editingProvider)} onChange={(event) => chooseProvider(event.target.value)}>{!providerCatalog.some((entry) => entry.flavor === dialogProviderType) && <option value={dialogProviderType}>{dialogProviderType}</option>}<optgroup label="Recommended cloud providers">{primaryProviderCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</optgroup><optgroup label="More providers">{moreProviderCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</optgroup></select></label>
+            <label>Provider type<select value={dialogProviderType} disabled={Boolean(editingProvider)} onChange={(event) => chooseProvider(event.target.value)}>{!providerCatalog.some((entry) => entry.flavor === dialogProviderType) && <option value={dialogProviderType}>{dialogProviderType}</option>}<optgroup label="Recommended cloud providers">{primaryProviderCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</optgroup><optgroup label="More providers">{moreProviderCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</optgroup></select></label>
             {editingProvider && <p className="provider-dialog-note">Provider type and locality are fixed after creation. Other profile settings use revision-safe updates.</p>}
             <label>Profile name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
             <label>Endpoint<input required={!selected?.defaultBaseUrl} value={endpoint} placeholder={selected?.defaultBaseUrl ?? "https://provider.example/v1"} onChange={(event) => setEndpoint(event.target.value)} /></label>
@@ -675,9 +629,10 @@ export function SettingsPage() {
             {formError && <DiagnosticErrorNotice error={formError} fallback="The form could not be saved." compact />}
             {formValidationError && <InlineValidationNotice message={formValidationError} />}
             <footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim() || (dialogProviderType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim()))}>{saving ? "Saving…" : editingProvider ? "Save provider" : "Add provider"}</button></footer>
-        </ModalSurface>
+          </form>
+        </div>
       )}
-      {operatorDialog && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="operator-dialog-title" onClose={() => setOperatorDialog(false)} onSubmit={(event) => void submitOperator(event)}><header><div><small>Local attribution</small><h2 id="operator-dialog-title">{editingOperator ? "Edit operator" : "Add operator"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close operator dialog" onClick={() => setOperatorDialog(false)}><X size={17} /></button></header><label>Display name<input required data-autofocus value={operatorName} onChange={(event) => setOperatorName(event.target.value)} /></label><label>Email<input type="email" value={operatorEmail} onChange={(event) => setOperatorEmail(event.target.value)} /></label><label>Role<input value={operatorRole} placeholder="Project lead, analyst…" onChange={(event) => setOperatorRole(event.target.value)} /></label><p className="provider-dialog-note">This identity is stored locally for attribution only. It is not an authentication account and grants no permissions.</p>{operatorError && <DiagnosticErrorNotice error={operatorError} fallback="The operator profile could not be saved." compact />}<footer><button className="button secondary" type="button" onClick={() => setOperatorDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(operatorBusy)}>{operatorBusy ? "Saving…" : "Save operator"}</button></footer></ModalSurface>}
+      {operatorDialog && <div className="dialog-backdrop"><form className="provider-dialog resource-dialog" role="dialog" aria-modal="true" aria-labelledby="operator-dialog-title" onSubmit={(event) => void submitOperator(event)}><header><div><small>Local attribution</small><h2 id="operator-dialog-title">{editingOperator ? "Edit operator" : "Add operator"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close operator dialog" onClick={() => setOperatorDialog(false)}><X size={17} /></button></header><label>Display name<input required autoFocus value={operatorName} onChange={(event) => setOperatorName(event.target.value)} /></label><label>Email<input type="email" value={operatorEmail} onChange={(event) => setOperatorEmail(event.target.value)} /></label><label>Role<input value={operatorRole} placeholder="Project lead, analyst…" onChange={(event) => setOperatorRole(event.target.value)} /></label><p className="provider-dialog-note">This identity is stored locally for attribution only. It is not an authentication account and grants no permissions.</p>{operatorError && <DiagnosticErrorNotice error={operatorError} fallback="The operator profile could not be saved." compact />}<footer><button className="button secondary" type="button" onClick={() => setOperatorDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(operatorBusy)}>{operatorBusy ? "Saving…" : "Save operator"}</button></footer></form></div>}
     </div>
   );
 }

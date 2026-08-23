@@ -13,7 +13,6 @@ import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -25,9 +24,7 @@ from .domain import (
     Engagement,
     McpApprovalMode,
     ProviderProfile,
-    RiskClass,
     RunBudget,
-    RunBackend,
     RunStatus,
     ScopePolicy,
     Task,
@@ -38,11 +35,8 @@ from .domain import (
 )
 from .orchestration import (
     MissionRuntime,
-    MissionPlan,
     ModelSpecialist,
-    PlannedTask,
     Specialist,
-    SpecialistResult,
     SpecialistRole,
     StaticSupervisor,
     Supervisor,
@@ -89,51 +83,6 @@ class MissionStateError(MissionServiceError):
 
 class MissionServiceUnavailable(MissionServiceError):
     """The local mission service cannot accept work."""
-
-
-class ExplicitStageSupervisor(StaticSupervisor):
-    """Turn an operator-authored stage list into a durable sequential graph."""
-
-    def __init__(self, stages: list[dict[str, str]]) -> None:
-        self.stages = stages
-
-    async def plan(
-        self, objective: str, context: Mapping[str, object], budget: RunBudget
-    ) -> MissionPlan:
-        del context, budget
-        tasks: list[PlannedTask] = []
-        previous: list[str] = []
-        for stage in self.stages:
-            task = PlannedTask(
-                role=SpecialistRole.SCOPE_PLANNING,
-                title=stage["title"],
-                instructions=(
-                    f"Overall mission objective: {objective}\n"
-                    f"Current stage objective: {stage['objective']}"
-                ),
-                depends_on=previous,
-                risk_class=RiskClass.LOCAL_READ,
-            )
-            tasks.append(task)
-            previous = [task.id]
-        return MissionPlan(
-            summary="Execute the operator-authored mission stages in order",
-            rationale="Stage boundaries and ordering were explicitly selected by the operator.",
-            tasks=tasks,
-        )
-
-    async def synthesize(
-        self,
-        objective: str,
-        plan: MissionPlan,
-        results: Mapping[str, SpecialistResult],
-    ) -> str:
-        sections = ["## Mission result", objective]
-        by_id = {task.id: task for task in plan.tasks}
-        for task_id, result in results.items():
-            task = by_id.get(task_id)
-            sections.extend([f"### {task.title if task else 'Stage'}", result.summary])
-        return "\n\n".join(item for item in sections if item)
 
 
 ProviderFactory = Callable[[ProviderProfile], ModelProvider]
@@ -195,7 +144,6 @@ class MissionService:
         self.max_active_missions = max_active_missions
         self.cancellation_timeout_seconds = cancellation_timeout_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
-        self._scheduled_tasks: dict[str, asyncio.Task[None]] = {}
         self._cancel_reasons: dict[str, tuple[str, str]] = {}
         self._lock = asyncio.Lock()
         self._closed = False
@@ -217,29 +165,6 @@ class MissionService:
         while True:
             page = self.store.list_entities(AgentRun, offset=offset, limit=1_000)
             for run in page:
-                if run.backend != RunBackend.NATIVE:
-                    continue
-                scheduled_for = run.metadata.get("scheduled_for")
-                if (
-                    run.metadata.get("origin") == "api"
-                    and run.status == RunStatus.QUEUED
-                    and isinstance(scheduled_for, str)
-                ):
-                    try:
-                        profile = self.store.get(ProviderProfile, run.supervisor_provider_id or "")
-                        provider = self.provider_factory(profile)
-                        task = create_diagnostic_task(
-                            self._scheduled_execute(run.id, provider, datetime.fromisoformat(scheduled_for)),
-                            feature="missions",
-                            event_code="missions.scheduled",
-                            failure_message="A scheduled Mission failed before start.",
-                            name=f"nebula-scheduled-mission-{run.id}",
-                        )
-                        self._scheduled_tasks[run.id] = task
-                        continue
-                    except Exception as exc:
-                        self._finalize_failed(run.id, f"scheduled mission could not be restored: {self._safe_error(exc)}")
-                        continue
                 if (
                     run.id in owned_run_ids
                     or run.status in _TERMINAL_RUN_STATUSES
@@ -260,12 +185,6 @@ class MissionService:
         provider_id: str,
         model: str,
         budget: RunBudget,
-        stages: list[dict[str, str]] | None = None,
-        scheduled_for: datetime | None = None,
-        repeat_interval_seconds: int | None = None,
-        retry_of_run_id: str | None = None,
-        recurrence_of_run_id: str | None = None,
-        series_id: str | None = None,
         tool_names: list[str] | None = None,
         mcp_server_ids: list[str] | None = None,
         allow_cloud_tool_results: bool = False,
@@ -277,15 +196,6 @@ class MissionService:
         clean_provider_id = provider_id.strip()
         clean_model = model.strip()
         selected_tools = list(dict.fromkeys(tool_names or ()))
-        selected_stages = [
-            {"title": item["title"].strip(), "objective": item["objective"].strip()}
-            for item in (stages or [])
-            if item.get("title", "").strip() and item.get("objective", "").strip()
-        ]
-        if scheduled_for is not None and scheduled_for.tzinfo is None:
-            raise MissionConfigurationError("scheduled mission time must include a timezone")
-        if repeat_interval_seconds is not None and repeat_interval_seconds < 3_600:
-            raise MissionConfigurationError("repeating missions must be at least one hour apart")
         try:
             mcp_profiles = resolve_mcp_profiles(
                 self.store, list(dict.fromkeys(mcp_server_ids or ()))
@@ -400,18 +310,11 @@ class MissionService:
             runtime_snapshot={
                 "mcp_server_ids": [item.id for item in mcp_profiles],
                 "mcp_snapshot": [item.model_dump(mode="json") for item in mcp_profiles],
-                "remote_mcp_confirmed": allow_cloud_tool_results,
             },
             metadata={
                 "name": name.strip() if name and name.strip() else clean_objective,
                 "analysis_only": not selected_action_tools,
                 "origin": "api",
-                **({"stages": selected_stages} if selected_stages else {}),
-                **({"scheduled_for": scheduled_for.isoformat()} if scheduled_for else {}),
-                **({"repeat_interval_seconds": repeat_interval_seconds} if repeat_interval_seconds else {}),
-                **({"retry_of_run_id": retry_of_run_id} if retry_of_run_id else {}),
-                **({"recurrence_of_run_id": recurrence_of_run_id} if recurrence_of_run_id else {}),
-                **({"series_id": series_id} if series_id else {}),
                 **(
                     {
                         "tool_names": selected_action_tools,
@@ -485,51 +388,15 @@ class MissionService:
                 actor_id=actor_id,
                 idempotency_key="run:queued",
             )
-            if scheduled_for is not None and scheduled_for > utc_now():
-                task = create_diagnostic_task(
-                    self._scheduled_execute(run.id, provider, scheduled_for),
-                    feature="missions",
-                    event_code="missions.scheduled",
-                    failure_message="A scheduled Mission failed before start.",
-                    name=f"nebula-scheduled-mission-{run.id}",
-                )
-                self._scheduled_tasks[run.id] = task
-            else:
-                task = create_diagnostic_task(
-                    self._execute(run, provider),
-                    feature="missions",
-                    event_code="missions.run",
-                    failure_message="A mission background task stopped unexpectedly.",
-                    name=f"nebula-mission-{run.id}",
-                )
-                self._tasks[run.id] = task
+            task = create_diagnostic_task(
+                self._execute(run, provider),
+                feature="missions",
+                event_code="missions.run",
+                failure_message="A mission background task stopped unexpectedly.",
+                name=f"nebula-mission-{run.id}",
+            )
+            self._tasks[run.id] = task
             return run
-
-    async def _scheduled_execute(
-        self, run_id: str, provider: ModelProvider, scheduled_for: datetime
-    ) -> None:
-        try:
-            delay = max(0.0, (scheduled_for - utc_now()).total_seconds())
-            if delay:
-                await asyncio.sleep(delay)
-            run = self.store.get(AgentRun, run_id)
-            if run.status != RunStatus.QUEUED or self._closed:
-                return
-            async with self._lock:
-                self._scheduled_tasks.pop(run_id, None)
-                self._tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
-            await self._execute(run, provider)
-        except asyncio.CancelledError:
-            if not self._closed:
-                latest = self.store.get(AgentRun, run_id)
-                if latest.status == RunStatus.CANCELLING:
-                    reason, actor = self._cancel_reasons.get(
-                        run_id, ("Stopped before scheduled start", "operator")
-                    )
-                    self._finalize_cancelled(run_id, reason, actor)
-            return
-        finally:
-            self._scheduled_tasks.pop(run_id, None)
 
     async def stop_mission(
         self,
@@ -547,7 +414,7 @@ class MissionService:
                 f"run {run.id} is already terminal ({run.status.value})"
             )
         async with self._lock:
-            task = self._tasks.get(run.id) or self._scheduled_tasks.get(run.id)
+            task = self._tasks.get(run.id)
         if (task is None or task.done()) and run.metadata.get("origin") != "api":
             raise MissionStateError(
                 "run is not owned by this API mission service; cancellation "
@@ -582,7 +449,7 @@ class MissionService:
                 raise
 
         async with self._lock:
-            task = self._tasks.get(run.id) or self._scheduled_tasks.get(run.id)
+            task = self._tasks.get(run.id)
             if task is not None and not task.done():
                 self._cancel_reasons[run.id] = (clean_reason, actor_id)
                 task.cancel()
@@ -593,8 +460,6 @@ class MissionService:
             await asyncio.wait_for(
                 asyncio.shield(task), timeout=self.cancellation_timeout_seconds
             )
-        except asyncio.CancelledError:
-            return self._finalize_cancelled(run.id, clean_reason, actor_id)
         except asyncio.TimeoutError as caught_error:
             # CANCELLING is truthful while a provider ignores cancellation.
             record_caught_exception(
@@ -677,15 +542,9 @@ class MissionService:
             if self._closed:
                 return
             self._closed = True
-            scheduled = [task for task in self._scheduled_tasks.values() if not task.done()]
-            self._scheduled_tasks.clear()
             run_ids = [
                 run_id for run_id, task in self._tasks.items() if not task.done()
             ]
-        for task in scheduled:
-            task.cancel()
-        if scheduled:
-            await gather_diagnostic(*scheduled, feature="missions", event_code="missions.shutdown.scheduled", failure_message="A scheduled Mission timer did not stop cleanly.", stage="shutdown")
         if not run_ids:
             return
         await gather_diagnostic(
@@ -809,36 +668,11 @@ class MissionService:
             elif latest.status not in _TERMINAL_RUN_STATUSES:
                 self._finalize_failed(queued.id, self._safe_error(exc))
         finally:
-            recurrence_source = self.store.get(AgentRun, queued.id)
             async with self._lock:
                 current_task = asyncio.current_task()
                 if self._tasks.get(queued.id) is current_task:
                     self._tasks.pop(queued.id, None)
                 self._cancel_reasons.pop(queued.id, None)
-            if recurrence_source.status == RunStatus.COMPLETE and not self._closed:
-                await self._schedule_recurrence(recurrence_source)
-
-    async def _schedule_recurrence(self, prior: AgentRun) -> None:
-        interval = prior.metadata.get("repeat_interval_seconds")
-        if not isinstance(interval, int) or interval < 3_600:
-            return
-        created = await self.start_mission(
-            engagement_id=prior.engagement_id,
-            name=str(prior.metadata.get("name") or prior.objective),
-            objective=prior.objective,
-            provider_id=prior.supervisor_provider_id or "",
-            model=prior.supervisor_model or "",
-            budget=prior.budget,
-            stages=prior.metadata.get("stages") if isinstance(prior.metadata.get("stages"), list) else [],
-            scheduled_for=utc_now() + timedelta(seconds=interval),
-            repeat_interval_seconds=interval,
-            recurrence_of_run_id=prior.id,
-            series_id=str(prior.metadata.get("series_id") or prior.id),
-            tool_names=list(prior.metadata.get("command_tool_names") or []),
-            mcp_server_ids=list(prior.runtime_snapshot.get("mcp_server_ids") or []),
-            allow_cloud_tool_results=prior.runtime_snapshot.get("remote_mcp_confirmed") is True,
-            actor_id="system",
-        )
 
     async def _resume_execute(
         self,
@@ -943,8 +777,6 @@ class MissionService:
                 raise MissionConfigurationError(
                     "tool mission did not produce any bounded specialists"
                 )
-            if run.metadata.get("stages"):
-                components.context["stages"] = run.metadata["stages"]
             return components
         max_tokens = run.budget.max_tokens or 2_048
         specialist = ModelSpecialist(
@@ -952,9 +784,8 @@ class MissionService:
             model=run.supervisor_model,
             max_output_tokens=min(2_048, max_tokens),
         )
-        stages = run.metadata.get("stages")
         return MissionComponents(
-            supervisor=(ExplicitStageSupervisor(stages) if isinstance(stages, list) and stages else StaticSupervisor()),
+            supervisor=StaticSupervisor(),
             specialists={SpecialistRole.SCOPE_PLANNING: specialist},
         )
 

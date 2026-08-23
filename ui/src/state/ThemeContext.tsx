@@ -45,15 +45,6 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
-    const syncStoredPreference = (event: StorageEvent) => {
-      if (event.key !== STORAGE_KEY || !preferences.includes(event.newValue as ThemePreference)) return;
-      setPreferenceState(event.newValue as ThemePreference);
-    };
-    window.addEventListener("storage", syncStoredPreference);
-    return () => window.removeEventListener("storage", syncStoredPreference);
-  }, []);
-
-  useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
     document.documentElement.style.colorScheme = resolvedTheme === "light" ? "light" : "dark";
   }, [resolvedTheme]);

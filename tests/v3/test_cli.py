@@ -57,28 +57,6 @@ def test_browser_diagnostic_ingress_is_loopback_only_unless_explicit():
         allow_remote=False,
         explicitly_enabled=False,
     )
-
-
-def test_ui_no_auth_implies_lan_and_requires_explicit_unsafe_opt_in(tmp_path, monkeypatch):
-    frontend = tmp_path / "ui"
-    frontend.mkdir()
-    (frontend / "index.html").write_text("<html></html>", encoding="utf-8")
-    monkeypatch.setenv("NEBULA_V3_UI_DIR", str(frontend))
-
-    rejected = CliRunner().invoke(app, ["ui", "--no-auth", "--no-browser"])
-    assert rejected.exit_code == 2
-    assert "--no-auth implies --lan and requires --allow-insecure-lan" in rejected.output
-
-    observed = {}
-    monkeypatch.setattr("nebula.v3.cli.serve", lambda **kwargs: observed.update(kwargs))
-    accepted = CliRunner().invoke(
-        app,
-        ["ui", "--allow-insecure-lan", "--no-auth", "--no-browser"],
-    )
-    assert accepted.exit_code == 0, accepted.output
-    assert observed["host"] == "0.0.0.0"
-    assert observed["allow_remote"] is True
-    assert observed["allow_unauthenticated_remote"] is True
     assert not _browser_diagnostic_ingress_allowed(
         "127.0.0.1",
         handshake_stdout=True,

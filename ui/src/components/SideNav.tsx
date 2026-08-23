@@ -1,19 +1,18 @@
 import { useState, type FormEvent } from "react";
-import { Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
+import { Check, ChevronDown, LockKeyhole, Orbit, Plus, ShieldCheck, X } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { navigationGroups, navigationItems } from "../navigation";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
-import { HostFolderPicker } from "./HostFolderPicker";
 
 interface SideNavProps {
   collapsed: boolean;
   onNavigate: () => void;
+  variant?: "standard" | "zero";
 }
 
-export function SideNav({ collapsed, onNavigate }: SideNavProps) {
+export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNavProps) {
   const {
-    api,
     coreState,
     createEngagement,
     activeOperator,
@@ -25,7 +24,6 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [clientName, setClientName] = useState("");
-  const [workspacePath, setWorkspacePath] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const engagementName = engagement?.name ?? "No project available";
@@ -43,10 +41,9 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
     setSaving(true);
     setError(undefined);
     try {
-      await createEngagement({ name, clientName: clientName || undefined, workspacePath: workspacePath || undefined });
+      await createEngagement({ name, clientName: clientName || undefined });
       setName("");
       setClientName("");
-      setWorkspacePath("");
       setCreating(false);
       setOpen(false);
     } catch (createError) {
@@ -57,7 +54,7 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
     }
   };
   return (
-    <aside className="side-nav" data-shell="shared" aria-label="Primary navigation">
+    <aside className={`side-nav${variant === "zero" ? " zero-anchor-dock" : ""}`} data-variant={variant} aria-label="Primary navigation">
       <div className="brand-lockup">
         <span className="brand-mark" aria-hidden="true">
           <Orbit size={24} strokeWidth={1.8} />
@@ -81,7 +78,7 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
             {engagements.map((item) => <button type="button" key={item.id} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { selectEngagement(item.id); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>)}
             {engagements.length === 0 && <p>No projects yet.</p>}
           </div>}
-          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label><label>Project folder<input aria-label="Project folder" aria-describedby="project-folder-help" value={workspacePath} placeholder="Choose a folder" onChange={(event) => setWorkspacePath(event.target.value)} /><small id="project-folder-help">Optional. Grok, Codex, and Kali use this folder directly as their shared working directory.</small></label><HostFolderPicker api={api} value={workspacePath} onSelect={setWorkspacePath} />{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}
+          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label>{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}
         </div>}
       </div>
 
@@ -121,6 +118,13 @@ export function SideNav({ collapsed, onNavigate }: SideNavProps) {
             <span>{label}</span>
           </NavLink>
         ))}
+        <div className="local-first-note">
+          <ShieldCheck size={17} aria-hidden="true" />
+          <span>
+            <strong>Local-first workspace</strong>
+            <small>Cloud knowledge requires confirmation</small>
+          </span>
+        </div>
         <div className="operator-row">
           <span className="operator-avatar">{operatorInitials}</span>
           <span>

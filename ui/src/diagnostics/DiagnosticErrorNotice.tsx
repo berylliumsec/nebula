@@ -11,13 +11,13 @@ function stringField(value: Record<string, unknown> | undefined, ...names: strin
   return undefined;
 }
 
-function boundedReason(value: string, fallback: string, limit = 500): string {
+function boundedReason(value: string, fallback: string): string {
   const bounded = value
     .replaceAll("\0", "�")
     .replace(referencePattern, "")
     .trim();
   const result = bounded || fallback;
-  return result.length <= limit ? result : `${result.slice(0, Math.max(0, limit - 1))}…`;
+  return result.length <= 500 ? result : `${result.slice(0, 499)}…`;
 }
 
 export interface DiagnosticErrorNoticeProps {
@@ -60,17 +60,15 @@ export function DiagnosticErrorNotice({
     .filter(Boolean)
     .join(" ");
   const Root = compact ? "span" : "div";
-  const headlineLimit = compact ? 180 : 500;
-  const detailLimit = compact ? 240 : 500;
 
   return (
     <Root className={classes} role="alert" data-error-reference={reference}>
       <ShieldAlert size={16} />
       <span>
-        <strong>{title ?? boundedReason(rawMessage, fallback, headlineLimit)}</strong>
-        {title && <small>{boundedReason(rawMessage, fallback, detailLimit)}</small>}
-        {operatorDetail && <small><b>Cause:</b> {boundedReason(operatorDetail, fallback, detailLimit)}</small>}
-        {impact && <small><b>Impact:</b> {boundedReason(impact, "Impact was not classified.", detailLimit)}</small>}
+        <strong>{title ?? boundedReason(rawMessage, fallback)}</strong>
+        {title && <small>{boundedReason(rawMessage, fallback)}</small>}
+        {operatorDetail && <small><b>Cause:</b> {boundedReason(operatorDetail, fallback)}</small>}
+        {impact && <small><b>Impact:</b> {boundedReason(impact, "Impact was not classified.")}</small>}
         <small>
           {retryable === true
             ? "This operation can be retried."

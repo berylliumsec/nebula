@@ -9,11 +9,11 @@ import {
   FolderOpen,
   RefreshCw,
   ShieldAlert,
+  X,
 } from "lucide-react";
 import type { HealthResponse, SetupStatus } from "../api/types";
 import { useConfirmation } from "../components/DialogSystem";
 import { announceSettingsSaved } from "../components/SettingsSaveFeedback";
-import { SurfaceNotice } from "../components/SurfacePrimitives";
 import { useWorkspace } from "../state/WorkspaceContext";
 import {
   diagnosticsFallbackErrors,
@@ -258,21 +258,8 @@ function FailureCard({
 export function DiagnosticsAvailabilityBanner() {
   const [available, setAvailable] = useState(isDiagnosticsAvailable);
   const [reason, setReason] = useState<string>();
-  const dismissalKey = useMemo(() => `nebula.notice.diagnostics-unavailable:${window.location.origin}`, []);
-  const [dismissed, setDismissed] = useState(() => {
-    try { return window.localStorage.getItem(dismissalKey) === "dismissed"; } catch { return false; }
-  });
+  const [dismissed, setDismissed] = useState(false);
   const reasonRef = useRef<string | undefined>(undefined);
-
-  const dismiss = () => {
-    try { window.localStorage.setItem(dismissalKey, "dismissed"); } catch { /* Device storage may be unavailable. */ }
-    setDismissed(true);
-  };
-
-  const clearDismissal = () => {
-    try { window.localStorage.removeItem(dismissalKey); } catch { /* Device storage may be unavailable. */ }
-    setDismissed(false);
-  };
 
   useEffect(() => {
     const update = (event: Event) => {
@@ -281,26 +268,22 @@ export function DiagnosticsAvailabilityBanner() {
       setAvailable(detail.available);
       setReason(detail.reason);
       reasonRef.current = detail.reason;
-      if (detail.available || detail.occurrence || changedFailure) clearDismissal();
+      if (detail.available || detail.occurrence || changedFailure) setDismissed(false);
     };
     window.addEventListener("nebula-diagnostics-health", update);
     return () => window.removeEventListener("nebula-diagnostics-health", update);
   }, []);
 
   if (available || dismissed) return null;
-  const browserCaptureUnavailable = reason?.startsWith("Browser event capture");
   return (
-    <SurfaceNotice
-      className="diagnostics-unavailable"
-      severity={browserCaptureUnavailable ? "informational" : "warning"}
-      title={browserCaptureUnavailable ? "Browser event capture is unavailable." : "Local diagnostics are unavailable."}
-      detail={browserCaptureUnavailable
-        ? "Interface failures stay in bounded browser memory; Core and the rest of the workspace remain usable."
-        : reason ?? "New failures are being retained in memory for this session."}
-      actions={<a href="/settings#diagnostics-settings">Diagnostics</a>}
-      dismissLabel="Dismiss diagnostics notice"
-      onDismiss={dismiss}
-    />
+    <div className="diagnostics-unavailable" role="status">
+      <ShieldAlert size={16} />
+      <span><strong>{reason?.startsWith("Browser event capture") ? "Browser event capture is unavailable." : "Local diagnostics are unavailable."}</strong> {reason ?? "New failures are being retained in memory for this session."}</span>
+      <div className="diagnostics-unavailable-actions">
+        <a href="/settings#diagnostics-settings">Diagnostics</a>
+        <button className="icon-button subtle" type="button" aria-label="Dismiss diagnostics notice" onClick={() => setDismissed(true)}><X size={15} /></button>
+      </div>
+    </div>
   );
 }
 

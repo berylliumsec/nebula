@@ -67,16 +67,4 @@ describe("DiagnosticErrorNotice", () => {
     expect(screen.getByText("Impact:").closest("small")).toHaveTextContent(error.impact);
     expect(screen.getByText("Reference: err_harness_shared · transport closed")).toBeVisible();
   });
-
-  it("bounds compact validation failures so raw payloads cannot dominate mobile chat", () => {
-    const oversized = JSON.stringify([
-      { type: "string_too_long", input: "x".repeat(8_000) },
-    ]);
-    render(<DiagnosticErrorNotice error={oversized} compact />);
-
-    const alert = screen.getByRole("alert");
-    const headline = alert.querySelector("strong");
-    expect(headline?.textContent?.length).toBeLessThanOrEqual(180);
-    expect(alert).not.toHaveTextContent("x".repeat(500));
-  });
 });

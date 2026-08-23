@@ -6,6 +6,7 @@ import {
   Clock3,
   DollarSign,
   FileCheck2,
+  ScanSearch,
   ShieldCheck,
   Target,
 } from "lucide-react";
@@ -70,7 +71,7 @@ export function OverviewPage() {
         </div>
       )}
 
-      {hasCoverage && <section className="metric-grid" aria-label="Project summary">
+      <section className="metric-grid" aria-label="Project summary">
         <article className="metric-card accent-blue">
           <span className="metric-icon"><Target size={19} /></span>
           <div><small>Assets</small><strong>{assets.length}</strong><span>In this project</span></div>
@@ -87,7 +88,7 @@ export function OverviewPage() {
           <span className="metric-icon"><DollarSign size={19} /></span>
           <div><small>Model cost</small><strong>{formatProjectModelCost(run?.spentUsd)}</strong><span>Recorded for this mission</span></div>
         </article>
-      </section>}
+      </section>
 
       <div className="overview-grid">
         <section className={`panel mission-panel${events.length === 0 ? " is-empty" : ""}`}>
@@ -126,17 +127,21 @@ export function OverviewPage() {
           ) : <div className="mission-events-empty"><Clock3 size={18} aria-hidden="true" /><div><strong>No mission activity</strong><small>Events appear after Core records a transition.</small></div></div>}
         </section>
 
-        <section className="panel assessment-panel">
+        <section className="panel risk-panel">
           <header className="panel-header compact">
-            <div><h2>Assessment posture</h2><p>Current scope, validation, and review state</p></div>
-            <ShieldCheck size={20} aria-hidden="true" />
+            <div><h2>Finding posture</h2><p>Validated and confirmed</p></div>
+            <Link to="/findings" className="text-link">View all</Link>
           </header>
-          <dl className="policy-facts">
-            <div><dt>Runner</dt><dd><span className={`status-dot ${health?.runner === "ready" ? "healthy" : "unavailable"}`} /> {health?.runner ?? "Core unavailable"}</dd></div>
-            <div><dt>Assets</dt><dd>{assets.length} loaded</dd></div>
-            <div><dt>Validated</dt><dd>{validatedFindings.length} finding{validatedFindings.length === 1 ? "" : "s"}</dd></div>
-            <div><dt>Pending</dt><dd><Clock3 size={14} /> {approvals.length} approval{approvals.length === 1 ? "" : "s"}</dd></div>
-          </dl>
+          <div className="risk-summary">
+            <div className="risk-ring" aria-label={`${validatedFindings.length} validated findings`}>
+              <span><strong>{validatedFindings.length}</strong><small>validated</small></span>
+            </div>
+            <ul className="risk-legend">
+              {(["critical", "high", "medium", "low"] as const).map((severity) => (
+                <li key={severity}><span className={`severity-dot ${severity}`} /><strong>{findings.filter((finding) => finding.severity === severity).length}</strong> {severity}</li>
+              ))}
+            </ul>
+          </div>
           {priorityFinding ? (
             <div className="priority-finding">
               <span className="risk-badge exploit">{priorityFinding.cveIds[0] ?? priorityFinding.severity}</span>
@@ -144,8 +149,15 @@ export function OverviewPage() {
               <p>{priorityFinding.evidenceCount} evidence record{priorityFinding.evidenceCount === 1 ? "" : "s"} · {priorityFinding.status.replace("_", " ")}</p>
               <Link to="/findings">Review finding <ArrowUpRight size={14} /></Link>
             </div>
-          ) : <div className="assessment-guidance"><strong>No findings recorded</strong><p>Start a mission or add an asset when you are ready to assess this project.</p><Link to="/findings">Open findings <ArrowUpRight size={14} /></Link></div>}
-          {hasCoverage && <div className="coverage-list compact">
+          ) : <div className="priority-finding empty"><strong>No findings yet</strong></div>}
+        </section>
+
+        <section className="panel coverage-panel">
+          <header className="panel-header compact">
+            <div><h2>Assessment coverage</h2><p>Deterministic progress by surface</p></div>
+            <ScanSearch size={19} aria-hidden="true" />
+          </header>
+          {hasCoverage ? <div className="coverage-list">
             {([
               ["Assets loaded", assets.length ? 100 : 0, `${assets.length} records`],
               ["Findings loaded", findings.length ? 100 : 0, `${findings.length} records`],
@@ -158,7 +170,20 @@ export function OverviewPage() {
                 <strong>{value}%</strong>
               </div>
             ))}
-          </div>}
+          </div> : <div className="coverage-empty"><strong>No mission coverage yet</strong></div>}
+        </section>
+
+        <section className="panel policy-panel">
+          <header className="panel-header compact">
+            <div><h2>Scope & safety</h2><p>Current mission policy</p></div>
+            <ShieldCheck size={20} aria-hidden="true" />
+          </header>
+          <dl className="policy-facts">
+            <div><dt>Runner</dt><dd><span className={`status-dot ${health?.runner === "ready" ? "healthy" : "unavailable"}`} /> {health?.runner ?? "Core unavailable"}</dd></div>
+            <div><dt>Assets</dt><dd>{assets.length} loaded records</dd></div>
+            <div><dt>Autonomy</dt><dd>Scoped approvals</dd></div>
+            <div><dt>Pending</dt><dd><Clock3 size={14} /> {approvals.length} approvals</dd></div>
+          </dl>
         </section>
       </div>
     </div>

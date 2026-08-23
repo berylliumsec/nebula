@@ -1,13 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { browserAuthorizationRecovery, browserSessionIsAuthorized, browserSessionRequiresRelaunch, resolveApiRuntime } from "./runtime";
+import { beforeEach, describe, expect, it } from "vitest";
+import { browserSessionRequiresRelaunch, resolveApiRuntime } from "./runtime";
 
 describe("browser API runtime", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/workspace");
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
   });
 
   it("consumes a fragment token into memory and removes it from the URL", async () => {
@@ -38,34 +34,5 @@ describe("browser API runtime", () => {
     expect(browserSessionRequiresRelaunch(undefined, false)).toBe(true);
     expect(browserSessionRequiresRelaunch(undefined, true)).toBe(false);
     expect(browserSessionRequiresRelaunch("one-time-secret", false)).toBe(false);
-  });
-
-  it("directs LAN browsers to pairing while reserving relaunch for loopback sessions", () => {
-    expect(browserAuthorizationRecovery("192.168.1.155")).toBe("pair");
-    expect(browserAuthorizationRecovery("nebula.lan")).toBe("pair");
-    expect(browserAuthorizationRecovery("127.0.0.1")).toBe("relaunch");
-    expect(browserAuthorizationRecovery("[::1]")).toBe("relaunch");
-    expect(browserAuthorizationRecovery("localhost")).toBe("relaunch");
-  });
-
-  it("accepts a browser when Core confirms cookie or no-auth access", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const authorized = await browserSessionIsAuthorized("http://nebula.test");
-
-    expect(authorized).toBe(true);
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringMatching(/\/api\/v1\/health$/),
-      expect.objectContaining({ credentials: "include" }),
-    );
-  });
-
-  it("rejects a browser when Core rejects the session", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 401 })));
-
-    const authorized = await browserSessionIsAuthorized("http://nebula.test/api/v1");
-
-    expect(authorized).toBe(false);
   });
 });

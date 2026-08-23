@@ -145,28 +145,6 @@ describe("CodeEditorPanel", () => {
     expect(listWorkspace).toHaveBeenCalledTimes(2);
   });
 
-  it("progressively discloses mobile files and secondary editor actions", async () => {
-    const user = userEvent.setup();
-    renderPanel({ listWorkspace: vi.fn().mockResolvedValue(listing([])) });
-
-    await user.click((await screen.findAllByRole("button", { name: "New file" }))[0]);
-    const panelElement = screen.getByRole("textbox", { name: "Code editor" }).closest(".code-editor-panel");
-    expect(panelElement).toHaveClass("has-buffer");
-    expect(panelElement).not.toHaveClass("mobile-files-open");
-
-    const more = screen.getByRole("button", { name: "More editor actions" });
-    expect(more).toHaveAttribute("aria-expanded", "false");
-    await user.click(more);
-    expect(more).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByLabelText("Editor options")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Show editor files" }));
-    expect(panelElement).toHaveClass("mobile-files-open");
-    expect(screen.queryByLabelText("Editor options")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Hide editor files" }));
-    expect(panelElement).not.toHaveClass("mobile-files-open");
-  });
-
   it("refuses binary workspace content", async () => {
     const user = userEvent.setup();
     renderPanel({

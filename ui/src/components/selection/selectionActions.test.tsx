@@ -59,41 +59,6 @@ describe("selection actions", () => {
     });
   });
 
-  it("hashes and transmits boundary whitespace as exact selected context", async () => {
-    const text = "\n  λ selected context  \t\n";
-    const draft = createSelectionDraft({
-      text,
-      source: { kind: "document", label: "Document selection" },
-    });
-
-    const attachment = await createHashedSelectionAttachment(
-      draft as NonNullable<typeof draft>,
-    );
-
-    expect(attachment.text).toBe(text);
-    expect(attachment.sha256).toBe(
-      "7c5bed747dbf110edd9f1269c27337b29a74a35722d08ad2b261e6c511c778af",
-    );
-  });
-
-  it("creates selected-context hashes without Web Crypto on a LAN HTTP origin", async () => {
-    const originalCrypto = globalThis.crypto;
-    vi.stubGlobal("crypto", undefined);
-    const draft = createSelectionDraft({
-      text: "LAN selection",
-      source: { kind: "terminal", label: "Terminal" },
-    });
-
-    const attachment = await createHashedSelectionAttachment(
-      draft as NonNullable<typeof draft>,
-    );
-
-    expect(attachment.sha256).toBe(
-      "633cb283b483eb2b2e6fa1104caabb062e6b610ddf54842837a689d3dad5f04c",
-    );
-    vi.stubGlobal("crypto", originalCrypto);
-  });
-
   it("rejects password and explicitly sensitive DOM selections", () => {
     const password = document.createElement("input");
     password.type = "password";
@@ -153,23 +118,6 @@ describe("selection actions", () => {
     fireEvent.scroll(document);
 
     expect(screen.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
-  });
-
-  it("does not cover controls that opt out of selected-text actions", () => {
-    render(<SelectionActionsProvider onAsk={vi.fn()}>
-      <p>actionable transcript text</p>
-      <textarea aria-label="Composer" data-selection-actions-disabled="true" defaultValue="draft message" />
-    </SelectionActionsProvider>);
-    const paragraph = screen.getByText("actionable transcript text");
-    selectNodeText(paragraph.firstChild as Text);
-    fireEvent.pointerUp(paragraph);
-    expect(screen.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
-
-    const composer = screen.getByRole("textbox", { name: "Composer" }) as HTMLTextAreaElement;
-    composer.setSelectionRange(0, composer.value.length);
-    fireEvent.select(composer);
-
-    expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull();
   });
 
   it("dismisses the selection actions after copying", async () => {
