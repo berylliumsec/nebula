@@ -62,6 +62,17 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("tab", { name: "Workspace code editor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Autonomous missions" })).toBeVisible();
     expect(screen.queryByText(/Acme|Jordan/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Human controlled")).not.toBeInTheDocument();
+  });
+
+  it("never renders the removed Human controlled badge in any theme", () => {
+    for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
+      localStorage.setItem("nebula.theme", theme);
+      const rendered = renderApp();
+      expect(screen.queryByText("Human controlled")).not.toBeInTheDocument();
+      expect(document.querySelector('[title^="Human controlled"]')).not.toBeInTheDocument();
+      rendered.unmount();
+    }
   });
 
   it("opens and restores the dedicated Workbench Code view", async () => {
@@ -92,9 +103,9 @@ describe("Nebula workspace", () => {
   it("uses Zero as the first-run theme while preserving explicit preferences", async () => {
     const firstRender = renderApp();
     expect(document.documentElement).toHaveAttribute("data-theme", "zero");
-    expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
+    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
     expect(screen.getByRole("complementary", { name: "Primary navigation" })).toHaveAttribute("data-shell", "shared");
-    expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Zero Layer context" })).toBeVisible();
     expect(localStorage.getItem("nebula.theme")).toBeNull();
 
     firstRender.unmount();
@@ -152,12 +163,12 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: /Zero/ })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("keeps the shared shell when restoring Zero or conventional preferences", async () => {
+  it("renders the contextual Zero shell only for the restored Zero preference", async () => {
     localStorage.setItem("nebula.theme", "zero");
     const firstRender = renderApp();
-    expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
-    expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Primary navigation" }).querySelector('a[href="/project"]')).toBeInTheDocument();
+    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
+    expect(await screen.findByRole("region", { name: "Zero Layer context" })).toBeVisible();
+    expect(screen.getByRole("link", { name: /Open overview/ })).toHaveAttribute("href", "/project");
 
     firstRender.unmount();
     localStorage.setItem("nebula.theme", "dark");

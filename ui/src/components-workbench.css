@@ -478,6 +478,44 @@ kbd { font-size: 11px; }
 .sessions-page.full-screen .notes-panel { height: 100%; min-height: 0; }
 .sessions-page.full-screen .agents-page { width: 100%; max-width: none; min-height: 100%; padding: 0; }
 .sessions-page.full-screen .workbench-activity-stack { min-height: 100%; }
+@media (min-width: 761px) {
+  :root:not([data-theme="zero"]) .main-content:has(> .sessions-page.screen-fit) {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit > :is(.page-header, .session-toolbar) { flex: 0 0 auto; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit > .session-layout {
+    height: auto;
+    min-height: 0;
+    flex: 1 1 auto;
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .session-workspace { height: 100%; min-height: 0; overflow: hidden; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit :where(.persistent-terminal, .persistent-code-editor) { width: 100%; height: 100%; min-height: 0; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .terminal-workspace { display: flex; height: 100%; min-height: 0; flex-direction: column; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .terminal-tab-panel { min-height: 0; flex: 1 1 auto; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .terminal-tab-panel > :where(.container-terminal-panel, .container-terminal-live) { height: 100%; min-height: 0; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .terminal-tab-panel > .container-terminal-panel { display: flex; flex-direction: column; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .terminal-auto-start { min-height: 0; flex: 1 1 auto; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .container-terminal-live { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .xterm-shell { min-height: 0; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit :is(.code-editor-panel, .code-editor-main) { height: 100%; min-height: 0; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .code-editor-files { max-height: none; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .code-mirror-host { min-height: 0; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .workspace-browser { display: flex; height: 100%; min-height: 0; flex-direction: column; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .workspace-browser-layout { min-height: 0; flex: 1 1 auto; }
+  :root:not([data-theme="zero"]) .sessions-page.screen-fit .workspace-entry-list { min-height: 0; }
+}
 .session-toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
 .workbench-full-screen-toggle { color: var(--muted-strong); }
 .post-tool-toggles { display: flex; align-items: center; gap: 3px; color: var(--muted); font-size: 11px; white-space: nowrap; }

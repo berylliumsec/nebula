@@ -38,25 +38,25 @@ export default defineConfig({
     {
       name: "mobile-chromium",
       testMatch: "**/interface.spec.ts",
-      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret/,
+      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["Pixel 5"] },
     },
     {
       name: "mobile-chromium-small",
       testMatch: "**/interface.spec.ts",
-      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret/,
+      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["Pixel 5"], viewport: { width: 320, height: 700 } },
     },
     {
       name: "mobile-webkit",
       testMatch: "**/interface.spec.ts",
-      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret/,
+      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["iPhone 13"] },
     },
     {
       name: "mobile-webkit-wide",
       testMatch: "**/interface.spec.ts",
-      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret/,
+      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["iPhone 13"], viewport: { width: 430, height: 932 } },
     },
     {

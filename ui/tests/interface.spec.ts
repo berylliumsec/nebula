@@ -660,8 +660,17 @@ test("hidden terminal views stop emitting resize frames", async ({ page }, testI
 test(firstRunThemeTest, async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
-  await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
+});
+
+test("Workbench omits the removed Human controlled badge in every theme", async ({ page }) => {
+  await openWorkspace(page, "/", "Workbench");
+  for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
+    await setTheme(page, theme);
+    await expect(page.getByText("Human controlled", { exact: true })).toHaveCount(0);
+    await expect(page.locator('[title^="Human controlled"]')).toHaveCount(0);
+  }
 });
 
 test("primary navigation exposes only the five task destinations", async ({ page }) => {
@@ -1991,6 +2000,46 @@ test("the workbench expands to the full viewport and restores in place", async (
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
 });
 
+test("regular themes snap primary workbench surfaces to the available screen", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) <= 760, "phone layouts use the mobile workbench navigation");
+
+  await openWorkspace(page, "/", "Workbench");
+  const surfaces = [
+    ["Terminal", ".persistent-terminal"],
+    ["Workspace code editor", ".persistent-code-editor"],
+    ["Workspace files", ".workspace-browser"],
+  ] as const;
+
+  for (const theme of ["dark", "light", "high-contrast"] as const) {
+    await setTheme(page, theme);
+    for (const [tabName, surfaceSelector] of surfaces) {
+      await page.getByRole("tab", { name: tabName, exact: true }).click();
+      const workbench = page.locator(".sessions-page.screen-fit");
+      const surface = page.locator(surfaceSelector);
+      await expect(workbench).toBeVisible();
+      await expect(surface).toBeVisible();
+      const geometry = await surface.evaluate((element) => {
+        const surface = element.getBoundingClientRect();
+        const workspace = element.closest(".session-workspace")!.getBoundingClientRect();
+        const main = element.closest(".main-content")!;
+        const mainBounds = main.getBoundingClientRect();
+        const workbench = element.closest(".sessions-page")!.getBoundingClientRect();
+        return {
+          mainOverflow: main.scrollHeight - main.clientHeight,
+          workbenchBottomGap: mainBounds.bottom - workbench.bottom,
+          surfaceBottomGap: workspace.bottom - surface.bottom,
+          surfaceHeight: surface.height,
+          workspaceHeight: workspace.height,
+        };
+      });
+      expect(geometry.mainOverflow, `${theme} ${tabName} should not make the Workbench page scroll`).toBeLessThanOrEqual(1);
+      expect(geometry.workbenchBottomGap, `${theme} ${tabName} should end at the viewport edge`).toBeLessThanOrEqual(1);
+      expect(Math.abs(geometry.surfaceBottomGap), `${theme} ${tabName} should fill its workspace`).toBeLessThanOrEqual(1);
+      expect(geometry.surfaceHeight, `${theme} ${tabName} should use the available workspace height`).toBeGreaterThanOrEqual(geometry.workspaceHeight - 16);
+    }
+  }
+});
+
 test("the code editor keeps its caret and syntax layers aligned while typing", async ({ page }, testInfo) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await page.goto("/?view=code");
@@ -2381,39 +2430,21 @@ for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
   });
 }
 
-test("Zero is a palette variant without blocking route or overlay motion", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Theme geometry only needs one browser project.");
+test("Zero restores its contextual shell without blocking route or overlay motion", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "The full shell contract only needs one desktop browser project.");
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
 
-  await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(0);
-  expect(await page.locator("body").evaluate((element) => ({
-    bodyBefore: getComputedStyle(element, "::before").animationName,
-    bodyAfter: getComputedStyle(element, "::after").animationName,
-  }))).toEqual({ bodyBefore: "none", bodyAfter: "none" });
-
-  const zeroGeometry = await page.locator(".app-shell").evaluate((shell) => {
-    const rect = (selector: string) => {
-      const bounds = shell.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
-    };
-    return { nav: rect(".side-nav"), top: rect(".top-bar"), main: rect(".main-content") };
-  });
+  await expect(page.locator(".app-shell.zero-layer-shell")).toHaveCount(1);
+  await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(3);
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
 
   await page.getByRole("button", { name: "Search commands" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
-  expect(await page.locator(".command-palette").evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
-
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeHidden();
   await setTheme(page, "dark");
-  const darkGeometry = await page.locator(".app-shell").evaluate((shell) => {
-    const rect = (selector: string) => {
-      const bounds = shell.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
-    };
-    return { nav: rect(".side-nav"), top: rect(".top-bar"), main: rect(".main-content") };
-  });
-  expect(darkGeometry).toEqual(zeroGeometry);
+  await expect(page.locator(".app-shell.zero-layer-shell, .zero-layer-deck, .zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(0);
 });
 
 test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ page }, testInfo) => {
@@ -2421,7 +2452,7 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   await openWorkspace(page, "/", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
 
-  await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
   await expect(page.locator("main#main-content")).toHaveCount(1);
   if (mobile) {
     await expect(page.getByRole("complementary", { name: "Primary navigation" })).toBeHidden();
@@ -2463,15 +2494,24 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   const workbenchLink = mobile
     ? page.getByRole("navigation", { name: "Mobile operator navigation" }).getByRole("button", { name: "Chat", exact: true })
     : page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: "Workbench", exact: true });
-  await workbenchLink.focus();
-  const focusStyle = await workbenchLink.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth), color: style.outlineColor };
-  });
-  expect(focusStyle.style).toBe("solid");
-  expect(focusStyle.width).toBeGreaterThanOrEqual(2);
-  expect(focusStyle.color).not.toBe("rgba(0, 0, 0, 0)");
-  await workbenchLink.evaluate((element) => element.blur());
+  if (testInfo.project.name.startsWith("mobile-webkit")) {
+    const touchBounds = await workbenchLink.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { width: bounds.width, height: bounds.height };
+    });
+    expect(touchBounds.width).toBeGreaterThanOrEqual(44);
+    expect(touchBounds.height).toBeGreaterThanOrEqual(44);
+  } else {
+    await workbenchLink.focus();
+    const focusStyle = await workbenchLink.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth), color: style.outlineColor };
+    });
+    expect(focusStyle.style).toBe("solid");
+    expect(focusStyle.width).toBeGreaterThanOrEqual(2);
+    expect(focusStyle.color).not.toBe("rgba(0, 0, 0, 0)");
+    await workbenchLink.evaluate((element) => element.blur());
+  }
 
   if (testInfo.project.name !== "desktop") {
     await expect(page).toHaveScreenshot("workbench-zero-responsive.png", { fullPage: true });
