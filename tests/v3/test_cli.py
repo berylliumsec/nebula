@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -59,7 +60,9 @@ def test_browser_diagnostic_ingress_is_loopback_only_unless_explicit():
     )
 
 
-def test_ui_no_auth_implies_lan_and_requires_explicit_unsafe_opt_in(tmp_path, monkeypatch):
+def test_ui_no_auth_implies_lan_and_requires_explicit_unsafe_opt_in(
+    tmp_path, monkeypatch
+):
     frontend = tmp_path / "ui"
     frontend.mkdir()
     (frontend / "index.html").write_text("<html></html>", encoding="utf-8")
@@ -67,7 +70,11 @@ def test_ui_no_auth_implies_lan_and_requires_explicit_unsafe_opt_in(tmp_path, mo
 
     rejected = CliRunner().invoke(app, ["ui", "--no-auth", "--no-browser"])
     assert rejected.exit_code == 2
-    assert "--no-auth implies --lan and requires --allow-insecure-lan" in rejected.output
+    plain_output = re.sub(r"\x1b\[[0-9;]*m", "", rejected.output)
+    normalized_output = " ".join(plain_output.split())
+    assert (
+        "--no-auth implies --lan and requires --allow-insecure-lan" in normalized_output
+    )
 
     observed = {}
     monkeypatch.setattr("nebula.v3.cli.serve", lambda **kwargs: observed.update(kwargs))
