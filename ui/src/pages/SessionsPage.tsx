@@ -225,7 +225,12 @@ function AuthenticatedChatImage({ api, block }: { api: ApiClient; block: ChatCon
     void api.fetchChatImagePreview(previewArtifactId, controller.signal).then((blob) => {
       objectUrl = URL.createObjectURL(blob);
       setUrl(objectUrl);
-    }).catch(() => { if (!controller.signal.aborted) setFailed(true); });
+    }).catch((error) => {
+      if (!controller.signal.aborted) {
+        logCaughtDiagnostic("interface.chat.image_preview_failed", "A chat image preview could not be loaded.", error, "chat-media");
+        setFailed(true);
+      }
+    });
     return () => {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -866,6 +871,7 @@ export function SessionsPage() {
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
+        logCaughtDiagnostic("interface.chat.skills_list_failed", "Harness skills could not be discovered.", error, "harness-skills");
         setHarnessSkills([]);
         setHarnessSkillError(error instanceof Error ? error.message : "Skills could not be discovered.");
       })
@@ -1735,6 +1741,7 @@ export function SessionsPage() {
       }));
       setPendingImages((current) => [...current, ...uploaded].slice(0, 4));
     } catch (error) {
+      logCaughtDiagnostic("interface.chat.image_upload_failed", "A chat image could not be attached.", error, "chat-media");
       setChatError(error instanceof Error ? error.message : "The image could not be attached.");
     } finally {
       setUploadingImage(false);

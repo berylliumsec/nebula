@@ -3,7 +3,7 @@ import { Link2, LoaderCircle, Smartphone, Trash2, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import type { ApiClient } from "../api/client";
 import type { PairedDevice } from "../api/types";
-import { DiagnosticErrorNotice } from "../diagnostics";
+import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { ModalSurface, useConfirmation } from "./DialogSystem";
 
 interface DevicePairingSettingsProps {
@@ -27,6 +27,7 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
     try {
       return api ? new URL(api.baseUrl).hostname : "";
     } catch {
+      // diagnostic-expected: an absent or malformed runtime URL disables host-only pairing.
       return "";
     }
   })();
@@ -41,6 +42,7 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
     try {
       setDevices(await api.listPairedDevices());
     } catch (caught) {
+      logCaughtDiagnostic("interface.device_pairing.list_failed", "Paired devices could not be listed.", caught, "device-pairing");
       setError(caught instanceof Error ? caught.message : "Could not list paired devices.");
     }
   }, [api]);
@@ -53,6 +55,7 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
     try {
       setPairing(await api.createDevicePairing(name.trim()));
     } catch (caught) {
+      logCaughtDiagnostic("interface.device_pairing.create_failed", "A device pairing link could not be created.", caught, "device-pairing");
       setPairingError(caught instanceof Error ? caught.message : "Could not create a pairing.");
     } finally {
       setBusy(false);
@@ -91,6 +94,7 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
       }
       await refresh();
     } catch (caught) {
+      logCaughtDiagnostic("interface.device_pairing.revoke_failed", "A paired device could not be revoked.", caught, "device-pairing");
       setError(caught instanceof Error ? caught.message : "Could not revoke the paired device.");
     } finally {
       setRevokingId(undefined);

@@ -260,17 +260,17 @@ export function DiagnosticsAvailabilityBanner() {
   const [reason, setReason] = useState<string>();
   const dismissalKey = useMemo(() => `nebula.notice.diagnostics-unavailable:${window.location.origin}`, []);
   const [dismissed, setDismissed] = useState(() => {
-    try { return window.localStorage.getItem(dismissalKey) === "dismissed"; } catch { return false; }
+    try { return window.localStorage.getItem(dismissalKey) === "dismissed"; } catch { /* diagnostic-expected: private browsing may deny device-local notice storage. */ return false; }
   });
   const reasonRef = useRef<string | undefined>(undefined);
 
   const dismiss = () => {
-    try { window.localStorage.setItem(dismissalKey, "dismissed"); } catch { /* Device storage may be unavailable. */ }
+    try { window.localStorage.setItem(dismissalKey, "dismissed"); } catch { /* diagnostic-expected: device storage may be unavailable. */ }
     setDismissed(true);
   };
 
   const clearDismissal = () => {
-    try { window.localStorage.removeItem(dismissalKey); } catch { /* Device storage may be unavailable. */ }
+    try { window.localStorage.removeItem(dismissalKey); } catch { /* diagnostic-expected: device storage may be unavailable. */ }
     setDismissed(false);
   };
 

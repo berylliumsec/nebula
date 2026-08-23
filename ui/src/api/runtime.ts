@@ -41,6 +41,7 @@ export async function browserSessionIsAuthorized(normalizedBase: string): Promis
     });
     return response.ok;
   } catch {
+    // diagnostic-expected: authorization probing is best-effort and the caller presents recovery.
     return false;
   }
 }

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUp, ChevronRight, Folder, FolderOpen, LoaderCircle, Server, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { ModalSurface } from "./DialogSystem";
 
 interface FolderListing {
@@ -37,6 +38,7 @@ export function HostFolderPicker({ api, value, onSelect }: {
         else selectButtonRef.current?.focus();
       });
     } catch (caught) {
+      logCaughtDiagnostic("interface.host_folder.list_failed", "A host workspace folder could not be listed.", caught, "host-folder-picker");
       setError(caught instanceof Error ? caught.message : "Folder could not be listed.");
       requestAnimationFrame(() => retryButtonRef.current?.focus());
     } finally {

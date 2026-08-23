@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 export function PairingGate({ children }: { children: ReactNode }) {
   const pairing = useMemo(() => {
@@ -29,6 +30,7 @@ export function PairingGate({ children }: { children: ReactNode }) {
       if (!response.ok) throw new Error((await response.json()).detail ?? "Pairing was rejected.");
       window.location.replace("/");
     } catch (caught) {
+      logCaughtDiagnostic("interface.device_pairing.redeem_failed", "This browser could not redeem the device pairing.", caught, "device-pairing");
       setError(caught instanceof Error ? caught.message : "Pairing failed.");
       setBusy(false);
     }
