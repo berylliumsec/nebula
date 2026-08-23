@@ -507,6 +507,25 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
     assert "rootless Podman" in detail
 
 
+def test_container_runtime_timeout_has_actionable_health_detail(monkeypatch):
+    runner = ContainerSandboxRunner(
+        profile=RunnerProfile(
+            runtime_type=ContainerRuntimeType.PODMAN,
+            executable="/usr/bin/podman",
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+        )
+    )
+
+    async def timeout():
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(runner, "_validate_runtime_profile", timeout)
+    available, detail = asyncio.run(runner.available())
+    assert available is False
+    assert detail == "container runtime health check failed: TimeoutError"
+
+
 def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
     monkeypatch.delenv("CONTAINER_HOST", raising=False)
     runner = ContainerSandboxRunner(

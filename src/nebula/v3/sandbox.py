@@ -1137,7 +1137,8 @@ class ContainerSandboxRunner(SandboxRunner):
                 exc,
                 stage="sandbox",
             )
-            return False, f"container runtime health check failed: {exc}"
+            detail = str(exc).strip() or exc.__class__.__name__
+            return False, f"container runtime health check failed: {detail}"
 
     async def _validate_runtime_profile(self) -> tuple[bool, str]:
         assert self.profile is not None
@@ -1292,8 +1293,11 @@ class ContainerSandboxRunner(SandboxRunner):
             stderr=asyncio.subprocess.PIPE,
             env=_runtime_environment(),
         )
+        # Rootless Podman may need to initialize its user service and storage
+        # metadata on the first inspected command. Keep the probe bounded, but
+        # allow enough time for that legitimate local startup path.
         stdout, stderr = await _communicate_limited(
-            process, timeout_seconds=10, output_bytes=2_000_000
+            process, timeout_seconds=30, output_bytes=2_000_000
         )
         return (
             stdout.decode("utf-8", errors="replace").strip(),
