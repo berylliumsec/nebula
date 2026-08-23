@@ -330,13 +330,6 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
 
     async def capture(*arguments):
         nonlocal health_checks
-        if arguments == (
-            "info",
-            "--format",
-            "{{.Host.Security.Rootless}}|{{.Host.OS}}",
-        ):
-            health_checks += 1
-            return "true|linux", "", 0
         if arguments == ("ps", "--all", "--format", "{{.Names}}"):
             return (
                 "nebula-terminal-good123\n"
@@ -348,10 +341,16 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
             )
         raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
 
+    async def capture_health():
+        nonlocal health_checks
+        health_checks += 1
+        return "true|linux", "", 0
+
     async def remove(name):
         removed.append(name)
 
     monkeypatch.setattr(runner, "_capture", capture)
+    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
     monkeypatch.setattr(runner, "_force_remove", remove)
     asyncio.run(runner.cleanup_terminal_containers())
 
@@ -370,22 +369,21 @@ def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
 
     async def capture(*arguments):
         nonlocal health_checks
-        if arguments == (
-            "info",
-            "--format",
-            "{{.Host.Security.Rootless}}|{{.Host.OS}}",
-        ):
-            health_checks += 1
-            rootless = health_checks == 1
-            return f"{str(rootless).lower()}|linux", "", 0
         if arguments == ("ps", "--all", "--format", "{{.Names}}"):
             return "nebula-terminal-orphan\n", "", 0
         raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
+
+    async def capture_health():
+        nonlocal health_checks
+        health_checks += 1
+        rootless = health_checks == 1
+        return f"{str(rootless).lower()}|linux", "", 0
 
     async def remove(name):
         removed.append(name)
 
     monkeypatch.setattr(runner, "_capture", capture)
+    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
     monkeypatch.setattr(runner, "_force_remove", remove)
     asyncio.run(runner.cleanup_terminal_containers())
 
@@ -499,15 +497,10 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
         )
     )
 
-    async def capture(*arguments):
-        assert arguments == (
-            "info",
-            "--format",
-            "{{.Host.Security.Rootless}}|{{.Host.OS}}",
-        )
+    async def capture_health():
         return "true|linux", "", 0
 
-    monkeypatch.setattr(runner, "_capture", capture)
+    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
     available, detail = asyncio.run(runner.available())
     assert available is True
     assert "rootless Podman" in detail
@@ -667,9 +660,13 @@ def test_macos_podman_machine_requires_running_rootless_loopback_connection(
                 "",
                 0,
             )
+        raise AssertionError(f"unexpected runtime arguments: {arguments!r}")
+
+    async def capture_health():
         return "true|linux", "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
+    monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
     available, detail = asyncio.run(runner.available())
     assert available is True
     assert "Podman Machine" in detail

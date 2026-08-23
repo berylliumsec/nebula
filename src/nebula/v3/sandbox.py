@@ -1237,9 +1237,7 @@ class ContainerSandboxRunner(SandboxRunner):
         # Request only the two fields used for admission. Older Podman builds
         # can block while serializing the full ``info`` document to a pipe,
         # even though the runtime itself is healthy.
-        info_output, info_error, return_code = await self._capture(
-            "info", "--format", "{{.Host.Security.Rootless}}|{{.Host.OS}}"
-        )
+        info_output, info_error, return_code = await self._capture_podman_health()
         if return_code != 0:
             return False, info_error or "Podman service is unavailable"
         rootless, separator, host_os = info_output.strip().partition("|")
@@ -1256,6 +1254,35 @@ class ContainerSandboxRunner(SandboxRunner):
             else "approved local rootless Podman runner is available"
         )
         return True, detail
+
+    async def _capture_podman_health(self) -> tuple[str, str, int]:
+        """Capture the fixed-size Podman admission fields without pipe races."""
+
+        process = await asyncio.create_subprocess_exec(
+            *self._runtime_argv(),
+            "info",
+            "--format",
+            "{{.Host.Security.Rootless}}|{{.Host.OS}}",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=30
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            process.kill()
+            await process.communicate()
+            raise
+        if len(stdout) > 256 or len(stderr) > 64 * 1024:
+            raise SandboxError("Podman health output exceeded its fixed limit")
+        return (
+            stdout.decode("utf-8", errors="replace").strip(),
+            stderr.decode("utf-8", errors="replace").strip(),
+            int(process.returncode or 0),
+        )
 
     async def _validate_podman_connection(self, *, machine: bool) -> tuple[bool, str]:
         assert self.profile is not None
