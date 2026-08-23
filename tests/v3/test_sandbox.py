@@ -514,8 +514,9 @@ def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
         )
     )
 
-    async def capture(*arguments):
+    async def capture(*arguments, include_context=True):
         assert arguments[0] == "system"
+        assert include_context is False
         return (
             '[{"Name":"remote-lab","URI":"ssh://runner.example/run/podman.sock"}]',
             "",
@@ -627,10 +628,12 @@ def test_macos_podman_machine_requires_running_rootless_loopback_connection(
         )
     )
 
-    async def capture(*arguments):
+    async def capture(*arguments, include_context=True):
         if arguments[0] == "machine":
+            assert include_context is True
             return '[{"State":"running","Rootful":false}]', "", 0
         if arguments[0] == "system":
+            assert include_context is False
             return (
                 '[{"Name":"podman-machine-default","URI":"ssh://core@127.0.0.1:51234/run/user/501/podman.sock"}]',
                 "",

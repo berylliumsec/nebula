@@ -1302,7 +1302,12 @@ class ContainerSandboxRunner(SandboxRunner):
     async def _validate_podman_connection(self, *, machine: bool) -> tuple[bool, str]:
         assert self.profile is not None
         connections_output, connections_error, return_code = await self._capture(
-            "system", "connection", "list", "--format", "json"
+            "system",
+            "connection",
+            "list",
+            "--format",
+            "json",
+            include_context=False,
         )
         if return_code != 0:
             return False, connections_error or "Podman connection is unavailable"
@@ -1329,9 +1334,20 @@ class ContainerSandboxRunner(SandboxRunner):
             return False, f"Podman connection must {expected}"
         return True, "Podman connection is local"
 
-    async def _capture(self, *arguments: str) -> tuple[str, str, int]:
+    async def _capture(
+        self, *arguments: str, include_context: bool = True
+    ) -> tuple[str, str, int]:
+        runtime_argv = (
+            self._runtime_argv()
+            if include_context
+            else [str(self.profile.executable)]
+            if self.profile is not None
+            else []
+        )
+        if not runtime_argv:
+            raise SandboxUnavailable("no container runtime is configured")
         process = await asyncio.create_subprocess_exec(
-            *self._runtime_argv(),
+            *runtime_argv,
             *arguments,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
