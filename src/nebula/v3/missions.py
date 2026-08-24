@@ -1240,10 +1240,7 @@ class MissionService:
             raise MissionConfigurationError(
                 "analysis-only missions require zero tools and one non-delegating task"
             )
-        if (
-            budget.max_tokens is not None
-            and budget.max_tokens > MAX_API_MISSION_TOKENS
-        ):
+        if budget.max_tokens is not None and budget.max_tokens > MAX_API_MISSION_TOKENS:
             raise MissionConfigurationError(
                 "mission token budget exceeds the API limit"
             )

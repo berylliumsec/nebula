@@ -437,15 +437,11 @@ class NebulaStore:
                 "max_artifact_queries" if artifact_query else "max_tool_calls"
             )
             maximum_value = (
-                run["payload"].get(
-                    budget_field, 20 if artifact_query else 0
-                )
+                run["payload"].get(budget_field, 20 if artifact_query else 0)
                 if call.origin == ToolCallOrigin.CHAT
                 else run["payload"].get("budget", {}).get(budget_field)
             )
-            maximum = (
-                int(maximum_value) if maximum_value is not None else None
-            )
+            maximum = int(maximum_value) if maximum_value is not None else None
             counter = (
                 connection.execute(
                     select(RunBudgetCounterRow)
