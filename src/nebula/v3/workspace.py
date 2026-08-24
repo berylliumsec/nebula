@@ -394,6 +394,8 @@ class WorkspaceService:
             try:
                 parsed_tasks = json5.loads(vscode_tasks, allow_duplicate_keys=False)
             except (RecursionError, ValueError):
+                # diagnostic-expected: the invalid manifest is returned as a visible,
+                # disabled task with an in-place recovery instruction.
                 add(
                     "VS Code tasks need attention",
                     ":",
@@ -423,6 +425,8 @@ class WorkspaceService:
             try:
                 parsed = json.loads(package)
             except json.JSONDecodeError:
+                # diagnostic-expected: an invalid optional package manifest is
+                # ignored while other bounded task sources remain available.
                 parsed = None
             scripts = parsed.get("scripts") if isinstance(parsed, dict) else None
             if isinstance(scripts, dict):
@@ -719,6 +723,7 @@ class WorkspaceService:
         try:
             return payload.decode("utf-8")
         except UnicodeDecodeError:
+            # diagnostic-expected: non-UTF-8 optional task manifests are unsupported.
             return None
 
     def _read_vscode_manifest(
@@ -745,6 +750,7 @@ class WorkspaceService:
         try:
             return payload.decode("utf-8"), None
         except UnicodeDecodeError:
+            # diagnostic-expected: the caller renders this exact configuration error.
             return None, f"{path} must use UTF-8 text."
 
     def debug_configurations(
@@ -810,6 +816,8 @@ class WorkspaceService:
         try:
             parsed = json5.loads(manifest, allow_duplicate_keys=False)
         except (RecursionError, ValueError):
+            # diagnostic-expected: the invalid manifest becomes a visible disabled
+            # launch profile with an in-place recovery instruction.
             add(
                 "VS Code launch profiles need attention",
                 None,
@@ -901,6 +909,8 @@ class WorkspaceService:
                     *_relative_parts(resolved_path, require_value=True)
                 ).as_posix()
             except ExecutionServiceError:
+                # diagnostic-expected: the profile is retained as an explicit,
+                # disabled out-of-workspace configuration.
                 reject("Debug program must remain inside the project workspace.")
                 continue
             if not resolved_path.endswith(".py"):
@@ -1149,6 +1159,7 @@ class WorkspaceService:
                 repository.output.decode("utf-8", errors="strict").strip()
             ).resolve()
         except (OSError, UnicodeDecodeError):
+            # diagnostic-expected: invalid Git output fails closed to not_repository.
             repository_root = Path("/")
         if repository_root != root:
             return SourceControlStatus(
@@ -1856,6 +1867,8 @@ async def _run_git(
             env=environment,
         )
     except OSError as exc:
+        # diagnostic-expected: the caller converts this result into visible
+        # source-control unavailable state and retains the bounded detail.
         return _GitResult(127, str(exc).encode("utf-8", errors="replace"))
 
     output = bytearray()
@@ -1875,6 +1888,7 @@ async def _run_git(
             process.kill()
         await asyncio.wait_for(process.wait(), 1.0)
     except TimeoutError:
+        # diagnostic-expected: timeout is returned as visible bounded Git detail.
         if process.returncode is None:
             process.kill()
             await process.wait()
@@ -1890,6 +1904,7 @@ def _decode_git_scalar(payload: bytes) -> str | None:
     try:
         value = payload.decode("utf-8", errors="strict").strip()
     except UnicodeDecodeError:
+        # diagnostic-expected: invalid optional Git scalar becomes absent metadata.
         return None
     return value[:500] or None
 
@@ -1931,6 +1946,8 @@ def _parse_porcelain_status(payload: bytes) -> tuple[list[SourceControlFile], bo
             path = record[3:].decode("utf-8", errors="strict")
             _relative_parts(path, require_value=True)
         except (UnicodeDecodeError, ExecutionServiceError):
+            # diagnostic-expected: malformed Git records are omitted and the
+            # response is marked truncated for the operator.
             truncated = True
             continue
         original_path: str | None = None
@@ -1942,6 +1959,8 @@ def _parse_porcelain_status(payload: bytes) -> tuple[list[SourceControlFile], bo
                 original_path = records[index].decode("utf-8", errors="strict")
                 _relative_parts(original_path, require_value=True)
             except (UnicodeDecodeError, ExecutionServiceError):
+                # diagnostic-expected: malformed rename provenance is omitted and
+                # the response is marked truncated for the operator.
                 truncated = True
                 original_path = None
             index += 1

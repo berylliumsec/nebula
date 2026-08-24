@@ -4729,6 +4729,8 @@ def create_app(
         try:
             session = await service.attach(session_id, ticket)
         except DebuggerError as exc:
+            # diagnostic-expected: the authenticated protocol rejection is returned
+            # to the client as the WebSocket close reason.
             await websocket.close(
                 code=4404 if exc.status_code == 404 else 4401,
                 reason=exc.detail[:120],
@@ -4782,10 +4784,18 @@ def create_app(
                     }
                 )
 
+        # diagnostic-expected: every pump is supervised by the wait set below and
+        # cancelled and gathered in the shared finally block.
         tasks = {
-            asyncio.create_task(browser_to_adapter()),
-            asyncio.create_task(adapter_to_browser()),
-            asyncio.create_task(adapter_stderr()),
+            asyncio.create_task(
+                browser_to_adapter()
+            ),  # diagnostic-expected: supervised below
+            asyncio.create_task(
+                adapter_to_browser()
+            ),  # diagnostic-expected: supervised below
+            asyncio.create_task(
+                adapter_stderr()
+            ),  # diagnostic-expected: supervised below
         }
         caught: BaseException | None = None
         try:
@@ -4797,6 +4807,7 @@ def create_app(
                 if caught is not None:
                     break
         except WebSocketDisconnect:
+            # diagnostic-expected: disconnect only ends this attached viewer.
             pass
         finally:
             for task in tasks:
@@ -4808,6 +4819,8 @@ def create_app(
                         {"kind": "error", "code": caught.code, "detail": caught.detail}
                     )
                 except (RuntimeError, WebSocketDisconnect):
+                    # diagnostic-expected: the socket already carried the terminal
+                    # failure or closed before it could receive the final frame.
                     pass
             await service.close(session_id)
 
@@ -4900,6 +4913,8 @@ def create_app(
         try:
             store.get(Engagement, engagement_id)
         except NotFoundError:
+            # diagnostic-expected: missing engagement is an authenticated protocol
+            # rejection surfaced through the WebSocket close reason.
             await websocket.close(code=4404, reason="engagement not found")
             return
         await websocket.accept(subprotocol="nebula.language-server.v1")
@@ -4915,6 +4930,8 @@ def create_app(
                 try:
                     payload = json.loads(raw)
                 except json.JSONDecodeError:
+                    # diagnostic-expected: invalid client JSON receives the standard
+                    # JSON-RPC parse-error response and the session remains usable.
                     await websocket.send_json(
                         {
                             "jsonrpc": "2.0",
@@ -4926,6 +4943,7 @@ def create_app(
                 for response in await session.handle(payload):
                     await websocket.send_json(response)
         except WebSocketDisconnect:
+            # diagnostic-expected: disconnect clears the ephemeral document session.
             return
         finally:
             session.documents.clear()

@@ -237,6 +237,8 @@ class DebugService:
         )
         async with self._lock:
             self._sessions[session_id] = session
+            # diagnostic-expected: the service owns this expiry task and close()
+            # cancels and gathers it before removing the session.
             self._expiry_tasks[session_id] = asyncio.create_task(
                 self._expire(session_id), name=f"debug-expiry-{session_id}"
             )

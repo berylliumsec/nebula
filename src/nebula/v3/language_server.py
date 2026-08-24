@@ -386,13 +386,27 @@ def format_document(document: _OpenDocument) -> list[dict[str, Any]]:
             check=False,
             env={"HOME": "/nonexistent", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        record_caught_exception(
+            "language_server",
+            "language_server.format.unavailable",
+            "Ruff could not format a bounded editor document.",
+            exc,
+            stage="format",
+        )
         return []
     if completed.returncode != 0 or len(completed.stdout) > MAX_DOCUMENT_BYTES:
         return []
     try:
         formatted = completed.stdout.decode("utf-8")
-    except UnicodeDecodeError:
+    except UnicodeDecodeError as exc:
+        record_caught_exception(
+            "language_server",
+            "language_server.format.invalid_output",
+            "Ruff returned formatting output that was not UTF-8.",
+            exc,
+            stage="format",
+        )
         return []
     if formatted == document.source:
         return []
@@ -505,6 +519,8 @@ def _ruff_diagnostics(document: _OpenDocument) -> list[dict[str, Any]]:
                 end_column,
             )
         except (KeyError, TypeError, ValueError):
+            # diagnostic-expected: malformed individual Ruff records are omitted;
+            # the bounded valid records remain visible to the operator.
             continue
         diagnostic: dict[str, Any] = {
             "range": diagnostic_range,
@@ -744,12 +760,14 @@ class LanguageServerSession:
                 ]
             return [self._result(request_id, value)]
         except (TypeError, ValueError) as exc:
+            # diagnostic-expected: invalid client parameters receive JSON-RPC -32602.
             return (
                 []
                 if notification
                 else [self._error(request_id, -32602, str(exc)[:1_000])]
             )
         except asyncio.TimeoutError:
+            # diagnostic-expected: bounded analysis timeout receives JSON-RPC -32001.
             return (
                 []
                 if notification
