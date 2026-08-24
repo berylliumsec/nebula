@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const testPort = process.env.NEBULA_UI_TEST_PORT ?? "1420";
+
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: false,
@@ -14,7 +16,7 @@ export default defineConfig({
     },
   },
   use: {
-    baseURL: "http://127.0.0.1:1420",
+    baseURL: `http://127.0.0.1:${testPort}`,
     colorScheme: "dark",
     reducedMotion: "reduce",
     trace: "retain-on-failure",
@@ -38,25 +40,25 @@ export default defineConfig({
     {
       name: "mobile-chromium",
       testMatch: "**/interface.spec.ts",
-      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
+      grep: /host folder picker|mission workflow|completed harness output|assistant context pack|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["Pixel 5"] },
     },
     {
       name: "mobile-chromium-small",
       testMatch: "**/interface.spec.ts",
-      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
+      grep: /host folder picker|mission workflow|completed harness output|assistant context pack|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["Pixel 5"], viewport: { width: 320, height: 700 } },
     },
     {
       name: "mobile-webkit",
       testMatch: "**/interface.spec.ts",
-      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
+      grep: /host folder picker|mission workflow|completed harness output|assistant context pack|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["iPhone 13"] },
     },
     {
       name: "mobile-webkit-wide",
       testMatch: "**/interface.spec.ts",
-      grep: /host folder picker|mission workflow|completed harness output|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
+      grep: /host folder picker|mission workflow|completed harness output|assistant context pack|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["iPhone 13"], viewport: { width: 430, height: 932 } },
     },
     {
@@ -67,8 +69,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run dev -- --host 127.0.0.1",
-    url: "http://127.0.0.1:1420",
+    command: `npm run dev -- --host 127.0.0.1 --port ${testPort}`,
+    url: `http://127.0.0.1:${testPort}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

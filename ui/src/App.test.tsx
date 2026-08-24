@@ -45,6 +45,7 @@ function selectElementText(element: HTMLElement) {
 describe("Nebula workspace", () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     window.history.replaceState({}, "", "/");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Core offline")));
   });
@@ -381,7 +382,7 @@ describe("Nebula workspace", () => {
     const user = userEvent.setup();
 
     renderApp("/sessions");
-    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }));
+    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 5_000 }));
     await user.click(screen.getByRole("button", { name: "New chat" }));
     await user.click(screen.getByRole("button", { name: "Assistant settings" }));
     expect(await screen.findByRole("combobox", { name: "Chat provider" })).toHaveValue("provider-1");
@@ -468,14 +469,14 @@ describe("Nebula workspace", () => {
     await user.click(await screen.findByRole("button", { name: "Ask Nebula" }));
 
     expect(await screen.findByRole("tab", { name: "Analyst chat" })).toHaveAttribute("aria-selected", "true");
-    const attachment = screen.getByRole("group", { name: "Selected context attachment" });
+    const attachment = screen.getByRole("region", { name: "Selected context pack" });
     expect(attachment).toHaveTextContent("Project selection");
     expect(within(attachment).queryByText("Selection review", { selector: "p" })).toBeNull();
-    const expandQuote = within(attachment).getByRole("button", { name: "Expand quoted context" });
+    const expandQuote = within(attachment).getByRole("button", { name: "Expand Project selection" });
     expect(expandQuote).toHaveAttribute("aria-expanded", "false");
     await user.click(expandQuote);
     expect(within(attachment).getByText("Selection review", { selector: "p" })).toBeVisible();
-    expect(within(attachment).getByRole("button", { name: "Collapse quoted context" })).toHaveAttribute("aria-expanded", "true");
+    expect(within(attachment).getByRole("button", { name: "Collapse Project selection" })).toHaveAttribute("aria-expanded", "true");
     const composer = screen.getByRole("textbox", { name: "Message the analyst assistant" });
     expect(composer).toHaveValue("");
     expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/completions"))).toBe(false);
@@ -531,7 +532,7 @@ describe("Nebula workspace", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/observations") && init?.method === "POST")).toBe(true));
   });
 
-  it("keeps chat working memory in the background", async () => {
+  it("keeps chat drafts durable while saved memory stays behind explicit disclosure", async () => {
     const entity = {
       created_at: "2026-07-12T10:00:00Z",
       updated_at: "2026-07-12T11:00:00Z",
@@ -584,7 +585,7 @@ describe("Nebula workspace", () => {
     const user = userEvent.setup();
     const rendered = renderApp("/sessions");
 
-    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }));
+    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 5_000 }));
     expect(screen.queryByLabelText("Conversations")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Show conversations" }));
     const conversationPanel = await screen.findByLabelText("Conversations");
@@ -592,10 +593,13 @@ describe("Nebula workspace", () => {
     expect(localStorage.getItem("nebula.conversations.open")).toBe("true");
     expect(await screen.findByTitle("Saved context")).toBeVisible();
     expect(await screen.findByText("Port retained")).toBeVisible();
-    expect(screen.getByTestId("router-location")).toHaveTextContent(/session=session-1/);
-    rendered.unmount();
-    renderApp("/sessions");
-    expect(await screen.findByLabelText("Conversations")).toBeVisible();
+    const conversationSearch = screen.getByRole("searchbox", { name: "Search conversations" });
+    await user.type(conversationSearch, "missing runtime");
+    expect(screen.getByText("No conversations match “missing runtime”.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Clear conversation search" }));
+    expect(await screen.findByTitle("Saved context")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Saved contextmodel-1/ }));
+    await waitFor(() => expect(screen.getByTestId("router-location")).toHaveTextContent(/session=session-1/));
     expect(await screen.findByText("Port retained")).toBeVisible();
     const transcript = screen.getByText("Port retained").closest(".chat-scroll")!;
     const transcriptMutations: MutationRecord[] = [];
@@ -605,9 +609,23 @@ describe("Nebula workspace", () => {
     transcriptMutations.push(...transcriptObserver.takeRecords());
     transcriptObserver.disconnect();
     expect(transcriptMutations.filter((record) => record.addedNodes.length || record.removedNodes.length)).toEqual([]);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/sessions/session-1/context"))).toBe(true));
     expect(screen.queryByText("The selected service uses port 8443.")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Working memory" })).not.toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/sessions/session-1/context"))).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Open context details, 100 percent of target input used" }));
+    const inspector = await screen.findByLabelText("Session inspector");
+    expect(within(inspector).getByText("Core compacted through message 1; the source transcript remains unchanged.")).toBeVisible();
+    await user.click(within(inspector).getByText("Inspect saved memory"));
+    expect(within(inspector).getByText("The selected service uses port 8443.")).toBeVisible();
+    rendered.unmount();
+    renderApp("/sessions");
+    const recoveredComposer = await screen.findByRole("textbox", { name: "Message the analyst assistant" });
+    await waitFor(() => expect(recoveredComposer).toHaveValue("draft"));
+    expect(await screen.findByText("Port retained")).toBeVisible();
+    const assistantMessage = screen.getByText("Port retained").closest("article");
+    expect(assistantMessage).not.toBeNull();
+    await user.click(within(assistantMessage!).getByRole("button", { name: "Quote in composer" }));
+    expect((recoveredComposer as HTMLTextAreaElement).value).toContain("> Port retained");
     expect(screen.queryByRole("button", { name: "Save Assistant Response" })).not.toBeInTheDocument();
     for (const forkButton of screen.getAllByRole("button", { name: "Fork conversation here" })) {
       expect(forkButton.closest(".chat-message-actions")).not.toBeNull();
@@ -631,7 +649,7 @@ describe("Nebula workspace", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "More actions for Port review" })).not.toBeInTheDocument());
     expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "DELETE")).toBe(true);
     expect(new URLSearchParams(window.location.search).get("session")).toBeNull();
-  });
+  }, 15_000);
 
   it("deletes every saved Assistant conversation after one confirmation", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };

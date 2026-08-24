@@ -23,17 +23,72 @@ export interface NebulaDraftRequest {
 }
 
 interface WorkbenchDraftContextValue {
-  assistantDraft?: SelectionActionDraft;
+  assistantDrafts: SelectionActionDraft[];
+  assistantDraftNotice?: string;
   noteDraft?: SelectionActionDraft;
   executionDraft?: SelectionActionDraft;
   requestNebulaDraft(request: NebulaDraftRequest): void;
   requestNoteDraft(request: NebulaDraftRequest): void;
-  clearAssistantDraft(): void;
+  removeAssistantDraft(index: number): void;
+  clearAssistantDrafts(): void;
+  clearAssistantDraftNotice(): void;
   clearNoteDraft(): void;
   clearExecutionDraft(): void;
 }
 
 const WorkbenchDraftContext = createContext<WorkbenchDraftContextValue | undefined>(undefined);
+
+export const ASSISTANT_CONTEXT_CHARACTER_LIMIT = 20_000;
+export const ASSISTANT_CONTEXT_ITEM_LIMIT = 20;
+
+interface AssistantDraftMerge {
+  drafts: SelectionActionDraft[];
+  notice?: string;
+}
+
+function sameAssistantDraft(left: SelectionActionDraft, right: SelectionActionDraft): boolean {
+  return left.source.kind === right.source.kind
+    && left.source.id === right.source.id
+    && left.source.label === right.source.label
+    && left.text === right.text;
+}
+
+/** Keeps the browser pack inside Core's exact 20-item / 20,000-character contract. */
+export function mergeAssistantDraft(
+  current: SelectionActionDraft[],
+  next: SelectionActionDraft,
+): AssistantDraftMerge {
+  if (current.some((item) => sameAssistantDraft(item, next))) {
+    return { drafts: current, notice: `${next.source.label} is already in the context pack.` };
+  }
+  if (current.length >= ASSISTANT_CONTEXT_ITEM_LIMIT) {
+    return { drafts: current, notice: `A context pack can contain up to ${ASSISTANT_CONTEXT_ITEM_LIMIT} selections.` };
+  }
+  const used = current.reduce((total, item) => total + item.text.length, 0);
+  let remaining = ASSISTANT_CONTEXT_CHARACTER_LIMIT - used;
+  if (remaining <= 0) {
+    return { drafts: current, notice: "The 20,000-character context pack is full. Remove a selection before adding another." };
+  }
+  if (next.text.length <= remaining) return { drafts: [...current, next] };
+  if (
+    remaining > 0
+    && next.text.charCodeAt(remaining - 1) >= 0xd800
+    && next.text.charCodeAt(remaining - 1) <= 0xdbff
+    && next.text.charCodeAt(remaining) >= 0xdc00
+    && next.text.charCodeAt(remaining) <= 0xdfff
+  ) remaining -= 1;
+  if (remaining <= 0) {
+    return { drafts: current, notice: "The 20,000-character context pack is full. Remove a selection before adding another." };
+  }
+  return {
+    drafts: [...current, {
+      ...next,
+      text: next.text.slice(0, remaining),
+      truncated: true,
+    }],
+    notice: `${next.source.label} was bounded to the remaining ${remaining.toLocaleString()} context characters.`,
+  };
+}
 
 function toSelectionDraft(request: NebulaDraftRequest): SelectionActionDraft | undefined {
   const draft = createSelectionDraft({
@@ -64,14 +119,15 @@ function sourceForRoute(pathname: string, element: Element | null): SelectionSou
 export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [assistantDraft, setAssistantDraft] = useState<SelectionActionDraft>();
+  const [assistantContext, setAssistantContext] = useState<AssistantDraftMerge>({ drafts: [] });
+  const { drafts: assistantDrafts, notice: assistantDraftNotice } = assistantContext;
   const [noteDraft, setNoteDraft] = useState<SelectionActionDraft>();
   const [executionDraft, setExecutionDraft] = useState<SelectionActionDraft>();
 
   const requestNebulaDraft = useCallback((request: NebulaDraftRequest) => {
     const next = toSelectionDraft(request);
     if (!next) return;
-    setAssistantDraft(next);
+    setAssistantContext((current) => mergeAssistantDraft(current.drafts, next));
     navigate("/?view=chat");
   }, [navigate]);
 
@@ -83,7 +139,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   }, [navigate]);
 
   const openAssistantSelection = useCallback((draft: SelectionActionDraft) => {
-    setAssistantDraft(draft);
+    setAssistantContext((current) => mergeAssistantDraft(current.drafts, draft));
     navigate("/?view=chat");
   }, [navigate]);
   const openNoteSelection = useCallback((draft: SelectionActionDraft) => {
@@ -94,7 +150,17 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     setExecutionDraft(draft);
     navigate("/?view=terminal");
   }, [navigate]);
-  const clearAssistantDraft = useCallback(() => setAssistantDraft(undefined), []);
+  const removeAssistantDraft = useCallback((index: number) => {
+    setAssistantContext((current) => ({
+      drafts: current.drafts.filter((_, currentIndex) => currentIndex !== index),
+    }));
+  }, []);
+  const clearAssistantDrafts = useCallback(() => {
+    setAssistantContext({ drafts: [] });
+  }, []);
+  const clearAssistantDraftNotice = useCallback(() => {
+    setAssistantContext((current) => ({ drafts: current.drafts }));
+  }, []);
   const clearNoteDraft = useCallback(() => setNoteDraft(undefined), []);
   const clearExecutionDraft = useCallback(() => setExecutionDraft(undefined), []);
   const resolveSource = useCallback(
@@ -103,21 +169,27 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   );
 
   const value = useMemo<WorkbenchDraftContextValue>(() => ({
-    assistantDraft,
+    assistantDrafts,
+    assistantDraftNotice,
     noteDraft,
     executionDraft,
     requestNebulaDraft,
     requestNoteDraft,
-    clearAssistantDraft,
+    removeAssistantDraft,
+    clearAssistantDrafts,
+    clearAssistantDraftNotice,
     clearNoteDraft,
     clearExecutionDraft,
   }), [
-    assistantDraft,
-    clearAssistantDraft,
+    assistantDrafts,
+    assistantDraftNotice,
+    clearAssistantDraftNotice,
+    clearAssistantDrafts,
     clearNoteDraft,
     clearExecutionDraft,
     executionDraft,
     noteDraft,
+    removeAssistantDraft,
     requestNebulaDraft,
     requestNoteDraft,
   ]);

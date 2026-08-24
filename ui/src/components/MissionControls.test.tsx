@@ -45,7 +45,7 @@ vi.mock("../state/WorkspaceContext", () => ({
 describe("NewMissionButton", () => {
   it("submits frozen harness options, durable stages, and a recurring schedule", async () => {
     const user = userEvent.setup();
-    const scheduledLocal = "2026-08-24T09:30";
+    const scheduledLocal = "2099-08-24T09:30";
     startMission.mockClear();
     render(<DialogProvider><NewMissionButton /></DialogProvider>);
     const trigger = await screen.findByRole("button", { name: "Automate task" });
@@ -56,6 +56,7 @@ describe("NewMissionButton", () => {
     await user.click(screen.getByText("Advanced"));
     expect(screen.getByText("Supervised security automation")).toBeInTheDocument();
     expect(screen.getByText("Harness native")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol"));
     expect(screen.getByLabelText("Mission harness effort")).toHaveValue("high");
     expect(screen.getByLabelText("Mission harness speed")).toHaveValue("priority");
     await user.click(screen.getByRole("button", { name: "Add stage" }));

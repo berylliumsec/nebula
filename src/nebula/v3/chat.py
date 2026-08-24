@@ -664,7 +664,8 @@ class ChatService:
         pending_session: ChatSession | None = None
         stored_messages: list[ChatMessage] = []
         engagement_id = request.engagement_id
-        incoming = list(request.messages)
+        durable_incoming = list(request.messages)
+        incoming = list(durable_incoming)
         if request.context_attachments:
             last = incoming[-1]
             incoming[-1] = ChatRequestMessage(
@@ -691,9 +692,10 @@ class ChatService:
                     "model cannot change within a durable chat session"
                 )
             stored_messages = self._session_messages(session)
-            incoming, new_messages = self._merge_history(stored_messages, incoming)
+            incoming, _ = self._merge_history(stored_messages, incoming)
+            _, new_messages = self._merge_history(stored_messages, durable_incoming)
         else:
-            new_messages = incoming
+            new_messages = durable_incoming
 
         selected_model = (
             request.model
@@ -718,7 +720,9 @@ class ChatService:
                 pending_session = ChatSession(
                     id=request.session_id or str(uuid4()),
                     engagement_id=engagement.id,
-                    title=self._title(incoming),
+                    # Titles describe the operator's prompt, never the expanded
+                    # provider payload containing selected-context envelopes.
+                    title=self._title(request.messages),
                     provider_profile_id=profile.id,
                     model=selected_model,
                 )

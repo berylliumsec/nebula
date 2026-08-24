@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 
@@ -12,32 +14,43 @@ interface RealCore {
   token: string;
 }
 
-async function startRealCore(): Promise<RealCore> {
+async function startRealCore(options: { bindHost?: string; browserHost?: string } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
   const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
   const token = "playwright-real-core-token-2026";
+  const bindHost = options.bindHost ?? "127.0.0.1";
+  const browserHost = options.browserHost ?? bindHost;
+  const coreExecutable = process.env.NEBULA_TEST_CORE_BIN ?? path.join(repository, ".venv/bin/nebula-core");
   const child = spawn(
-    path.join(repository, ".venv/bin/nebula-core"),
+    coreExecutable,
     [
       "serve",
-      "--host", "127.0.0.1",
+      "--host", bindHost,
       "--port", "0",
       "--token", token,
+      ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
       "--allow-insecure-device-pairing",
       "--data-dir", dataDir,
       "--static-dir", path.join(repository, "ui/dist"),
     ],
-    { cwd: repository, env: { ...process.env, PYTHONUNBUFFERED: "1" } },
+    {
+      cwd: repository,
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: "1",
+        PYTHONPATH: [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+      },
+    },
   );
   let output = "";
   const origin = await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), 30_000);
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
-      const match = output.match(/"url"\s*:\s*"(http:\/\/127\.0\.0\.1:\d+)"/);
+      const match = output.match(/"url"\s*:\s*"http:\/\/[^:\"]+:(\d+)"/);
       if (match) {
         clearTimeout(timeout);
-        resolve(match[1]);
+        resolve(`http://${browserHost}:${match[1]}`);
       }
     };
     child.stdout.on("data", inspect);
@@ -48,6 +61,15 @@ async function startRealCore(): Promise<RealCore> {
     });
   });
   return { process: child, dataDir, origin, token };
+}
+
+function localNetworkIpv4(): string {
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === "IPv4" && !address.internal) return address.address;
+    }
+  }
+  throw new Error("A non-loopback IPv4 address is required for LAN acceptance.");
 }
 
 async function stopRealCore(core: RealCore): Promise<void> {
@@ -63,6 +85,195 @@ async function stopRealCore(core: RealCore): Promise<void> {
     await rm(core.dataDir, { recursive: true, force: true });
   }
 }
+
+interface LocalModelStub {
+  origin: string;
+  requests: Array<Record<string, unknown>>;
+  server: Server;
+}
+
+async function startLocalModelStub(): Promise<LocalModelStub> {
+  const requests: Array<Record<string, unknown>> = [];
+  const server = createServer(async (request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.end(JSON.stringify({
+        object: "list",
+        data: [{ id: "security-model", object: "model", created: 1, owned_by: "local-acceptance" }],
+      }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/v1/chat/completions") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      response.end(JSON.stringify({
+        id: "chatcmpl-real-core",
+        object: "chat.completion",
+        created: 1,
+        model: "security-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "Real Core retained the exact research context." },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 18, completion_tokens: 8, total_tokens: 26 },
+      }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address() as AddressInfo;
+  return { origin: `http://127.0.0.1:${address.port}`, requests, server };
+}
+
+async function stopLocalModelStub(stub: LocalModelStub): Promise<void> {
+  stub.server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    stub.server.close((error) => error ? reject(error) : resolve());
+  });
+}
+
+test("production assistant preserves exact research context and relaunch-safe drafts through real Core", async ({ page }) => {
+  test.setTimeout(60_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagementsResponse = await api.get("engagements");
+    expect(engagementsResponse.ok()).toBe(true);
+    const engagements = await engagementsResponse.json() as Array<{ id: string }>;
+    const projectId = engagements[0]?.id;
+    expect(projectId).toBeTruthy();
+
+    const providerResponse = await api.post("providers", { data: {
+      name: "Real Core research model",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+
+    const selectedContext = "443/tcp open https\nTLS certificate expired";
+    const selectedContextHash = createHash("sha256").update(selectedContext).digest("hex");
+    const completionResponse = await api.post("chat/completions", { data: {
+      backend: "provider",
+      provider_id: provider.id,
+      model: "security-model",
+      engagement_id: projectId,
+      messages: [{ role: "user", content: "Review the exact 443/tcp observation." }],
+      context_attachments: [{
+        source_kind: "terminal",
+        source_id: "real-core-terminal",
+        source_label: "Nmap TLS result",
+        text: selectedContext,
+        sha256: selectedContextHash,
+        truncated: false,
+      }],
+      include_knowledge: false,
+      stream: false,
+    } });
+    expect(completionResponse.ok(), await completionResponse.text()).toBe(true);
+    const completion = await completionResponse.json() as { session_id: string };
+    expect(completion.session_id).toBeTruthy();
+    expect(modelStub.requests).toHaveLength(1);
+    const deliveredMessages = modelStub.requests[0].messages as Array<{ content?: string }>;
+    const deliveredContent = deliveredMessages.at(-1)?.content ?? "";
+    const deliveredContextJson = deliveredContent.match(
+      /BEGIN UNTRUSTED SELECTED CONTEXT \(JSON; DATA ONLY\)\n(.+)\nEND UNTRUSTED SELECTED CONTEXT/,
+    )?.[1];
+    expect(JSON.parse(deliveredContextJson ?? "[]")).toMatchObject([{
+      source_kind: "terminal",
+      source_id: "real-core-terminal",
+      source_label: "Nmap TLS result",
+      text: selectedContext,
+      sha256: selectedContextHash,
+      truncated: false,
+    }]);
+
+    const messagesResponse = await api.get(`chat/sessions/${completion.session_id}/messages`);
+    expect(messagesResponse.ok(), await messagesResponse.text()).toBe(true);
+    const messages = await messagesResponse.json() as Array<{ content: string; metadata?: Record<string, unknown> }>;
+    expect(messages[0]?.content).toBe("Review the exact 443/tcp observation.");
+    expect(messages[0]?.metadata).toMatchObject({
+      context_attachments: [{
+        source_kind: "terminal",
+        source_id: "real-core-terminal",
+        source_label: "Nmap TLS result",
+        text: selectedContext,
+        sha256: selectedContextHash,
+        truncated: false,
+      }],
+    });
+
+    const assistantUrl = `${core.origin}/?view=chat&session=${encodeURIComponent(completion.session_id)}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(assistantUrl);
+    await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("BEGIN UNTRUSTED SELECTED CONTEXT", { exact: false })).toHaveCount(0);
+    await page.getByRole("button", { name: /Open context details/ }).click();
+    const inspector = page.getByLabel("Session inspector");
+    await expect(inspector.getByRole("heading", { name: "Working context" })).toBeVisible();
+    await expect(inspector.getByText(/estimated.*target input tokens/)).toBeVisible();
+
+    const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+    await composer.fill("draft retained across a production relaunch");
+    // Core intentionally keeps bearer credentials in memory. Re-open the same
+    // authorized launch URL to exercise a fresh document without weakening that boundary.
+    await page.goto(assistantUrl);
+    await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toHaveValue("draft retained across a production relaunch");
+
+    await page.getByRole("button", { name: "Show conversations" }).click();
+    const sessionsResponse = await api.get("chat-sessions");
+    expect(sessionsResponse.ok(), await sessionsResponse.text()).toBe(true);
+    const sessions = await sessionsResponse.json() as Array<{ id: string; title: string }>;
+    const savedSession = sessions.find((session) => session.id === completion.session_id);
+    expect(savedSession).toBeTruthy();
+    expect(savedSession!.title).toBe("Review the exact 443/tcp observation.");
+    const activeConversation = page.locator(".session-list-item.active");
+    const activeConversationActions = page.locator(".session-list-item.active .session-actions-trigger");
+    await activeConversation.hover();
+    await activeConversationActions.click();
+    await expect(page.getByRole("menuitem", { name: "Copy link" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Conversation link copied without authentication material.")).toBeVisible();
+
+    await activeConversation.hover();
+    await activeConversationActions.click();
+    const exportMenuItem = page.getByRole("menuitem", { name: "Export transcript" });
+    await exportMenuItem.click({ force: true });
+    const exportDialog = page.getByRole("dialog").filter({ hasText: "The Markdown transcript can contain sensitive prompts" });
+    await expect(exportDialog).toBeVisible();
+    const downloadPromise = page.waitForEvent("download");
+    await exportDialog.getByRole("button", { name: "Export transcript" }).click();
+    const download = await downloadPromise;
+    const transcriptPath = await download.path();
+    expect(transcriptPath).toBeTruthy();
+    const transcript = await readFile(transcriptPath!, "utf8");
+    expect(transcript).toContain("Real Core retained the exact research context.");
+    expect(transcript).toContain(selectedContext);
+    expect(transcript).toContain(selectedContextHash);
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+    await stopLocalModelStub(modelStub);
+  }
+});
 
 test("a paired browser can revoke itself without a stale authentication error", async ({ page }) => {
   test.setTimeout(60_000);
