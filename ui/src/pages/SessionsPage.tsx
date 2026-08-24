@@ -701,6 +701,11 @@ export function SessionsPage() {
     if (view !== "chat") return;
     const composer = composerRef.current;
     if (!composer) return;
+    if (!draft) {
+      composer.style.height = "";
+      composer.style.overflowY = "hidden";
+      return;
+    }
     composer.style.height = "auto";
     const nextHeight = Math.min(composer.scrollHeight, CHAT_COMPOSER_MAX_HEIGHT);
     composer.style.height = `${nextHeight}px`;

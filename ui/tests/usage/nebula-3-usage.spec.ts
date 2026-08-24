@@ -348,8 +348,8 @@ test("13 configure models identity and appearance", async ({ page, core }) => {
     await operator.getByRole("button", { name: "Save operator" }).click();
   }
   await expect(page.getByRole("heading", { name: "Alex Morgan", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Zero" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
+  await page.getByRole("button", { name: "Zero Dark" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
   await beat(page, 1_100);
 });
 

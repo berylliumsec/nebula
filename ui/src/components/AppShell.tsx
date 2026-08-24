@@ -35,7 +35,7 @@ export function AppShell() {
     setupStatus,
     workspaceState,
   } = useWorkspace();
-  const zero = resolvedTheme === "zero";
+  const zero = resolvedTheme === "zero-dark" || resolvedTheme === "zero-light";
   const [activityOpen, setActivityOpen] = useState(false);
   const [activityView, setActivityView] = useState<ActivityCenterView>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);

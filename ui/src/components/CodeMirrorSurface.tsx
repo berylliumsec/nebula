@@ -1,9 +1,10 @@
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { bracketMatching, defaultHighlightStyle, indentOnInput, StreamLanguage, indentUnit, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, StreamLanguage, indentUnit, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
-import { dropCursor, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
+import { crosshairCursor, dropCursor, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection } from "@codemirror/view";
 import { useEffect, useRef } from "react";
-import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
+import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
 
 interface CodeMirrorSurfaceProps {
   active: boolean;
@@ -13,6 +14,7 @@ interface CodeMirrorSurfaceProps {
   onSave(): void;
   onSelectionChange?(text: string): void;
   completionSource?(context: CompletionContext): Promise<CompletionResult | null>;
+  findRequest?: number;
   value: string;
 }
 
@@ -67,10 +69,15 @@ const nebulaTheme = EditorView.theme({
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": { borderRadius: "0", backgroundColor: "color-mix(in srgb, var(--blue) 35%, transparent)" },
   ".cm-panels": { color: "var(--text)", backgroundColor: "var(--surface-raised)" },
   ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
+  ".cm-search": { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", padding: "7px 9px" },
+  ".cm-search input": { minHeight: "32px", padding: "5px 8px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", color: "var(--text)", backgroundColor: "var(--canvas)", font: "12px var(--font-mono)" },
+  ".cm-search button": { minWidth: "32px", minHeight: "32px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", color: "var(--text)", backgroundColor: "var(--surface)", cursor: "pointer" },
+  ".cm-search button:hover, .cm-search button:focus-visible": { borderColor: "var(--blue)", backgroundColor: "var(--surface-hover)" },
   ".cm-searchMatch": { backgroundColor: "var(--yellow-muted)", outline: "1px solid var(--yellow)" },
+  ".cm-foldGutter .cm-gutterElement": { cursor: "pointer" },
 });
 
-export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, onSave, onSelectionChange, completionSource, value }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, onSave, onSelectionChange, completionSource, findRequest = 0, value }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
@@ -78,10 +85,12 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
   const onCursorChangeRef = useRef(onCursorChange);
   const onSaveRef = useRef(onSave);
   const onSelectionChangeRef = useRef(onSelectionChange);
+  const completionSourceRef = useRef(completionSource);
   onChangeRef.current = onChange;
   onCursorChangeRef.current = onCursorChange;
   onSaveRef.current = onSave;
   onSelectionChangeRef.current = onSelectionChange;
+  completionSourceRef.current = completionSource;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -107,21 +116,40 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
           // positioned on the wrong line by macOS WKWebView after Enter key updates.
           // The native contenteditable caret stays coupled to the browser selection.
           lineNumbers(),
+          foldGutter(),
           highlightActiveLineGutter(),
           highlightSpecialChars(),
           history(),
           dropCursor(),
+          rectangularSelection(),
+          crosshairCursor(),
           indentOnInput(),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           bracketMatching(),
+          closeBrackets(),
+          highlightSelectionMatches(),
           highlightActiveLine(),
-          keymap.of([...defaultKeymap, ...historyKeymap]),
+          EditorState.allowMultipleSelections.of(true),
           nebulaTheme,
           indentUnit.of("  "),
           languageRef.current.of([]),
           EditorView.contentAttributes.of({ "aria-label": "Code editor", spellcheck: "false" }),
-          keymap.of([{ key: "Mod-s", run: () => { onSaveRef.current(); return true; } }]),
-          autocompletion({ activateOnTyping: true, maxRenderedOptions: 30, override: completionSource ? [(context) => completionSource(context)] : undefined }),
+          search({ top: true }),
+          autocompletion({
+            activateOnTyping: true,
+            maxRenderedOptions: 30,
+            override: completionSource ? [(context) => completionSourceRef.current?.(context) ?? null] : undefined,
+          }),
+          keymap.of([
+            { key: "Mod-s", run: () => { onSaveRef.current(); return true; } },
+            indentWithTab,
+            ...closeBracketsKeymap,
+            ...completionKeymap,
+            ...searchKeymap,
+            ...foldKeymap,
+            ...defaultKeymap,
+            ...historyKeymap,
+          ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
             if (update.selectionSet || update.docChanged) {
@@ -173,6 +201,11 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
   }, [filePath]);
 
   useEffect(() => { if (active) viewRef.current?.requestMeasure(); }, [active]);
+
+  useEffect(() => {
+    if (!findRequest || !viewRef.current) return;
+    openSearchPanel(viewRef.current);
+  }, [findRequest]);
 
   return <div className="code-mirror-host" ref={hostRef} />;
 }
