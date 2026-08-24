@@ -953,6 +953,10 @@ class ChatService:
                     stage="chat",
                 )
                 raise ChatConfigurationError(str(exc)) from exc
+            if tool_components is None:
+                raise ChatConfigurationError(
+                    "no command, automation, MCP, or browser runtime capabilities were selected"
+                )
             session_id = (
                 session.id
                 if session is not None
