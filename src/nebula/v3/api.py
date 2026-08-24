@@ -7589,7 +7589,9 @@ def create_app(
         request: BrowserCaptureSettingsRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserSession:
-        return browser_security.update_capture_settings(session_id, request, x_nebula_actor)
+        return browser_security.update_capture_settings(
+            session_id, request, x_nebula_actor
+        )
 
     @app.post(
         f"{API_PREFIX}/browser-sessions/{{session_id}}/traffic",

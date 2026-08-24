@@ -875,7 +875,9 @@ class ChatService:
                 "one chat turn cannot control more than one browser session"
             )
         browser_session_id = next(iter(browser_session_ids), None)
-        tools_enabled = request.tools_enabled or bool(mcp_profiles) or bool(browser_session_id)
+        tools_enabled = (
+            request.tools_enabled or bool(mcp_profiles) or bool(browser_session_id)
+        )
         if tools_enabled:
             if engagement_id is None:
                 raise ChatConfigurationError(

@@ -100,7 +100,9 @@ class BrowserTrafficRecordRequest(NebulaModel):
     tab_id: str = Field(min_length=1, max_length=200)
     method: str = Field(pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
     url: str = Field(min_length=1, max_length=16_384)
-    protocol: Literal["http/1.0", "http/1.1", "h2", "h3", "websocket", "unknown"] = "unknown"
+    protocol: Literal["http/1.0", "http/1.1", "h2", "h3", "websocket", "unknown"] = (
+        "unknown"
+    )
     status_code: int | None = Field(default=None, ge=100, le=999)
     request_headers: dict[str, str] = Field(default_factory=dict)
     response_headers: dict[str, str] = Field(default_factory=dict)
@@ -119,7 +121,10 @@ class BrowserTrafficRecordRequest(NebulaModel):
     def headers_are_bounded(cls, value: dict[str, str]) -> dict[str, str]:
         if len(value) > MAX_HEADERS:
             raise ValueError(f"browser traffic permits at most {MAX_HEADERS} headers")
-        if any(len(name) > MAX_HEADER_NAME or len(item) > MAX_HEADER_VALUE for name, item in value.items()):
+        if any(
+            len(name) > MAX_HEADER_NAME or len(item) > MAX_HEADER_VALUE
+            for name, item in value.items()
+        ):
             raise ValueError("browser traffic header name or value is too large")
         return value
 
@@ -197,7 +202,9 @@ def redact_browser_headers(headers: dict[str, str]) -> dict[str, str]:
     return redacted
 
 
-def _action_digest(request: BrowserActionProposalRequest, session: BrowserSession, scope: ScopePolicy) -> str:
+def _action_digest(
+    request: BrowserActionProposalRequest, session: BrowserSession, scope: ScopePolicy
+) -> str:
     payload = {
         "session_id": session.id,
         "identity_id": session.identity_id,
@@ -209,7 +216,9 @@ def _action_digest(request: BrowserActionProposalRequest, session: BrowserSessio
         "scope_policy_id": scope.id,
         "scope_policy_revision": scope.revision,
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -220,8 +229,12 @@ class BrowserSecurityService:
 
     def workspace(self, engagement_id: str) -> BrowserWorkspace:
         self.store.get(Engagement, engagement_id)
-        identities = self.store.list_entities(BrowserIdentity, engagement_id=engagement_id, limit=1_000)
-        sessions = self.store.list_entities(BrowserSession, engagement_id=engagement_id, limit=1_000)
+        identities = self.store.list_entities(
+            BrowserIdentity, engagement_id=engagement_id, limit=1_000
+        )
+        sessions = self.store.list_entities(
+            BrowserSession, engagement_id=engagement_id, limit=1_000
+        )
         if not identities:
             identity = BrowserIdentity(
                 engagement_id=engagement_id,
@@ -246,53 +259,85 @@ class BrowserSecurityService:
         return BrowserWorkspace(
             identities=identities,
             sessions=sessions,
-            traffic=self.store.list_entities(BrowserTrafficExchange, engagement_id=engagement_id, limit=1_000),
-            frames=self.store.list_entities(BrowserWebSocketFrame, engagement_id=engagement_id, limit=1_000),
-            actions=self.store.list_entities(BrowserAction, engagement_id=engagement_id, limit=1_000),
-            handoffs=self.store.list_entities(BrowserHandoff, engagement_id=engagement_id, limit=1_000),
+            traffic=self.store.list_entities(
+                BrowserTrafficExchange, engagement_id=engagement_id, limit=1_000
+            ),
+            frames=self.store.list_entities(
+                BrowserWebSocketFrame, engagement_id=engagement_id, limit=1_000
+            ),
+            actions=self.store.list_entities(
+                BrowserAction, engagement_id=engagement_id, limit=1_000
+            ),
+            handoffs=self.store.list_entities(
+                BrowserHandoff, engagement_id=engagement_id, limit=1_000
+            ),
         )
 
-    def create_identity(self, engagement_id: str, request: BrowserIdentityCreateRequest, actor_id: str) -> BrowserIdentity:
+    def create_identity(
+        self, engagement_id: str, request: BrowserIdentityCreateRequest, actor_id: str
+    ) -> BrowserIdentity:
         self.store.get(Engagement, engagement_id)
         identity = BrowserIdentity(engagement_id=engagement_id, **request.model_dump())
         return self._create(identity, "browser_identity.created", actor_id)
 
-    def create_session(self, engagement_id: str, request: BrowserSessionCreateRequest, actor_id: str) -> BrowserSession:
+    def create_session(
+        self, engagement_id: str, request: BrowserSessionCreateRequest, actor_id: str
+    ) -> BrowserSession:
         identity = self._owned(BrowserIdentity, request.identity_id, engagement_id)
         if identity.revoked_at is not None:
-            raise BrowserWorkflowError("revoked browser identities cannot start sessions")
+            raise BrowserWorkflowError(
+                "revoked browser identities cannot start sessions"
+            )
         session = BrowserSession(engagement_id=engagement_id, **request.model_dump())
         return self._create(session, "browser_session.created", actor_id)
 
-    def sync_session(self, session_id: str, request: BrowserSessionSyncRequest) -> BrowserSession:
+    def sync_session(
+        self, session_id: str, request: BrowserSessionSyncRequest
+    ) -> BrowserSession:
         session = self.store.get(BrowserSession, session_id)
         if session.status != BrowserSessionStatus.ACTIVE:
-            raise BrowserWorkflowError("only active browser sessions can synchronize tabs")
-        candidate = session.model_copy(update={"tabs": request.tabs, "active_tab_id": request.active_tab_id})
+            raise BrowserWorkflowError(
+                "only active browser sessions can synchronize tabs"
+            )
+        candidate = session.model_copy(
+            update={"tabs": request.tabs, "active_tab_id": request.active_tab_id}
+        )
         BrowserSession.model_validate(candidate.model_dump())
         updated, _ = self.store.update_with_operation_event(
             BrowserSession,
             session.id,
-            {"tabs": request.tabs, "active_tab_id": request.active_tab_id, "device_owner": request.device_owner, "last_seen_at": utc_now()},
+            {
+                "tabs": request.tabs,
+                "active_tab_id": request.active_tab_id,
+                "device_owner": request.device_owner,
+                "last_seen_at": utc_now(),
+            },
             expected_revision=request.expected_revision,
             operation_id=session.id,
             operation_kind="browser_session",
             engagement_id=session.engagement_id,
             event_type="browser_session.tabs_synced",
-            event_payload={"tab_count": len(request.tabs), "active_tab_id": request.active_tab_id},
+            event_payload={
+                "tab_count": len(request.tabs),
+                "active_tab_id": request.active_tab_id,
+            },
             actor_id=request.device_owner,
         )
         return updated
 
-    def update_capture_settings(self, session_id: str, request: BrowserCaptureSettingsRequest, actor_id: str) -> BrowserSession:
+    def update_capture_settings(
+        self, session_id: str, request: BrowserCaptureSettingsRequest, actor_id: str
+    ) -> BrowserSession:
         session = self.store.get(BrowserSession, session_id)
-        candidate = session.model_copy(update={
-            "capture_mode": request.capture_mode,
-            "proxy_enabled": request.proxy_enabled,
-            "interception_enabled": request.interception_enabled,
-            "upstream_proxy_enabled": request.upstream_proxy_enabled,
-            "upstream_proxy_url": request.upstream_proxy_url,
-        })
+        candidate = session.model_copy(
+            update={
+                "capture_mode": request.capture_mode,
+                "proxy_enabled": request.proxy_enabled,
+                "interception_enabled": request.interception_enabled,
+                "upstream_proxy_enabled": request.upstream_proxy_enabled,
+                "upstream_proxy_url": request.upstream_proxy_url,
+            }
+        )
         BrowserSession.model_validate(candidate.model_dump())
         updated, _ = self.store.update_with_operation_event(
             BrowserSession,
@@ -319,16 +364,26 @@ class BrowserSecurityService:
         )
         return updated
 
-    def record_traffic(self, session_id: str, request: BrowserTrafficRecordRequest, actor_id: str) -> BrowserTrafficExchange:
+    def record_traffic(
+        self, session_id: str, request: BrowserTrafficRecordRequest, actor_id: str
+    ) -> BrowserTrafficExchange:
         session = self.store.get(BrowserSession, session_id)
         if session.status != BrowserSessionStatus.ACTIVE:
-            raise BrowserWorkflowError("traffic can be recorded only for an active browser session")
+            raise BrowserWorkflowError(
+                "traffic can be recorded only for an active browser session"
+            )
         if request.tab_id not in {tab.id for tab in session.tabs}:
-            raise BrowserWorkflowError("traffic tab does not belong to the browser session")
+            raise BrowserWorkflowError(
+                "traffic tab does not belong to the browser session"
+            )
         scope = self._scope(session.engagement_id)
         self._require_in_scope(scope, request.url, "browser.capture", RiskClass.PASSIVE)
-        if session.capture_mode != BrowserCaptureMode.BODIES and (request.request_body_artifact_id or request.response_body_artifact_id):
-            raise BrowserWorkflowError("body artifacts require explicit body capture mode")
+        if session.capture_mode != BrowserCaptureMode.BODIES and (
+            request.request_body_artifact_id or request.response_body_artifact_id
+        ):
+            raise BrowserWorkflowError(
+                "body artifacts require explicit body capture mode"
+            )
         exchange = BrowserTrafficExchange(
             engagement_id=session.engagement_id,
             session_id=session.id,
@@ -379,18 +434,37 @@ class BrowserSecurityService:
         )
         return self._create(frame, "browser_websocket_frame.recorded", actor_id)
 
-    def propose_action(self, session_id: str, request: BrowserActionProposalRequest) -> BrowserAction:
+    def propose_action(
+        self, session_id: str, request: BrowserActionProposalRequest
+    ) -> BrowserAction:
         session = self.store.get(BrowserSession, session_id)
         if session.status != BrowserSessionStatus.ACTIVE:
             raise BrowserWorkflowError("actions require an active browser session")
         if request.tab_id not in {tab.id for tab in session.tabs}:
-            raise BrowserWorkflowError("action tab does not belong to the browser session")
+            raise BrowserWorkflowError(
+                "action tab does not belong to the browser session"
+            )
         scope = self._scope(session.engagement_id)
-        self._require_in_scope(scope, request.page_url, f"browser.{request.kind.value}", RiskClass.PASSIVE)
-        if request.kind not in {BrowserActionKind.NAVIGATE, BrowserActionKind.SCREENSHOT, BrowserActionKind.REPLAY} and not request.locator:
+        self._require_in_scope(
+            scope, request.page_url, f"browser.{request.kind.value}", RiskClass.PASSIVE
+        )
+        if (
+            request.kind
+            not in {
+                BrowserActionKind.NAVIGATE,
+                BrowserActionKind.SCREENSHOT,
+                BrowserActionKind.REPLAY,
+            }
+            and not request.locator
+        ):
             raise BrowserWorkflowError("element actions require a semantic locator")
-        if len(json.dumps(request.locator)) > 4_000 or len(json.dumps(request.arguments)) > 8_000:
-            raise BrowserWorkflowError("browser action locator or arguments are too large")
+        if (
+            len(json.dumps(request.locator)) > 4_000
+            or len(json.dumps(request.arguments)) > 8_000
+        ):
+            raise BrowserWorkflowError(
+                "browser action locator or arguments are too large"
+            )
         if request.kind == BrowserActionKind.FILL:
             if set(request.arguments) != {"non_secret_text"}:
                 raise BrowserWorkflowError(
@@ -410,16 +484,38 @@ class BrowserSecurityService:
             headers = request.arguments.get("headers", {})
             body = request.arguments.get("body", "")
             if not isinstance(target, str) or not isinstance(method, str):
-                raise BrowserWorkflowError("replay actions require URL and method arguments")
-            if method.upper() not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}:
+                raise BrowserWorkflowError(
+                    "replay actions require URL and method arguments"
+                )
+            if method.upper() not in {
+                "GET",
+                "HEAD",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS",
+            }:
                 raise BrowserWorkflowError("replay method is not supported")
-            if not isinstance(headers, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in headers.items()):
+            if not isinstance(headers, dict) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in headers.items()
+            ):
                 raise BrowserWorkflowError("replay headers must be a string map")
-            if any(any(fragment in key.lower() for fragment in SENSITIVE_HEADER_FRAGMENTS) for key in headers):
-                raise BrowserWorkflowError("replay headers cannot contain reusable secrets")
+            if any(
+                any(fragment in key.lower() for fragment in SENSITIVE_HEADER_FRAGMENTS)
+                for key in headers
+            ):
+                raise BrowserWorkflowError(
+                    "replay headers cannot contain reusable secrets"
+                )
             if not isinstance(body, str) or len(body.encode("utf-8")) > 64 * 1024:
-                raise BrowserWorkflowError("replay body must be a string no larger than 64 KiB")
-            self._require_in_scope(scope, target, "browser.replay", RiskClass.ACTIVE_SCAN)
+                raise BrowserWorkflowError(
+                    "replay body must be a string no larger than 64 KiB"
+                )
+            self._require_in_scope(
+                scope, target, "browser.replay", RiskClass.ACTIVE_SCAN
+            )
         action = BrowserAction(
             engagement_id=session.engagement_id,
             session_id=session.id,
@@ -432,34 +528,69 @@ class BrowserSecurityService:
         )
         return self._create(action, "browser_action.proposed", request.proposed_by)
 
-    def decide_action(self, action_id: str, request: BrowserActionDecisionRequest) -> BrowserAction:
+    def decide_action(
+        self, action_id: str, request: BrowserActionDecisionRequest
+    ) -> BrowserAction:
         action = self.store.get(BrowserAction, action_id)
         if action.status != BrowserActionStatus.PROPOSED:
             raise BrowserWorkflowError("only proposed browser actions can be decided")
         if utc_now() >= action.expires_at:
-            return self._transition_action(action, request.expected_revision, BrowserActionStatus.EXPIRED, "browser_action.expired", request.operator_id)
-        status = BrowserActionStatus.APPROVED if request.decision == "approve" else BrowserActionStatus.REJECTED
+            return self._transition_action(
+                action,
+                request.expected_revision,
+                BrowserActionStatus.EXPIRED,
+                "browser_action.expired",
+                request.operator_id,
+            )
+        status = (
+            BrowserActionStatus.APPROVED
+            if request.decision == "approve"
+            else BrowserActionStatus.REJECTED
+        )
         changes: dict[str, Any] = {"status": status}
         if status == BrowserActionStatus.APPROVED:
-            changes.update({"approved_by": request.operator_id, "approved_at": utc_now()})
+            changes.update(
+                {"approved_by": request.operator_id, "approved_at": utc_now()}
+            )
         updated, _ = self.store.update_with_operation_event(
-            BrowserAction, action.id, changes,
+            BrowserAction,
+            action.id,
+            changes,
             expected_revision=request.expected_revision,
-            operation_id=action.id, operation_kind="browser_action", engagement_id=action.engagement_id,
-            event_type=f"browser_action.{status.value}", event_payload={"action_sha256": action.action_sha256}, actor_id=request.operator_id,
+            operation_id=action.id,
+            operation_kind="browser_action",
+            engagement_id=action.engagement_id,
+            event_type=f"browser_action.{status.value}",
+            event_payload={"action_sha256": action.action_sha256},
+            actor_id=request.operator_id,
         )
         return updated
 
-    def start_action(self, action_id: str, request: BrowserActionExecutionRequest) -> BrowserAction:
+    def start_action(
+        self, action_id: str, request: BrowserActionExecutionRequest
+    ) -> BrowserAction:
         action = self.store.get(BrowserAction, action_id)
         if action.status != BrowserActionStatus.APPROVED:
             raise BrowserWorkflowError("only approved browser actions can execute")
         if utc_now() >= action.expires_at:
-            return self._transition_action(action, request.expected_revision, BrowserActionStatus.EXPIRED, "browser_action.expired", request.device_id)
+            return self._transition_action(
+                action,
+                request.expected_revision,
+                BrowserActionStatus.EXPIRED,
+                "browser_action.expired",
+                request.device_id,
+            )
         scope = self._scope(action.engagement_id)
-        if scope.id != action.scope_policy_id or scope.revision != action.scope_policy_revision:
-            raise BrowserWorkflowError("Project scope changed after approval; propose the action again")
-        self._require_in_scope(scope, action.page_url, f"browser.{action.kind.value}", RiskClass.PASSIVE)
+        if (
+            scope.id != action.scope_policy_id
+            or scope.revision != action.scope_policy_revision
+        ):
+            raise BrowserWorkflowError(
+                "Project scope changed after approval; propose the action again"
+            )
+        self._require_in_scope(
+            scope, action.page_url, f"browser.{action.kind.value}", RiskClass.PASSIVE
+        )
         if action.kind == BrowserActionKind.NAVIGATE:
             target = action.arguments.get("url")
             if not isinstance(target, str):
@@ -469,16 +600,30 @@ class BrowserSecurityService:
             target = action.arguments.get("url")
             if not isinstance(target, str):
                 raise BrowserWorkflowError("approved replay action lost its URL")
-            self._require_in_scope(scope, target, "browser.replay", RiskClass.ACTIVE_SCAN)
-        return self._transition_action(action, request.expected_revision, BrowserActionStatus.EXECUTING, "browser_action.executing", request.device_id)
+            self._require_in_scope(
+                scope, target, "browser.replay", RiskClass.ACTIVE_SCAN
+            )
+        return self._transition_action(
+            action,
+            request.expected_revision,
+            BrowserActionStatus.EXECUTING,
+            "browser_action.executing",
+            request.device_id,
+        )
 
-    def finish_action(self, action_id: str, request: BrowserActionResultRequest) -> BrowserAction:
+    def finish_action(
+        self, action_id: str, request: BrowserActionResultRequest
+    ) -> BrowserAction:
         action = self.store.get(BrowserAction, action_id)
         if action.status != BrowserActionStatus.EXECUTING:
             raise BrowserWorkflowError("only executing browser actions can finish")
         for evidence_id in request.evidence_ids:
             self._owned(Evidence, evidence_id, action.engagement_id)
-        status = BrowserActionStatus.COMPLETE if request.state == "complete" else BrowserActionStatus.FAILED
+        status = (
+            BrowserActionStatus.COMPLETE
+            if request.state == "complete"
+            else BrowserActionStatus.FAILED
+        )
         changes = {
             "status": status,
             "completed_at": utc_now(),
@@ -487,55 +632,104 @@ class BrowserSecurityService:
             "error": request.error,
         }
         updated, _ = self.store.update_with_operation_event(
-            BrowserAction, action.id, changes,
+            BrowserAction,
+            action.id,
+            changes,
             expected_revision=request.expected_revision,
-            operation_id=action.id, operation_kind="browser_action", engagement_id=action.engagement_id,
-            event_type=f"browser_action.{status.value}", event_payload={"evidence_ids": request.evidence_ids}, actor_id=request.device_id,
+            operation_id=action.id,
+            operation_kind="browser_action",
+            engagement_id=action.engagement_id,
+            event_type=f"browser_action.{status.value}",
+            event_payload={"evidence_ids": request.evidence_ids},
+            actor_id=request.device_id,
         )
         return updated
 
-    def create_handoff(self, session_id: str, request: BrowserHandoffCreateRequest) -> BrowserHandoff:
+    def create_handoff(
+        self, session_id: str, request: BrowserHandoffCreateRequest
+    ) -> BrowserHandoff:
         session = self.store.get(BrowserSession, session_id)
         if session.status != BrowserSessionStatus.ACTIVE:
             raise BrowserWorkflowError("handoffs require an active browser session")
         if request.command == "navigate" and request.url:
-            self._require_in_scope(self._scope(session.engagement_id), request.url, "browser.navigate", RiskClass.PASSIVE)
-        if request.command == "focus_tab" and request.tab_id not in {tab.id for tab in session.tabs}:
-            raise BrowserWorkflowError("handoff tab does not belong to the browser session")
+            self._require_in_scope(
+                self._scope(session.engagement_id),
+                request.url,
+                "browser.navigate",
+                RiskClass.PASSIVE,
+            )
+        if request.command == "focus_tab" and request.tab_id not in {
+            tab.id for tab in session.tabs
+        }:
+            raise BrowserWorkflowError(
+                "handoff tab does not belong to the browser session"
+            )
         handoff = BrowserHandoff(
             engagement_id=session.engagement_id,
             session_id=session.id,
             expires_at=utc_now() + HANDOFF_LIFETIME,
             **request.model_dump(),
         )
-        return self._create(handoff, "browser_handoff.queued", request.requested_by_device_id)
+        return self._create(
+            handoff, "browser_handoff.queued", request.requested_by_device_id
+        )
 
-    def claim_handoff(self, handoff_id: str, request: BrowserHandoffClaimRequest) -> BrowserHandoff:
+    def claim_handoff(
+        self, handoff_id: str, request: BrowserHandoffClaimRequest
+    ) -> BrowserHandoff:
         handoff = self.store.get(BrowserHandoff, handoff_id)
         if handoff.status != BrowserHandoffStatus.QUEUED:
             raise BrowserWorkflowError("only queued browser handoffs can be claimed")
         if utc_now() >= handoff.expires_at:
-            return self._transition_handoff(handoff, request.expected_revision, BrowserHandoffStatus.EXPIRED, request.desktop_device_id)
+            return self._transition_handoff(
+                handoff,
+                request.expected_revision,
+                BrowserHandoffStatus.EXPIRED,
+                request.desktop_device_id,
+            )
         updated, _ = self.store.update_with_operation_event(
-            BrowserHandoff, handoff.id,
-            {"status": BrowserHandoffStatus.CLAIMED, "claimed_by_device_id": request.desktop_device_id, "claimed_at": utc_now()},
+            BrowserHandoff,
+            handoff.id,
+            {
+                "status": BrowserHandoffStatus.CLAIMED,
+                "claimed_by_device_id": request.desktop_device_id,
+                "claimed_at": utc_now(),
+            },
             expected_revision=request.expected_revision,
-            operation_id=handoff.id, operation_kind="browser_handoff", engagement_id=handoff.engagement_id,
-            event_type="browser_handoff.claimed", event_payload={}, actor_id=request.desktop_device_id,
+            operation_id=handoff.id,
+            operation_kind="browser_handoff",
+            engagement_id=handoff.engagement_id,
+            event_type="browser_handoff.claimed",
+            event_payload={},
+            actor_id=request.desktop_device_id,
         )
         return updated
 
-    def finish_handoff(self, handoff_id: str, request: BrowserHandoffResultRequest) -> BrowserHandoff:
+    def finish_handoff(
+        self, handoff_id: str, request: BrowserHandoffResultRequest
+    ) -> BrowserHandoff:
         handoff = self.store.get(BrowserHandoff, handoff_id)
-        if handoff.status != BrowserHandoffStatus.CLAIMED or handoff.claimed_by_device_id != request.desktop_device_id:
+        if (
+            handoff.status != BrowserHandoffStatus.CLAIMED
+            or handoff.claimed_by_device_id != request.desktop_device_id
+        ):
             raise BrowserWorkflowError("handoff is not claimed by this desktop")
-        status = BrowserHandoffStatus.COMPLETE if request.state == "complete" else BrowserHandoffStatus.FAILED
+        status = (
+            BrowserHandoffStatus.COMPLETE
+            if request.state == "complete"
+            else BrowserHandoffStatus.FAILED
+        )
         updated, _ = self.store.update_with_operation_event(
-            BrowserHandoff, handoff.id,
+            BrowserHandoff,
+            handoff.id,
             {"status": status, "completed_at": utc_now(), "error": request.error},
             expected_revision=request.expected_revision,
-            operation_id=handoff.id, operation_kind="browser_handoff", engagement_id=handoff.engagement_id,
-            event_type=f"browser_handoff.{status.value}", event_payload={}, actor_id=request.desktop_device_id,
+            operation_id=handoff.id,
+            operation_kind="browser_handoff",
+            engagement_id=handoff.engagement_id,
+            event_type=f"browser_handoff.{status.value}",
+            event_payload={},
+            actor_id=request.desktop_device_id,
         )
         return updated
 
@@ -548,8 +742,18 @@ class BrowserSecurityService:
             raise BrowserWorkflowError("Project scope ownership is invalid")
         return scope
 
-    def _require_in_scope(self, scope: ScopePolicy, target: str, action: str, risk: RiskClass) -> None:
-        decision = self.policy.evaluate(scope, PolicyRequest(tool_name="security_browser", risk_class=risk, target=target, action=action))
+    def _require_in_scope(
+        self, scope: ScopePolicy, target: str, action: str, risk: RiskClass
+    ) -> None:
+        decision = self.policy.evaluate(
+            scope,
+            PolicyRequest(
+                tool_name="security_browser",
+                risk_class=risk,
+                target=target,
+                action=action,
+            ),
+        )
         if decision.effect == PolicyEffect.DENY:
             raise BrowserWorkflowError(decision.reason)
 
@@ -572,21 +776,52 @@ class BrowserSecurityService:
         )
         return created
 
-    def _transition_action(self, action: BrowserAction, revision: int, status: BrowserActionStatus, event_type: str, actor_id: str) -> BrowserAction:
+    def _transition_action(
+        self,
+        action: BrowserAction,
+        revision: int,
+        status: BrowserActionStatus,
+        event_type: str,
+        actor_id: str,
+    ) -> BrowserAction:
         updated, _ = self.store.update_with_operation_event(
-            BrowserAction, action.id, {"status": status}, expected_revision=revision,
-            operation_id=action.id, operation_kind="browser_action", engagement_id=action.engagement_id,
-            event_type=event_type, event_payload={"action_sha256": action.action_sha256}, actor_id=actor_id,
+            BrowserAction,
+            action.id,
+            {"status": status},
+            expected_revision=revision,
+            operation_id=action.id,
+            operation_kind="browser_action",
+            engagement_id=action.engagement_id,
+            event_type=event_type,
+            event_payload={"action_sha256": action.action_sha256},
+            actor_id=actor_id,
         )
         return updated
 
-    def _transition_handoff(self, handoff: BrowserHandoff, revision: int, status: BrowserHandoffStatus, actor_id: str) -> BrowserHandoff:
+    def _transition_handoff(
+        self,
+        handoff: BrowserHandoff,
+        revision: int,
+        status: BrowserHandoffStatus,
+        actor_id: str,
+    ) -> BrowserHandoff:
         updated, _ = self.store.update_with_operation_event(
-            BrowserHandoff, handoff.id, {"status": status}, expected_revision=revision,
-            operation_id=handoff.id, operation_kind="browser_handoff", engagement_id=handoff.engagement_id,
-            event_type=f"browser_handoff.{status.value}", event_payload={}, actor_id=actor_id,
+            BrowserHandoff,
+            handoff.id,
+            {"status": status},
+            expected_revision=revision,
+            operation_id=handoff.id,
+            operation_kind="browser_handoff",
+            engagement_id=handoff.engagement_id,
+            event_type=f"browser_handoff.{status.value}",
+            event_payload={},
+            actor_id=actor_id,
         )
         return updated
 
 
-__all__ = [name for name in globals() if name.startswith("Browser") or name == "redact_browser_headers"]
+__all__ = [
+    name
+    for name in globals()
+    if name.startswith("Browser") or name == "redact_browser_headers"
+]

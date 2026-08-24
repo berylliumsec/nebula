@@ -252,7 +252,8 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         } else {
           setError(`${errorMessage(caught)} Project scope was not changed; right-click the page to retry.`);
         }
-      } catch {
+      } catch (refreshCaught) {
+        void logCaughtDiagnostic("interface.workbench_browser.scope_refresh_failed", "Project scope could not be refreshed after an Add to scope conflict.", refreshCaught, "workbench_browser");
         setError(`${errorMessage(caught)} Project scope was not changed. Reconnect to Core, then right-click the page to retry.`);
       }
     } finally {
@@ -424,7 +425,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           await api.finishSecurityBrowserHandoff(claimed, "complete", undefined, "desktop");
           setNotice({ kind: "info", message: "Paired-device browser handoff completed on this desktop." });
         } catch (caught) {
-          await api.finishSecurityBrowserHandoff(claimed, "failed", errorMessage(caught), "desktop").catch(() => undefined);
+          void logCaughtDiagnostic("interface.security_browser.handoff_execution_failed", "A claimed browser handoff could not be completed.", caught, "workbench_browser");
+          await api.finishSecurityBrowserHandoff(claimed, "failed", errorMessage(caught), "desktop").catch((receiptCaught) => {
+            void logCaughtDiagnostic("interface.security_browser.handoff_receipt_failed", "A failed browser handoff could not be recorded.", receiptCaught, "workbench_browser");
+          });
           setWorkspaceError(errorMessage(caught));
         }
         await refreshWorkspace();
@@ -800,6 +804,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     try {
       await workbenchBrowser.captureContext(activeTab.id, projectId, requestId);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.evidence_capture_failed", "The current browser page could not be captured for Evidence.", caught, "workbench_browser");
       captureRef.current = undefined;
       setCapturingContext(false);
       setError(`${errorMessage(caught)} Reload the page and try again.`);
@@ -880,6 +885,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       setWorkspace((current) => current ? { ...current, sessions: [...current.sessions, session] } : current);
       await selectResearchSession(session);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.identity_session_select_failed", "A browser session could not be created for the selected identity.", caught, "workbench_browser");
       setWorkspaceError(errorMessage(caught));
     } finally {
       setIdentityBusy(false);
@@ -907,6 +913,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       setIdentityName("");
       await selectResearchSession(session);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.identity_create_failed", "A browser identity and its initial session could not be created.", caught, "workbench_browser");
       setWorkspaceError(errorMessage(caught));
     } finally {
       setIdentityBusy(false);
@@ -929,6 +936,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
       } : current);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.capture_mode_update_failed", "The browser capture detail could not be updated.", caught, "workbench_browser");
       setWorkspaceError(errorMessage(caught));
     }
   };
@@ -938,7 +946,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     if (proxyEnabled) {
       let path: string;
       try { path = await workbenchBrowser.revealProxyCa(projectId); }
-      catch (caught) { setWorkspaceError(errorMessage(caught)); return; }
+      catch (caught) {
+        void logCaughtDiagnostic("interface.security_browser.proxy_ca_reveal_failed", "The Project capture proxy CA could not be revealed.", caught, "workbench_browser");
+        setWorkspaceError(errorMessage(caught)); return;
+      }
       const approved = await confirm({
         title: "Enable Project capture proxy?",
         message: <>Nebula revealed <code>{path}</code>. Trust this Project-local CA in the operating system before enabling HTTPS capture. Its private key remains in protected Nebula application data. Enabling the proxy recreates open tabs in the same identity.</>,
@@ -965,6 +976,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       } : current);
       setNotice({ kind: "info", message: proxyEnabled ? "Capture proxy enabled. Reopen the tab to begin HTTP/2 and WebSocket capture." : "Capture proxy disabled. Reopen the tab to browse directly." });
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.proxy_update_failed", "The browser capture proxy setting could not be updated.", caught, "workbench_browser");
       setWorkspaceError(errorMessage(caught));
     }
   };
@@ -1041,6 +1053,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       setResearchView("actions");
       setNotice({ kind: "info", message: "Replay proposal is ready for exact operator approval. No request has been sent." });
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.replay_proposal_failed", "The edited browser request could not be prepared for approval.", caught, "workbench_browser");
       setWorkspaceError(errorMessage(caught));
     } finally {
       setReplayBusy(false);
@@ -1080,7 +1093,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       </li>)}</ol> : <div className="browser-research-empty"><Network size={20} /><strong>No captured traffic</strong><span>Traffic appears here when the native interception proxy is available and capture is enabled.</span></div>}
       {replayExchange && <form className="browser-replay-editor" onSubmit={proposeReplay}><header><strong>Edit request · no request sent yet</strong><button type="button" aria-label="Close request editor" onClick={() => setReplayExchange(undefined)}><X size={14} /></button></header><label>Method<input value={replayMethod} maxLength={16} onChange={(event) => setReplayMethod(event.target.value.toUpperCase())} /></label><label>URL<input value={replayUrl} maxLength={16384} onChange={(event) => setReplayUrl(event.target.value)} /></label><label>Headers JSON<textarea value={replayHeaders} rows={5} onChange={(event) => setReplayHeaders(event.target.value)} /></label><label>Body<textarea value={replayBody} rows={5} maxLength={65536} onChange={(event) => setReplayBody(event.target.value)} /></label><p>Cookies remain inside the selected identity and are attached by the system webview. Reusable secret headers are never copied into this editor.</p><button className="button primary" type="submit" disabled={replayBusy || !replayUrl.trim()}>{replayBusy ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />} Create approval proposal</button></form>}
     </div> : researchView === "actions" ? <div className="browser-action-list">
-      {(workspace?.actions.filter((action) => action.sessionId === activeSession?.id).length ?? 0) > 0 ? workspace?.actions.filter((action) => action.sessionId === activeSession?.id).map((action) => <article key={action.id}><header><span className={`browser-action-status ${action.status}`}>{action.status.replace("_", " ")}</span><strong>{action.kind}</strong><code>{action.actionSha256.slice(0, 12)}</code></header><p>{action.proposal}</p><small>{action.pageUrl} · scope r{action.scopePolicyRevision}</small>{action.status === "proposed" && <div><button className="button secondary" type="button" onClick={() => void api.decideSecurityBrowserAction(action, "reject", operatorId).then(refreshWorkspace).catch((caught) => setWorkspaceError(errorMessage(caught)))}>Reject</button><button className="button primary" type="button" onClick={() => void api.decideSecurityBrowserAction(action, "approve", operatorId).then(refreshWorkspace).catch((caught) => setWorkspaceError(errorMessage(caught)))}>Approve action</button></div>}{action.status === "approved" && <div><button className="button primary" type="button" disabled={!desktop || actionExecutionRef.current.size > 0} onClick={() => void executeApprovedAction(action)}>Execute once</button></div>}</article>) : <div className="browser-research-empty"><Sparkles size={20} /><strong>No browser action proposals</strong><span>AI suggestions are inert until they appear here and you approve them.</span></div>}
+      {(workspace?.actions.filter((action) => action.sessionId === activeSession?.id).length ?? 0) > 0 ? workspace?.actions.filter((action) => action.sessionId === activeSession?.id).map((action) => <article key={action.id}><header><span className={`browser-action-status ${action.status}`}>{action.status.replace("_", " ")}</span><strong>{action.kind}</strong><code>{action.actionSha256.slice(0, 12)}</code></header><p>{action.proposal}</p><small>{action.pageUrl} · scope r{action.scopePolicyRevision}</small>{action.status === "proposed" && <div><button className="button secondary" type="button" onClick={() => void api.decideSecurityBrowserAction(action, "reject", operatorId).then(refreshWorkspace).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.action_reject_failed", "The browser action could not be rejected.", caught, "workbench_browser"); setWorkspaceError(errorMessage(caught)); })}>Reject</button><button className="button primary" type="button" onClick={() => void api.decideSecurityBrowserAction(action, "approve", operatorId).then(refreshWorkspace).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.action_approve_failed", "The browser action could not be approved.", caught, "workbench_browser"); setWorkspaceError(errorMessage(caught)); })}>Approve action</button></div>}{action.status === "approved" && <div><button className="button primary" type="button" disabled={!desktop || actionExecutionRef.current.size > 0} onClick={() => void executeApprovedAction(action)}>Execute once</button></div>}</article>) : <div className="browser-research-empty"><Sparkles size={20} /><strong>No browser action proposals</strong><span>AI suggestions are inert until they appear here and you approve them.</span></div>}
     </div> : researchView === "identities" ? <div className="browser-identity-workbench">
       <label>Active identity<select value={activeIdentity?.id ?? ""} disabled={identityBusy} onChange={(event) => void selectIdentity(event.target.value)}>{workspace?.identities.filter((identity) => !identity.revokedAt).map((identity) => <option key={identity.id} value={identity.id}>{identity.name}{identity.isDefault ? " · default" : ""}</option>)}</select></label>
       <p>Each identity has a separate cookie jar, cache, and site storage partition. Switching identities closes the visible native tabs before restoring that identity's durable session.</p>
@@ -1090,9 +1103,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       <label>Research session<select value={activeSession?.id ?? ""} onChange={(event) => { const next = workspace?.sessions.find((session) => session.id === event.target.value); if (next) void selectResearchSession(next); }}>{workspace?.sessions.map((session) => <option key={session.id} value={session.id}>{session.name} · {session.status}</option>)}</select></label>
       <label>Capture detail<select value={activeSession?.captureMode === "metadata" ? "metadata" : "headers"} onChange={(event) => void updateCaptureMode(event.target.value as SecurityBrowserSession["captureMode"])}><option value="metadata">Metadata only</option><option value="headers">Redacted headers</option></select></label>
       <dl><div><dt>Durable tabs</dt><dd>{activeSession?.tabs.length ?? 0}</dd></div><div><dt>Device owner</dt><dd>{activeSession?.deviceOwner ?? "Unclaimed"}</dd></div><div><dt>Capture proxy</dt><dd>{capabilities?.interceptionProxy ? "HTTP history enabled when CA is trusted" : "Native proxy unavailable"}</dd></div><div><dt>HTTP/2 · WebSocket</dt><dd>{capabilities?.http2Capture && capabilities.websocketCapture ? "Captured" : "Unavailable in this build"}</dd></div></dl>
-      {desktop && capabilities?.interceptionProxy && <div className="browser-proxy-controls"><button className={activeSession?.proxyEnabled ? "button danger" : "button primary"} type="button" onClick={() => void setProxyEnabled(!activeSession?.proxyEnabled)}>{activeSession?.proxyEnabled ? "Disable capture proxy" : "Install CA and enable proxy"}</button><button className="button secondary" type="button" onClick={() => void workbenchBrowser.revealProxyCa(projectId).then((path) => setNotice({ kind: "info", message: `Project CA: ${path}` })).catch((caught) => setWorkspaceError(errorMessage(caught)))}>Reveal Project CA</button></div>}
-      {desktop && capabilities?.devtools && <button className="button secondary" type="button" disabled={!activeTab?.created} onClick={() => activeTab && void workbenchBrowser.openDevtools(activeTab.id, projectId).catch((caught) => setError(errorMessage(caught)))}><Bug size={14} /> Open DevTools</button>}
-      {!desktop && activeSession && activeTab?.url && <button className="button primary" type="button" onClick={() => void api.createSecurityBrowserHandoff(activeSession.id, { requestedByDeviceId: "paired-browser", command: "navigate", tabId: activeTab.id, url: activeTab.url }).then(() => { setNotice({ kind: "info", message: "Navigation queued for the desktop browser for five minutes." }); return refreshWorkspace(); }).catch((caught) => setWorkspaceError(errorMessage(caught)))}>Send page to desktop</button>}
+      {desktop && capabilities?.interceptionProxy && <div className="browser-proxy-controls"><button className={activeSession?.proxyEnabled ? "button danger" : "button primary"} type="button" onClick={() => void setProxyEnabled(!activeSession?.proxyEnabled)}>{activeSession?.proxyEnabled ? "Disable capture proxy" : "Install CA and enable proxy"}</button><button className="button secondary" type="button" onClick={() => void workbenchBrowser.revealProxyCa(projectId).then((path) => setNotice({ kind: "info", message: `Project CA: ${path}` })).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.proxy_ca_reveal_failed", "The Project capture proxy CA could not be revealed.", caught, "workbench_browser"); setWorkspaceError(errorMessage(caught)); })}>Reveal Project CA</button></div>}
+      {desktop && capabilities?.devtools && <button className="button secondary" type="button" disabled={!activeTab?.created} onClick={() => activeTab && void workbenchBrowser.openDevtools(activeTab.id, projectId).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.devtools_open_failed", "Browser DevTools could not be opened.", caught, "workbench_browser"); setError(errorMessage(caught)); })}><Bug size={14} /> Open DevTools</button>}
+      {!desktop && activeSession && activeTab?.url && <button className="button primary" type="button" onClick={() => void api.createSecurityBrowserHandoff(activeSession.id, { requestedByDeviceId: "paired-browser", command: "navigate", tabId: activeTab.id, url: activeTab.url }).then(() => { setNotice({ kind: "info", message: "Navigation queued for the desktop browser for five minutes." }); return refreshWorkspace(); }).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.handoff_create_failed", "A browser navigation handoff could not be queued for the desktop.", caught, "workbench_browser"); setWorkspaceError(errorMessage(caught)); })}>Send page to desktop</button>}
     </div>}
   </aside> : null;
 

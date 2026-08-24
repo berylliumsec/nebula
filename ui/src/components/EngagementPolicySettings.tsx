@@ -24,6 +24,7 @@ export function parseAllowedDomains(value: string): string[] | undefined {
           || url.search || url.hash) return undefined;
         domain = url.hostname;
       } catch {
+        // diagnostic-expected: malformed operator input is returned as inline validation.
         return undefined;
       }
     }

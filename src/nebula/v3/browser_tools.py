@@ -75,7 +75,14 @@ def browser_action_spec(session_id: str) -> ToolSpec:
                 "proposal": {"type": "string", "minLength": 1, "maxLength": 4000},
                 "page_url": {"type": "string", "minLength": 1, "maxLength": 16384},
             },
-            "required": ["tab_id", "kind", "locator", "arguments", "proposal", "page_url"],
+            "required": [
+                "tab_id",
+                "kind",
+                "locator",
+                "arguments",
+                "proposal",
+                "page_url",
+            ],
         },
         output_schema={
             "type": "object",
@@ -121,15 +128,21 @@ class BrowserActionProposalBroker:
         approval: Approval | None = None,
     ) -> ToolExecutionResult:
         if approval is not None:
-            raise InvalidToolArguments("browser proposal execution does not accept tool approval")
+            raise InvalidToolArguments(
+                "browser proposal execution does not accept tool approval"
+            )
         if invocation.tool_name != self.spec.name:
-            raise InvalidToolArguments(f"unknown browser capability: {invocation.tool_name}")
+            raise InvalidToolArguments(
+                f"unknown browser capability: {invocation.tool_name}"
+            )
         if invocation.engagement_id != self.session.engagement_id:
             raise InvalidToolArguments("browser session belongs to another Project")
         if scope.engagement_id != invocation.engagement_id:
             raise InvalidToolArguments("browser scope belongs to another Project")
         errors = sorted(
-            Draft202012Validator(self.spec.input_schema).iter_errors(invocation.arguments),
+            Draft202012Validator(self.spec.input_schema).iter_errors(
+                invocation.arguments
+            ),
             key=lambda item: list(item.path),
         )
         if errors:
@@ -203,8 +216,13 @@ def combine_tool_components(
 ) -> RuntimeToolComponents:
     if primary is None:
         return browser
-    if primary.scope.id != browser.scope.id or primary.scope.revision != browser.scope.revision:
-        raise ValueError("browser and command runtimes resolved different scope revisions")
+    if (
+        primary.scope.id != browser.scope.id
+        or primary.scope.revision != browser.scope.revision
+    ):
+        raise ValueError(
+            "browser and command runtimes resolved different scope revisions"
+        )
     overlap = set(primary.specs).intersection(browser.specs)
     if overlap:
         raise ValueError(f"duplicate browser capabilities: {sorted(overlap)}")
@@ -218,7 +236,9 @@ def combine_tool_components(
         workspace=primary.workspace,
         specs={**primary.specs, **browser.specs},
         runtime_digest="+".join(
-            item for item in [getattr(primary, "runtime_digest", ""), browser.runtime_digest] if item
+            item
+            for item in [getattr(primary, "runtime_digest", ""), browser.runtime_digest]
+            if item
         ),
     )
 

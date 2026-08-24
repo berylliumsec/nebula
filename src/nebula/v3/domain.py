@@ -860,7 +860,10 @@ class BrowserSession(Entity):
         if value is None:
             return None
         parsed = urlsplit(value)
-        if parsed.scheme.lower() not in {"http", "https", "socks5"} or not parsed.hostname:
+        if (
+            parsed.scheme.lower() not in {"http", "https", "socks5"}
+            or not parsed.hostname
+        ):
             raise ValueError("upstream proxy must use http, https, or socks5")
         if parsed.username is not None or parsed.password is not None:
             raise ValueError("upstream proxy credentials require protected storage")
@@ -893,7 +896,9 @@ class BrowserTrafficExchange(Entity):
     identity_id: str = Field(min_length=1, max_length=200)
     method: str = Field(pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
     url: str = Field(min_length=1, max_length=16_384)
-    protocol: Literal["http/1.0", "http/1.1", "h2", "h3", "websocket", "unknown"] = "unknown"
+    protocol: Literal["http/1.0", "http/1.1", "h2", "h3", "websocket", "unknown"] = (
+        "unknown"
+    )
     status_code: int | None = Field(default=None, ge=100, le=999)
     request_headers: dict[str, str] = Field(default_factory=dict)
     response_headers: dict[str, str] = Field(default_factory=dict)
@@ -916,7 +921,10 @@ class BrowserTrafficExchange(Entity):
     @classmethod
     def browser_exchange_url_is_network_only(cls, value: str) -> str:
         parsed = urlsplit(value)
-        if parsed.scheme.lower() not in {"http", "https", "ws", "wss"} or not parsed.hostname:
+        if (
+            parsed.scheme.lower() not in {"http", "https", "ws", "wss"}
+            or not parsed.hostname
+        ):
             raise ValueError("traffic URLs must use http, https, ws, or wss")
         if parsed.username is not None or parsed.password is not None:
             raise ValueError("traffic URLs cannot contain credentials")
