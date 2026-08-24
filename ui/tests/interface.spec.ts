@@ -237,6 +237,7 @@ async function installTruthfulCore(page: Page) {
         allowed_domains: ["example.com"],
         allowed_urls: [],
         allowed_ports: [443],
+        allow_all_targets: false,
         not_before: null,
         not_after: null,
         prohibited_actions: [],
@@ -1403,6 +1404,66 @@ test("host folder picker remains usable as a bounded project workflow", async ({
 
   const accessibility = await new AxeBuilder({ page }).include(".engagement-menu").analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("project scope normalizes root URLs and confirms all-target mode", async ({ page }) => {
+  let durableScope = {
+    ...entity,
+    id: "scope-scratch",
+    engagement_id: "scratch-project",
+    allowed_cidrs: [] as string[],
+    allowed_domains: ["example.com"],
+    allowed_urls: [] as string[],
+    allowed_ports: [443],
+    allow_all_targets: false,
+    not_before: null,
+    not_after: null,
+    prohibited_actions: [] as string[],
+    local_only: true,
+    max_concurrency: 1,
+    grants: [] as unknown[],
+    revision: 3,
+  };
+  await page.context().route("**/api/v1/engagements/scratch-project/scope", async (route) => {
+    if (route.request().method() === "PUT") {
+      const request = route.request().postDataJSON() as typeof durableScope & { expected_revision: number };
+      expect(request.expected_revision).toBe(durableScope.revision);
+      durableScope = {
+        ...durableScope,
+        ...request,
+        allowed_domains: request.allowed_domains.map((value) => new URL(value.includes("://") ? value : `https://${value}`).hostname.toLowerCase()),
+        revision: durableScope.revision + 1,
+      };
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(durableScope) });
+  });
+
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+  const domains = page.getByLabel("Allowed domains");
+  await domains.fill("https://www.Google.com/");
+  const allTargets = page.getByLabel("All targets and ports");
+  await allTargets.check();
+  await expect(page.getByText("All-targets mode overrides the destination and port allowlists below.")).toBeVisible();
+  await expect(domains).toBeDisabled();
+  await page.getByRole("button", { name: "Save scope" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Allow every network target and port?" });
+  await expect(confirmation).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include(".dialog-backdrop").analyze();
+  expect(accessibility.violations).toEqual([]);
+  await confirmation.getByRole("button", { name: "Allow all targets" }).click();
+  await expect(page.getByRole("status")).toContainText("Network scope updated");
+  expect(durableScope.allowed_domains).toEqual(["www.google.com"]);
+  expect(durableScope.allow_all_targets).toBe(true);
+
+  await openWorkspace(page, "/", "Workbench");
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+  await expect(page.getByLabel("All targets and ports")).toBeChecked();
+  await expect(page.getByLabel("Allowed domains")).toHaveValue("www.google.com");
+  await expect(page.getByLabel("Allowed domains")).toBeDisabled();
 });
 
 test("streaming chat follows the bottom without overriding reader scroll intent", async ({ page }, testInfo) => {

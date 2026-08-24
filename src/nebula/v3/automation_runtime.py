@@ -1391,6 +1391,11 @@ class AutomationRuntimeManager:
     ) -> tuple[list[EgressRule], list[str]]:
         if not policy.network_enabled or scope is None:
             return [], []
+        if scope.allow_all_targets:
+            return [
+                EgressRule(address="0.0.0.0/0", all_ports=True),
+                EgressRule(address="::/0", all_ports=True),
+            ], []
         ports = scope.allowed_ports
         rules = [
             EgressRule(address=value, ports=ports, all_ports=not ports)
@@ -1412,7 +1417,11 @@ class AutomationRuntimeManager:
             raise AutomationPolicyDenied("project scope is not active yet")
         if managed.scope.not_after and managed.scope.not_after <= utc_now():
             raise AutomationPolicyDenied("project scope has expired")
-        if not managed.scope.allowed_cidrs and not managed.scope.allowed_domains:
+        if (
+            not managed.scope.allow_all_targets
+            and not managed.scope.allowed_cidrs
+            and not managed.scope.allowed_domains
+        ):
             if managed.scope.allowed_urls:
                 raise AutomationPolicyDenied(
                     "URL-only scope cannot authorize arbitrary shell networking"

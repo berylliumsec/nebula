@@ -64,6 +64,24 @@ def test_scope_normalizes_targets_and_validates_window():
         ScopePolicy(engagement_id="eng-1", allowed_domains=["bad domain"])
 
 
+def test_scope_treats_root_urls_as_domains_but_rejects_lossy_domain_urls():
+    scope = ScopePolicy(
+        engagement_id="eng-1",
+        allowed_domains=["https://www.Google.com/", "www.google.com"],
+    )
+    assert scope.allowed_domains == ["www.google.com"]
+    with pytest.raises(ValidationError, match="must contain only"):
+        ScopePolicy(
+            engagement_id="eng-1",
+            allowed_domains=["https://www.google.com/admin"],
+        )
+    with pytest.raises(ValidationError, match="must contain only"):
+        ScopePolicy(
+            engagement_id="eng-1",
+            allowed_domains=["https://www.google.com:8443/"],
+        )
+
+
 def test_mission_grants_are_typed_and_expire_after_grant():
     granted_at = utc_now()
     grant = MissionGrant(

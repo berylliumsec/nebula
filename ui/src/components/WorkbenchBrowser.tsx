@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Link } from "react-router-dom";
 import { isTauriRuntime } from "../api/runtime";
 import {
+  buildBrowserScopeAddition,
   evaluateBrowserScope,
   formatBrowserContextForAssistant,
   normalizeBrowserInput,
@@ -13,6 +14,7 @@ import {
   type BrowserContextEvent,
   type BrowserDownloadEvent,
   type BrowserPageEvent,
+  type BrowserScopeRequestEvent,
   type BrowserTrafficEvent,
   type BrowserWebSocketFrameEvent,
   type BrowserActionEvent,
@@ -45,6 +47,7 @@ interface WorkbenchBrowserProps {
   onAddKnowledgeUrl: (url: string) => Promise<{ id: string; name: string }>;
   onAskNebula: (request: NebulaDraftRequest) => void;
   onOpenFiles: () => void;
+  onScopeUpdated: (scope: EngagementScopePolicy) => void;
   onUploadEvidence?: (request: EvidenceUploadRequest) => Promise<EvidenceSummary>;
 }
 
@@ -108,7 +111,7 @@ function visibleSurfaceRect(element: HTMLElement): DOMRect {
   return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
-export function WorkbenchBrowser({ active, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onOpenFiles, onUploadEvidence }: WorkbenchBrowserProps) {
+export function WorkbenchBrowser({ active, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onOpenFiles, onScopeUpdated, onUploadEvidence }: WorkbenchBrowserProps) {
   const confirm = useConfirmation();
   const dialogOpen = useDialogOpen();
   const { activityOpen, paletteOpen, sidebarCollapsed } = useChrome();
@@ -119,6 +122,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [notice, setNotice] = useState<BrowserNotice>();
   const [error, setError] = useState<string>();
   const [addingKnowledge, setAddingKnowledge] = useState(false);
+  const addingScopeRef = useRef(false);
   const [capturingContext, setCapturingContext] = useState(false);
   const [workspace, setWorkspace] = useState<SecurityBrowserWorkspace>();
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
@@ -145,8 +149,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const websocketExchangeRef = useRef(new Map<string, Promise<SecurityBrowserExchange>>());
   const actionExecutionRef = useRef(new Map<string, import("../api/types").SecurityBrowserAction>());
   const addressDraftRef = useRef(new Map<string, string>());
+  const scopeRef = useRef(scope);
   tabsRef.current = tabs;
   activeRef.current = activeId;
+  scopeRef.current = scope;
 
   const activeSession = workspace?.sessions.find((session) => session.id === sessionId)
     ?? workspace?.sessions.find((session) => session.status === "active")
@@ -183,6 +189,76 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       return next;
     });
   }, []);
+
+  const addPageToScope = useCallback(async (request: BrowserScopeRequestEvent) => {
+    if (request.projectId !== projectId) return;
+    if (request.state !== "ready") {
+      setError(request.detail ?? "The page changed. Right-click the current page and try Add to scope again.");
+      return;
+    }
+    const tab = tabsRef.current.find((item) => item.id === request.tabId);
+    if (!tab?.created || !tab.url || new URL(tab.url).href !== new URL(request.url).href) {
+      setError("The page changed after the context menu opened. Right-click the current page and try again.");
+      return;
+    }
+    const currentScope = scopeRef.current;
+    if (!currentScope) {
+      setError("Project scope is unavailable. Reconnect to Core, then right-click the page and try again.");
+      return;
+    }
+    if (currentScope.allowAllTargets || evaluateBrowserScope(request.url, currentScope).state === "in_scope") {
+      setNotice({ kind: "info", message: `${new URL(request.url).origin} is already in Project scope.` });
+      setError(undefined);
+      return;
+    }
+    const addition = buildBrowserScopeAddition(request.url, currentScope);
+    if (!addition.changed) {
+      setError("This target is already listed, but the Project scope is inactive. Review its time window in Settings.");
+      return;
+    }
+    const approved = await confirm({
+      title: `Add ${addition.origin} to scope?`,
+      message: <>
+        Nebula will add this exact HTTP(S) origin to URL-only browser scope revision {currentScope.revision}. This authorizes every path on the same scheme, host, and port, but does not by itself authorize shell networking.
+        {addition.addsPort && <> Because the current allowlist excludes port <code>{addition.port}</code>, this also adds that port for every currently scoped target.</>}
+      </>,
+      confirmLabel: "Add to scope",
+      tone: "danger",
+    });
+    if (!approved || addingScopeRef.current) return;
+    addingScopeRef.current = true;
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const latestTab = tabsRef.current.find((item) => item.id === request.tabId);
+      if (!latestTab?.url || new URL(latestTab.url).href !== new URL(request.url).href) {
+        throw new Error("The page changed before scope was saved. Right-click the current page and try again.");
+      }
+      const updated = await api.updateEngagementScope(projectId, {
+        ...addition.update,
+        expectedRevision: currentScope.revision,
+      });
+      scopeRef.current = updated;
+      onScopeUpdated(updated);
+      setNotice({ kind: "info", message: `${addition.origin} was added to Project scope revision ${updated.revision}.` });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.workbench_browser.scope_add_failed", "A browser origin could not be added to Project scope.", caught, "workbench_browser");
+      try {
+        const latest = await api.getEngagementScope(projectId);
+        if (latest.revision !== currentScope.revision) {
+          scopeRef.current = latest;
+          onScopeUpdated(latest);
+          setError("Project scope changed before this addition could be saved. The latest revision is loaded; right-click the page and review Add to scope again.");
+        } else {
+          setError(`${errorMessage(caught)} Project scope was not changed; right-click the page to retry.`);
+        }
+      } catch {
+        setError(`${errorMessage(caught)} Project scope was not changed. Reconnect to Core, then right-click the page to retry.`);
+      }
+    } finally {
+      addingScopeRef.current = false;
+    }
+  }, [api, confirm, onScopeUpdated, projectId]);
 
   const openAddress = useCallback(async (id: string, input: string) => {
     setError(undefined);
@@ -404,6 +480,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         if (payload.state === "title") { if (payload.title) updateTab(payload.tabId, { title: payload.title }); return; }
         updateTab(payload.tabId, { url: payload.url, address: payload.url, loading: payload.state === "loading", error: undefined });
       }),
+      listen<BrowserScopeRequestEvent>("nebula-browser-scope-request", ({ payload }) => {
+        void addPageToScope(payload);
+      }),
       listen<BrowserDownloadEvent>("nebula-browser-download", ({ payload }) => {
         if (payload.state !== "ready" || !payload.downloadId || !payload.filename) {
           setError(payload.detail ?? "The website download failed.");
@@ -559,7 +638,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       }),
     ]).then((unlisteners) => { if (disposed) unlisteners.forEach((stop) => stop()); else stops.push(...unlisteners); });
     return () => { disposed = true; stops.forEach((stop) => stop()); };
-  }, [activeIdentity, activeSession, addTab, api, confirm, desktop, onAskNebula, onUploadEvidence, operatorId, projectId, scope, updateTab]);
+  }, [activeIdentity, activeSession, addPageToScope, addTab, api, confirm, desktop, onAskNebula, onUploadEvidence, operatorId, projectId, scope, updateTab]);
 
   useEffect(() => {
     if (!desktop) return;

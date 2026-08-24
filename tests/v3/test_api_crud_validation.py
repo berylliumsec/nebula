@@ -28,6 +28,29 @@ def _auth():
     return {"Authorization": "Bearer test-token"}
 
 
+def test_project_scope_persists_all_targets_and_normalizes_root_domain_urls(api):
+    client, store = api
+    engagement = store.create(Engagement(name="Unrestricted assessment"))
+
+    updated = client.put(
+        f"/api/v1/engagements/{engagement.id}/scope",
+        headers=_auth(),
+        json={
+            "allowed_domains": ["https://www.Google.com/", "www.google.com"],
+            "allow_all_targets": True,
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["allowed_domains"] == ["www.google.com"]
+    assert updated.json()["allow_all_targets"] is True
+    loaded = client.get(
+        f"/api/v1/engagements/{engagement.id}/scope", headers=_auth()
+    )
+    assert loaded.status_code == 200
+    assert loaded.json()["allow_all_targets"] is True
+
+
 @pytest.fixture
 def api(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")

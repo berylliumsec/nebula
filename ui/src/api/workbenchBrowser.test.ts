@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EngagementScopePolicy } from "./types";
 import {
+  buildBrowserScopeAddition,
   evaluateBrowserScope,
   formatBrowserContextForAssistant,
   normalizeBrowserInput,
@@ -12,6 +13,7 @@ const scope: EngagementScopePolicy = {
   allowedDomains: ["app.example.test", "*.lab.example.test"],
   allowedUrls: ["https://admin.example.test/console"],
   allowedPorts: [443, 8443],
+  allowAllTargets: false,
   prohibitedActions: [],
   localOnly: true,
   maxConcurrency: 1,
@@ -69,6 +71,50 @@ describe("Workbench browser scope decisions", () => {
       ...scope,
       notAfter: "2000-01-01T00:00:00Z",
     }).state).toBe("inactive");
+  });
+
+  it("recognizes an explicit all-targets policy without weakening its time window", () => {
+    expect(evaluateBrowserScope("https://outside.example/", {
+      ...scope,
+      allowAllTargets: true,
+    })).toMatchObject({ state: "in_scope", label: "All targets" });
+    expect(evaluateBrowserScope("https://outside.example/", {
+      ...scope,
+      allowAllTargets: true,
+      notAfter: "2000-01-01T00:00:00Z",
+    }).state).toBe("inactive");
+  });
+});
+
+describe("Workbench browser scope additions", () => {
+  it("adds the exact origin without broadening domain scope", () => {
+    const addition = buildBrowserScopeAddition("https://outside.example.test/account?token=secret#profile", scope);
+
+    expect(addition).toMatchObject({
+      origin: "https://outside.example.test/",
+      port: 443,
+      addsOrigin: true,
+      addsPort: false,
+      changed: true,
+    });
+    expect(addition.update.allowedUrls).toEqual([
+      "https://admin.example.test/console",
+      "https://outside.example.test/",
+    ]);
+    expect(addition.update.allowedDomains).toEqual(scope.allowedDomains);
+  });
+
+  it("discloses and includes a required project-wide port expansion", () => {
+    const addition = buildBrowserScopeAddition("https://outside.example.test:9443/path", scope);
+
+    expect(addition).toMatchObject({ addsOrigin: true, addsPort: true, port: 9443 });
+    expect(addition.update.allowedPorts).toEqual([443, 8443, 9443]);
+  });
+
+  it("is idempotent for an already authorized page and rejects unsafe schemes and credentials", () => {
+    expect(buildBrowserScopeAddition("https://app.example.test/account", scope).changed).toBe(false);
+    expect(() => buildBrowserScopeAddition("file:///etc/passwd", scope)).toThrow("Only HTTP and HTTPS");
+    expect(() => buildBrowserScopeAddition("https://user:secret@app.example.test/", scope)).toThrow("embedded credentials");
   });
 });
 

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, Url, WebviewUrl,
+    menu::{MenuBuilder, MenuItemBuilder},
     webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder},
 };
 
@@ -39,6 +40,8 @@ const MAX_CAPTURE_SELECTION_CHARS: usize = 4_000;
 const MAX_CAPTURE_FORMS: usize = 40;
 const MAX_CAPTURE_LINKS: usize = 80;
 const MAX_CAPTURE_RAW_BYTES: usize = 2 * 1024 * 1024;
+const BROWSER_CONTEXT_SCHEME: &str = "nebula-browser-context";
+const BROWSER_CONTEXT_MENU_PREFIX: &str = "browser-context-";
 
 const BROWSER_CONTEXT_SCRIPT: &str = r#"(() => {
   const text = String(document.body?.innerText ?? "");
@@ -73,6 +76,7 @@ const BROWSER_CONTEXT_SCRIPT: &str = r#"(() => {
 pub(crate) struct BrowserState {
     tabs: Mutex<HashMap<String, BrowserTab>>,
     downloads: Mutex<HashMap<PathBuf, PendingDownload>>,
+    context_targets: Mutex<HashMap<String, PendingBrowserContext>>,
 }
 
 struct BrowserTab {
@@ -91,6 +95,12 @@ struct PendingDownload {
     finished: Arc<AtomicBool>,
 }
 
+#[derive(Clone)]
+struct PendingBrowserContext {
+    project_id: String,
+    url: String,
+}
+
 #[derive(Debug, Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BrowserBounds {
@@ -107,6 +117,16 @@ struct BrowserPageEvent {
     url: String,
     state: &'static str,
     title: Option<String>,
+    detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserScopeRequestEvent {
+    tab_id: String,
+    project_id: String,
+    url: String,
+    state: &'static str,
     detail: Option<String>,
 }
 
@@ -302,6 +322,99 @@ fn validated_url(value: &str) -> Result<Url, String> {
         return Err("Addresses containing embedded credentials are not accepted.".to_string());
     }
     Ok(url)
+}
+
+fn browser_context_menu_script(token: &str) -> Result<String, String> {
+    let endpoint = serde_json::to_string(&format!("{BROWSER_CONTEXT_SCHEME}://menu/{token}?url="))
+        .map_err(|error| format!("cannot prepare browser context menu: {error}"))?;
+    Ok(format!(
+        r#"(() => {{
+          const endpoint = {endpoint};
+          document.addEventListener("contextmenu", (event) => {{
+            if (!event.isTrusted) return;
+            event.preventDefault();
+            const target = String(location.href ?? "").slice(0, 4096);
+            location.assign(endpoint + encodeURIComponent(target));
+          }}, true);
+        }})()"#
+    ))
+}
+
+fn context_menu_target(next: &Url, token: &str) -> Result<Option<String>, String> {
+    if next.scheme() != BROWSER_CONTEXT_SCHEME {
+        return Ok(None);
+    }
+    if next.host_str() != Some("menu") || next.path() != format!("/{token}") {
+        return Err("The browser context-menu request was not authentic.".to_string());
+    }
+    let value = next
+        .query_pairs()
+        .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
+        .ok_or_else(|| "The browser context-menu target is missing.".to_string())?;
+    if value.len() > 4096 {
+        return Err("The browser context-menu target is too long.".to_string());
+    }
+    Ok(Some(validated_url(&value)?.to_string()))
+}
+
+fn context_menu_id(action: &str, tab_id: &str) -> String {
+    format!("{BROWSER_CONTEXT_MENU_PREFIX}{action}-{tab_id}")
+}
+
+fn show_browser_context_menu(
+    app: &AppHandle,
+    tab_id: &str,
+    project_id: &str,
+    url: String,
+) -> Result<(), String> {
+    let state = app.state::<BrowserState>();
+    let label = find_tab(&state, tab_id, project_id)?;
+    state
+        .context_targets
+        .lock()
+        .map_err(|_| "Browser context-menu state is unavailable.".to_string())?
+        .insert(
+            tab_id.to_string(),
+            PendingBrowserContext {
+                project_id: project_id.to_string(),
+                url,
+            },
+        );
+    let add_scope = MenuItemBuilder::with_id(context_menu_id("add-scope", tab_id), "Add to scope")
+        .build(app)
+        .map_err(|error| format!("cannot prepare Add to scope: {error}"))?;
+    let back = MenuItemBuilder::with_id(context_menu_id("back", tab_id), "Back")
+        .build(app)
+        .map_err(|error| format!("cannot prepare browser Back: {error}"))?;
+    let forward = MenuItemBuilder::with_id(context_menu_id("forward", tab_id), "Forward")
+        .build(app)
+        .map_err(|error| format!("cannot prepare browser Forward: {error}"))?;
+    let reload = MenuItemBuilder::with_id(context_menu_id("reload", tab_id), "Reload")
+        .build(app)
+        .map_err(|error| format!("cannot prepare browser Reload: {error}"))?;
+    let inspect = MenuItemBuilder::with_id(context_menu_id("inspect", tab_id), "Open DevTools")
+        .build(app)
+        .map_err(|error| format!("cannot prepare browser DevTools: {error}"))?;
+    let menu = MenuBuilder::new(app)
+        .item(&add_scope)
+        .separator()
+        .item(&back)
+        .item(&forward)
+        .item(&reload)
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .separator()
+        .item(&inspect)
+        .build()
+        .map_err(|error| format!("cannot prepare browser context menu: {error}"))?;
+    app.get_webview(&label)
+        .ok_or_else(|| "This browser tab is unavailable.".to_string())?
+        .window()
+        .popup_menu(&menu)
+        .map_err(|error| format!("cannot open browser context menu: {error}"))
 }
 
 fn bounded_chars(value: String, limit: usize) -> (String, bool) {
@@ -686,6 +799,91 @@ fn emit_page(app: &AppHandle, event: BrowserPageEvent) {
     }
 }
 
+pub(crate) fn handle_menu_event(app: &AppHandle, command: &str) -> bool {
+    let matched = ["add-scope", "back", "forward", "reload", "inspect"]
+        .into_iter()
+        .find_map(|action| {
+            command
+                .strip_prefix(&format!("{BROWSER_CONTEXT_MENU_PREFIX}{action}-"))
+                .map(|tab_id| (action, tab_id))
+        });
+    let Some((action, tab_id)) = matched else {
+        return false;
+    };
+    let state = app.state::<BrowserState>();
+    let pending = state
+        .context_targets
+        .lock()
+        .ok()
+        .and_then(|mut targets| targets.remove(tab_id));
+    let Some(pending) = pending else {
+        record_browser_failure(
+            app,
+            "desktop.browser.context_menu_stale",
+            "A stale browser context-menu action was ignored.",
+            "context-menu",
+        );
+        return true;
+    };
+    let label = match find_tab(&state, tab_id, &pending.project_id) {
+        Ok(label) => label,
+        Err(_) => return true,
+    };
+    let Some(webview) = app.get_webview(&label) else {
+        return true;
+    };
+    let result = match action {
+        "add-scope" => {
+            let current = webview
+                .url()
+                .ok()
+                .and_then(|value| validated_url(value.as_str()).ok());
+            let expected = validated_url(&pending.url).ok();
+            let (state, detail) = if current == expected {
+                ("ready", None)
+            } else {
+                (
+                    "failed",
+                    Some("The page changed after the context menu opened. Right-click the current page and try again.".to_string()),
+                )
+            };
+            app.emit_to(
+                "main",
+                "nebula-browser-scope-request",
+                BrowserScopeRequestEvent {
+                    tab_id: tab_id.to_string(),
+                    project_id: pending.project_id,
+                    url: pending.url,
+                    state,
+                    detail,
+                },
+            )
+            .map_err(|error| format!("cannot deliver Add to scope: {error}"))
+        }
+        "back" => webview
+            .eval("history.back()")
+            .map_err(|error| error.to_string()),
+        "forward" => webview
+            .eval("history.forward()")
+            .map_err(|error| error.to_string()),
+        "reload" => webview.reload().map_err(|error| error.to_string()),
+        "inspect" => {
+            webview.open_devtools();
+            Ok(())
+        }
+        _ => Ok(()),
+    };
+    if result.is_err() {
+        record_browser_failure(
+            app,
+            "desktop.browser.context_menu_action_failed",
+            "A browser context-menu action failed.",
+            "context-menu",
+        );
+    }
+    true
+}
+
 fn emit_download(app: &AppHandle, event: BrowserDownloadEvent) {
     if app
         .emit_to("main", "nebula-browser-download", event)
@@ -741,6 +939,9 @@ fn find_tab(state: &BrowserState, tab_id: &str, project_id: &str) -> Result<Stri
 }
 
 fn close_tab_internal(app: &AppHandle, state: &BrowserState, tab_id: &str) -> Result<(), String> {
+    if let Ok(mut targets) = state.context_targets.lock() {
+        targets.remove(tab_id);
+    }
     let tab = state
         .tabs
         .lock()
@@ -827,8 +1028,12 @@ pub(crate) fn browser_create_tab(
     fs::create_dir_all(&profile_dir)
         .map_err(|error| format!("cannot prepare browser storage: {error}"))?;
 
+    let context_token = random_id("context")?;
+    let context_script = browser_context_menu_script(&context_token)?;
     let navigation_app = app.clone();
     let navigation_tab = tab_id.clone();
+    let navigation_project = project_id.clone();
+    let navigation_token = context_token.clone();
     let popup_app = app.clone();
     let popup_tab = tab_id.clone();
     let load_app = app.clone();
@@ -851,7 +1056,38 @@ pub(crate) fn browser_create_tab(
     };
 
     let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
+        .initialization_script(context_script)
         .on_navigation(move |next| {
+            match context_menu_target(next, &navigation_token) {
+                Ok(Some(target)) => {
+                    if show_browser_context_menu(
+                        &navigation_app,
+                        &navigation_tab,
+                        &navigation_project,
+                        target,
+                    )
+                    .is_err()
+                    {
+                        record_browser_failure(
+                            &navigation_app,
+                            "desktop.browser.context_menu_open_failed",
+                            "The browser context menu could not be opened.",
+                            "context-menu",
+                        );
+                    }
+                    return false;
+                }
+                Err(_) => {
+                    record_browser_failure(
+                        &navigation_app,
+                        "desktop.browser.context_menu_request_rejected",
+                        "An invalid browser context-menu request was rejected.",
+                        "context-menu",
+                    );
+                    return false;
+                }
+                Ok(None) => {}
+            }
             let allowed = validated_url(next.as_str()).is_ok();
             if !allowed {
                 emit_page(&navigation_app, BrowserPageEvent { tab_id: navigation_tab.clone(), url: next.to_string(), state: "blocked", title: None, detail: Some("Nebula Browser blocked a non-HTTP navigation.".to_string()) });
@@ -1690,6 +1926,36 @@ mod tests {
         assert!(validated_url("file:///etc/passwd").is_err());
         assert!(validated_url("javascript:alert(1)").is_err());
         assert!(validated_url("https://user:secret@example.test/").is_err());
+    }
+
+    #[test]
+    fn context_menu_navigation_requires_the_per_tab_token_and_a_safe_target() {
+        let token = "context-0123456789abcdef";
+        let mut request = Url::parse(&format!("{BROWSER_CONTEXT_SCHEME}://menu/{token}")).unwrap();
+        request
+            .query_pairs_mut()
+            .append_pair("url", "https://example.test/account?view=security");
+        assert_eq!(
+            context_menu_target(&request, token).unwrap().as_deref(),
+            Some("https://example.test/account?view=security")
+        );
+        assert!(context_menu_target(&request, "context-other").is_err());
+        let mut unsafe_request =
+            Url::parse(&format!("{BROWSER_CONTEXT_SCHEME}://menu/{token}")).unwrap();
+        unsafe_request
+            .query_pairs_mut()
+            .append_pair("url", "file:///etc/passwd");
+        assert!(context_menu_target(&unsafe_request, token).is_err());
+    }
+
+    #[test]
+    fn context_menu_script_uses_trusted_right_clicks_without_exposing_tauri_ipc() {
+        let script = browser_context_menu_script("context-safe").unwrap();
+        assert!(script.contains("contextmenu"));
+        assert!(script.contains("event.isTrusted"));
+        assert!(script.contains("nebula-browser-context://menu/context-safe?url="));
+        assert!(!script.contains("__TAURI"));
+        assert!(!script.contains("ipc.postMessage"));
     }
 
     #[test]

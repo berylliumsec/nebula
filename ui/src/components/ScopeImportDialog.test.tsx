@@ -16,6 +16,7 @@ const scope: EngagementScopePolicy = {
   allowedDomains: [],
   allowedUrls: [],
   allowedPorts: [443],
+  allowAllTargets: false,
   prohibitedActions: [],
   localOnly: true,
   maxConcurrency: 1,

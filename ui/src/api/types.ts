@@ -195,6 +195,7 @@ export interface EngagementScopePolicy {
   allowedDomains: string[];
   allowedUrls: string[];
   allowedPorts: number[];
+  allowAllTargets: boolean;
   notBefore?: string;
   notAfter?: string;
   prohibitedActions: string[];

@@ -324,6 +324,50 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
   }
 });
 
+test("real Core persists normalized domains and explicit all-target scope through Settings", async ({ page }) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+    await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+    await page.getByLabel("Allowed domains").fill("https://www.Google.com/");
+    await page.getByLabel("All targets and ports").check();
+    await page.getByRole("button", { name: "Save scope" }).click();
+    const confirmation = page.getByRole("dialog", { name: "Allow every network target and port?" });
+    await expect(confirmation).toBeVisible();
+    await confirmation.getByRole("button", { name: "Allow all targets" }).click();
+    await expect(page.getByRole("status")).toContainText("Network scope updated");
+
+    const engagements = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const saved = await api.get(`engagements/${engagements[0].id}/scope`);
+    expect(saved.ok(), await saved.text()).toBe(true);
+    expect(await saved.json()).toMatchObject({
+      allowed_domains: ["www.google.com"],
+      allow_all_targets: true,
+    });
+
+    await page.goto("about:blank");
+    const reloadedScope = page.waitForResponse((response) => response.url().endsWith("/scope") && response.request().method() === "GET");
+    await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
+    expect(await (await reloadedScope).json()).toMatchObject({ allow_all_targets: true });
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+    await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+    await expect(page.getByLabel("All targets and ports")).toBeChecked();
+    await expect(page.getByLabel("Allowed domains")).toHaveValue("www.google.com");
+    await expect(page.getByLabel("Allowed domains")).toBeDisabled();
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
 test("a paired browser can revoke itself without a stale authentication error", async ({ page }) => {
   test.setTimeout(60_000);
   const core = await startRealCore();

@@ -2806,6 +2806,7 @@ export function SessionsPage() {
               onAddKnowledgeUrl={(url) => ingestKnowledgeUrlSource({ engagementId: engagement.id, url })}
               onAskNebula={requestNebulaDraft}
               onOpenFiles={() => setView("workspace")}
+              onScopeUpdated={setBrowserScope}
               onUploadEvidence={uploadEvidence}
             />
           </div>}

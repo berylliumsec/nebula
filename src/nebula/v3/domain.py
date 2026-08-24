@@ -456,6 +456,7 @@ class ScopePolicy(Entity):
     allowed_domains: list[str] = Field(default_factory=list)
     allowed_urls: list[str] = Field(default_factory=list)
     allowed_ports: list[int] = Field(default_factory=list)
+    allow_all_targets: bool = False
     not_before: datetime | None = None
     not_after: datetime | None = None
     prohibited_actions: list[str] = Field(default_factory=list)
@@ -479,7 +480,27 @@ class ScopePolicy(Entity):
             r"^(?:\*\.)?(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
         )
         for value in values:
-            domain = value.rstrip(".").lower()
+            candidate = value.strip()
+            if "://" in candidate:
+                parsed = urlsplit(candidate)
+                if (
+                    parsed.scheme.lower() not in {"http", "https"}
+                    or not parsed.hostname
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or parsed.port is not None
+                    or parsed.path not in {"", "/"}
+                    or parsed.query
+                    or parsed.fragment
+                ):
+                    raise ValueError(
+                        f"domain URL must contain only an HTTP(S) hostname: {value}"
+                    )
+                candidate = parsed.hostname
+            try:
+                domain = candidate.rstrip(".").encode("idna").decode("ascii").lower()
+            except UnicodeError as exc:
+                raise ValueError(f"invalid domain: {value}") from exc
             if not domain_pattern.fullmatch(domain):
                 raise ValueError(f"invalid domain: {value}")
             normalized.append(domain)

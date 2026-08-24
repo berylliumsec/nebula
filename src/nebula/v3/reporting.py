@@ -596,6 +596,7 @@ class ReportRenderService:
         story.append(Paragraph("Scope", heading))
         if scope:
             scope_lines = [
+                f"Target mode: {'all targets and ports' if scope.get('allow_all_targets') else 'bounded allowlist'}",
                 f"CIDRs: {', '.join(scope.get('allowed_cidrs') or []) or 'none'}",
                 f"Domains: {', '.join(scope.get('allowed_domains') or []) or 'none'}",
                 f"URLs: {', '.join(scope.get('allowed_urls') or []) or 'none'}",

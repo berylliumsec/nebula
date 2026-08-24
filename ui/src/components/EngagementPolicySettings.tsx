@@ -5,9 +5,31 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
 import { InlineValidationNotice } from "./InlineValidationNotice";
+import { useConfirmation } from "./DialogSystem";
 
 function lines(value: string): string[] {
   return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
+}
+
+export function parseAllowedDomains(value: string): string[] | undefined {
+  const normalized: string[] = [];
+  for (const entry of lines(value)) {
+    let domain = entry;
+    if (entry.includes("://")) {
+      try {
+        const url = new URL(entry);
+        if ((url.protocol !== "http:" && url.protocol !== "https:")
+          || url.username || url.password || url.port
+          || (url.pathname !== "/" && url.pathname !== "")
+          || url.search || url.hash) return undefined;
+        domain = url.hostname;
+      } catch {
+        return undefined;
+      }
+    }
+    normalized.push(domain.replace(/\.$/, "").toLocaleLowerCase());
+  }
+  return [...new Set(normalized)];
 }
 
 export function parseAllowedPorts(value: string): number[] | undefined {
@@ -49,6 +71,7 @@ function wireDate(value: string): string | undefined {
 }
 
 export function EngagementPolicySettings() {
+  const confirm = useConfirmation();
   const { api, coreState, engagement, previewMode } = useWorkspace();
   const [scope, setScope] = useState<EngagementScopePolicy>();
   const [policy, setPolicy] = useState<AutomationProjectPolicy>();
@@ -56,6 +79,7 @@ export function EngagementPolicySettings() {
   const [allowedDomains, setAllowedDomains] = useState("");
   const [allowedUrls, setAllowedUrls] = useState("");
   const [allowedPorts, setAllowedPorts] = useState("");
+  const [allowAllTargets, setAllowAllTargets] = useState(false);
   const [notBefore, setNotBefore] = useState("");
   const [notAfter, setNotAfter] = useState("");
   const [prohibitedActions, setProhibitedActions] = useState("");
@@ -74,6 +98,7 @@ export function EngagementPolicySettings() {
     setAllowedDomains(next.allowedDomains.join("\n"));
     setAllowedUrls(next.allowedUrls.join("\n"));
     setAllowedPorts(formatAllowedPorts(next.allowedPorts));
+    setAllowAllTargets(next.allowAllTargets);
     setNotBefore(inputDate(next.notBefore));
     setNotAfter(inputDate(next.notAfter));
     setProhibitedActions(next.prohibitedActions.join("\n"));
@@ -109,6 +134,11 @@ export function EngagementPolicySettings() {
   const saveScope = async (event: FormEvent) => {
     event.preventDefault();
     if (!api || !engagement || !scope) return;
+    const domains = parseAllowedDomains(allowedDomains);
+    if (!domains) {
+      setValidationError("Allowed domains accept a hostname or a root HTTP(S) URL such as www.example.com or https://www.example.com. Put URLs with paths or ports in URL-only scope.");
+      return;
+    }
     const ports = parseAllowedPorts(allowedPorts);
     if (!ports) {
       setValidationError("Allowed ports must be numbers or ascending ranges from 0 through 65535, such as 80, 443, or 0-400.");
@@ -124,13 +154,23 @@ export function EngagementPolicySettings() {
       setValidationError("Maximum concurrency must be a whole number from 1 through 256.");
       return;
     }
+    if (allowAllTargets && !scope.allowAllTargets) {
+      const approved = await confirm({
+        title: "Allow every network target and port?",
+        message: <>This removes destination and port boundaries for Browser actions and project-scoped networking. Time windows, prohibited actions, privacy controls, and high-risk approval requirements still apply. Existing allowlist entries are retained for when you turn this mode off.</>,
+        confirmLabel: "Allow all targets",
+        tone: "danger",
+      });
+      if (!approved) return;
+    }
     setSaving("scope"); setError(undefined); setValidationError(undefined);
     try {
       applyScope(await api.updateEngagementScope(engagement.id, {
         allowedCidrs: lines(allowedCidrs),
-        allowedDomains: lines(allowedDomains),
+        allowedDomains: domains,
         allowedUrls: lines(allowedUrls),
         allowedPorts: ports,
+        allowAllTargets,
         notBefore: start,
         notAfter: end,
         prohibitedActions: lines(prohibitedActions),
@@ -186,10 +226,12 @@ export function EngagementPolicySettings() {
       <form className="panel policy-form" onSubmit={(event) => void saveScope(event)}>
         <header className="panel-header compact"><div><h3>Network scope</h3><p>DNS plus TCP egress only; URL paths alone cannot authorize shell networking.</p></div><ShieldCheck size={18} /></header>
         <div className="policy-form-body">
-          <label>Allowed domains<textarea rows={4} value={allowedDomains} placeholder="example.com\n*.example.org" onChange={(event) => setAllowedDomains(event.target.value)} /></label>
-          <label>Allowed CIDRs<textarea rows={4} value={allowedCidrs} placeholder="203.0.113.0/24" onChange={(event) => setAllowedCidrs(event.target.value)} /></label>
-          <label>Allowed TCP ports<input value={allowedPorts} placeholder="80, 443, 8000-8100" onChange={(event) => setAllowedPorts(event.target.value)} /></label>
-          <label>URL-only scope entries<textarea rows={3} value={allowedUrls} placeholder="https://example.com/reviewed/path" onChange={(event) => setAllowedUrls(event.target.value)} /></label>
+          <label className="provider-consent"><input type="checkbox" checked={allowAllTargets} onChange={(event) => setAllowAllTargets(event.target.checked)} /><span><strong>All targets and ports</strong><small>Unrestricted target mode for authorized operators. Time windows, prohibited actions, privacy controls, and high-risk approvals remain enforced.</small></span></label>
+          {allowAllTargets && <InlineValidationNotice message="All-targets mode overrides the destination and port allowlists below. Their saved values are retained and become authoritative again when this mode is turned off." />}
+          <label>Allowed domains<textarea rows={4} value={allowedDomains} placeholder="example.com\nhttps://www.example.org" disabled={allowAllTargets} onChange={(event) => setAllowedDomains(event.target.value)} /><small>Hostnames and root HTTP(S) URLs are equivalent here. Paths belong in URL-only scope.</small></label>
+          <label>Allowed CIDRs<textarea rows={4} value={allowedCidrs} placeholder="203.0.113.0/24" disabled={allowAllTargets} onChange={(event) => setAllowedCidrs(event.target.value)} /></label>
+          <label>Allowed TCP ports<input value={allowedPorts} placeholder="80, 443, 8000-8100" disabled={allowAllTargets} onChange={(event) => setAllowedPorts(event.target.value)} /></label>
+          <label>URL-only scope entries<textarea rows={3} value={allowedUrls} placeholder="https://example.com/reviewed/path" disabled={allowAllTargets} onChange={(event) => setAllowedUrls(event.target.value)} /></label>
           <div className="resource-form-grid"><label>Active from<input type="datetime-local" value={notBefore} onChange={(event) => setNotBefore(event.target.value)} /></label><label>Expires<input type="datetime-local" value={notAfter} onChange={(event) => setNotAfter(event.target.value)} /></label></div>
           <label>Prohibited actions<textarea rows={3} value={prohibitedActions} onChange={(event) => setProhibitedActions(event.target.value)} /></label>
           <div className="resource-form-grid"><label>Maximum concurrency<input type="number" min={1} max={256} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label><label className="provider-consent"><input type="checkbox" checked={localOnly} onChange={(event) => setLocalOnly(event.target.checked)} /><span><strong>Local only</strong><small>Do not send project data to remote models.</small></span></label></div>

@@ -25,6 +25,7 @@ from nebula.v3.domain import (
     ApprovalStatus,
     AutomationApprovalPolicy,
     AutomationNetworkMode,
+    AutomationProjectPolicy,
     AutomationSession,
     AutomationSessionStatus,
     CommandExecution,
@@ -52,6 +53,19 @@ from nebula.v3.tool_results import (
 
 
 IMAGE = "registry.invalid/nebula-automation@sha256:" + "a" * 64
+
+
+def test_all_target_scope_compiles_to_dual_stack_all_port_egress():
+    rules, domains = AutomationRuntimeManager._network_boundary(
+        AutomationProjectPolicy(engagement_id="eng-1", network_enabled=True),
+        ScopePolicy(engagement_id="eng-1", allow_all_targets=True),
+    )
+
+    assert domains == []
+    assert [(rule.address, rule.all_ports, rule.ports) for rule in rules] == [
+        ("0.0.0.0/0", True, []),
+        ("::/0", True, []),
+    ]
 
 
 class FakeProcess(RuntimeBackendProcess):

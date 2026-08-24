@@ -116,6 +116,9 @@ fn build_app() -> tauri::App<Wry> {
         })
         .on_menu_event(|app, event| {
             let command = event.id().as_ref();
+            if browser::handle_menu_event(app, command) {
+                return;
+            }
             if matches!(
                 command,
                 "home"

@@ -758,6 +758,7 @@ class ScopePolicyUpdateRequest(NebulaModel):
     allowed_domains: list[str] = Field(default_factory=list)
     allowed_urls: list[str] = Field(default_factory=list)
     allowed_ports: list[int] = Field(default_factory=list)
+    allow_all_targets: bool = False
     not_before: datetime | None = None
     not_after: datetime | None = None
     prohibited_actions: list[str] = Field(default_factory=list)

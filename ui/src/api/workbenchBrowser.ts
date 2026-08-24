@@ -18,6 +18,13 @@ export interface BrowserPageEvent {
   title?: string;
   detail?: string;
 }
+export interface BrowserScopeRequestEvent {
+  tabId: string;
+  projectId: string;
+  url: string;
+  state: "ready" | "failed";
+  detail?: string;
+}
 export interface BrowserDownloadEvent {
   tabId: string;
   downloadId?: string;
@@ -119,6 +126,56 @@ function effectivePort(url: URL): number {
   return url.protocol === "https:" ? 443 : 80;
 }
 
+export interface BrowserScopeAddition {
+  origin: string;
+  port: number;
+  addsOrigin: boolean;
+  addsPort: boolean;
+  changed: boolean;
+  update: Omit<EngagementScopePolicy, "engagementId" | "revision">;
+}
+
+/** Build the least-privilege durable scope change for a page context-menu request. */
+export function buildBrowserScopeAddition(urlValue: string, scope: EngagementScopePolicy): BrowserScopeAddition {
+  const url = new URL(urlValue);
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) {
+    throw new Error("Only HTTP and HTTPS pages can be added to Project scope.");
+  }
+  if (url.username || url.password) {
+    throw new Error("Addresses containing embedded credentials cannot be added to Project scope.");
+  }
+  const origin = `${url.origin}/`;
+  const port = effectivePort(url);
+  const targetAlreadyAllowed = domainAllowed(url.hostname, scope.allowedDomains)
+    || urlAllowed(url, scope.allowedUrls)
+    || ipv4CidrAllowed(url.hostname, scope.allowedCidrs);
+  const addsOrigin = !targetAlreadyAllowed;
+  // An empty port list means all ports. If a list exists, preserving a useful
+  // Add-to-scope action requires explicitly extending that global allowlist.
+  const addsPort = scope.allowedPorts.length > 0 && !scope.allowedPorts.includes(port);
+  return {
+    origin,
+    port,
+    addsOrigin,
+    addsPort,
+    changed: addsOrigin || addsPort,
+    update: {
+      id: scope.id,
+      allowedCidrs: scope.allowedCidrs,
+      allowedDomains: scope.allowedDomains,
+      allowedUrls: addsOrigin ? [...scope.allowedUrls, origin] : scope.allowedUrls,
+      allowedPorts: addsPort ? [...scope.allowedPorts, port].sort((left, right) => left - right) : scope.allowedPorts,
+      allowAllTargets: scope.allowAllTargets,
+      notBefore: scope.notBefore,
+      notAfter: scope.notAfter,
+      prohibitedActions: scope.prohibitedActions,
+      localOnly: scope.localOnly,
+      maxConcurrency: scope.maxConcurrency,
+      grants: scope.grants,
+    },
+  };
+}
+
 function domainAllowed(host: string, patterns: string[]): boolean {
   const normalizedHost = host.replace(/\.$/, "").toLocaleLowerCase();
   return patterns.some((value) => {
@@ -170,7 +227,7 @@ function ipv4CidrAllowed(host: string, cidrs: string[]): boolean {
 export function evaluateBrowserScope(urlValue: string | undefined, scope?: EngagementScopePolicy): BrowserScopeDecision {
   if (!scope) return { state: "unknown", label: "Scope unavailable", detail: "Project scope could not be confirmed." };
   const targetCount = scope.allowedCidrs.length + scope.allowedDomains.length + scope.allowedUrls.length;
-  if (!targetCount) return { state: "unconfigured", label: "Scope not set", detail: "No browser targets are authorized in Project scope.", revision: scope.revision };
+  if (!scope.allowAllTargets && !targetCount) return { state: "unconfigured", label: "Scope not set", detail: "No browser targets are authorized in Project scope.", revision: scope.revision };
   const now = Date.now();
   if ((scope.notBefore && now < Date.parse(scope.notBefore)) || (scope.notAfter && now >= Date.parse(scope.notAfter))) {
     return { state: "inactive", label: "Scope inactive", detail: "The Project scope window is not currently active.", revision: scope.revision };
@@ -181,6 +238,9 @@ export function evaluateBrowserScope(urlValue: string | undefined, scope?: Engag
   catch {
     // diagnostic-expected: transient operator address text has an explicit unknown-scope presentation.
     return { state: "unknown", label: "Scope unknown", detail: "The current address is not a valid URL.", revision: scope.revision };
+  }
+  if (scope.allowAllTargets) {
+    return { state: "in_scope", label: "All targets", detail: `Project scope revision ${scope.revision} permits every HTTP and HTTPS target and port.`, revision: scope.revision };
   }
   const targetAllowed = domainAllowed(url.hostname, scope.allowedDomains)
     || urlAllowed(url, scope.allowedUrls)

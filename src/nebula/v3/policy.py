@@ -313,6 +313,8 @@ class PolicyEngine:
         request: PolicyRequest,
         target: _Target,
     ) -> PolicyDecision | None:
+        if policy.allow_all_targets:
+            return None
         address_allowed = target.address is not None and _ip_allowed(
             target.address, policy.allowed_cidrs
         )

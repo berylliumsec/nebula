@@ -173,7 +173,7 @@ export function DialogProvider({ children }: PropsWithChildren) {
         {children}
         {pending && (
         <ModalSurface labelledBy="confirmation-title" className="confirmation-dialog" onClose={() => finish(false)}>
-          <header>
+          <header role="presentation">
             <span className={`confirmation-icon ${pending.options.tone ?? "default"}`} aria-hidden="true">
               <AlertTriangle size={20} />
             </span>

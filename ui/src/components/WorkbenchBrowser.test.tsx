@@ -65,6 +65,7 @@ const scope: EngagementScopePolicy = {
   allowedDomains: ["docs.example.com"],
   allowedUrls: [],
   allowedPorts: [443],
+  allowAllTargets: false,
   prohibitedActions: [],
   localOnly: true,
   maxConcurrency: 1,
@@ -100,6 +101,13 @@ function browserApi(): ApiClient {
   return {
     getSecurityBrowserWorkspace: vi.fn(async () => ({ identities: [identity], sessions: [session], traffic: [], frames: [], actions: [], handoffs: [] })),
     syncSecurityBrowserSession: vi.fn(async (_session, tabs, activeTabId) => ({ ...session, tabs, activeTabId, revision: 2 })),
+    getEngagementScope: vi.fn(async () => scope),
+    updateEngagementScope: vi.fn(async (_projectId, request) => ({
+      ...scope,
+      ...request,
+      engagementId: scope.engagementId,
+      revision: request.expectedRevision + 1,
+    })),
   } as unknown as ApiClient;
 }
 
@@ -107,22 +115,27 @@ function renderBrowser(
   onAddKnowledgeUrl = vi.fn(async () => ({ id: "source-1", name: "Guide" })),
   onAskNebula = vi.fn(),
   scopeValue: EngagementScopePolicy | undefined = scope,
+  onScopeUpdated = vi.fn(),
+  api = browserApi(),
 ) {
   return {
     onAddKnowledgeUrl,
     onAskNebula,
+    onScopeUpdated,
+    api,
     ...render(
       <MemoryRouter>
         <DialogProvider>
           <ChromeProvider value={chrome}>
             <WorkbenchBrowser
               active
-              api={browserApi()}
+              api={api}
               projectId="project-1"
               scope={scopeValue}
               onAddKnowledgeUrl={onAddKnowledgeUrl}
               onAskNebula={onAskNebula}
               onOpenFiles={() => undefined}
+              onScopeUpdated={onScopeUpdated}
             />
           </ChromeProvider>
         </DialogProvider>
@@ -306,6 +319,64 @@ describe("WorkbenchBrowser", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("The page changed during capture.");
     expect(screen.getByRole("button", { name: "Ask Nebula about the live page" })).toBeEnabled();
+  });
+
+  it("adds the right-clicked origin to durable Project scope after confirmation", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    const api = browserApi();
+    const onScopeUpdated = vi.fn();
+    renderBrowser(vi.fn(async () => ({ id: "source-1", name: "Guide" })), vi.fn(), scope, onScopeUpdated, api);
+    await openPage("https://outside.example.net/account?view=security");
+    const tabId = browserMocks.create.mock.calls[0][0] as string;
+
+    act(() => {
+      eventMocks.handlers.get("nebula-browser-scope-request")?.({
+        payload: {
+          tabId,
+          projectId: "project-1",
+          url: "https://outside.example.net/account?view=security",
+          state: "ready",
+        },
+      });
+    });
+
+    expect(await screen.findByText("Add https://outside.example.net/ to scope?")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Add to scope" }));
+
+    await waitFor(() => expect(api.updateEngagementScope).toHaveBeenCalledWith("project-1", expect.objectContaining({
+      allowedUrls: ["https://outside.example.net/"],
+      allowedDomains: ["docs.example.com"],
+      expectedRevision: 4,
+    })));
+    expect(onScopeUpdated).toHaveBeenCalledWith(expect.objectContaining({ revision: 5 }));
+    expect(await screen.findByRole("status")).toHaveTextContent("was added to Project scope revision 5");
+  });
+
+  it("loads a concurrent scope revision without overwriting it and explains the retry", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    const api = browserApi();
+    vi.mocked(api.updateEngagementScope).mockRejectedValueOnce(new Error("revision conflict"));
+    vi.mocked(api.getEngagementScope).mockResolvedValueOnce({ ...scope, allowedDomains: ["docs.example.com", "new.example"], revision: 5 });
+    const onScopeUpdated = vi.fn();
+    renderBrowser(vi.fn(async () => ({ id: "source-1", name: "Guide" })), vi.fn(), scope, onScopeUpdated, api);
+    await openPage("https://outside.example.net/account");
+    const tabId = browserMocks.create.mock.calls[0][0] as string;
+    act(() => {
+      eventMocks.handlers.get("nebula-browser-scope-request")?.({
+        payload: { tabId, projectId: "project-1", url: "https://outside.example.net/account", state: "ready" },
+      });
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Add to scope" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Project scope changed before this addition could be saved");
+    expect(onScopeUpdated).toHaveBeenCalledWith(expect.objectContaining({ revision: 5 }));
+    expect(api.updateEngagementScope).toHaveBeenCalledTimes(1);
   });
 
   it("keeps ingestion failures in the browser without a success notice", async () => {
