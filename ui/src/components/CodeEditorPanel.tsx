@@ -35,7 +35,7 @@ interface CodeEditorPanelProps {
   onOpenTerminal?: () => void;
   onUseWithAssistant?: (context: {
     text: string;
-    sourceKind: "workspace_file";
+    sourceKind: "workspace_file" | "debug_snapshot";
     sourceId: string;
     sourceLabel: string;
     truncated: boolean;
@@ -594,7 +594,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
     {workspaceSearchMode && <EditorWorkspaceSearch api={api} engagementId={engagementId} initialMode={workspaceSearchMode} onClose={() => setWorkspaceSearchMode(undefined)} onOpen={(match) => void openWorkspaceMatch(match)} />}
     {preferencesOpen && <EditorPreferencesDialog preferences={preferences} onApply={savePreferences} onClose={() => setPreferencesOpen(false)} />}
     {tasksOpen && onRun && <EditorTasksDialog api={api} engagementId={engagementId} onClose={() => setTasksOpen(false)} onRun={onRun} />}
-    {debuggerOpen && buffer?.filePath.endsWith(".py") && <EditorDebuggerPanel api={api} engagementId={engagementId} path={buffer.filePath} expectedSha256={buffer.expectedSha256} dirty={dirty} breakpoints={breakpoints[buffer.filePath] ?? []} cursorLine={cursor.line} onToggleBreakpoint={(line) => toggleBreakpoint(buffer.filePath, line)} onReveal={(line) => setNavigation({ line, column: 1, request: Date.now() })} onClose={() => setDebuggerOpen(false)} />}
+    {debuggerOpen && buffer?.filePath.endsWith(".py") && <EditorDebuggerPanel api={api} engagementId={engagementId} path={buffer.filePath} expectedSha256={buffer.expectedSha256} dirty={dirty} breakpoints={breakpoints[buffer.filePath] ?? []} cursorLine={cursor.line} onToggleBreakpoint={(line) => toggleBreakpoint(buffer.filePath, line)} onReveal={(line) => setNavigation({ line, column: 1, request: Date.now() })} onUseWithAssistant={onUseWithAssistant} onClose={() => setDebuggerOpen(false)} />}
     {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
   </div>;
 }

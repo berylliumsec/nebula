@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CircleStop,
   LoaderCircle,
+  MessageSquareText,
   Pause,
   Play,
   RotateCcw,
@@ -26,12 +27,96 @@ interface EditorDebuggerPanelProps {
   cursorLine: number;
   onToggleBreakpoint(line: number): void;
   onReveal(line: number): void;
+  onUseWithAssistant?(context: DebugSnapshotContext): void;
   onClose(): void;
+}
+
+export interface DebugSnapshotContext {
+  text: string;
+  sourceKind: "debug_snapshot";
+  sourceId: string;
+  sourceLabel: string;
+  truncated: boolean;
 }
 
 interface VariableGroup {
   name: string;
   variables: DebugProtocol.Variable[];
+}
+
+interface DebugSnapshotInput {
+  sessionId: string;
+  path: string;
+  sourceSha256: string;
+  imageDigest: string;
+  state: string;
+  stack: DebugProtocol.StackFrame[];
+  variables: VariableGroup[];
+  output: string[];
+}
+
+const clipSnapshotText = (value: string, limit: number) =>
+  value.length > limit ? `${value.slice(0, limit)}\u2026` : value;
+
+export function buildDebugSnapshot(input: DebugSnapshotInput): DebugSnapshotContext {
+  const joinedOutput = input.output.join("");
+  let truncated = joinedOutput.length > 10_000
+    || input.stack.length > 50
+    || input.variables.length > 8
+    || input.variables.some((group) => group.variables.length > 100);
+  const snapshot = {
+    schema: "nebula.debug-snapshot/v1",
+    source: {
+      path: clipSnapshotText(input.path, 4096),
+      sha256: clipSnapshotText(input.sourceSha256, 128),
+    },
+    runtime: {
+      imageDigest: clipSnapshotText(input.imageDigest, 256),
+      workspaceAccess: "read-only",
+      networkAccess: "none",
+    },
+    session: {
+      id: clipSnapshotText(input.sessionId, 256),
+      state: clipSnapshotText(input.state, 64),
+    },
+    stack: input.stack.slice(0, 50).map((frame) => ({
+      name: clipSnapshotText(frame.name, 512),
+      path: clipSnapshotText(frame.source?.path?.replace("/workspace/", "") ?? "", 4096),
+      line: frame.line,
+      column: frame.column,
+    })),
+    variables: input.variables.slice(0, 8).map((group) => ({
+      scope: clipSnapshotText(group.name, 256),
+      values: group.variables.slice(0, 100).map((variable) => ({
+        name: clipSnapshotText(variable.name, 256),
+        type: clipSnapshotText(variable.type ?? "", 256),
+        value: clipSnapshotText(variable.value, 1000),
+      })),
+    })),
+    output: joinedOutput.slice(-10_000),
+  };
+  let text = JSON.stringify(snapshot, null, 2);
+  if (text.length > 65_536) {
+    truncated = true;
+    text = JSON.stringify({
+      ...snapshot,
+      stack: snapshot.stack.slice(0, 10).map((frame) => ({
+        ...frame,
+        name: clipSnapshotText(frame.name, 256),
+        path: clipSnapshotText(frame.path, 512),
+      })),
+      variables: [],
+      output: snapshot.output.slice(-4000),
+      truncationReason: "Snapshot exceeded the 64 KiB assistant-context limit; variables were omitted.",
+    }, null, 2);
+  }
+  return {
+    text,
+    sourceKind: "debug_snapshot",
+    sourceId: input.sessionId,
+    sourceLabel: `Debugger: ${input.path}`,
+    truncated,
+  };
 }
 
 export function EditorDebuggerPanel({
@@ -44,6 +129,7 @@ export function EditorDebuggerPanel({
   cursorLine,
   onToggleBreakpoint,
   onReveal,
+  onUseWithAssistant,
   onClose,
 }: EditorDebuggerPanelProps) {
   const transportRef = useRef<DebugTransport | undefined>(undefined);
@@ -62,6 +148,7 @@ export function EditorDebuggerPanel({
   const [evaluated, setEvaluated] = useState("");
   const [expression, setExpression] = useState("");
   const [sessionDetail, setSessionDetail] = useState<{
+    id: string;
     digest: string;
     expiresAt: string;
   }>();
@@ -186,6 +273,7 @@ export function EditorDebuggerPanel({
         arguments: parsedArguments,
       });
       setSessionDetail({
+        id: session.sessionId,
         digest: session.imageDigest,
         expiresAt: session.expiresAt,
       });
@@ -274,6 +362,20 @@ export function EditorDebuggerPanel({
       context: "repl",
     })) as DebugProtocol.EvaluateResponse | undefined;
     if (response) setEvaluated(response.body.result);
+  };
+
+  const askNebula = () => {
+    if (!onUseWithAssistant || !sessionDetail || !expectedSha256) return;
+    onUseWithAssistant(buildDebugSnapshot({
+      sessionId: sessionDetail.id,
+      path,
+      sourceSha256: expectedSha256,
+      imageDigest: sessionDetail.digest,
+      state,
+      stack,
+      variables,
+      output,
+    }));
   };
 
   const active = !["idle", "failed"].includes(state);
@@ -416,6 +518,15 @@ export function EditorDebuggerPanel({
               <CircleStop size={15} />
             </button>
             {state === "ended" && <button type="button" aria-label="Restart debugger" onClick={() => void start()}><RotateCcw size={15} /></button>}
+            <button
+              type="button"
+              aria-label="Ask Nebula about debugger state"
+              title="Attach a bounded debugger snapshot to a Nebula chat draft"
+              disabled={!onUseWithAssistant || !sessionDetail || !["stopped", "ended"].includes(state)}
+              onClick={askNebula}
+            >
+              <MessageSquareText size={15} />
+            </button>
             <span>
               {state}
               {sessionDetail
