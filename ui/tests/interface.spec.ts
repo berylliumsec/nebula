@@ -2408,6 +2408,22 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(page.locator(".code-mirror-host")).toHaveAttribute("data-language-ready", "example.c");
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("textbox", { name: "Search commands" }).fill("Editor: Workspace Environment");
+    await palette.getByRole("option", { name: /Editor: Workspace Environment/ }).click();
+  } else {
+    await page.getByRole("button", { name: "Environment", exact: true }).click();
+  }
+  const environment = page.getByRole("dialog", { name: "Workspace environment" });
+  await expect(environment.getByText("Nebula-managed project workspace")).toBeVisible();
+  await expect(environment.getByText("Kali runtime ready")).toBeVisible();
+  await expect(environment).toContainText("/workspace");
+  const environmentAccessibility = await new AxeBuilder({ page }).include(".editor-environment-dialog").analyze();
+  expect(environmentAccessibility.violations).toEqual([]);
+  await environment.getByRole("button", { name: "Close", exact: true }).click();
+
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     await page.getByRole("button", { name: "More editor actions" }).click();
     const editorOptions = page.getByLabel("Editor options");
     const optionBounds = await editorOptions.locator("label, button").evaluateAll((elements) => elements.map((element) => {
@@ -2437,6 +2453,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(compatibleTasks.getByRole("option", { name: /Extension-owned task/ })).toBeDisabled();
   await expect(compatibleTasks).toContainText("requires a VS Code extension");
   await compatibleTasks.getByRole("button", { name: "Close project tasks" }).click();
+  await expect(compatibleTasks).toBeHidden();
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     const panel = page.locator(".code-editor-panel");

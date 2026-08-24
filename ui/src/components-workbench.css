@@ -1090,6 +1090,22 @@ kbd { font-size: 11px; }
 .editor-preference-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 16px 18px; }.editor-preference-fields > label:not(.editor-wrap-setting) { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }.editor-preference-fields select { min-height: 36px; }.editor-wrap-setting { display: flex; grid-column: 1 / -1; align-items: center; gap: 9px; padding: 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); }.editor-wrap-setting > span { display: grid; gap: 2px; }.editor-wrap-setting small { color: var(--muted); }
 .editor-keybindings { display: grid; gap: 7px; padding: 0 18px 16px; }.editor-keybindings > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.editor-keybindings h3, .editor-keybindings p { margin: 0; }.editor-keybindings h3 { font-size: 13px; }.editor-keybindings p { color: var(--muted); font-size: 11px; }.editor-keybindings > label { display: grid; grid-template-columns: minmax(0, 1fr) 190px; align-items: center; gap: 12px; color: var(--muted-strong); font-size: 12px; }.editor-keybindings input { min-height: 36px; font-family: var(--font-mono); }.editor-keybindings input.invalid { border-color: var(--red); }
 .editor-preferences-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
+.editor-environment-dialog { width: min(720px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow: auto; }
+.editor-environment-dialog > header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+.editor-environment-dialog h2 { margin: 2px 0 0; font-size: 16px; }
+.editor-environment-dialog header small, .editor-environment-grid small { color: var(--muted); }
+.editor-environment-grid { display: grid; gap: 9px; padding: 16px 18px; }
+.editor-environment-grid > section { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 11px; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-muted); }
+.editor-environment-grid > section > svg { margin-top: 2px; color: var(--blue); }
+.editor-environment-grid h3, .editor-environment-grid p { margin: 0; }
+.editor-environment-grid h3 { margin: 2px 0 5px; font-size: 13px; }
+.editor-environment-grid p { display: flex; align-items: center; gap: 5px; margin-top: 7px; color: var(--muted-strong); font-size: 11px; line-height: 1.5; }
+.editor-environment-grid code { overflow-wrap: anywhere; }
+.editor-environment-dialog > .form-error { margin: 0 18px 10px; }
+.editor-environment-retry { margin: 0 18px 12px; }
+.editor-environment-dialog > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-top: 1px solid var(--border); }
+.editor-environment-dialog > footer > span { color: var(--muted); font-size: 11px; }
+.editor-environment-dialog > footer > div { display: flex; flex: 0 0 auto; gap: 8px; }
 .code-mirror-host { position: relative; min-width: 0; min-height: 430px; flex: 1 1 0; align-self: stretch; overflow: hidden; contain: layout paint; }
 .inventory-panel { align-self: start; overflow: hidden; }
 .inventory-disclosure > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 16px; list-style: none; cursor: pointer; }
@@ -1895,6 +1911,10 @@ kbd { font-size: 11px; }
   .code-editor-pane + .code-editor-pane { border-top-color: var(--border); border-left-color: transparent; }
   .code-editor-pane-focus { min-height: 44px; align-items: center; }
   .editor-preferences-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .editor-environment-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .editor-environment-dialog > footer { align-items: stretch; flex-direction: column; }
+  .editor-environment-dialog > footer > div .button { min-height: 44px; flex: 1; }
+  .code-editor-environment-action { display: none; }
   .editor-preference-fields { grid-template-columns: 1fr; }
   .editor-wrap-setting { grid-column: auto; min-height: 44px; }
   .editor-keybindings > label { grid-template-columns: 1fr; gap: 4px; }

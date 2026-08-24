@@ -216,6 +216,113 @@ describe("CodeEditorPanel", () => {
     expect(listWorkspace).toHaveBeenCalledTimes(2);
   });
 
+  it("reloads a clean open tab when Terminal changes the shared workspace", async () => {
+    const user = userEvent.setup();
+    const downloadWorkspaceFile = vi.fn()
+      .mockResolvedValueOnce(new Blob(["print('editor')\n"]))
+      .mockResolvedValueOnce(new Blob(["print('terminal')\n"]));
+    const api = { listWorkspace: vi.fn().mockResolvedValue(listing()), downloadWorkspaceFile };
+    const view = render(panel(api));
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    expect(await screen.findByRole("textbox", { name: "Code editor" })).toHaveValue("print('editor')\n");
+    view.rerender(panel(api, false));
+    view.rerender(panel(api, true));
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("print('terminal')\n"));
+    expect(await screen.findByText("Workspace synchronized: 1 reloaded.")).toBeVisible();
+  });
+
+  it("preserves a dirty tab and flags an external Terminal change before save", async () => {
+    const user = userEvent.setup();
+    const downloadWorkspaceFile = vi.fn()
+      .mockResolvedValueOnce(new Blob(["print('editor')\n"]))
+      .mockResolvedValueOnce(new Blob(["print('terminal')\n"]));
+    const api = { listWorkspace: vi.fn().mockResolvedValue(listing()), downloadWorkspaceFile };
+    const view = render(panel(api));
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Code editor" }), { target: { value: "print('unsaved research')\n" } });
+    view.rerender(panel(api, false));
+    view.rerender(panel(api, true));
+
+    expect(await screen.findByText("Newer workspace version detected")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("print('unsaved research')\n");
+    expect(screen.getByLabelText("External workspace conflict")).toBeVisible();
+  });
+
+  it("never overwrites typing that begins while an external refresh is in flight", async () => {
+    const user = userEvent.setup();
+    let resolveExternal!: (blob: Blob) => void;
+    const external = new Promise<Blob>((resolve) => { resolveExternal = resolve; });
+    const downloadWorkspaceFile = vi.fn()
+      .mockResolvedValueOnce(new Blob(["print('editor')\n"]))
+      .mockReturnValueOnce(external);
+    const api = { listWorkspace: vi.fn().mockResolvedValue(listing()), downloadWorkspaceFile };
+    const view = render(panel(api));
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    view.rerender(panel(api, false));
+    view.rerender(panel(api, true));
+    await waitFor(() => expect(downloadWorkspaceFile).toHaveBeenCalledTimes(2));
+    fireEvent.change(screen.getByRole("textbox", { name: "Code editor" }), { target: { value: "print('typed during refresh')\n" } });
+    await act(async () => resolveExternal(new Blob(["print('terminal')\n"])));
+
+    expect(await screen.findByText("Newer workspace version detected")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("print('typed during refresh')\n");
+  });
+
+  it("turns a dirty externally deleted file into an explicit recoverable draft", async () => {
+    const user = userEvent.setup();
+    const downloadWorkspaceFile = vi.fn()
+      .mockResolvedValueOnce(new Blob(["print('editor')\n"]))
+      .mockRejectedValueOnce(new ApiError("workspace file not found", 404));
+    const api = { listWorkspace: vi.fn().mockResolvedValue(listing()), downloadWorkspaceFile };
+    const view = render(panel(api));
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Code editor" }), { target: { value: "print('keep this')\n" } });
+    view.rerender(panel(api, false));
+    view.rerender(panel(api, true));
+
+    expect(await screen.findByText("Workspace file was deleted")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("print('keep this')\n");
+    await user.click(screen.getByRole("button", { name: "Keep as draft" }));
+    expect(screen.queryByText("Workspace file was deleted")).not.toBeInTheDocument();
+    expect(screen.getByText("The deleted workspace file is now an unsaved editor draft. Save to recreate it, or choose another path.")).toBeVisible();
+  });
+
+  it("explains the shared linked workspace and hands runtime work to Terminal", async () => {
+    const user = userEvent.setup();
+    const onOpenTerminal = vi.fn();
+    const api = {
+      listWorkspace: vi.fn().mockResolvedValue(listing([])),
+      containerTerminalCapabilities: vi.fn().mockResolvedValue({
+        engagementId: "project-1",
+        ready: true,
+        sourceImage: "docker.io/kalilinux/kali-rolling@sha256:exact",
+        installedPackages: ["kali-linux-headless"],
+        network: {},
+        security: {},
+        workspace: "/workspace",
+        limits: {},
+        idleTimeoutSeconds: 900,
+        freshContainer: true,
+      }),
+    } as unknown as ApiClient;
+    render(<DialogProvider><WorkbenchEditorProvider><CodeEditorPanel active api={api} engagementId="project-1" workspacePath="/srv/research/acme" onOpenTerminal={onOpenTerminal} /></WorkbenchEditorProvider></DialogProvider>);
+
+    await user.click((await screen.findAllByRole("button", { name: "New file" }))[0]);
+    await user.click(screen.getByRole("button", { name: "Environment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Workspace environment" });
+    expect(within(dialog).getByText("Linked host folder")).toBeVisible();
+    expect(within(dialog).getByText("/srv/research/acme")).toBeVisible();
+    expect(await within(dialog).findByText("Kali runtime ready")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Open Terminal" }));
+    expect(onOpenTerminal).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog", { name: "Workspace environment" })).not.toBeInTheDocument();
+  });
+
   it("progressively discloses mobile files and secondary editor actions", async () => {
     const user = userEvent.setup();
     renderPanel({ listWorkspace: vi.fn().mockResolvedValue(listing([])) });

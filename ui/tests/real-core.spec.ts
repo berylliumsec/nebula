@@ -530,6 +530,25 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     expect(evidenceResponse.ok()).toBe(true);
     expect(JSON.stringify(await evidenceResponse.json())).toContain("scanner.py");
 
+    await writeFile(path.join(workspaceRoot, "scanner.py"), "def scan_target():\n    return False  # Terminal edit\n", "utf8");
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Code/ }).click();
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("return False  # Terminal edit");
+    await expect(page.getByText("Workspace synchronized: 1 reloaded.")).toBeVisible();
+
+    await page.getByRole("textbox", { name: "Code editor" }).fill("def scan_target():\n    return 'unsaved operator draft'\n");
+    await writeFile(path.join(workspaceRoot, "scanner.py"), "def scan_target():\n    return 'newer agent edit'\n", "utf8");
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Code/ }).click();
+    await expect(page.getByText("Newer workspace version detected")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("unsaved operator draft");
+    await page.getByRole("button", { name: "Reload", exact: true }).click();
+    const reload = page.getByRole("dialog", { name: "Reload the workspace file?" });
+    await reload.getByRole("button", { name: "Reload file" }).click();
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("newer agent edit");
+
     await page.waitForTimeout(350);
     await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
