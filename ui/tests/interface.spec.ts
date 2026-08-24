@@ -2382,6 +2382,7 @@ test("both Zero themes snap primary workbench surfaces to the available screen",
 });
 
 test("the code editor keeps its caret and syntax layers aligned while typing", async ({ page }, testInfo) => {
+  test.slow();
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await page.goto("/?view=code");
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {

@@ -85,7 +85,7 @@ test("03 create code and review project files", async ({ page, core }) => {
     "print(f\"Reviewing {TARGET} for {len(REQUIRED)} required headers\")",
   ].join("\n"));
   await beat(page);
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Saved /workspace/check_security_headers.py", { timeout: 15_000 });
   await beat(page);
 
