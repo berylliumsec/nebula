@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type KeyboardEvent } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import { WorkbenchEditorProvider } from "../state/WorkbenchEditorContext";
 import { CodeEditorPanel } from "./CodeEditorPanel";
 import { DialogProvider } from "./DialogSystem";
 import { clearEditorSessions, loadEditorSessions } from "../state/editorSessionPersistence";
+import { ChromeProvider, type ChromeContextValue, type ContextualCommand } from "../state/ChromeContext";
 
 beforeEach(() => {
   localStorage.clear();
@@ -386,5 +387,51 @@ describe("CodeEditorPanel", () => {
     expect(within(debuggerPanel).getByText("Isolated launch review")).toBeVisible();
     expect(within(debuggerPanel).getByText(/project is read-only, networking is disabled/)).toBeVisible();
     expect(within(debuggerPanel).getByRole("button", { name: "Start isolated debugger" })).toBeEnabled();
+  });
+
+  it("registers contextual palette commands that preserve the existing debugger review", async () => {
+    const user = userEvent.setup();
+    const setContextualCommands = vi.fn();
+    const chrome: ChromeContextValue = {
+      activityOpen: false,
+      paletteOpen: false,
+      sidebarCollapsed: false,
+      toolbarHost: null,
+      openPalette: vi.fn(),
+      setActivityOpen: vi.fn(),
+      setContextualCommands,
+      setPaletteOpen: vi.fn(),
+      setToolbarHost: vi.fn(),
+      toggleActivity: vi.fn(),
+      toggleSidebar: vi.fn(),
+    };
+    render(<ChromeProvider value={chrome}><DialogProvider><WorkbenchEditorProvider><CodeEditorPanel
+      active
+      api={{
+        listWorkspace: vi.fn().mockResolvedValue(listing()),
+        downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('debug')\n"])),
+      } as unknown as ApiClient}
+      engagementId="project-1"
+      onRun={vi.fn()}
+    /></WorkbenchEditorProvider></DialogProvider></ChromeProvider>);
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    await waitFor(() => expect(setContextualCommands).toHaveBeenCalled());
+    const registrations = setContextualCommands.mock.calls
+      .map(([commands]) => commands as ContextualCommand[])
+      .filter((commands) => commands.length > 0);
+    const commands = registrations.at(-1)!;
+    expect(commands.find((command) => command.id === "editor.debug")).toMatchObject({
+      disabled: false,
+      shortcut: "F5",
+    });
+    expect(commands.find((command) => command.id === "editor.tasks")).toMatchObject({
+      disabled: false,
+      shortcut: "Mod+Shift+B",
+    });
+
+    act(() => commands.find((command) => command.id === "editor.debug")!.run());
+    expect(await screen.findByRole("dialog", { name: "Python debugger" })).toBeVisible();
+    expect(screen.getByText("Isolated launch review")).toBeVisible();
   });
 });

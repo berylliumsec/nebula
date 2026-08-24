@@ -2529,6 +2529,17 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await editorSettings.getByRole("button", { name: "Apply settings" }).click();
   await expect.poll(() => page.locator(".code-mirror-host").evaluate((host) => getComputedStyle(host.shadowRoot!.querySelector(".cm-editor")!).fontSize)).toBe("16px");
 
+  await page.keyboard.press("Control+Shift+P");
+  const editorPalette = page.getByRole("dialog", { name: "Command palette" });
+  await expect(editorPalette).toBeVisible();
+  await editorPalette.getByRole("textbox", { name: "Search commands" }).fill("Editor: Debug Saved Python");
+  const unavailableDebugger = editorPalette.getByRole("option", { name: /Editor: Debug Saved Python/ });
+  await expect(unavailableDebugger).toBeDisabled();
+  await expect(unavailableDebugger).toContainText("Debugging requires an open Python file");
+  await expect(unavailableDebugger).toContainText("F5");
+  await page.keyboard.press("Escape");
+  await expect(editorPalette).toBeHidden();
+
   await page.getByRole("button", { name: "New editor file" }).click();
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     await page.getByRole("button", { name: "More editor actions" }).click();

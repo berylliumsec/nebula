@@ -3,12 +3,14 @@ import { Command, Moon, PanelLeft, PanelRight, Search, Sun } from "lucide-react"
 import { useNavigate } from "react-router-dom";
 import { navigationItems } from "../navigation";
 import { useTheme } from "../state/ThemeContext";
+import type { ContextualCommand } from "../state/ChromeContext";
 
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   onToggleActivity: () => void;
   onToggleSidebar: () => void;
+  contextualCommands?: ContextualCommand[];
 }
 
 interface PaletteAction {
@@ -17,6 +19,8 @@ interface PaletteAction {
   description: string;
   icon: typeof Command;
   keywords: string;
+  shortcut?: string;
+  disabled?: boolean;
   run: () => void;
 }
 
@@ -27,7 +31,7 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function CommandPalette({ open, onClose, onToggleActivity, onToggleSidebar }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onToggleActivity, onToggleSidebar, contextualCommands = [] }: CommandPaletteProps) {
   const navigate = useNavigate();
   const { setPreference } = useTheme();
   const [query, setQuery] = useState("");
@@ -78,8 +82,13 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
         keywords: "activity approvals inspector drawer panel",
         run: onToggleActivity,
       },
+      ...contextualCommands.map((command) => ({
+        ...command,
+        icon: Command,
+        keywords: `${command.keywords ?? ""} editor code`,
+      })),
     ],
-    [navigate, onToggleActivity, onToggleSidebar, setPreference],
+    [contextualCommands, navigate, onToggleActivity, onToggleSidebar, setPreference],
   );
 
   const results = useMemo(() => {
@@ -106,7 +115,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
   if (!open) return null;
 
   const execute = (action: PaletteAction | undefined) => {
-    if (!action) return;
+    if (!action || action.disabled) return;
     action.run();
     onClose();
   };
@@ -174,6 +183,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
                 type="button"
                 role="option"
                 aria-selected={selected === index}
+                disabled={action.disabled}
                 onMouseEnter={() => setSelected(index)}
                 onClick={() => execute(action)}
               >
@@ -184,6 +194,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
                   <strong>{action.label}</strong>
                   <small>{action.description}</small>
                 </span>
+                {action.shortcut && <kbd>{action.shortcut}</kbd>}
               </button>
             );
           })}

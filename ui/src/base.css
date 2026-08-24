@@ -244,9 +244,11 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .palette-search { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 0 14px; border-bottom: 1px solid var(--border); color: var(--muted); }
 .palette-search input { min-width: 0; flex: 1; height: 52px; border: 0; outline: 0; color: var(--text-strong); font-size: 13px; }
 .palette-results { max-height: 360px; padding: 7px; overflow-y: auto; }
-.palette-results button { display: grid; width: 100%; grid-template-columns: 32px 1fr; gap: 10px; align-items: center; padding: 8px; border: 0; border-radius: var(--radius-control); background: transparent; text-align: left; cursor: pointer; }
+.palette-results button { display: grid; width: 100%; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px; border: 0; border-radius: var(--radius-control); background: transparent; text-align: left; cursor: pointer; }
 .palette-results button[aria-selected="true"] { background: var(--blue-muted); }
-.palette-results button > span:last-child { display: flex; flex-direction: column; }
+.palette-results button:disabled { opacity: .52; cursor: not-allowed; }
+.palette-results button > span:nth-child(2) { display: flex; min-width: 0; flex-direction: column; }
+.palette-results button > kbd { color: var(--muted); font: 10px var(--font-mono); white-space: nowrap; }
 .palette-results button strong { font-size: 11px; }
 .palette-results button small { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .palette-icon { display: grid; width: 31px; height: 31px; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--blue); background: var(--surface); }

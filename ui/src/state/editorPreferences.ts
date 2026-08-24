@@ -1,7 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { logCaughtDiagnostic } from "../diagnostics";
 
-export type EditorAction = "closeEditor" | "nextEditor" | "quickOpen" | "save" | "splitEditor" | "workspaceSearch";
+export type EditorAction =
+  | "closeEditor"
+  | "commandPalette"
+  | "debug"
+  | "find"
+  | "format"
+  | "nextEditor"
+  | "problems"
+  | "quickOpen"
+  | "rename"
+  | "save"
+  | "splitEditor"
+  | "tasks"
+  | "workspaceSearch";
 
 export interface EditorPreferences {
   fontSize: 12 | 13 | 14 | 16;
@@ -14,10 +27,17 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   fontSize: 13,
   keybindings: {
     closeEditor: "Mod+W",
+    commandPalette: "Mod+Shift+P",
+    debug: "F5",
+    find: "Mod+F",
+    format: "Alt+Shift+F",
     nextEditor: "Mod+Tab",
+    problems: "Mod+Shift+M",
     quickOpen: "Mod+P",
+    rename: "F2",
     save: "Mod+S",
     splitEditor: "Mod+\\",
+    tasks: "Mod+Shift+B",
     workspaceSearch: "Mod+Shift+F",
   },
   tabSize: 2,
@@ -26,8 +46,12 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
 
 const STORAGE_KEY = "nebula.editor.preferences.v1";
 const CHANGE_EVENT = "nebula-editor-preferences";
-const ACTIONS: EditorAction[] = ["closeEditor", "nextEditor", "quickOpen", "save", "splitEditor", "workspaceSearch"];
-const SHORTCUT = /^(?:Mod|Ctrl|Alt|Shift)(?:\+(?:Mod|Ctrl|Alt|Shift))*\+(?:[A-Z0-9]|Tab|\\)$/;
+const ACTIONS: EditorAction[] = ["closeEditor", "commandPalette", "debug", "find", "format", "nextEditor", "problems", "quickOpen", "rename", "save", "splitEditor", "tasks", "workspaceSearch"];
+const SHORTCUT = /^(?:(?:Mod|Alt|Shift)\+)*(?:[A-Z0-9]|Tab|\\|F(?:[1-9]|1[0-2]))$/;
+
+function validShortcut(shortcut: string): boolean {
+  return shortcut.length <= 40 && SHORTCUT.test(shortcut) && (shortcut.includes("+") || /^F(?:[1-9]|1[0-2])$/.test(shortcut));
+}
 
 export function normalizeEditorPreferences(value: unknown): EditorPreferences {
   if (!value || typeof value !== "object") return DEFAULT_EDITOR_PREFERENCES;
@@ -36,7 +60,7 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
   if (candidate.keybindings && typeof candidate.keybindings === "object") {
     for (const action of ACTIONS) {
       const shortcut = candidate.keybindings[action];
-      if (typeof shortcut === "string" && SHORTCUT.test(shortcut) && shortcut.length <= 40) keybindings[action] = shortcut;
+      if (typeof shortcut === "string" && validShortcut(shortcut)) keybindings[action] = shortcut;
     }
   }
   return {
@@ -79,9 +103,9 @@ export function useEditorPreferences() {
 
 export function shortcutFromKeyboardEvent(event: Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey">): string | undefined {
   const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
-  if (["Alt", "Control", "Meta", "Shift"].includes(key) || !["Tab", "\\", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"].includes(key)) return undefined;
+  if (["Alt", "Control", "Meta", "Shift"].includes(key) || !["Tab", "\\", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", ...Array.from({ length: 12 }, (_, index) => `F${index + 1}`)].includes(key)) return undefined;
   const modifiers = [event.metaKey || event.ctrlKey ? "Mod" : undefined, event.altKey ? "Alt" : undefined, event.shiftKey ? "Shift" : undefined].filter(Boolean);
-  return modifiers.length ? [...modifiers, key].join("+") : undefined;
+  return modifiers.length || /^F(?:[1-9]|1[0-2])$/.test(key) ? [...modifiers, key].join("+") : undefined;
 }
 
 export function eventMatchesShortcut(event: Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey">, shortcut: string): boolean {

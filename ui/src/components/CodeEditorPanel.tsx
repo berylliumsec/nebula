@@ -22,6 +22,7 @@ import { codeMirrorKey, eventMatchesShortcut, useEditorPreferences } from "../st
 import type { LanguageServerState } from "../api/languageServer";
 import { EditorTasksDialog } from "./EditorTasksDialog";
 import { EditorDebuggerPanel } from "./EditorDebuggerPanel";
+import { useOptionalChrome } from "../state/ChromeContext";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
 
@@ -77,6 +78,9 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[], buffers:
 
 export function CodeEditorPanel({ active, api, engagementId, providers = [], harnesses = [], onRun, onOpenTerminal, onUseWithAssistant }: CodeEditorPanelProps) {
   const confirm = useConfirmation();
+  const chrome = useOptionalChrome();
+  const openPalette = chrome?.openPalette;
+  const setContextualCommands = chrome?.setContextualCommands;
   const { buffer, buffers, activateBuffer, closeBuffer, closeSplit, focusPane, persistenceError, persistenceState, primaryBuffer, retryPersistence, secondaryBuffer, setBuffer, splitEditor, updateBuffer: updateBufferById, updateBuffers } = useWorkbenchEditor(engagementId);
   const { preferences, savePreferences } = useEditorPreferences();
   const [directory, setDirectory] = useState("");
@@ -120,11 +124,31 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   const crumbs = useMemo(() => directory ? directory.split("/") : [], [directory]);
 
   useEffect(() => {
+    if (!active || !setContextualCommands) return;
+    const dispatch = (command: string) => () => document.dispatchEvent(new CustomEvent("nebula-editor-command", { detail: command }));
+    const python = Boolean(buffer?.filePath.endsWith(".py"));
+    setContextualCommands([
+      { id: "editor.quickOpen", label: "Editor: Quick Open", description: "Open a file from the current project workspace", keywords: "file go", shortcut: preferences.keybindings.quickOpen, run: dispatch("quickOpen") },
+      { id: "editor.workspaceSearch", label: "Editor: Search Workspace", description: "Search text across bounded project files", keywords: "find grep text", shortcut: preferences.keybindings.workspaceSearch, run: dispatch("workspaceSearch") },
+      { id: "editor.find", label: "Editor: Find in File", description: buffer ? `Search ${buffer.filePath}` : "Open a file before searching", keywords: "search current", shortcut: preferences.keybindings.find, disabled: !buffer, run: dispatch("find") },
+      { id: "editor.problems", label: "Editor: Show Problems", description: python ? "Show Python language-server diagnostics" : "Problems currently requires an open Python file", keywords: "diagnostics errors warnings", shortcut: preferences.keybindings.problems, disabled: !python, run: dispatch("problems") },
+      { id: "editor.format", label: "Editor: Format Document", description: python ? "Format the saved Python document with Ruff" : "Formatting currently requires an open Python file", keywords: "ruff python", shortcut: preferences.keybindings.format, disabled: !python, run: dispatch("format") },
+      { id: "editor.rename", label: "Editor: Rename Symbol", description: python ? "Preview a workspace-safe Python rename" : "Rename currently requires an open Python file", keywords: "refactor python", shortcut: preferences.keybindings.rename, disabled: !python, run: dispatch("rename") },
+      { id: "editor.tasks", label: "Editor: Project Tasks and Tests", description: onRun ? "Discover project-native tasks and review before execution" : "Reviewed execution is unavailable in this session", keywords: "build test pytest npm make cargo go", shortcut: preferences.keybindings.tasks, disabled: !onRun, run: dispatch("tasks") },
+      { id: "editor.debug", label: "Editor: Debug Saved Python", description: !python ? "Debugging requires an open Python file" : dirty || !buffer?.expectedSha256 ? "Open the review, then save exact file bytes before launch" : "Review an isolated, read-only, network-disabled debug launch", keywords: "breakpoint debugpy DAP security", shortcut: preferences.keybindings.debug, disabled: !python, run: dispatch("debug") },
+      { id: "editor.split", label: secondaryBuffer ? "Editor: Close Split" : "Editor: Split Editor", description: buffers.length < 2 ? "Open another file before splitting" : "View two open files side by side", keywords: "pane layout", shortcut: preferences.keybindings.splitEditor, disabled: buffers.length < 2, run: dispatch("splitEditor") },
+      { id: "editor.settings", label: "Editor: Settings and Keybindings", description: "Configure device-local editor behavior and shortcuts", keywords: "preferences keyboard", run: dispatch("settings") },
+    ]);
+    return () => setContextualCommands([]);
+  }, [active, buffer, buffers.length, dirty, onRun, preferences.keybindings, secondaryBuffer, setContextualCommands]);
+
+  useEffect(() => {
     skipBreakpointPersist.current = true;
     try {
       const saved = localStorage.getItem(`nebula.editor.breakpoints.${engagementId}`);
       setBreakpoints(saved ? JSON.parse(saved) as Record<string, number[]> : {});
-    } catch {
+    } catch (caughtError) {
+      void logCaughtDiagnostic("interface.code_editor.breakpoints_load", "Saved editor breakpoints could not be restored on this device.", caughtError, "code_editor");
       setBreakpoints({});
     }
   }, [engagementId]);
@@ -136,7 +160,8 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
     }
     try {
       localStorage.setItem(`nebula.editor.breakpoints.${engagementId}`, JSON.stringify(breakpoints));
-    } catch {
+    } catch (caughtError) {
+      void logCaughtDiagnostic("interface.code_editor.breakpoints_persist", "Editor breakpoints could not be saved on this device.", caughtError, "code_editor");
       // Breakpoints remain usable for this page when browser persistence is unavailable.
     }
   }, [breakpoints, engagementId]);
@@ -512,36 +537,43 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
 
   useEffect(() => {
     if (!active) return;
-    const shortcut = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (buffer && eventMatchesShortcut(event, preferences.keybindings.save)) {
-        event.preventDefault();
-        void save(false, buffer);
-      } else if (eventMatchesShortcut(event, preferences.keybindings.quickOpen)) {
-        event.preventDefault();
-        setWorkspaceSearchMode("files");
-      } else if (eventMatchesShortcut(event, preferences.keybindings.workspaceSearch)) {
-        event.preventDefault();
-        setWorkspaceSearchMode("text");
-      } else if (buffer?.filePath.endsWith(".py") && event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "m") {
-        event.preventDefault();
-        setProblemsRequest((request) => request + 1);
-      } else if (buffer && eventMatchesShortcut(event, preferences.keybindings.closeEditor)) {
-        event.preventDefault();
-        void closeEditorTab(buffer);
-      } else if (buffers.length > 1 && eventMatchesShortcut(event, preferences.keybindings.nextEditor)) {
-        event.preventDefault();
+    const runEditorCommand = (command: string): boolean => {
+      if (command === "commandPalette") openPalette?.();
+      else if (command === "save" && buffer) void save(false, buffer);
+      else if (command === "quickOpen") setWorkspaceSearchMode("files");
+      else if (command === "workspaceSearch") setWorkspaceSearchMode("text");
+      else if (command === "find" && buffer) setFindRequest((request) => request + 1);
+      else if (command === "problems" && buffer?.filePath.endsWith(".py")) setProblemsRequest((request) => request + 1);
+      else if (command === "format" && buffer?.filePath.endsWith(".py")) setFormatRequest((request) => request + 1);
+      else if (command === "rename" && buffer?.filePath.endsWith(".py")) setRenameRequest((request) => request + 1);
+      else if (command === "tasks" && onRun) setTasksOpen(true);
+      else if (command === "debug" && buffer?.filePath.endsWith(".py")) setDebuggerOpen(true);
+      else if (command === "closeEditor" && buffer) void closeEditorTab(buffer);
+      else if (command === "nextEditor" && buffers.length > 1) {
         const current = buffers.findIndex((candidate) => candidate.id === buffer?.id);
         activateBuffer(buffers[(current + 1) % buffers.length].id);
-      } else if (buffers.length > 1 && eventMatchesShortcut(event, preferences.keybindings.splitEditor)) {
-        event.preventDefault();
+      } else if (command === "splitEditor" && buffers.length > 1) {
         if (secondaryBuffer) closeSplit();
         else splitEditor();
+      } else if (command === "settings") setPreferencesOpen(true);
+      else return false;
+      return true;
+    };
+    const shortcut = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const command = (Object.entries(preferences.keybindings) as Array<[string, string]>).find(([, binding]) => eventMatchesShortcut(event, binding))?.[0];
+      if (command && runEditorCommand(command)) {
+        event.preventDefault();
       }
     };
+    const paletteCommand = (event: Event) => runEditorCommand((event as CustomEvent<string>).detail);
     document.addEventListener("keydown", shortcut);
-    return () => document.removeEventListener("keydown", shortcut);
-  }, [active, buffer, buffers, closeSplit, preferences.keybindings, save, secondaryBuffer, splitEditor]);
+    document.addEventListener("nebula-editor-command", paletteCommand);
+    return () => {
+      document.removeEventListener("keydown", shortcut);
+      document.removeEventListener("nebula-editor-command", paletteCommand);
+    };
+  }, [active, buffer, buffers, closeSplit, onRun, openPalette, preferences.keybindings, save, secondaryBuffer, splitEditor]);
 
   const editorPane = (candidate: WorkbenchEditorBuffer, pane: "primary" | "secondary") => <div className={`code-editor-pane${candidate.id === buffer?.id ? " active" : ""}`} key={`${pane}:${candidate.id}`}>
     {secondaryBuffer && <header><button className="code-editor-pane-focus" type="button" aria-label={`Focus ${candidate.filePath} editor`} aria-pressed={candidate.id === buffer?.id} onClick={() => focusPane(candidate.id)}><span>{candidate.filePath}</span></button>{pane === "secondary" && <button className="icon-button subtle" type="button" aria-label="Close split editor" onClick={closeSplit}><X size={14} /></button>}</header>}

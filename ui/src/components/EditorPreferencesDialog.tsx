@@ -12,8 +12,15 @@ interface EditorPreferencesDialogProps {
 
 const actions: Array<[EditorAction, string]> = [
   ["save", "Save active file"],
+  ["commandPalette", "Show command palette"],
   ["quickOpen", "Quick open"],
   ["workspaceSearch", "Search workspace"],
+  ["find", "Find in active file"],
+  ["problems", "Show Problems"],
+  ["format", "Format document"],
+  ["rename", "Rename symbol"],
+  ["tasks", "Show project tasks"],
+  ["debug", "Review and start debugging"],
   ["closeEditor", "Close active editor"],
   ["nextEditor", "Next editor"],
   ["splitEditor", "Split editor"],

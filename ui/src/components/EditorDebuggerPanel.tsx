@@ -260,6 +260,7 @@ export function EditorDebuggerPanel({
         throw new Error();
       parsedArguments = parsed;
     } catch {
+      // diagnostic-expected: invalid operator input is explained inline before any session is created.
       setArgumentsError(
         'Arguments must be a JSON string array, for example ["--target", "sample.bin"].',
       );
@@ -314,13 +315,19 @@ export function EditorDebuggerPanel({
           justMyCode: false,
           console: "internalConsole",
         })
-        .catch((launchError) =>
+        .catch((launchError) => {
+          void logCaughtDiagnostic(
+            "interface.code_debugger.launch",
+            "The isolated Python launch failed after the debugger connected.",
+            launchError,
+            "code_debugger",
+          );
           setError(
             launchError instanceof Error
               ? launchError.message
               : "Python launch failed.",
-          ),
-        );
+          );
+        });
       setState("running");
     } catch (caughtError) {
       void logCaughtDiagnostic(

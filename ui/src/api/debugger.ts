@@ -119,6 +119,7 @@ export class DebugTransport {
     try {
       frame = JSON.parse(raw) as typeof frame;
     } catch {
+      // diagnostic-expected: the transport converts malformed Core data into an operator-visible failed state.
       this.options.onState?.(
         "failed",
         "Core returned an invalid debugger message.",

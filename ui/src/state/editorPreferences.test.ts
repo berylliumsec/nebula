@@ -23,5 +23,24 @@ describe("editorPreferences", () => {
     expect(shortcutFromKeyboardEvent(event)).toBe("Mod+Shift+P");
     expect(eventMatchesShortcut(event, "Mod+Shift+P")).toBe(true);
     expect(codeMirrorKey("Mod+Shift+S")).toBe("Mod-Shift-s");
+    expect(shortcutFromKeyboardEvent({ altKey: false, ctrlKey: false, key: "F2", metaKey: false, shiftKey: false })).toBe("F2");
+    expect(eventMatchesShortcut({ altKey: false, ctrlKey: false, key: "F5", metaKey: false, shiftKey: false }, "F5")).toBe(true);
+  });
+
+  it("fills newly introduced actions when loading an older preference record", () => {
+    const preferences = normalizeEditorPreferences({
+      fontSize: 14,
+      keybindings: { save: "Mod+Alt+S" },
+    });
+    expect(preferences.keybindings.save).toBe("Mod+Alt+S");
+    expect(preferences.keybindings).toMatchObject({
+      commandPalette: "Mod+Shift+P",
+      debug: "F5",
+      find: "Mod+F",
+      format: "Alt+Shift+F",
+      problems: "Mod+Shift+M",
+      rename: "F2",
+      tasks: "Mod+Shift+B",
+    });
   });
 });

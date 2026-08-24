@@ -1045,7 +1045,7 @@ kbd { font-size: 11px; }
 .code-editor-mobile-only, .code-editor-mobile-title, .code-editor-mobile-tools-toggle, .code-editor-mobile-files-toggle, .code-editor-mobile-tools { display: none; }
 .code-editor-debug-entry { display: flex; min-height: 38px; align-items: center; justify-content: flex-end; gap: 10px; padding: 4px 10px; border-top: 1px solid var(--border-soft); background: var(--surface-muted); }
 .code-editor-debug-entry span { color: var(--muted); font-size: 11px; }
-.code-mirror-host::part(cm-debug-breakpoint), .cm-debug-breakpoint { display: block; width: 9px; height: 9px; margin: 0 3px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 1px color-mix(in srgb, var(--red) 70%, black); }
+.code-mirror-host::part(cm-debug-breakpoint), .cm-debug-breakpoint { display: block; width: 9px; height: 9px; margin: 0 3px; border: 1px solid color-mix(in srgb, var(--red) 70%, black); border-radius: 50%; background: var(--red); }
 .editor-debugger { position: absolute; z-index: 20; right: 12px; bottom: 30px; display: flex; width: min(760px, calc(100% - 286px)); max-height: calc(100% - 50px); flex-direction: column; overflow: auto; border: 1px solid var(--border-strong); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow-lg); }
 .editor-debugger > header { position: sticky; z-index: 1; top: 0; display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
 .editor-debugger > header > span { display: flex; min-width: 0; align-items: center; gap: 7px; }
