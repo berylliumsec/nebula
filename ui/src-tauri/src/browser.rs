@@ -77,7 +77,9 @@ pub(crate) struct BrowserState {
 
 struct BrowserTab {
     project_id: String,
+    identity_partition: String,
     label: String,
+    proxy: Option<crate::browser_proxy::BrowserProxyHandle>,
 }
 
 struct PendingDownload {
@@ -217,6 +219,26 @@ struct BrowserContextEvent {
     detail: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrowserActionRequest {
+    action_id: String,
+    kind: String,
+    locator: serde_json::Map<String, serde_json::Value>,
+    arguments: serde_json::Map<String, serde_json::Value>,
+    page_url: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserActionEvent {
+    action_id: String,
+    tab_id: String,
+    state: &'static str,
+    result: serde_json::Value,
+    detail: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BrowserImportResult {
@@ -233,6 +255,11 @@ pub(crate) struct BrowserImportResult {
 pub(crate) struct BrowserCapabilities {
     engine: &'static str,
     project_storage: &'static str,
+    identity_partitions: bool,
+    devtools: bool,
+    interception_proxy: bool,
+    http2_capture: bool,
+    websocket_capture: bool,
 }
 
 #[tauri::command]
@@ -250,6 +277,11 @@ pub(crate) fn browser_capabilities() -> BrowserCapabilities {
         } else {
             "ephemeral"
         },
+        identity_partitions: true,
+        devtools: true,
+        interception_proxy: true,
+        http2_capture: true,
+        websocket_capture: true,
     }
 }
 
@@ -571,6 +603,27 @@ fn project_key_hex(project_id: &str) -> String {
         .collect()
 }
 
+const DEFAULT_IDENTITY_PARTITION: &str = "browser-00000000-0000-0000-0000-000000000000";
+
+fn identity_key(project_id: &str, identity_partition: &str) -> [u8; 16] {
+    if identity_partition == DEFAULT_IDENTITY_PARTITION {
+        return project_key(project_id);
+    }
+    let digest = Sha256::digest(
+        format!("nebula-browser-profile-v2:{project_id}:{identity_partition}").as_bytes(),
+    );
+    let mut key = [0_u8; 16];
+    key.copy_from_slice(&digest[..16]);
+    key
+}
+
+fn identity_key_hex(project_id: &str, identity_partition: &str) -> String {
+    identity_key(project_id, identity_partition)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[cfg(target_os = "macos")]
 fn macos_supports_project_store() -> bool {
     use objc2_foundation::NSProcessInfo;
@@ -708,6 +761,9 @@ fn close_tab_internal(app: &AppHandle, state: &BrowserState, tab_id: &str) -> Re
                 .close()
                 .map_err(|error| format!("cannot close browser tab: {error}"))?;
         }
+        if let Some(proxy) = tab.proxy {
+            proxy.stop();
+        }
     }
     Ok(())
 }
@@ -718,11 +774,19 @@ pub(crate) fn browser_create_tab(
     state: State<'_, BrowserState>,
     tab_id: String,
     project_id: String,
+    identity_partition: String,
+    session_id: String,
+    proxy_enabled: bool,
     url: String,
     bounds: BrowserBounds,
 ) -> Result<(), String> {
-    if !valid_identifier(&tab_id) || !valid_identifier(&project_id) {
-        return Err("The browser tab or Project identifier is invalid.".to_string());
+    if !valid_identifier(&tab_id)
+        || !valid_identifier(&project_id)
+        || !valid_identifier(&identity_partition)
+        || !valid_identifier(&session_id)
+        || !identity_partition.starts_with("browser-")
+    {
+        return Err("The browser tab, Project, or identity identifier is invalid.".to_string());
     }
     let url = validated_url(&url)?;
     let bounds = checked_bounds(bounds)?;
@@ -747,12 +811,19 @@ pub(crate) fn browser_create_tab(
     }
 
     let label = format!("browser-{tab_id}");
-    let profile_dir = app
+    let profile_root = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("cannot locate browser storage: {error}"))?
-        .join("browser-profiles")
-        .join(project_key_hex(&project_id));
+        .join("browser-profiles");
+    let profile_dir = if identity_partition == DEFAULT_IDENTITY_PARTITION {
+        profile_root.join(project_key_hex(&project_id))
+    } else {
+        profile_root
+            .join("identities")
+            .join(project_key_hex(&project_id))
+            .join(identity_key_hex(&project_id, &identity_partition))
+    };
     fs::create_dir_all(&profile_dir)
         .map_err(|error| format!("cannot prepare browser storage: {error}"))?;
 
@@ -767,6 +838,17 @@ pub(crate) fn browser_create_tab(
     let download_app = app.clone();
     let download_tab = tab_id.clone();
     let download_project = project_id.clone();
+
+    let proxy = if proxy_enabled {
+        Some(crate::browser_proxy::start(
+            &app,
+            &project_key_hex(&project_id),
+            &session_id,
+            &tab_id,
+        )?)
+    } else {
+        None
+    };
 
     let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
         .on_navigation(move |next| {
@@ -891,12 +973,16 @@ pub(crate) fn browser_create_tab(
         .enable_clipboard_access()
         .focused(false)
         .zoom_hotkeys_enabled(true)
-        .devtools(false);
+        .devtools(true);
+
+    if let Some(proxy) = &proxy {
+        builder = builder.proxy_url(proxy.url.clone());
+    }
 
     #[cfg(target_os = "macos")]
     {
         if macos_supports_project_store() {
-            builder = builder.data_store_identifier(project_key(&project_id));
+            builder = builder.data_store_identifier(identity_key(&project_id, &identity_partition));
         } else {
             builder = builder.incognito(true);
         }
@@ -941,8 +1027,28 @@ pub(crate) fn browser_create_tab(
         .tabs
         .lock()
         .map_err(|_| "Browser state is unavailable.".to_string())?
-        .insert(tab_id, BrowserTab { project_id, label });
+        .insert(
+            tab_id,
+            BrowserTab {
+                project_id,
+                identity_partition,
+                label,
+                proxy,
+            },
+        );
     Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn browser_reveal_proxy_ca(
+    app: AppHandle,
+    project_id: String,
+) -> Result<String, String> {
+    if !valid_identifier(&project_id) {
+        return Err("The Project identifier is invalid.".to_string());
+    }
+    crate::browser_proxy::reveal_ca(&app, &project_key_hex(&project_id))
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -998,6 +1104,150 @@ pub(crate) fn browser_capture_context(
             emit_context(&callback_app, event);
         })
         .map_err(|error| format!("cannot capture live page context: {error}"))
+}
+
+#[tauri::command]
+pub(crate) fn browser_execute_action(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    tab_id: String,
+    project_id: String,
+    request: BrowserActionRequest,
+) -> Result<(), String> {
+    if !valid_identifier(&request.action_id) {
+        return Err("The browser action identifier is invalid.".to_string());
+    }
+    validated_url(&request.page_url)?;
+    let allowed_kinds = [
+        "navigate", "click", "fill", "select", "press", "extract", "replay",
+    ];
+    if !allowed_kinds.contains(&request.kind.as_str()) {
+        return Err(
+            "This browser action kind is not executable by the native browser.".to_string(),
+        );
+    }
+    if request.kind == "navigate" {
+        let target = request
+            .arguments
+            .get("url")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Navigate actions require a URL argument.".to_string())?;
+        validated_url(target)?;
+    }
+    if request.kind == "replay" {
+        let target = request
+            .arguments
+            .get("url")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Replay actions require a URL argument.".to_string())?;
+        validated_url(target)?;
+    }
+    let locator = serde_json::to_string(&request.locator)
+        .map_err(|error| format!("cannot encode browser action locator: {error}"))?;
+    let arguments = serde_json::to_string(&request.arguments)
+        .map_err(|error| format!("cannot encode browser action arguments: {error}"))?;
+    let kind = serde_json::to_string(&request.kind)
+        .map_err(|error| format!("cannot encode browser action kind: {error}"))?;
+    let expected_url = serde_json::to_string(&request.page_url)
+        .map_err(|error| format!("cannot encode browser action page: {error}"))?;
+    let script = format!(
+        r#"(() => {{
+      const kind = {kind};
+      const locator = {locator};
+      const args = {arguments};
+      const expectedUrl = {expected_url};
+      const fail = (error) => ({{ ok: false, error: String(error).slice(0, 2000), pageUrl: String(location.href).slice(0, 4096) }});
+      try {{
+        if (String(location.href) !== expectedUrl) return fail("The page changed after approval.");
+        if (kind === "navigate") {{ location.assign(String(args.url)); return {{ ok: true, kind, pageUrl: expectedUrl, navigation: String(args.url).slice(0, 4096) }}; }}
+        if (kind === "replay") {{
+          const target = new URL(String(args.url), location.href);
+          const requestHeaders = args.headers && typeof args.headers === "object" ? args.headers : {{}};
+          const forbidden = /authorization|cookie|csrf|xsrf|api[-_]?key|token/i;
+          if (Object.keys(requestHeaders).some((name) => forbidden.test(name))) return fail("Replay headers cannot contain reusable secrets.");
+          const xhr = new XMLHttpRequest();
+          xhr.open(String(args.method || "GET").toUpperCase(), target.href, false);
+          xhr.withCredentials = true;
+          for (const [name, value] of Object.entries(requestHeaders)) xhr.setRequestHeader(String(name), String(value));
+          xhr.send(args.body === undefined || args.body === "" ? null : String(args.body).slice(0, 65536));
+          const responseHeaders = Object.fromEntries(String(xhr.getAllResponseHeaders()).trim().split(/[\r\n]+/).filter(Boolean).map((line) => {{ const index = line.indexOf(":"); return index > 0 ? [line.slice(0, index).trim(), line.slice(index + 1).trim()] : [line, ""]; }}));
+          return {{ ok: true, kind, pageUrl: expectedUrl, requestUrl: target.href.slice(0, 4096), method: String(args.method || "GET").toUpperCase(), status: xhr.status, responseHeaders, responsePreview: String(xhr.responseText || "").slice(0, 16000), responseBytes: String(xhr.responseText || "").length }};
+        }}
+        let candidates = [];
+        if (locator.css) candidates = Array.from(document.querySelectorAll(String(locator.css)));
+        else if (locator.label) {{
+          const wanted = String(locator.label).trim().toLocaleLowerCase();
+          candidates = Array.from(document.querySelectorAll("label")).filter((label) => String(label.innerText || label.textContent || "").trim().toLocaleLowerCase() === wanted).map((label) => label.control).filter(Boolean);
+        }} else {{
+          candidates = Array.from(document.querySelectorAll("button,a,input,select,textarea,[role],[tabindex]"));
+          if (locator.role) candidates = candidates.filter((element) => String(element.getAttribute("role") || element.tagName).toLocaleLowerCase() === String(locator.role).toLocaleLowerCase());
+          if (locator.name) {{ const wanted = String(locator.name).trim().toLocaleLowerCase(); candidates = candidates.filter((element) => String(element.getAttribute("aria-label") || element.innerText || element.textContent || element.getAttribute("name") || "").trim().toLocaleLowerCase() === wanted); }}
+          if (locator.text) {{ const wanted = String(locator.text).trim().toLocaleLowerCase(); candidates = candidates.filter((element) => String(element.innerText || element.textContent || "").trim().toLocaleLowerCase() === wanted); }}
+        }}
+        candidates = Array.from(new Set(candidates)).filter((element) => element instanceof HTMLElement && element.isConnected);
+        if (candidates.length !== 1) return fail(`Semantic locator matched ${{candidates.length}} elements; exactly one is required.`);
+        const element = candidates[0];
+        if (kind === "click") element.click();
+        else if (kind === "fill") {{
+          if (!("non_secret_text" in args)) return fail("Fill requires an explicit non_secret_text argument.");
+          if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return fail("Fill target is not a text control.");
+          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")?.set;
+          if (!setter) return fail("Fill target has no value setter.");
+          setter.call(element, String(args.non_secret_text).slice(0, 4000));
+          element.dispatchEvent(new Event("input", {{ bubbles: true }}));
+          element.dispatchEvent(new Event("change", {{ bubbles: true }}));
+        }} else if (kind === "select") {{
+          if (!(element instanceof HTMLSelectElement)) return fail("Select target is not a select control.");
+          element.value = String(args.value || ""); element.dispatchEvent(new Event("change", {{ bubbles: true }}));
+        }} else if (kind === "press") {{
+          const key = String(args.key || "").slice(0, 80); if (!key) return fail("Press requires a key.");
+          element.dispatchEvent(new KeyboardEvent("keydown", {{ key, bubbles: true }})); element.dispatchEvent(new KeyboardEvent("keyup", {{ key, bubbles: true }}));
+        }}
+        const extracted = kind === "extract" ? String(element.innerText || element.textContent || "").slice(0, 16000) : undefined;
+        return {{ ok: true, kind, pageUrl: expectedUrl, matched: 1, extracted, tag: element.tagName.toLocaleLowerCase() }};
+      }} catch (error) {{ return fail(error instanceof Error ? error.message : error); }}
+    }})()"#
+    );
+    let label = find_tab(&state, &tab_id, &project_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+    let callback_app = app.clone();
+    let callback_tab = tab_id.clone();
+    let action_id = request.action_id.clone();
+    webview
+        .eval_with_callback(&script, move |raw| {
+            let decoded = serde_json::from_str::<serde_json::Value>(&raw);
+            let (state, result, detail) = match decoded {
+                Ok(result) if result.get("ok").and_then(|value| value.as_bool()) == Some(true) => {
+                    ("complete", result, None)
+                }
+                Ok(result) => {
+                    let detail = result
+                        .get("error")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("The browser action failed.")
+                        .to_string();
+                    ("failed", result, Some(detail))
+                }
+                Err(_) => (
+                    "failed",
+                    serde_json::json!({}),
+                    Some("The browser returned an invalid action receipt.".to_string()),
+                ),
+            };
+            let _ = callback_app.emit(
+                "nebula-browser-action",
+                BrowserActionEvent {
+                    action_id: action_id.clone(),
+                    tab_id: callback_tab.clone(),
+                    state,
+                    result,
+                    detail,
+                },
+            );
+        })
+        .map_err(|error| format!("cannot execute the approved browser action: {error}"))
 }
 
 #[tauri::command]
@@ -1089,6 +1339,76 @@ pub(crate) fn browser_close_tab(
 }
 
 #[tauri::command]
+pub(crate) fn browser_open_devtools(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    tab_id: String,
+    project_id: String,
+) -> Result<(), String> {
+    let label = find_tab(&state, &tab_id, &project_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+    webview.open_devtools();
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn browser_clear_identity_data(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    project_id: String,
+    identity_partition: String,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id)
+        || !valid_identifier(&identity_partition)
+        || !identity_partition.starts_with("browser-")
+    {
+        return Err("The Project or identity identifier is invalid.".to_string());
+    }
+    let tabs: Vec<String> = state
+        .tabs
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .iter()
+        .filter(|(_, tab)| {
+            tab.project_id == project_id && tab.identity_partition == identity_partition
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in tabs {
+        let label = find_tab(&state, &id, &project_id)?;
+        if let Some(webview) = app.get_webview(&label) {
+            webview
+                .clear_all_browsing_data()
+                .map_err(|error| format!("cannot clear browser identity storage: {error}"))?;
+        }
+        close_tab_internal(&app, &state, &id)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let profile_root = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("cannot locate browser storage: {error}"))?
+            .join("browser-profiles");
+        let profile = if identity_partition == DEFAULT_IDENTITY_PARTITION {
+            profile_root.join(project_key_hex(&project_id))
+        } else {
+            profile_root
+                .join("identities")
+                .join(project_key_hex(&project_id))
+                .join(identity_key_hex(&project_id, &identity_partition))
+        };
+        if profile.exists() {
+            fs::remove_dir_all(profile)
+                .map_err(|error| format!("cannot clear browser identity storage: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub(crate) fn browser_clear_project_data(
     app: AppHandle,
     state: State<'_, BrowserState>,
@@ -1124,6 +1444,17 @@ pub(crate) fn browser_clear_project_data(
     if profile.exists() {
         fs::remove_dir_all(profile)
             .map_err(|error| format!("cannot clear browser storage: {error}"))?;
+    }
+    let identity_profiles = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("cannot locate browser storage: {error}"))?
+        .join("browser-profiles")
+        .join("identities")
+        .join(project_key_hex(&project_id));
+    if identity_profiles.exists() {
+        fs::remove_dir_all(identity_profiles)
+            .map_err(|error| format!("cannot clear browser identity storage: {error}"))?;
     }
     Ok(())
 }

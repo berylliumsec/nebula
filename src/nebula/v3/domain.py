@@ -70,6 +70,48 @@ class RiskClass(StringEnum):
     SCOPE_CHANGE = "scope_change"
 
 
+class BrowserSessionStatus(StringEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    CLOSED = "closed"
+
+
+class BrowserCaptureMode(StringEnum):
+    METADATA = "metadata"
+    HEADERS = "headers"
+    BODIES = "bodies"
+
+
+class BrowserActionKind(StringEnum):
+    NAVIGATE = "navigate"
+    CLICK = "click"
+    FILL = "fill"
+    SELECT = "select"
+    PRESS = "press"
+    EXTRACT = "extract"
+    SCREENSHOT = "screenshot"
+    REPLAY = "replay"
+
+
+class BrowserActionStatus(StringEnum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    EXECUTING = "executing"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
+class BrowserHandoffStatus(StringEnum):
+    QUEUED = "queued"
+    CLAIMED = "claimed"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
 class FindingStatus(StringEnum):
     CANDIDATE = "candidate"
     VALIDATED = "validated"
@@ -718,6 +760,280 @@ class Identity(Entity):
     asset_ids: list[str] = Field(default_factory=list)
     privileged: bool | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BrowserTabState(NebulaModel):
+    """Durable, non-secret representation of one native browser tab."""
+
+    id: str = Field(min_length=1, max_length=200)
+    url: str | None = Field(default=None, max_length=16_384)
+    title: str = Field(default="New tab", max_length=500)
+    position: int = Field(default=0, ge=0, le=255)
+    last_scope_state: Literal[
+        "in_scope", "out_of_scope", "inactive", "unconfigured", "unknown"
+    ] = "unknown"
+    last_scope_revision: int | None = Field(default=None, ge=1)
+
+    @field_validator("url")
+    @classmethod
+    def browser_tab_url_is_network_only(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("browser tab URLs must use http or https")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("browser tab URLs cannot contain credentials")
+        return value
+
+
+class BrowserIdentity(Entity):
+    """Named native storage partition; cookie material is never stored here."""
+
+    entity_kind: ClassVar[str] = "browser_identities"
+    engagement_id: str
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2_000)
+    color: str = Field(default="#7c6cff", pattern=r"^#[0-9a-fA-F]{6}$")
+    storage_partition: str = Field(
+        default_factory=lambda: f"browser-{uuid4()}",
+        pattern=r"^browser-[0-9a-f-]{36}$",
+    )
+    ephemeral: bool = False
+    is_default: bool = False
+    revoked_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("revoked_at")
+    @classmethod
+    def browser_identity_revocation_is_aware(
+        cls, value: datetime | None
+    ) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("browser identity revocation must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class BrowserSession(Entity):
+    """Durable research timeline; live cookies remain in the identity partition."""
+
+    entity_kind: ClassVar[str] = "browser_sessions"
+    engagement_id: str
+    name: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    status: BrowserSessionStatus = BrowserSessionStatus.ACTIVE
+    capture_mode: BrowserCaptureMode = BrowserCaptureMode.HEADERS
+    proxy_enabled: bool = False
+    tabs: list[BrowserTabState] = Field(default_factory=list, max_length=16)
+    active_tab_id: str | None = Field(default=None, max_length=200)
+    upstream_proxy_enabled: bool = False
+    upstream_proxy_url: str | None = Field(default=None, max_length=2_048)
+    interception_enabled: bool = False
+    device_owner: str | None = Field(default=None, max_length=200)
+    last_seen_at: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("upstream_proxy_url")
+    @classmethod
+    def browser_upstream_proxy_is_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() not in {"http", "https", "socks5"} or not parsed.hostname:
+            raise ValueError("upstream proxy must use http, https, or socks5")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("upstream proxy credentials require protected storage")
+        return value
+
+    @field_validator("last_seen_at")
+    @classmethod
+    def browser_last_seen_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("browser last_seen_at must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def browser_active_tab_exists(self) -> "BrowserSession":
+        ids = [tab.id for tab in self.tabs]
+        if len(ids) != len(set(ids)):
+            raise ValueError("browser tab ids must be unique")
+        if self.active_tab_id is not None and self.active_tab_id not in ids:
+            raise ValueError("active browser tab must belong to the session")
+        return self
+
+
+class BrowserTrafficExchange(Entity):
+    """Bounded traffic index. Raw bodies live only in integrity-checked artifacts."""
+
+    entity_kind: ClassVar[str] = "browser_traffic"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    tab_id: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    method: str = Field(pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
+    url: str = Field(min_length=1, max_length=16_384)
+    protocol: Literal["http/1.0", "http/1.1", "h2", "h3", "websocket", "unknown"] = "unknown"
+    status_code: int | None = Field(default=None, ge=100, le=999)
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    response_headers: dict[str, str] = Field(default_factory=dict)
+    request_body_artifact_id: str | None = Field(default=None, max_length=200)
+    response_body_artifact_id: str | None = Field(default=None, max_length=200)
+    request_bytes: int | None = Field(default=None, ge=0)
+    response_bytes: int | None = Field(default=None, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    scope_state: Literal["in_scope", "out_of_scope", "inactive", "unconfigured"]
+    scope_policy_id: str = Field(min_length=1, max_length=200)
+    scope_policy_revision: int = Field(ge=1)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    replay_of_exchange_id: str | None = Field(default=None, max_length=200)
+    error: str | None = Field(default=None, max_length=4_000)
+    truncated: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("url")
+    @classmethod
+    def browser_exchange_url_is_network_only(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() not in {"http", "https", "ws", "wss"} or not parsed.hostname:
+            raise ValueError("traffic URLs must use http, https, ws, or wss")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("traffic URLs cannot contain credentials")
+        return value
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def browser_exchange_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("browser exchange timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class BrowserWebSocketFrame(Entity):
+    entity_kind: ClassVar[str] = "browser_websocket_frames"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    exchange_id: str = Field(min_length=1, max_length=200)
+    direction: Literal["client", "server"]
+    opcode: Literal["text", "binary", "ping", "pong", "close"]
+    payload_preview: str = Field(default="", max_length=2_000)
+    payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    payload_artifact_id: str | None = Field(default=None, max_length=200)
+    payload_bytes: int = Field(ge=0)
+    observed_at: datetime = Field(default_factory=utc_now)
+    truncated: bool = False
+
+    @field_validator("observed_at")
+    @classmethod
+    def websocket_observed_at_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("websocket frame timestamp must include a timezone")
+        return value.astimezone(timezone.utc)
+
+
+class BrowserAction(Entity):
+    """Inert AI/operator proposal and its deterministic execution receipt."""
+
+    entity_kind: ClassVar[str] = "browser_actions"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    tab_id: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    kind: BrowserActionKind
+    status: BrowserActionStatus = BrowserActionStatus.PROPOSED
+    locator: dict[str, str] = Field(default_factory=dict)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    proposal: str = Field(min_length=1, max_length=4_000)
+    proposed_by: str = Field(min_length=1, max_length=200)
+    page_url: str = Field(min_length=1, max_length=16_384)
+    scope_policy_id: str = Field(min_length=1, max_length=200)
+    scope_policy_revision: int = Field(ge=1)
+    action_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    approved_by: str | None = Field(default=None, max_length=200)
+    approved_at: datetime | None = None
+    expires_at: datetime
+    completed_at: datetime | None = None
+    result: dict[str, Any] = Field(default_factory=dict)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    error: str | None = Field(default=None, max_length=4_000)
+
+    @field_validator("page_url")
+    @classmethod
+    def browser_action_page_is_network_only(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("browser actions require an http or https page")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("browser action page cannot contain credentials")
+        return value
+
+    @field_validator("approved_at", "expires_at", "completed_at")
+    @classmethod
+    def browser_action_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("browser action timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def browser_action_approval_is_coherent(self) -> "BrowserAction":
+        approved = self.status in {
+            BrowserActionStatus.APPROVED,
+            BrowserActionStatus.EXECUTING,
+            BrowserActionStatus.COMPLETE,
+            BrowserActionStatus.FAILED,
+        }
+        if approved and (self.approved_by is None or self.approved_at is None):
+            raise ValueError("approved browser actions require approval attribution")
+        if self.expires_at <= self.created_at:
+            raise ValueError("browser action expiry must follow creation")
+        return self
+
+
+class BrowserHandoff(Entity):
+    """Expiring paired-device request; it never carries browser secrets."""
+
+    entity_kind: ClassVar[str] = "browser_handoffs"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    requested_by_device_id: str = Field(min_length=1, max_length=200)
+    command: Literal["navigate", "focus_tab"]
+    tab_id: str | None = Field(default=None, max_length=200)
+    url: str | None = Field(default=None, max_length=16_384)
+    status: BrowserHandoffStatus = BrowserHandoffStatus.QUEUED
+    expires_at: datetime
+    claimed_by_device_id: str | None = Field(default=None, max_length=200)
+    claimed_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = Field(default=None, max_length=4_000)
+
+    @field_validator("url")
+    @classmethod
+    def browser_handoff_url_is_network_only(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("browser handoff URLs must use http or https")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("browser handoff URLs cannot contain credentials")
+        return value
+
+    @field_validator("expires_at", "claimed_at", "completed_at")
+    @classmethod
+    def browser_handoff_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("browser handoff timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def browser_handoff_payload_matches_command(self) -> "BrowserHandoff":
+        if self.command == "navigate" and self.url is None:
+            raise ValueError("navigate handoffs require a URL")
+        if self.command == "focus_tab" and self.tab_id is None:
+            raise ValueError("focus handoffs require a tab id")
+        if self.expires_at <= self.created_at:
+            raise ValueError("browser handoff expiry must follow creation")
+        return self
 
 
 class SoftwareComponent(Entity):
@@ -2367,6 +2683,12 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     Asset,
     Service,
     Identity,
+    BrowserIdentity,
+    BrowserSession,
+    BrowserTrafficExchange,
+    BrowserWebSocketFrame,
+    BrowserAction,
+    BrowserHandoff,
     SoftwareComponent,
     Observation,
     Finding,

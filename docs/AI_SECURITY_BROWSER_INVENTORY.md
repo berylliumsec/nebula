@@ -1,94 +1,120 @@
-# Nebula AI Security Browser inventory
+# Nebula AI Security Browser implementation contract
 
-Status: implementation contract for `codex/ai-security-browser` at
-`47daf3feda88a469f5f563662c0d2bb6d9225a56`.
+Status: active implementation contract for `codex/ai-security-browser`, based on
+Zero Layer `origin/main` (`5b8013a1`). This contract is a required whole-product
+upgrade, not a claim that every gate below has passed.
 
-## Operator journey and acceptance contract
+## Delivered and bounded in this branch
 
-The operator enters **Workbench > Browser**, opens an authorized target in the
-Project-isolated native profile, sees whether the live URL matches the durable
-Project scope, captures a bounded semantic snapshot only when the final page is
-confirmed in scope, reviews that
-snapshot in Chat, and explicitly submits it to the selected provider or harness.
-The page is never sent to AI in the background and captured page content is
-carried through the existing exact-hash, untrusted-context boundary.
+This branch delivers durable sessions/tabs/timelines, isolated named identities,
+redacted HTTP/1.1 and HTTP/2 history, WebSocket frame metadata, two-exchange
+authorization diffing, reviewed edit/replay through the active identity, Project
+CA lifecycle, DevTools, immutable semantic page Evidence, scope-bound AI action
+proposals with one-shot operator approval, and expiring mobile/desktop handoffs.
 
-| Journey step | Observable invariant | State authority | Test layer |
-| --- | --- | --- | --- |
-| Entry/discovery | Browser, target-scope state, and AI action are understandable without product knowledge | Workbench URL + Core scope | component + Playwright |
-| Navigate | Only HTTP(S) URLs without embedded credentials open; the final live URL updates the tab and scope badge | native webview + Core scope | Rust + component |
-| Capture | One explicit action returns a bounded rendered-text, form, and link snapshot with URL/title provenance and no input values or cookies; missing, inactive, outside, or changed scope fails closed | live native webview + Core scope | Rust + component + desktop dogfood |
-| Review/use | Capture opens Chat as an editable, removable attachment; it does not submit a turn | Workbench draft context | component + real Core |
-| Send | The reviewed attachment is hashed over its exact UTF-8 text and marked as untrusted data for the model | Chat request + Core | existing UI/Core regressions + real Core |
-| Failure/retry | Capture and scope-load failures remain actionable in Browser; retry is safe and does not duplicate a chat turn | component transient state | component + desktop dogfood |
-| Refresh/reconnect | Scope reloads from Core; browser profile persistence remains Project-scoped, while open-tab restoration is explicitly not yet supported | Core + native profile | real Core + desktop dogfood |
-| Clear/revoke | Clear closes tabs and removes only this Project's browser storage | native browser state | existing Rust + desktop dogfood |
+It does **not** claim pixel screenshots, raw body-artifact capture, live
+pause-and-modify interception, upstream-proxy chaining, or browser-extension
+hosting. Those require additional native engine work and their release gates are
+still open; the UI does not present them as completed controls. The semantic page
+Evidence capture is deliberately named as such and is not relabeled a screenshot.
 
-Lifecycle coverage: discover, navigate, capture, review, send, fail/retry, switch
-views, reconnect, and clear are required. Stream/interrupt belongs to the existing
-Chat lifecycle. Browser-session fork and durable tab restoration are deferred.
+## Outcome
 
-## Current baseline
+An operator enters **Workbench > Browser**, selects a durable research session
+and named identity, opens an authorized target, observes redacted HTTP and
+WebSocket traffic, and can replay or compare exchanges without exporting the
+identity's cookies. Captures become hash-addressed Evidence. AI may inspect an
+explicit bounded snapshot and propose one deterministic action, but only an
+operator-approved action can run in the selected native tab. The same durable
+session, history, evidence, and queued navigation handoffs remain visible after
+refresh, restart, reconnect, and from a paired LAN/mobile client.
 
-Nebula already provides Project-isolated browser storage, a native system
-webview, HTTP(S)-only navigation, tabs and navigation controls, bounded staged
-downloads into Project Files, public-page ingestion into Sources, and explicit
-Project-data clearing. The web/LAN UI honestly falls back to the device browser
-instead of pretending it can embed the desktop webview.
+## State authorities
 
-The scope badge added by this work is advisory context for manual browsing, not
-an executable policy gate. It does not claim that the native webview blocks an
-operator from leaving scope.
+| State | Authority | Rule |
+| --- | --- | --- |
+| Engagement scope and active window | Core `ScopePolicy` | Core revalidates mutable operations; the UI badge is explanatory only |
+| Session, tabs, navigation timeline, capture policy | Core browser entities | Native and web clients rehydrate from Core and update with optimistic revisions |
+| Cookie/cache/local-storage partition | Native webview profile keyed by Project + browser identity | Secrets do not enter ordinary Core entity JSON |
+| Traffic metadata and redacted headers | Core traffic entities | Bounded records; authorization and cookie values are replaced by stable hashes |
+| Raw bodies, DOM, screenshots, HAR, receipts | Artifact store + immutable `Evidence` | Exact SHA-256 and provenance; raw sensitive reads require acknowledgement |
+| Pending AI/browser actions | Core browser action entity | Proposal is inert; execution requires current scope plus explicit approval |
+| Live webview and transient interception pause | Desktop native runtime | A restart never silently resumes a paused request or pending execution |
+| Mobile/desktop handoff | Core expiring command | Paired clients may queue bounded navigation/focus; only desktop owns live DOM |
 
-## Baseline gaps blocking a leading security-research browser
+## Observable invariants and lifecycle matrix
 
-The benchmark is deliberately composite. Burp's current bar is a mature
-request/response workbench plus scope-aware AI assistance
-([tools](https://portswigger.net/burp/documentation/desktop/tools),
-[AI features](https://portswigger.net/burp/documentation/ai-features)); general
-AI-browser frameworks set the bar for observe/extract/act workflows and
-deterministic action reuse
-([Browser Use](https://docs.browser-use.com/cloud/agent/quickstart),
-[Stagehand](https://github.com/browserbase/stagehand/blob/main/packages/docs/v2/first-steps/quickstart.mdx)).
-Nebula has to meet both bars while retaining Project scope, evidence provenance,
-operator approval, provider policy, and the rest of the Workbench lifecycle.
+| Journey step | Observable invariant | Test layer |
+| --- | --- | --- |
+| Discover | Browser opens on a session workbench that explains identity, capture mode, scope, traffic, and required recovery | component + desktop/mobile Playwright |
+| Create | A first-use Project gets one default session and identity; named identities create isolated native storage partitions | domain + real Core + native |
+| Select/use | URL, selected session, tab, and identity agree; unsupported native-only controls are explained on LAN/mobile | component + real Core |
+| Navigate | Only credential-free HTTP(S) URLs open; Core scope is rechecked and final URL is recorded with its scope revision | Rust + Core + desktop dogfood |
+| Capture | HTTP/1.1, HTTP/2, and WebSocket metadata is bounded; secrets are redacted by default; body capture is explicit and visibly sensitive | Rust + integration |
+| Inspect | History filters, request/response detail, WebSocket frames, copy, replay, and side-by-side diff remain usable with long or binary content | component + Playwright |
+| Replay | Replay is derived from a recorded exchange, visibly editable, scope checked, bound to one identity, and produces a new linked exchange | domain + Rust + real Core |
+| Compare identities | The same request can be replayed in two named cookie jars and the status/header/body diff identifies authorization variance | domain + native + Playwright |
+| Evidence | Screenshot, DOM, request/response, WebSocket transcript, or session bundle becomes an immutable Evidence record with exact digest and provenance | real Core + artifact integrity |
+| AI inspect | An explicit, bounded, untrusted snapshot excludes values/cookies and is reviewed before model submission | Rust + component + real Core |
+| AI act | AI creates an inert semantic action proposal; ambiguous locators, stale tabs, changed scope, or absent approval fail closed | domain + Rust + real Core |
+| DevTools/proxy | Desktop exposes DevTools plus local CA and upstream-proxy lifecycle; failures say what still works and how to recover | native + packaged dogfood |
+| Refresh/reconnect | Sessions, tabs, timeline, traffic, evidence links, and pending proposals reappear without duplication; native tabs rehydrate explicitly | real Core + packaged desktop |
+| Mobile/LAN | A paired device can inspect durable state and queue an expiring navigation/focus handoff, but cannot claim live-DOM ownership | real Core + production LAN |
+| Failure/retry | Errors retain safe state, identify the failed layer, and make idempotent retry explicit | component + real Core |
+| Close/revoke | Closing a session is durable; deleting an identity requires confirmation and clears only that partition; Project clear cannot affect another Project | native + real Core |
 
-1. **No live-page AI context.** AI can receive a public URL through Sources but
-   cannot inspect the authenticated page the operator is actually viewing.
-2. **No visible scope decision.** The durable Project scope protects executable
-   tools but is absent from Browser navigation, where researchers spend most of
-   their time.
-3. **No traffic workbench.** There is no HTTP history, request/response viewer,
-   interception, modification, replay, diffing, WebSocket inspection, or HTTP/2
-   tooling comparable to a mature security proxy.
-4. **No governed browser actions.** Nebula has harness browser capabilities, but
-   no same-session observe/propose/approve/act bridge into this native profile.
-5. **No browser evidence primitive.** Screenshots, DOM snapshots, and request
-   pairs cannot yet become immutable Evidence records with hashes and provenance.
-6. **No durable research trail.** Tabs, navigation history, captures, annotations,
-   and AI action receipts do not survive app restart as a reviewable timeline.
-7. **No identity matrix.** Researchers cannot create named cookie jars, compare
-   two roles side-by-side, or run authorization-difference checks.
-8. **No extension/proxy ecosystem.** There is no compatible interception proxy,
-   upstream proxy configuration, CA lifecycle, devtools, or extension API.
-9. **No deterministic automation ladder.** There is no separation between
-   inspect/extract, proposed single action, approved deterministic replay, and
-   bounded agentic exploration.
-10. **Mobile/LAN is a handoff, not continuity.** It can open or index a URL but
-    cannot resume the desktop browser session or inspect its live state.
+Lifecycle coverage is required for discover, create, select, navigate, capture,
+inspect, replay, compare, evidence, propose, approve/reject, execute, interrupt,
+background, reconnect, refresh, close, revoke, and clear. Multi-step autonomy is
+permitted only as a sequence of separately approved deterministic actions unless
+the operator has enabled an explicit bounded approval policy.
 
-## Upgrade sequence
+## Security and privacy contract
 
-This worktree implements the prerequisite first slice: live semantic capture,
-scope status, and explicit Chat handoff. The next complete slices should be:
+1. Navigation, replay, capture, and action execution fail closed when Project
+   scope is missing, inactive, stale, or does not authorize the final target.
+2. `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, CSRF-like
+   headers, form values, and WebSocket credentials are never stored in normal
+   entity JSON or included in AI context. Redacted records keep a stable SHA-256
+   marker so equality can be compared without disclosure.
+3. Default capture is metadata plus redacted headers. Request/response bodies are
+   explicit per-session opt-in, bounded, and stored as artifacts. Sensitive raw
+   reads require the existing acknowledgement boundary.
+4. Replay uses the chosen native identity partition. A replay editor cannot add
+   credential-bearing URLs, target a different Project, or bypass current scope.
+5. The generated local interception CA is Project-local, never exported or
+   installed globally without an explicit operating-system action, and can be
+   rotated or revoked. Upstream-proxy credentials use protected credential
+   storage rather than Core JSON.
+6. AI observes only an operator-selected snapshot. Model output is untrusted and
+   creates an inert proposal. Execution re-resolves a semantic locator to exactly
+   one element and records the scope revision, page URL, action digest, result,
+   and resulting evidence.
+7. Mobile continuity carries durable metadata and expiring commands, never live
+   cookies, raw identity storage, or an implicit remote-control channel.
+8. Interception pauses are bounded and default-deny on timeout; app restart
+   releases them without forwarding modified data.
 
-1. immutable capture-to-Evidence with screenshot/DOM/request provenance;
-2. a local interception proxy and HTTP history/replay/diff workbench;
-3. proposed browser actions with scope checks and per-action approval;
-4. deterministic action receipts/replay before multi-step autonomy;
-5. named identities and authorization-difference workflows;
-6. durable, reconnectable browser research sessions.
+## Product composition
 
-The do-not-claim boundary is strict: semantic capture does not make Nebula a
-Burp replacement, does not prove request/response visibility, and does not prove
-that a provider or harness acted inside the live native session.
+The benchmark is composite: mature request/response inspection, WebSocket and
+HTTP/2 capture, interception, replay, diff, CA and upstream-proxy lifecycle;
+isolated browser contexts and DevTools; and AI observe/propose/approve/act with
+deterministic receipts. Nebula's differentiator is that those primitives share
+Project scope, Evidence, chat context integrity, durable research timelines,
+provider policy, identities, and paired-device continuity instead of living in a
+separate proxy application.
+
+## Test layers and completion boundary
+
+Required release evidence is: Python domain/API/storage tests; Rust capture,
+redaction, partition, replay, and action tests; React component tests for every
+state; real-Core persistence and reconnect; production bundle at 1440 and 1024
+desktop widths; mobile Chromium and WebKit at 320, 390, and 430 widths; a
+non-loopback paired LAN origin; packaged native DevTools/proxy/identity dogfood;
+and physical-device mobile validation where available.
+
+No partial slice, mocked route, build success, or desktop viewport upgrades this
+contract to “complete.” The final handoff must name any missing native platform,
+LAN, packaged, engine, or physical-device evidence and describe the resulting
+limitation.

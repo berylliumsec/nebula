@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Check, Download, ExternalLink, Globe2, LoaderCircle, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Bug, Check, Download, ExternalLink, GitCompareArrows, Globe2, History, LoaderCircle, Network, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, UserRound, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Link } from "react-router-dom";
 import { isTauriRuntime } from "../api/runtime";
@@ -13,8 +13,13 @@ import {
   type BrowserContextEvent,
   type BrowserDownloadEvent,
   type BrowserPageEvent,
+  type BrowserTrafficEvent,
+  type BrowserWebSocketFrameEvent,
+  type BrowserActionEvent,
 } from "../api/workbenchBrowser";
-import type { EngagementScopePolicy } from "../api/types";
+import type { EngagementScopePolicy, EvidenceSummary, EvidenceUploadRequest } from "../api/types";
+import type { ApiClient } from "../api/client";
+import type { SecurityBrowserExchange, SecurityBrowserSession, SecurityBrowserWorkspace } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useChrome } from "../state/ChromeContext";
 import type { NebulaDraftRequest } from "../state/WorkbenchDraftContext";
@@ -32,12 +37,15 @@ interface BrowserTab {
 
 interface WorkbenchBrowserProps {
   active: boolean;
+  api: ApiClient;
+  operatorId?: string;
   projectId: string;
   scope?: EngagementScopePolicy;
   scopeLoading?: boolean;
   onAddKnowledgeUrl: (url: string) => Promise<{ id: string; name: string }>;
   onAskNebula: (request: NebulaDraftRequest) => void;
   onOpenFiles: () => void;
+  onUploadEvidence?: (request: EvidenceUploadRequest) => Promise<EvidenceSummary>;
 }
 
 type BrowserNotice =
@@ -58,6 +66,15 @@ function blankTab(): BrowserTab {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function utf8Base64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
 }
 
 function snapInsideStart(value: number): number {
@@ -91,7 +108,7 @@ function visibleSurfaceRect(element: HTMLElement): DOMRect {
   return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
-export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onOpenFiles }: WorkbenchBrowserProps) {
+export function WorkbenchBrowser({ active, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onOpenFiles, onUploadEvidence }: WorkbenchBrowserProps) {
   const confirm = useConfirmation();
   const dialogOpen = useDialogOpen();
   const { activityOpen, paletteOpen, sidebarCollapsed } = useChrome();
@@ -103,13 +120,38 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
   const [error, setError] = useState<string>();
   const [addingKnowledge, setAddingKnowledge] = useState(false);
   const [capturingContext, setCapturingContext] = useState(false);
+  const [workspace, setWorkspace] = useState<SecurityBrowserWorkspace>();
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [sessionHydrated, setSessionHydrated] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState<string>();
+  const [sessionId, setSessionId] = useState<string>();
+  const [researchOpen, setResearchOpen] = useState(false);
+  const [researchView, setResearchView] = useState<"traffic" | "actions" | "identities" | "session">("traffic");
+  const [selectedExchangeIds, setSelectedExchangeIds] = useState<string[]>([]);
+  const [identityName, setIdentityName] = useState("");
+  const [identityBusy, setIdentityBusy] = useState(false);
+  const [replayExchange, setReplayExchange] = useState<SecurityBrowserExchange>();
+  const [replayMethod, setReplayMethod] = useState("GET");
+  const [replayUrl, setReplayUrl] = useState("");
+  const [replayHeaders, setReplayHeaders] = useState("{}");
+  const [replayBody, setReplayBody] = useState("");
+  const [replayBusy, setReplayBusy] = useState(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(tabs);
   const activeRef = useRef(activeId);
-  const captureRef = useRef<{ requestId: string; tabId: string } | undefined>(undefined);
+  const captureRef = useRef<{ requestId: string; tabId: string; purpose: "assistant" | "evidence" } | undefined>(undefined);
+  const hydratedProjectRef = useRef<string | undefined>(undefined);
+  const websocketExchangeRef = useRef(new Map<string, Promise<SecurityBrowserExchange>>());
+  const actionExecutionRef = useRef(new Map<string, import("../api/types").SecurityBrowserAction>());
+  const addressDraftRef = useRef(new Map<string, string>());
   tabsRef.current = tabs;
   activeRef.current = activeId;
+
+  const activeSession = workspace?.sessions.find((session) => session.id === sessionId)
+    ?? workspace?.sessions.find((session) => session.status === "active")
+    ?? workspace?.sessions[0];
+  const activeIdentity = workspace?.identities.find((identity) => identity.id === activeSession?.identityId);
 
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
   const scopeDecision = scopeLoading
@@ -135,7 +177,11 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
   }, []);
 
   const updateTab = useCallback((id: string, change: Partial<BrowserTab>) => {
-    setTabs((current) => current.map((tab) => tab.id === id ? { ...tab, ...change } : tab));
+    setTabs((current) => {
+      const next = current.map((tab) => tab.id === id ? { ...tab, ...change } : tab);
+      tabsRef.current = next;
+      return next;
+    });
   }, []);
 
   const openAddress = useCallback(async (id: string, input: string) => {
@@ -144,23 +190,64 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
     try { url = normalizeBrowserInput(input); }
     catch (caught) {
       // diagnostic-expected: local operator input validation is presented inline.
-      setError(errorMessage(caught)); return;
+      setError(errorMessage(caught)); return false;
+    }
+    const navigationScope = evaluateBrowserScope(url, scope);
+    if (navigationScope.state !== "in_scope") {
+      setError(`Nebula blocked this navigation because the target is not confirmed in Project scope. ${navigationScope.detail}`);
+      return false;
     }
     const tab = tabsRef.current.find((item) => item.id === id);
     const nextBounds = bounds();
-    if (!tab || !nextBounds) return;
+    if (!tab) {
+      setError("The selected browser tab changed before navigation. Select the tab and try again.");
+      return false;
+    }
+    if (!nextBounds) {
+      setError("The embedded browser surface is not visible yet. Restore the Browser panel and try again.");
+      return false;
+    }
     updateTab(id, { address: url, url, loading: true, error: undefined });
     try {
+      if (!activeSession) throw new Error("The durable browser session is unavailable.");
+      const durableTabs = tabsRef.current.map((item, position) => {
+        const nextUrl = item.id === id ? url : item.url;
+        const decision = evaluateBrowserScope(nextUrl, scope);
+        return {
+          id: item.id,
+          url: nextUrl,
+          title: item.title,
+          position,
+          lastScopeState: decision.state,
+          lastScopeRevision: decision.revision,
+        };
+      });
+      const persistedSession = await api.syncSecurityBrowserSession(activeSession, durableTabs, id, "desktop");
+      setWorkspace((current) => current ? {
+        ...current,
+        sessions: current.sessions.map((session) => session.id === persistedSession.id ? persistedSession : session),
+      } : current);
       if (tab.created) await workbenchBrowser.navigate(id, projectId, url);
       else {
-        await workbenchBrowser.create(id, projectId, url, nextBounds);
+        if (!activeIdentity) throw new Error("Select a healthy browser identity before opening a page.");
+        await workbenchBrowser.create(
+          id,
+          projectId,
+          activeIdentity.storagePartition,
+          persistedSession.id,
+          persistedSession.proxyEnabled,
+          url,
+          nextBounds,
+        );
         updateTab(id, { created: true });
       }
+      return true;
     } catch (caught) {
       void logCaughtDiagnostic("interface.workbench_browser.navigation_failed", "The embedded browser could not navigate.", caught, "workbench_browser");
       updateTab(id, { loading: false, error: errorMessage(caught) });
+      return false;
     }
-  }, [bounds, projectId, updateTab]);
+  }, [activeIdentity, activeSession, api, bounds, projectId, scope, updateTab]);
 
   const addTab = useCallback((url?: string) => {
     if (tabsRef.current.length >= MAX_TABS) {
@@ -200,6 +287,101 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
       setError(errorMessage(caught));
     });
   }, [desktop]);
+
+  const refreshWorkspace = useCallback(async () => {
+    setWorkspaceError(undefined);
+    try {
+      const next = await api.getSecurityBrowserWorkspace(projectId);
+      setWorkspace(next);
+      setSessionId((current) => next.sessions.some((session) => session.id === current)
+        ? current
+        : next.sessions.find((session) => session.status === "active")?.id ?? next.sessions[0]?.id);
+      return next;
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.workspace_load_failed", "The durable browser research workspace could not be loaded.", caught, "workbench_browser");
+      setWorkspaceError(errorMessage(caught));
+      return undefined;
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }, [api, projectId]);
+
+  useEffect(() => {
+    setWorkspace(undefined);
+    setWorkspaceLoading(true);
+    setSessionHydrated(false);
+    setWorkspaceError(undefined);
+    setSessionId(undefined);
+    hydratedProjectRef.current = undefined;
+    void refreshWorkspace();
+  }, [refreshWorkspace]);
+
+  useEffect(() => {
+    if (!desktop || !active || !activeSession) return;
+    let disposed = false;
+    let handling = false;
+    const process = async () => {
+      if (handling || disposed) return;
+      handling = true;
+      try {
+        const next = await api.getSecurityBrowserWorkspace(projectId);
+        if (disposed) return;
+        const queued = next.handoffs.find((handoff) => handoff.sessionId === activeSession.id && handoff.status === "queued");
+        if (!queued) return;
+        setWorkspace(next);
+        const claimed = await api.claimSecurityBrowserHandoff(queued, "desktop");
+        try {
+          if (claimed.command === "focus_tab") {
+            const target = tabsRef.current.find((tab) => tab.id === claimed.tabId);
+            if (!target) throw new Error("The requested durable tab is not available on this desktop.");
+            setActiveId(target.id);
+          } else {
+            if (!claimed.url) throw new Error("The navigation handoff has no URL.");
+            let target = tabsRef.current.find((tab) => tab.id === claimed.tabId);
+            if (!target) {
+              target = blankTab();
+              setTabs((current) => [...current, target!].slice(0, MAX_TABS));
+            }
+            setActiveId(target.id);
+            if (!await openAddress(target.id, claimed.url)) throw new Error("The desktop browser could not complete the queued navigation.");
+          }
+          await api.finishSecurityBrowserHandoff(claimed, "complete", undefined, "desktop");
+          setNotice({ kind: "info", message: "Paired-device browser handoff completed on this desktop." });
+        } catch (caught) {
+          await api.finishSecurityBrowserHandoff(claimed, "failed", errorMessage(caught), "desktop").catch(() => undefined);
+          setWorkspaceError(errorMessage(caught));
+        }
+        await refreshWorkspace();
+      } catch (caught) {
+        void logCaughtDiagnostic("interface.security_browser.handoff_poll_failed", "Browser handoffs could not be synchronized.", caught, "workbench_browser");
+      } finally {
+        handling = false;
+      }
+    };
+    void process();
+    const timer = window.setInterval(() => void process(), 3000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [active, activeSession, api, desktop, openAddress, projectId, refreshWorkspace]);
+
+  useEffect(() => {
+    if (!activeSession || hydratedProjectRef.current === `${projectId}:${activeSession.id}`) return;
+    hydratedProjectRef.current = `${projectId}:${activeSession.id}`;
+    const restored = activeSession.tabs.length
+      ? activeSession.tabs.map((tab) => ({
+          id: tab.id,
+          address: tab.url ?? "",
+          url: tab.url,
+          title: tab.title,
+          loading: false,
+          created: false,
+        }))
+      : [blankTab()];
+    setTabs(restored);
+    setActiveId(activeSession.activeTabId && restored.some((tab) => tab.id === activeSession.activeTabId)
+      ? activeSession.activeTabId
+      : restored[0].id);
+    setSessionHydrated(true);
+  }, [activeSession, projectId]);
 
   useEffect(() => {
     const next = blankTab();
@@ -263,16 +445,121 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
         catch {
           // diagnostic-expected: the desktop boundary already validates capture provenance; retain the safe fallback label.
         }
-        onAskNebula({
-          text: captured.text,
-          sourceKind: "browser_page",
-          sourceLabel: `Browser · ${payload.context.title || hostname}`.slice(0, 500),
-          truncated: captured.truncated,
+        if (pending.purpose === "assistant") {
+          onAskNebula({
+            text: captured.text,
+            sourceKind: "browser_page",
+            sourceId: activeSession?.id,
+            sourceLabel: `Browser · ${payload.context.title || hostname}`.slice(0, 500),
+            truncated: captured.truncated,
+          });
+        } else if (onUploadEvidence && activeSession && activeIdentity) {
+          const capturedAt = new Date().toISOString();
+          void onUploadEvidence({
+            engagementId: projectId,
+            filename: `browser-page-${hostname.replace(/[^a-z0-9.-]/gi, "-")}-${capturedAt.replace(/[:.]/g, "-")}.txt`,
+            title: `Browser page · ${payload.context.title || hostname}`,
+            evidenceType: "browser-page-capture",
+            contentBase64: utf8Base64(captured.text),
+            mediaType: "text/plain; charset=utf-8",
+            description: "Immutable, scope-checked semantic capture of the live authenticated browser page. Form values and cookies are excluded.",
+            source: "security-browser",
+            capturedBy: operatorId,
+            sourceVersion: "browser-semantic-context-v1",
+            sourceContext: {
+              project_id: projectId,
+              browser_session_id: activeSession.id,
+              browser_tab_id: pending.tabId,
+              browser_identity_id: activeIdentity.id,
+              url: payload.context.url,
+              scope_revision: decision.revision,
+              captured_at: capturedAt,
+              truncated: captured.truncated,
+            },
+            metadata: { browser_session_id: activeSession.id, browser_identity_id: activeIdentity.id, url: payload.context.url },
+          }).then((evidence) => {
+            setNotice({ kind: "info", message: `${evidence.title} was preserved as immutable Evidence.` });
+          }).catch((caught) => {
+            void logCaughtDiagnostic("interface.security_browser.evidence_failed", "The browser page capture could not be preserved.", caught, "workbench_browser");
+            setError(errorMessage(caught));
+          });
+        }
+      }),
+      listen<BrowserTrafficEvent>("nebula-browser-traffic", ({ payload }) => {
+        void api.recordSecurityBrowserTraffic(payload.sessionId, {
+          tabId: payload.tabId,
+          method: payload.method,
+          url: payload.url,
+          protocol: payload.protocol,
+          statusCode: payload.statusCode,
+          requestHeaders: payload.requestHeaders,
+          responseHeaders: payload.responseHeaders,
+          requestBytes: payload.requestBytes,
+          responseBytes: payload.responseBytes,
+          durationMs: payload.durationMs,
+          error: payload.error,
+        }).then((exchange) => setWorkspace((current) => current ? {
+          ...current,
+          traffic: current.traffic.some((item) => item.id === exchange.id)
+            ? current.traffic
+            : [...current.traffic, exchange],
+        } : current)).catch((caught) => {
+          void logCaughtDiagnostic("interface.security_browser.traffic_persist_failed", "Captured browser traffic could not be persisted.", caught, "workbench_browser");
+          setWorkspaceError(`${errorMessage(caught)} Traffic remained local to the native capture event and was not added to the durable timeline.`);
+        });
+      }),
+      listen<BrowserWebSocketFrameEvent>("nebula-browser-websocket-frame", ({ payload }) => {
+        const key = `${payload.sessionId}:${payload.tabId}:${payload.url}`;
+        let exchangeRequest = websocketExchangeRef.current.get(key);
+        if (!exchangeRequest) {
+          exchangeRequest = api.recordSecurityBrowserTraffic(payload.sessionId, {
+            tabId: payload.tabId,
+            method: "GET",
+            url: payload.url.replace(/^ws:/, "http:").replace(/^wss:/, "https:"),
+            protocol: "websocket",
+            statusCode: 101,
+            requestHeaders: {},
+            responseHeaders: {},
+          });
+          websocketExchangeRef.current.set(key, exchangeRequest);
+        }
+        void exchangeRequest.then((exchange) => api.recordSecurityBrowserWebSocketFrame(payload.sessionId, {
+          exchangeId: exchange.id,
+          direction: payload.direction,
+          opcode: payload.opcode,
+          payloadPreview: payload.payloadPreview,
+          payloadSha256: payload.payloadSha256,
+          payloadBytes: payload.payloadBytes,
+          truncated: payload.truncated,
+        }).then((frame) => setWorkspace((current) => current ? {
+          ...current,
+          traffic: current.traffic.some((item) => item.id === exchange.id) ? current.traffic : [...current.traffic, exchange],
+          frames: current.frames.some((item) => item.id === frame.id) ? current.frames : [...current.frames, frame],
+        } : current))).catch((caught) => {
+          websocketExchangeRef.current.delete(key);
+          void logCaughtDiagnostic("interface.security_browser.websocket_persist_failed", "A WebSocket frame could not be persisted.", caught, "workbench_browser");
+          setWorkspaceError(`${errorMessage(caught)} The frame was not added to the durable timeline.`);
+        });
+      }),
+      listen<BrowserActionEvent>("nebula-browser-action", ({ payload }) => {
+        const executing = actionExecutionRef.current.get(payload.actionId);
+        if (!executing) return;
+        actionExecutionRef.current.delete(payload.actionId);
+        void api.finishSecurityBrowserAction(executing, {
+          state: payload.state,
+          result: payload.result,
+          error: payload.detail,
+        }).then((updated) => setWorkspace((current) => current ? {
+          ...current,
+          actions: current.actions.map((action) => action.id === updated.id ? updated : action),
+        } : current)).catch((caught) => {
+          void logCaughtDiagnostic("interface.security_browser.action_receipt_failed", "A browser action receipt could not be persisted.", caught, "workbench_browser");
+          setWorkspaceError(`${errorMessage(caught)} The native action result requires recovery before another action runs.`);
         });
       }),
     ]).then((unlisteners) => { if (disposed) unlisteners.forEach((stop) => stop()); else stops.push(...unlisteners); });
     return () => { disposed = true; stops.forEach((stop) => stop()); };
-  }, [addTab, confirm, desktop, onAskNebula, projectId, scope, updateTab]);
+  }, [activeIdentity, activeSession, addTab, api, confirm, desktop, onAskNebula, onUploadEvidence, operatorId, projectId, scope, updateTab]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -283,6 +570,36 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
       });
     }
   }, [activeId, browserVisible, desktop, projectId, tabs]);
+
+  useEffect(() => {
+    if (!activeSession || hydratedProjectRef.current !== `${projectId}:${activeSession.id}`) return;
+    const durableTabs = tabs.map((tab, position) => {
+      const decision = evaluateBrowserScope(tab.url, scope);
+      return {
+        id: tab.id,
+        url: tab.url,
+        title: tab.title,
+        position,
+        lastScopeState: decision.state,
+        lastScopeRevision: decision.revision,
+      };
+    });
+    const previous = JSON.stringify({ tabs: activeSession.tabs, active: activeSession.activeTabId });
+    const next = JSON.stringify({ tabs: durableTabs, active: activeId });
+    if (previous === next) return;
+    const timer = window.setTimeout(() => {
+      void api.syncSecurityBrowserSession(activeSession, durableTabs, activeId, desktop ? "desktop" : "paired-browser")
+        .then((updated) => setWorkspace((current) => current ? {
+          ...current,
+          sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
+        } : current))
+        .catch((caught) => {
+          void logCaughtDiagnostic("interface.security_browser.session_sync_failed", "Browser tabs could not be persisted.", caught, "workbench_browser");
+          setWorkspaceError(`${errorMessage(caught)} Refresh the research session and retry.`);
+        });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [activeId, activeSession, api, desktop, projectId, scope, tabs]);
 
   useEffect(() => {
     if (!desktop || !browserVisible || !activeTab?.created) return;
@@ -317,7 +634,14 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (activeTab) void openAddress(activeTab.id, activeTab.address);
+    if (activeTab) {
+      const formValue = event.currentTarget.querySelector("input")?.value;
+      const latest = addressDraftRef.current.get(activeTab.id)
+        ?? formValue
+        ?? tabsRef.current.find((tab) => tab.id === activeTab.id)?.address
+        ?? activeTab.address;
+      void openAddress(activeTab.id, latest);
+    }
   };
 
   const runControl = async (action: "back" | "forward" | "stop" | "reload") => {
@@ -369,7 +693,7 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
       return;
     }
     const requestId = `capture-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`.replace(/[^a-zA-Z0-9_-]/g, "-");
-    captureRef.current = { requestId, tabId: activeTab.id };
+    captureRef.current = { requestId, tabId: activeTab.id, purpose: "assistant" };
     setCapturingContext(true);
     setError(undefined);
     setNotice(undefined);
@@ -379,6 +703,26 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
       captureRef.current = undefined;
       setCapturingContext(false);
       void logCaughtDiagnostic("interface.workbench_browser.context_capture_failed", "The live browser page could not be prepared for Nebula.", caught, "workbench_browser");
+      setError(`${errorMessage(caught)} Reload the page and try again.`);
+    }
+  };
+
+  const preserveCurrentPageEvidence = async () => {
+    if (!onUploadEvidence || !activeTab?.created || activeTab.loading || !activeTab.url || capturingContext) return;
+    if (scopeDecision.state !== "in_scope") {
+      setError(`Nebula can preserve page Evidence only for a page confirmed in scope. ${scopeDecision.detail}`);
+      return;
+    }
+    const requestId = `evidence-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`.replace(/[^a-zA-Z0-9_-]/g, "-");
+    captureRef.current = { requestId, tabId: activeTab.id, purpose: "evidence" };
+    setCapturingContext(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await workbenchBrowser.captureContext(activeTab.id, projectId, requestId);
+    } catch (caught) {
+      captureRef.current = undefined;
+      setCapturingContext(false);
       setError(`${errorMessage(caught)} Reload the page and try again.`);
     }
   };
@@ -426,7 +770,255 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
     }
   };
 
-  if (!desktop) return <div className="workbench-browser web-browser-fallback">
+  const selectResearchSession = async (nextSession: SecurityBrowserSession) => {
+    if (nextSession.id === activeSession?.id) return;
+    for (const tab of tabsRef.current) {
+      if (tab.created) await workbenchBrowser.close(tab.id, projectId).catch((caught) => {
+        void logCaughtDiagnostic("interface.security_browser.identity_tab_close_failed", "A browser tab could not close before the identity switch.", caught, "workbench_browser");
+      });
+    }
+    hydratedProjectRef.current = undefined;
+    setSessionHydrated(false);
+    setSessionId(nextSession.id);
+  };
+
+  const selectIdentity = async (identityId: string) => {
+    if (!workspace) return;
+    const existing = workspace.sessions.find((session) => session.identityId === identityId && session.status === "active");
+    if (existing) {
+      await selectResearchSession(existing);
+      return;
+    }
+    const identity = workspace.identities.find((item) => item.id === identityId);
+    if (!identity) return;
+    setIdentityBusy(true);
+    try {
+      const session = await api.createSecurityBrowserSession(projectId, {
+        name: `${identity.name} research`,
+        identityId,
+        captureMode: activeSession?.captureMode ?? "headers",
+      });
+      setWorkspace((current) => current ? { ...current, sessions: [...current.sessions, session] } : current);
+      await selectResearchSession(session);
+    } catch (caught) {
+      setWorkspaceError(errorMessage(caught));
+    } finally {
+      setIdentityBusy(false);
+    }
+  };
+
+  const createIdentity = async (event: FormEvent) => {
+    event.preventDefault();
+    const name = identityName.trim();
+    if (!name || identityBusy) return;
+    setIdentityBusy(true);
+    setWorkspaceError(undefined);
+    try {
+      const identity = await api.createSecurityBrowserIdentity(projectId, { name });
+      const session = await api.createSecurityBrowserSession(projectId, {
+        name: `${identity.name} research`,
+        identityId: identity.id,
+        captureMode: activeSession?.captureMode ?? "headers",
+      });
+      setWorkspace((current) => current ? {
+        ...current,
+        identities: [...current.identities, identity],
+        sessions: [...current.sessions, session],
+      } : current);
+      setIdentityName("");
+      await selectResearchSession(session);
+    } catch (caught) {
+      setWorkspaceError(errorMessage(caught));
+    } finally {
+      setIdentityBusy(false);
+    }
+  };
+
+  const updateCaptureMode = async (captureMode: SecurityBrowserSession["captureMode"]) => {
+    if (!activeSession) return;
+    setWorkspaceError(undefined);
+    try {
+      const updated = await api.updateSecurityBrowserCapture(activeSession, {
+        captureMode,
+        proxyEnabled: activeSession.proxyEnabled,
+        interceptionEnabled: activeSession.interceptionEnabled,
+        upstreamProxyEnabled: activeSession.upstreamProxyEnabled,
+        upstreamProxyUrl: activeSession.upstreamProxyUrl,
+      });
+      setWorkspace((current) => current ? {
+        ...current,
+        sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
+      } : current);
+    } catch (caught) {
+      setWorkspaceError(errorMessage(caught));
+    }
+  };
+
+  const setProxyEnabled = async (proxyEnabled: boolean) => {
+    if (!activeSession) return;
+    if (proxyEnabled) {
+      let path: string;
+      try { path = await workbenchBrowser.revealProxyCa(projectId); }
+      catch (caught) { setWorkspaceError(errorMessage(caught)); return; }
+      const approved = await confirm({
+        title: "Enable Project capture proxy?",
+        message: <>Nebula revealed <code>{path}</code>. Trust this Project-local CA in the operating system before enabling HTTPS capture. Its private key remains in protected Nebula application data. Enabling the proxy recreates open tabs in the same identity.</>,
+        confirmLabel: "CA is trusted · enable",
+      });
+      if (!approved) return;
+    }
+    setWorkspaceError(undefined);
+    try {
+      const updated = await api.updateSecurityBrowserCapture(activeSession, {
+        captureMode: activeSession.captureMode,
+        proxyEnabled,
+        interceptionEnabled: activeSession.interceptionEnabled,
+        upstreamProxyEnabled: activeSession.upstreamProxyEnabled,
+        upstreamProxyUrl: activeSession.upstreamProxyUrl,
+      });
+      for (const tab of tabsRef.current) {
+        if (tab.created) await workbenchBrowser.close(tab.id, projectId);
+      }
+      setTabs((current) => current.map((tab) => ({ ...tab, created: false, loading: false })));
+      setWorkspace((current) => current ? {
+        ...current,
+        sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
+      } : current);
+      setNotice({ kind: "info", message: proxyEnabled ? "Capture proxy enabled. Reopen the tab to begin HTTP/2 and WebSocket capture." : "Capture proxy disabled. Reopen the tab to browse directly." });
+    } catch (caught) {
+      setWorkspaceError(errorMessage(caught));
+    }
+  };
+
+  const executeApprovedAction = async (action: import("../api/types").SecurityBrowserAction) => {
+    if (!desktop) { setWorkspaceError("Approved actions execute only in the desktop browser that owns the live tab."); return; }
+    const tab = tabsRef.current.find((item) => item.id === action.tabId);
+    if (!tab?.created || tab.url !== action.pageUrl) {
+      setWorkspaceError("The approved action's exact live tab and page are not open. Restore that tab or propose the action again.");
+      return;
+    }
+    setWorkspaceError(undefined);
+    let executing: import("../api/types").SecurityBrowserAction | undefined;
+    try {
+      executing = await api.startSecurityBrowserAction(action);
+      actionExecutionRef.current.set(action.id, executing);
+      setWorkspace((current) => current ? {
+        ...current,
+        actions: current.actions.map((item) => item.id === executing!.id ? executing! : item),
+      } : current);
+      await workbenchBrowser.executeAction(tab.id, projectId, {
+        actionId: executing.id,
+        kind: executing.kind,
+        locator: executing.locator,
+        arguments: executing.arguments,
+        pageUrl: executing.pageUrl,
+      });
+    } catch (caught) {
+      actionExecutionRef.current.delete(action.id);
+      if (executing) {
+        try {
+          const failed = await api.finishSecurityBrowserAction(executing, { state: "failed", error: errorMessage(caught) });
+          setWorkspace((current) => current ? { ...current, actions: current.actions.map((item) => item.id === failed.id ? failed : item) } : current);
+        } catch (receiptError) {
+          void logCaughtDiagnostic("interface.security_browser.action_start_recovery_failed", "A failed browser action could not be reconciled.", receiptError, "workbench_browser");
+        }
+      }
+      setWorkspaceError(errorMessage(caught));
+    }
+  };
+
+  const beginReplay = (exchange: SecurityBrowserExchange) => {
+    const reusableHeaders = Object.fromEntries(Object.entries(exchange.requestHeaders).filter(([name, value]) =>
+      !/authorization|cookie|csrf|xsrf|api[-_]?key|token/i.test(name) && !value.startsWith("<redacted:"),
+    ));
+    setReplayExchange(exchange);
+    setReplayMethod(exchange.method);
+    setReplayUrl(exchange.url);
+    setReplayHeaders(JSON.stringify(reusableHeaders, null, 2));
+    setReplayBody("");
+  };
+
+  const proposeReplay = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!activeSession || !activeTab?.created || !activeTab.url || !replayExchange || replayBusy) return;
+    setReplayBusy(true);
+    setWorkspaceError(undefined);
+    try {
+      const headers = JSON.parse(replayHeaders) as unknown;
+      if (!headers || Array.isArray(headers) || typeof headers !== "object" || !Object.values(headers).every((value) => typeof value === "string")) {
+        throw new Error("Replay headers must be a JSON object with string values.");
+      }
+      const action = await api.proposeSecurityBrowserAction(activeSession.id, {
+        tabId: activeTab.id,
+        kind: "replay",
+        locator: {},
+        arguments: { method: replayMethod, url: replayUrl, headers, body: replayBody },
+        proposal: `Replay ${replayMethod} ${replayUrl} through identity ${activeIdentity?.name ?? activeSession.identityId}; source exchange ${replayExchange.id}.`,
+        proposedBy: operatorId,
+        pageUrl: activeTab.url,
+      });
+      setWorkspace((current) => current ? { ...current, actions: [...current.actions, action] } : current);
+      setReplayExchange(undefined);
+      setResearchView("actions");
+      setNotice({ kind: "info", message: "Replay proposal is ready for exact operator approval. No request has been sent." });
+    } catch (caught) {
+      setWorkspaceError(errorMessage(caught));
+    } finally {
+      setReplayBusy(false);
+    }
+  };
+
+  const sessionTraffic = workspace?.traffic.filter((exchange) => exchange.sessionId === activeSession?.id) ?? [];
+  const selectedExchanges = selectedExchangeIds
+    .map((id) => sessionTraffic.find((exchange) => exchange.id === id))
+    .filter((exchange): exchange is SecurityBrowserExchange => Boolean(exchange));
+  const comparison = selectedExchanges.length === 2 ? {
+    status: selectedExchanges[0].statusCode === selectedExchanges[1].statusCode ? "same" : `${selectedExchanges[0].statusCode ?? "—"} → ${selectedExchanges[1].statusCode ?? "—"}`,
+    changedHeaders: Array.from(new Set([
+      ...Object.keys(selectedExchanges[0].responseHeaders),
+      ...Object.keys(selectedExchanges[1].responseHeaders),
+    ])).filter((name) => selectedExchanges[0].responseHeaders[name] !== selectedExchanges[1].responseHeaders[name]),
+    bytes: selectedExchanges[0].responseBytes === selectedExchanges[1].responseBytes ? "same" : `${selectedExchanges[0].responseBytes ?? "—"} → ${selectedExchanges[1].responseBytes ?? "—"}`,
+  } : undefined;
+
+  const researchPanel = researchOpen ? <aside className="browser-research-panel" aria-label="Security research workbench">
+    <header>
+      <div><strong>Research workbench</strong><small>{activeSession?.name ?? "Loading durable session"} · {activeIdentity?.name ?? "No identity"}</small></div>
+      <button type="button" aria-label="Close research workbench" onClick={() => setResearchOpen(false)}><X size={15} /></button>
+    </header>
+    <nav aria-label="Research tools">
+      <button type="button" className={researchView === "traffic" ? "active" : ""} onClick={() => setResearchView("traffic")}><Network size={14} /> Traffic <span>{sessionTraffic.length}</span></button>
+      <button type="button" className={researchView === "actions" ? "active" : ""} onClick={() => setResearchView("actions")}><Sparkles size={14} /> Actions <span>{workspace?.actions.filter((action) => action.sessionId === activeSession?.id).length ?? 0}</span></button>
+      <button type="button" className={researchView === "identities" ? "active" : ""} onClick={() => setResearchView("identities")}><UserRound size={14} /> Identities <span>{workspace?.identities.length ?? 0}</span></button>
+      <button type="button" className={researchView === "session" ? "active" : ""} onClick={() => setResearchView("session")}><History size={14} /> Session</button>
+    </nav>
+    {workspaceLoading ? <div className="browser-research-empty"><LoaderCircle className="spin" size={18} /> Loading durable browser state…</div> : workspaceError ? <div className="browser-research-empty error" role="alert"><strong>Research state is unavailable</strong><span>{workspaceError}</span><button className="button secondary" type="button" onClick={() => void refreshWorkspace()}>Try again</button></div> : researchView === "traffic" ? <div className="browser-traffic-workbench">
+      <div className="browser-research-toolbar"><span>Metadata and redacted headers</span><button type="button" disabled={selectedExchangeIds.length !== 2} onClick={() => setSelectedExchangeIds([])}><GitCompareArrows size={13} /> {selectedExchangeIds.length === 2 ? "Clear comparison" : "Select two to compare"}</button></div>
+      {comparison && <div className="browser-exchange-diff"><strong>Authorization response diff</strong><span>Status: {comparison.status}</span><span>Bytes: {comparison.bytes}</span><span>{comparison.changedHeaders.length ? `${comparison.changedHeaders.length} response headers changed: ${comparison.changedHeaders.join(", ")}` : "Response headers are identical."}</span></div>}
+      {sessionTraffic.length ? <ol className="browser-traffic-list">{[...sessionTraffic].reverse().map((exchange) => <li key={exchange.id} className={selectedExchangeIds.includes(exchange.id) ? "selected" : ""}>
+        <label><input type="checkbox" checked={selectedExchangeIds.includes(exchange.id)} onChange={(event) => setSelectedExchangeIds((current) => event.target.checked ? [...current.filter((id) => id !== exchange.id), exchange.id].slice(-2) : current.filter((id) => id !== exchange.id))} /><span className={`browser-method method-${exchange.method.toLowerCase()}`}>{exchange.method}</span><code>{exchange.statusCode ?? "…"}</code><span title={exchange.url}>{exchange.url}</span><small>{exchange.protocol} · {exchange.durationMs === undefined ? "—" : `${exchange.durationMs} ms`}</small></label>
+        <details><summary>Request and response</summary><section><strong>Request headers</strong><pre>{JSON.stringify(exchange.requestHeaders, null, 2)}</pre><strong>Response headers</strong><pre>{JSON.stringify(exchange.responseHeaders, null, 2)}</pre><button className="button secondary" type="button" disabled={!desktop || !activeTab?.created} onClick={() => beginReplay(exchange)}>Edit and replay with {activeIdentity?.name ?? "active identity"}</button></section></details>
+      </li>)}</ol> : <div className="browser-research-empty"><Network size={20} /><strong>No captured traffic</strong><span>Traffic appears here when the native interception proxy is available and capture is enabled.</span></div>}
+      {replayExchange && <form className="browser-replay-editor" onSubmit={proposeReplay}><header><strong>Edit request · no request sent yet</strong><button type="button" aria-label="Close request editor" onClick={() => setReplayExchange(undefined)}><X size={14} /></button></header><label>Method<input value={replayMethod} maxLength={16} onChange={(event) => setReplayMethod(event.target.value.toUpperCase())} /></label><label>URL<input value={replayUrl} maxLength={16384} onChange={(event) => setReplayUrl(event.target.value)} /></label><label>Headers JSON<textarea value={replayHeaders} rows={5} onChange={(event) => setReplayHeaders(event.target.value)} /></label><label>Body<textarea value={replayBody} rows={5} maxLength={65536} onChange={(event) => setReplayBody(event.target.value)} /></label><p>Cookies remain inside the selected identity and are attached by the system webview. Reusable secret headers are never copied into this editor.</p><button className="button primary" type="submit" disabled={replayBusy || !replayUrl.trim()}>{replayBusy ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />} Create approval proposal</button></form>}
+    </div> : researchView === "actions" ? <div className="browser-action-list">
+      {(workspace?.actions.filter((action) => action.sessionId === activeSession?.id).length ?? 0) > 0 ? workspace?.actions.filter((action) => action.sessionId === activeSession?.id).map((action) => <article key={action.id}><header><span className={`browser-action-status ${action.status}`}>{action.status.replace("_", " ")}</span><strong>{action.kind}</strong><code>{action.actionSha256.slice(0, 12)}</code></header><p>{action.proposal}</p><small>{action.pageUrl} · scope r{action.scopePolicyRevision}</small>{action.status === "proposed" && <div><button className="button secondary" type="button" onClick={() => void api.decideSecurityBrowserAction(action, "reject", operatorId).then(refreshWorkspace).catch((caught) => setWorkspaceError(errorMessage(caught)))}>Reject</button><button className="button primary" type="button" onClick={() => void api.decideSecurityBrowserAction(action, "approve", operatorId).then(refreshWorkspace).catch((caught) => setWorkspaceError(errorMessage(caught)))}>Approve action</button></div>}{action.status === "approved" && <div><button className="button primary" type="button" disabled={!desktop || actionExecutionRef.current.size > 0} onClick={() => void executeApprovedAction(action)}>Execute once</button></div>}</article>) : <div className="browser-research-empty"><Sparkles size={20} /><strong>No browser action proposals</strong><span>AI suggestions are inert until they appear here and you approve them.</span></div>}
+    </div> : researchView === "identities" ? <div className="browser-identity-workbench">
+      <label>Active identity<select value={activeIdentity?.id ?? ""} disabled={identityBusy} onChange={(event) => void selectIdentity(event.target.value)}>{workspace?.identities.filter((identity) => !identity.revokedAt).map((identity) => <option key={identity.id} value={identity.id}>{identity.name}{identity.isDefault ? " · default" : ""}</option>)}</select></label>
+      <p>Each identity has a separate cookie jar, cache, and site storage partition. Switching identities closes the visible native tabs before restoring that identity's durable session.</p>
+      <form onSubmit={createIdentity}><label htmlFor="browser-new-identity">New identity</label><div><input id="browser-new-identity" value={identityName} maxLength={120} placeholder="e.g. Admin, Member, Anonymous" onChange={(event) => setIdentityName(event.target.value)} /><button className="button secondary" type="submit" disabled={!identityName.trim() || identityBusy}>{identityBusy ? <LoaderCircle className="spin" size={14} /> : <Plus size={14} />} Create isolated identity</button></div></form>
+      <ul>{workspace?.identities.map((identity) => <li key={identity.id}><span style={{ background: identity.color }} /><div><strong>{identity.name}</strong><small>{identity.ephemeral ? "Ephemeral" : "Persistent"} · {workspace.sessions.filter((session) => session.identityId === identity.id).length} sessions</small></div></li>)}</ul>
+    </div> : <div className="browser-session-workbench">
+      <label>Research session<select value={activeSession?.id ?? ""} onChange={(event) => { const next = workspace?.sessions.find((session) => session.id === event.target.value); if (next) void selectResearchSession(next); }}>{workspace?.sessions.map((session) => <option key={session.id} value={session.id}>{session.name} · {session.status}</option>)}</select></label>
+      <label>Capture detail<select value={activeSession?.captureMode === "metadata" ? "metadata" : "headers"} onChange={(event) => void updateCaptureMode(event.target.value as SecurityBrowserSession["captureMode"])}><option value="metadata">Metadata only</option><option value="headers">Redacted headers</option></select></label>
+      <dl><div><dt>Durable tabs</dt><dd>{activeSession?.tabs.length ?? 0}</dd></div><div><dt>Device owner</dt><dd>{activeSession?.deviceOwner ?? "Unclaimed"}</dd></div><div><dt>Capture proxy</dt><dd>{capabilities?.interceptionProxy ? "HTTP history enabled when CA is trusted" : "Native proxy unavailable"}</dd></div><div><dt>HTTP/2 · WebSocket</dt><dd>{capabilities?.http2Capture && capabilities.websocketCapture ? "Captured" : "Unavailable in this build"}</dd></div></dl>
+      {desktop && capabilities?.interceptionProxy && <div className="browser-proxy-controls"><button className={activeSession?.proxyEnabled ? "button danger" : "button primary"} type="button" onClick={() => void setProxyEnabled(!activeSession?.proxyEnabled)}>{activeSession?.proxyEnabled ? "Disable capture proxy" : "Install CA and enable proxy"}</button><button className="button secondary" type="button" onClick={() => void workbenchBrowser.revealProxyCa(projectId).then((path) => setNotice({ kind: "info", message: `Project CA: ${path}` })).catch((caught) => setWorkspaceError(errorMessage(caught)))}>Reveal Project CA</button></div>}
+      {desktop && capabilities?.devtools && <button className="button secondary" type="button" disabled={!activeTab?.created} onClick={() => activeTab && void workbenchBrowser.openDevtools(activeTab.id, projectId).catch((caught) => setError(errorMessage(caught)))}><Bug size={14} /> Open DevTools</button>}
+      {!desktop && activeSession && activeTab?.url && <button className="button primary" type="button" onClick={() => void api.createSecurityBrowserHandoff(activeSession.id, { requestedByDeviceId: "paired-browser", command: "navigate", tabId: activeTab.id, url: activeTab.url }).then(() => { setNotice({ kind: "info", message: "Navigation queued for the desktop browser for five minutes." }); return refreshWorkspace(); }).catch((caught) => setWorkspaceError(errorMessage(caught)))}>Send page to desktop</button>}
+    </div>}
+  </aside> : null;
+
+  if (!desktop) return <div className={`workbench-browser web-browser-fallback${researchOpen ? " research-open" : ""}`}>
+    <div className="browser-web-research-bar"><button className="button secondary" type="button" aria-expanded={researchOpen} onClick={() => setResearchOpen((value) => !value)}><Network size={14} /> Research workbench</button><span>Durable history and desktop handoff are available on paired devices.</span></div>
     {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
     {notice && <div className="browser-notice" role="status">
       {notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : <Check size={14} />}
@@ -448,10 +1040,11 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
         <button className="button secondary" type="button" disabled={addingKnowledge || !activeTab?.address.trim()} onClick={() => void addWebAddressToKnowledge()}>{addingKnowledge ? <LoaderCircle className="spin" size={15} /> : <BookPlus size={15} />} Add to Sources</button>
       </div>
     </div>
+    {researchPanel}
   </div>;
 
   return (
-    <div className="workbench-browser">
+    <div className={`workbench-browser${researchOpen ? " research-open" : ""}`}>
       <div className="browser-tab-strip" role="tablist" aria-label="Browser tabs">
         {tabs.map((tab) => <div className={tab.id === activeId ? "browser-tab active" : "browser-tab"} key={tab.id}><button type="button" role="tab" aria-selected={tab.id === activeId} title={tab.title} onClick={() => setActiveId(tab.id)}>{tab.loading ? <LoaderCircle className="spin" size={13} /> : <Globe2 size={13} />}<span>{tab.title}</span></button><button type="button" aria-label={`Close ${tab.title}`} onClick={() => void closeTab(tab.id)}><X size={13} /></button></div>)}
         <button className="browser-new-tab" type="button" aria-label="New browser tab" disabled={tabs.length >= MAX_TABS} onClick={() => addTab()}><Plus size={15} /></button>
@@ -460,9 +1053,11 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
         <button type="button" aria-label="Back" disabled={!activeTab?.created} onClick={() => void runControl("back")}><ArrowLeft size={16} /></button>
         <button type="button" aria-label="Forward" disabled={!activeTab?.created} onClick={() => void runControl("forward")}><ArrowRight size={16} /></button>
         <button type="button" aria-label={activeTab?.loading ? "Stop loading" : "Reload"} disabled={!activeTab?.created} onClick={() => void runControl(activeTab?.loading ? "stop" : "reload")}>{activeTab?.loading ? <X size={15} /> : <RefreshCw size={15} />}</button>
-        <form onSubmit={submit}><Search size={15} aria-hidden="true" /><label className="sr-only" htmlFor="browser-address">Address or search</label><input id="browser-address" value={activeTab?.address ?? ""} placeholder="Search or enter an address" autoComplete="off" spellCheck={false} onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} /><span className={`browser-scope-badge ${scopeDecision.state}`} title={scopeDecision.detail}><ShieldCheck size={13} aria-hidden="true" /><span>{scopeDecision.label}</span></span></form>
+        <form onSubmit={submit}><Search size={15} aria-hidden="true" /><label className="sr-only" htmlFor="browser-address">Address or search</label><input id="browser-address" value={activeTab?.address ?? ""} placeholder="Search or enter an address" autoComplete="off" spellCheck={false} onChange={(event) => { if (activeTab) { addressDraftRef.current.set(activeTab.id, event.target.value); updateTab(activeTab.id, { address: event.target.value }); } }} /><span className={`browser-scope-badge ${scopeDecision.state}`} title={scopeDecision.detail}><ShieldCheck size={13} aria-hidden="true" /><span>{scopeDecision.label}</span></span></form>
         <button type="button" aria-label="Ask Nebula about the live page" title={scopeDecision.state === "in_scope" ? "Capture rendered text, form metadata, and links for a reviewed chat attachment. Input values and cookies are excluded." : `Live-page AI capture is unavailable until this address is confirmed in scope. ${scopeDecision.detail}`} disabled={!activeTab?.created || activeTab.loading || !activeTab.url || capturingContext || scopeDecision.state !== "in_scope"} onClick={() => void askNebulaAboutCurrentPage()}>{capturingContext ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}</button>
+        {onUploadEvidence && <button type="button" aria-label="Preserve live page as Evidence" title="Preserve a scope-checked semantic page capture as immutable Evidence. Form values and cookies are excluded." disabled={!activeTab?.created || activeTab.loading || !activeTab.url || capturingContext || scopeDecision.state !== "in_scope"} onClick={() => void preserveCurrentPageEvidence()}><BookOpenCheck size={15} /></button>}
         <button type="button" aria-label="Add current page to Project Sources" title="Add this public page to Project Sources" disabled={!activeTab?.created || activeTab.loading || !activeTab.url || addingKnowledge} onClick={() => void addCurrentPageToKnowledge()}>{addingKnowledge ? <LoaderCircle className="spin" size={15} /> : <BookPlus size={15} />}</button>
+        <button type="button" className={researchOpen ? "active" : ""} aria-label="Security research workbench" aria-expanded={researchOpen} title="Traffic, replay, actions, identities, and durable session" onClick={() => setResearchOpen((value) => !value)}><Network size={15} /></button>
         <button type="button" aria-label="Clear Project browser data" title="Clear Project browser data" onClick={() => void clearData()}><Trash2 size={15} /></button>
       </div>
       {capabilities?.projectStorage === "ephemeral" && <div className="browser-privacy-notice"><ShieldCheck size={14} /> macOS 13 browser data is isolated and cleared when Nebula closes.</div>}
@@ -475,8 +1070,9 @@ export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = fals
         <button type="button" aria-label="Dismiss browser notice" onClick={() => setNotice(undefined)}><X size={14} /></button>
       </div>}
       <div className={`browser-surface${activeTab?.created ? " is-live" : ""}`} ref={surfaceRef}>
-        {!activeTab?.created && <div className="browser-start"><Globe2 size={34} /><strong>Browse from the Workbench</strong><p>Pages run in an isolated {capabilities?.engine ?? "system webview"} profile for this Project. Nebula captures live page context only when you ask.</p><span className={`browser-start-scope ${scopeDecision.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeDecision.label} · {scopeDecision.detail}</span><form onSubmit={submit}><Search size={16} /><input aria-label="Start browsing" autoFocus={active} value={activeTab?.address ?? ""} placeholder="Search or enter an address" onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} /><button className="button primary" type="submit">Go</button></form>{activeTab?.error && <small role="alert">{activeTab.error}</small>}</div>}
+        {!activeTab?.created && <div className="browser-start"><Globe2 size={34} /><strong>Browse from the Workbench</strong><p>Pages run in an isolated {capabilities?.engine ?? "system webview"} profile for the selected research identity. Nebula captures live page context only when you ask.</p><span className={`browser-start-scope ${scopeDecision.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeDecision.label} · {scopeDecision.detail}</span><form onSubmit={submit}><Search size={16} /><input aria-label="Start browsing" autoFocus={active} value={activeTab?.address ?? ""} placeholder={!sessionHydrated ? "Loading isolated identity…" : "Search or enter an address"} disabled={!sessionHydrated || !activeIdentity} onChange={(event) => { if (activeTab) { addressDraftRef.current.set(activeTab.id, event.target.value); updateTab(activeTab.id, { address: event.target.value }); } }} /><button className="button primary" type="submit" disabled={!sessionHydrated || !activeIdentity}>Go</button></form>{activeTab?.error && <small role="alert">{activeTab.error}</small>}</div>}
       </div>
+      {researchPanel}
     </div>
   );
 }

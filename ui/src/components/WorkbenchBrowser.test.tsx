@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { EngagementScopePolicy } from "../api/types";
+import type { ApiClient } from "../api/client";
 import { ChromeProvider, type ChromeContextValue } from "../state/ChromeContext";
 import { DialogProvider } from "./DialogSystem";
 import { WorkbenchBrowser } from "./WorkbenchBrowser";
@@ -71,6 +72,37 @@ const scope: EngagementScopePolicy = {
   revision: 4,
 };
 
+function browserApi(): ApiClient {
+  const identity = {
+    id: "identity-1",
+    name: "Default identity",
+    description: "Project-isolated browser profile",
+    color: "#7c6cff",
+    storagePartition: "browser-00000000-0000-0000-0000-000000000000",
+    ephemeral: false,
+    isDefault: true,
+    revision: 1,
+  };
+  const session = {
+    id: "browser-session-1",
+    name: "Research session",
+    identityId: identity.id,
+    status: "active" as const,
+    captureMode: "headers" as const,
+    proxyEnabled: false,
+    tabs: [{ id: "tab-durable", title: "New tab", position: 0, lastScopeState: "unknown" as const }],
+    activeTabId: "tab-durable",
+    upstreamProxyEnabled: false,
+    interceptionEnabled: false,
+    lastSeenAt: "2026-08-24T00:00:00Z",
+    revision: 1,
+  };
+  return {
+    getSecurityBrowserWorkspace: vi.fn(async () => ({ identities: [identity], sessions: [session], traffic: [], frames: [], actions: [], handoffs: [] })),
+    syncSecurityBrowserSession: vi.fn(async (_session, tabs, activeTabId) => ({ ...session, tabs, activeTabId, revision: 2 })),
+  } as unknown as ApiClient;
+}
+
 function renderBrowser(
   onAddKnowledgeUrl = vi.fn(async () => ({ id: "source-1", name: "Guide" })),
   onAskNebula = vi.fn(),
@@ -85,6 +117,7 @@ function renderBrowser(
           <ChromeProvider value={chrome}>
             <WorkbenchBrowser
               active
+              api={browserApi()}
               projectId="project-1"
               scope={scopeValue}
               onAddKnowledgeUrl={onAddKnowledgeUrl}
@@ -99,7 +132,8 @@ function renderBrowser(
 }
 
 async function openPage(finalUrl = "https://docs.example.com/guide") {
-  fireEvent.change(screen.getByLabelText("Start browsing"), { target: { value: "https://docs.example.com/start" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Go" })).not.toBeDisabled());
+  fireEvent.input(screen.getByLabelText("Start browsing"), { target: { value: "https://docs.example.com/start" } });
   fireEvent.click(screen.getByRole("button", { name: "Go" }));
   await waitFor(() => expect(browserMocks.create).toHaveBeenCalled());
   const tabId = browserMocks.create.mock.calls[0][0] as string;

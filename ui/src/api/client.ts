@@ -41,6 +41,13 @@ import type {
   ScopeImport,
   ScopeImportApplyResult,
   ScopeImportCreateRequest,
+  SecurityBrowserAction,
+  SecurityBrowserExchange,
+  SecurityBrowserHandoff,
+  SecurityBrowserIdentity,
+  SecurityBrowserSession,
+  SecurityBrowserWorkspace,
+  SecurityBrowserWebSocketFrame,
   FindingCreateRequest,
   FindingSummary,
   FindingUpdateRequest,
@@ -201,6 +208,125 @@ interface WireEngagement extends WireEntity {
   tags?: string[];
   workspace_path?: string | null;
   metadata?: JsonObject;
+}
+
+interface WireBrowserIdentity extends WireEntity {
+  engagement_id: string;
+  name: string;
+  description: string;
+  color: string;
+  storage_partition: string;
+  ephemeral: boolean;
+  is_default: boolean;
+  revoked_at?: string | null;
+}
+
+interface WireBrowserTab {
+  id: string;
+  url?: string | null;
+  title: string;
+  position: number;
+  last_scope_state: SecurityBrowserSession["tabs"][number]["lastScopeState"];
+  last_scope_revision?: number | null;
+}
+
+interface WireBrowserSession extends WireEntity {
+  engagement_id: string;
+  name: string;
+  identity_id: string;
+  status: SecurityBrowserSession["status"];
+  capture_mode: SecurityBrowserSession["captureMode"];
+  proxy_enabled: boolean;
+  tabs: WireBrowserTab[];
+  active_tab_id?: string | null;
+  upstream_proxy_enabled: boolean;
+  upstream_proxy_url?: string | null;
+  interception_enabled: boolean;
+  device_owner?: string | null;
+  last_seen_at: string;
+}
+
+interface WireBrowserExchange extends WireEntity {
+  engagement_id: string;
+  session_id: string;
+  tab_id: string;
+  identity_id: string;
+  method: string;
+  url: string;
+  protocol: SecurityBrowserExchange["protocol"];
+  status_code?: number | null;
+  request_headers: Record<string, string>;
+  response_headers: Record<string, string>;
+  request_body_artifact_id?: string | null;
+  response_body_artifact_id?: string | null;
+  request_bytes?: number | null;
+  response_bytes?: number | null;
+  duration_ms?: number | null;
+  scope_state: SecurityBrowserExchange["scopeState"];
+  scope_policy_revision: number;
+  started_at: string;
+  completed_at?: string | null;
+  replay_of_exchange_id?: string | null;
+  error?: string | null;
+  truncated: boolean;
+}
+
+interface WireBrowserAction extends WireEntity {
+  engagement_id: string;
+  session_id: string;
+  tab_id: string;
+  identity_id: string;
+  kind: SecurityBrowserAction["kind"];
+  status: SecurityBrowserAction["status"];
+  locator: Record<string, string>;
+  arguments: Record<string, unknown>;
+  proposal: string;
+  proposed_by: string;
+  page_url: string;
+  scope_policy_revision: number;
+  action_sha256: string;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  expires_at: string;
+  completed_at?: string | null;
+  result: Record<string, unknown>;
+  evidence_ids: string[];
+  error?: string | null;
+}
+
+interface WireBrowserWebSocketFrame extends WireEntity {
+  engagement_id: string;
+  session_id: string;
+  exchange_id: string;
+  direction: SecurityBrowserWebSocketFrame["direction"];
+  opcode: SecurityBrowserWebSocketFrame["opcode"];
+  payload_preview: string;
+  payload_sha256: string;
+  payload_bytes: number;
+  observed_at: string;
+  truncated: boolean;
+}
+
+interface WireBrowserHandoff extends WireEntity {
+  engagement_id: string;
+  session_id: string;
+  requested_by_device_id: string;
+  command: SecurityBrowserHandoff["command"];
+  tab_id?: string | null;
+  url?: string | null;
+  status: SecurityBrowserHandoff["status"];
+  expires_at: string;
+  claimed_by_device_id?: string | null;
+  error?: string | null;
+}
+
+interface WireBrowserWorkspace {
+  identities: WireBrowserIdentity[];
+  sessions: WireBrowserSession[];
+  traffic: WireBrowserExchange[];
+  frames: WireBrowserWebSocketFrame[];
+  actions: WireBrowserAction[];
+  handoffs: WireBrowserHandoff[];
 }
 
 interface WireAgentRun extends WireEntity {
@@ -2790,6 +2916,141 @@ function mapScopeImport(value: WireScopeImport): ScopeImport {
     appliedScopePolicyId: value.applied_scope_policy_id ?? undefined,
     appliedScopeRevision: value.applied_scope_revision ?? undefined,
     revision: numberField(value.revision),
+  };
+}
+
+function mapBrowserIdentity(value: WireBrowserIdentity): SecurityBrowserIdentity {
+  return {
+    id: value.id,
+    name: value.name,
+    description: value.description,
+    color: value.color,
+    storagePartition: value.storage_partition,
+    ephemeral: value.ephemeral,
+    isDefault: value.is_default,
+    revokedAt: value.revoked_at ?? undefined,
+    revision: value.revision,
+  };
+}
+
+function mapBrowserSession(value: WireBrowserSession): SecurityBrowserSession {
+  return {
+    id: value.id,
+    name: value.name,
+    identityId: value.identity_id,
+    status: value.status,
+    captureMode: value.capture_mode,
+    proxyEnabled: value.proxy_enabled,
+    tabs: value.tabs.map((tab) => ({
+      id: tab.id,
+      url: tab.url ?? undefined,
+      title: tab.title,
+      position: tab.position,
+      lastScopeState: tab.last_scope_state,
+      lastScopeRevision: tab.last_scope_revision ?? undefined,
+    })),
+    activeTabId: value.active_tab_id ?? undefined,
+    upstreamProxyEnabled: value.upstream_proxy_enabled,
+    upstreamProxyUrl: value.upstream_proxy_url ?? undefined,
+    interceptionEnabled: value.interception_enabled,
+    deviceOwner: value.device_owner ?? undefined,
+    lastSeenAt: value.last_seen_at,
+    revision: value.revision,
+  };
+}
+
+function mapBrowserExchange(value: WireBrowserExchange): SecurityBrowserExchange {
+  return {
+    id: value.id,
+    sessionId: value.session_id,
+    tabId: value.tab_id,
+    identityId: value.identity_id,
+    method: value.method,
+    url: value.url,
+    protocol: value.protocol,
+    statusCode: value.status_code ?? undefined,
+    requestHeaders: value.request_headers,
+    responseHeaders: value.response_headers,
+    requestBodyArtifactId: value.request_body_artifact_id ?? undefined,
+    responseBodyArtifactId: value.response_body_artifact_id ?? undefined,
+    requestBytes: value.request_bytes ?? undefined,
+    responseBytes: value.response_bytes ?? undefined,
+    durationMs: value.duration_ms ?? undefined,
+    scopeState: value.scope_state,
+    scopePolicyRevision: value.scope_policy_revision,
+    startedAt: value.started_at,
+    completedAt: value.completed_at ?? undefined,
+    replayOfExchangeId: value.replay_of_exchange_id ?? undefined,
+    error: value.error ?? undefined,
+    truncated: value.truncated,
+  };
+}
+
+function mapBrowserAction(value: WireBrowserAction): SecurityBrowserAction {
+  return {
+    id: value.id,
+    sessionId: value.session_id,
+    tabId: value.tab_id,
+    identityId: value.identity_id,
+    kind: value.kind,
+    status: value.status,
+    locator: value.locator,
+    arguments: value.arguments,
+    proposal: value.proposal,
+    proposedBy: value.proposed_by,
+    pageUrl: value.page_url,
+    scopePolicyRevision: value.scope_policy_revision,
+    actionSha256: value.action_sha256,
+    approvedBy: value.approved_by ?? undefined,
+    approvedAt: value.approved_at ?? undefined,
+    expiresAt: value.expires_at,
+    completedAt: value.completed_at ?? undefined,
+    result: value.result,
+    evidenceIds: value.evidence_ids,
+    error: value.error ?? undefined,
+    revision: value.revision,
+  };
+}
+
+function mapBrowserWebSocketFrame(value: WireBrowserWebSocketFrame): SecurityBrowserWebSocketFrame {
+  return {
+    id: value.id,
+    sessionId: value.session_id,
+    exchangeId: value.exchange_id,
+    direction: value.direction,
+    opcode: value.opcode,
+    payloadPreview: value.payload_preview,
+    payloadSha256: value.payload_sha256,
+    payloadBytes: value.payload_bytes,
+    observedAt: value.observed_at,
+    truncated: value.truncated,
+  };
+}
+
+function mapBrowserHandoff(value: WireBrowserHandoff): SecurityBrowserHandoff {
+  return {
+    id: value.id,
+    sessionId: value.session_id,
+    requestedByDeviceId: value.requested_by_device_id,
+    command: value.command,
+    tabId: value.tab_id ?? undefined,
+    url: value.url ?? undefined,
+    status: value.status,
+    expiresAt: value.expires_at,
+    claimedByDeviceId: value.claimed_by_device_id ?? undefined,
+    error: value.error ?? undefined,
+    revision: value.revision,
+  };
+}
+
+function mapBrowserWorkspace(value: WireBrowserWorkspace): SecurityBrowserWorkspace {
+  return {
+    identities: value.identities.map(mapBrowserIdentity),
+    sessions: value.sessions.map(mapBrowserSession),
+    traffic: value.traffic.map(mapBrowserExchange),
+    frames: value.frames.map(mapBrowserWebSocketFrame),
+    actions: value.actions.map(mapBrowserAction),
+    handoffs: value.handoffs.map(mapBrowserHandoff),
   };
 }
 
@@ -6035,5 +6296,269 @@ export class ApiClient {
         method: "POST",
       },
     ).then(mapChatTurn);
+  }
+
+  getSecurityBrowserWorkspace(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<SecurityBrowserWorkspace> {
+    return this.request<WireBrowserWorkspace>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-workspace`,
+      { signal },
+    ).then(mapBrowserWorkspace);
+  }
+
+  createSecurityBrowserIdentity(
+    engagementId: string,
+    body: { name: string; description?: string; color?: string; ephemeral?: boolean },
+  ): Promise<SecurityBrowserIdentity> {
+    return this.request<WireBrowserIdentity>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-identities`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          name: body.name,
+          description: body.description ?? "",
+          color: body.color ?? "#7c6cff",
+          ephemeral: body.ephemeral ?? false,
+        }),
+      },
+    ).then(mapBrowserIdentity);
+  }
+
+  createSecurityBrowserSession(
+    engagementId: string,
+    body: { name: string; identityId: string; captureMode?: SecurityBrowserSession["captureMode"] },
+  ): Promise<SecurityBrowserSession> {
+    return this.request<WireBrowserSession>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-sessions`,
+      {
+        method: "POST",
+        body: JSON.stringify({ name: body.name, identity_id: body.identityId, capture_mode: body.captureMode ?? "headers" }),
+      },
+    ).then(mapBrowserSession);
+  }
+
+  syncSecurityBrowserSession(
+    session: SecurityBrowserSession,
+    tabs: SecurityBrowserSession["tabs"],
+    activeTabId: string | undefined,
+    deviceOwner: string,
+  ): Promise<SecurityBrowserSession> {
+    return this.request<WireBrowserSession>(
+      `browser-sessions/${encodeURIComponent(session.id)}/tabs`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          expected_revision: session.revision,
+          tabs: tabs.map((tab) => ({
+            id: tab.id,
+            url: tab.url,
+            title: tab.title,
+            position: tab.position,
+            last_scope_state: tab.lastScopeState,
+            last_scope_revision: tab.lastScopeRevision,
+          })),
+          active_tab_id: activeTabId,
+          device_owner: deviceOwner,
+        }),
+      },
+    ).then(mapBrowserSession);
+  }
+
+  updateSecurityBrowserCapture(
+    session: SecurityBrowserSession,
+    body: Pick<SecurityBrowserSession, "captureMode" | "proxyEnabled" | "interceptionEnabled" | "upstreamProxyEnabled" | "upstreamProxyUrl">,
+  ): Promise<SecurityBrowserSession> {
+    return this.request<WireBrowserSession>(
+      `browser-sessions/${encodeURIComponent(session.id)}/capture-settings`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          expected_revision: session.revision,
+          capture_mode: body.captureMode,
+          proxy_enabled: body.proxyEnabled,
+          interception_enabled: body.interceptionEnabled,
+          upstream_proxy_enabled: body.upstreamProxyEnabled,
+          upstream_proxy_url: body.upstreamProxyUrl,
+        }),
+      },
+    ).then(mapBrowserSession);
+  }
+
+  recordSecurityBrowserTraffic(
+    sessionId: string,
+    body: {
+      tabId: string;
+      method: string;
+      url: string;
+      protocol: SecurityBrowserExchange["protocol"];
+      statusCode?: number;
+      requestHeaders: Record<string, string>;
+      responseHeaders: Record<string, string>;
+      requestBytes?: number;
+      responseBytes?: number;
+      durationMs?: number;
+      error?: string;
+    },
+  ): Promise<SecurityBrowserExchange> {
+    return this.request<WireBrowserExchange>(
+      `browser-sessions/${encodeURIComponent(sessionId)}/traffic`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          tab_id: body.tabId,
+          method: body.method,
+          url: body.url,
+          protocol: body.protocol,
+          status_code: body.statusCode,
+          request_headers: body.requestHeaders,
+          response_headers: body.responseHeaders,
+          request_bytes: body.requestBytes,
+          response_bytes: body.responseBytes,
+          duration_ms: body.durationMs,
+          error: body.error,
+        }),
+      },
+    ).then(mapBrowserExchange);
+  }
+
+  recordSecurityBrowserWebSocketFrame(
+    sessionId: string,
+    body: {
+      exchangeId: string;
+      direction: SecurityBrowserWebSocketFrame["direction"];
+      opcode: SecurityBrowserWebSocketFrame["opcode"];
+      payloadPreview: string;
+      payloadSha256: string;
+      payloadBytes: number;
+      truncated: boolean;
+    },
+  ): Promise<SecurityBrowserWebSocketFrame> {
+    return this.request<WireBrowserWebSocketFrame>(
+      `browser-sessions/${encodeURIComponent(sessionId)}/websocket-frames`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          exchange_id: body.exchangeId,
+          direction: body.direction,
+          opcode: body.opcode,
+          payload_preview: body.payloadPreview,
+          payload_sha256: body.payloadSha256,
+          payload_bytes: body.payloadBytes,
+          truncated: body.truncated,
+        }),
+      },
+    ).then(mapBrowserWebSocketFrame);
+  }
+
+  proposeSecurityBrowserAction(
+    sessionId: string,
+    body: {
+      tabId: string;
+      kind: SecurityBrowserAction["kind"];
+      locator?: Record<string, string>;
+      arguments?: Record<string, unknown>;
+      proposal: string;
+      proposedBy: string;
+      pageUrl: string;
+    },
+  ): Promise<SecurityBrowserAction> {
+    return this.request<WireBrowserAction>(
+      `browser-sessions/${encodeURIComponent(sessionId)}/actions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          tab_id: body.tabId,
+          kind: body.kind,
+          locator: body.locator ?? {},
+          arguments: body.arguments ?? {},
+          proposal: body.proposal,
+          proposed_by: body.proposedBy,
+          page_url: body.pageUrl,
+        }),
+      },
+    ).then(mapBrowserAction);
+  }
+
+  decideSecurityBrowserAction(
+    action: SecurityBrowserAction,
+    decision: "approve" | "reject",
+    operatorId = "operator",
+  ): Promise<SecurityBrowserAction> {
+    return this.request<WireBrowserAction>(
+      `browser-actions/${encodeURIComponent(action.id)}/decision`,
+      { method: "POST", body: JSON.stringify({ expected_revision: action.revision, operator_id: operatorId, decision }) },
+    ).then(mapBrowserAction);
+  }
+
+  startSecurityBrowserAction(
+    action: SecurityBrowserAction,
+    deviceId = "desktop",
+  ): Promise<SecurityBrowserAction> {
+    return this.request<WireBrowserAction>(
+      `browser-actions/${encodeURIComponent(action.id)}/start`,
+      { method: "POST", body: JSON.stringify({ expected_revision: action.revision, device_id: deviceId }) },
+    ).then(mapBrowserAction);
+  }
+
+  finishSecurityBrowserAction(
+    action: SecurityBrowserAction,
+    body: { state: "complete" | "failed"; deviceId?: string; result?: Record<string, unknown>; evidenceIds?: string[]; error?: string },
+  ): Promise<SecurityBrowserAction> {
+    return this.request<WireBrowserAction>(
+      `browser-actions/${encodeURIComponent(action.id)}/result`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_revision: action.revision,
+          device_id: body.deviceId ?? "desktop",
+          state: body.state,
+          result: body.result ?? {},
+          evidence_ids: body.evidenceIds ?? [],
+          error: body.error,
+        }),
+      },
+    ).then(mapBrowserAction);
+  }
+
+  createSecurityBrowserHandoff(
+    sessionId: string,
+    body: { requestedByDeviceId: string; command: SecurityBrowserHandoff["command"]; tabId?: string; url?: string },
+  ): Promise<SecurityBrowserHandoff> {
+    return this.request<WireBrowserHandoff>(
+      `browser-sessions/${encodeURIComponent(sessionId)}/handoffs`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          requested_by_device_id: body.requestedByDeviceId,
+          command: body.command,
+          tab_id: body.tabId,
+          url: body.url,
+        }),
+      },
+    ).then(mapBrowserHandoff);
+  }
+
+  claimSecurityBrowserHandoff(
+    handoff: SecurityBrowserHandoff,
+    desktopDeviceId = "desktop",
+  ): Promise<SecurityBrowserHandoff> {
+    return this.request<WireBrowserHandoff>(
+      `browser-handoffs/${encodeURIComponent(handoff.id)}/claim`,
+      { method: "POST", body: JSON.stringify({ expected_revision: handoff.revision, desktop_device_id: desktopDeviceId }) },
+    ).then(mapBrowserHandoff);
+  }
+
+  finishSecurityBrowserHandoff(
+    handoff: SecurityBrowserHandoff,
+    state: "complete" | "failed",
+    error?: string,
+    desktopDeviceId = "desktop",
+  ): Promise<SecurityBrowserHandoff> {
+    return this.request<WireBrowserHandoff>(
+      `browser-handoffs/${encodeURIComponent(handoff.id)}/result`,
+      { method: "POST", body: JSON.stringify({ expected_revision: handoff.revision, desktop_device_id: desktopDeviceId, state, error }) },
+    ).then(mapBrowserHandoff);
   }
 }

@@ -2,7 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import type { EngagementScopePolicy } from "./types";
 
 export interface BrowserBounds { x: number; y: number; width: number; height: number }
-export interface BrowserCapabilities { engine: string; projectStorage: "persistent" | "ephemeral" }
+export interface BrowserCapabilities {
+  engine: string;
+  projectStorage: "persistent" | "ephemeral";
+  identityPartitions: boolean;
+  devtools: boolean;
+  interceptionProxy: boolean;
+  http2Capture: boolean;
+  websocketCapture: boolean;
+}
 export interface BrowserPageEvent {
   tabId: string;
   url: string;
@@ -45,6 +53,38 @@ export interface BrowserContextEvent {
   tabId: string;
   state: "ready" | "failed";
   context?: BrowserPageContext;
+  detail?: string;
+}
+export interface BrowserTrafficEvent {
+  sessionId: string;
+  tabId: string;
+  method: string;
+  url: string;
+  protocol: "http/1.0" | "http/1.1" | "h2" | "h3" | "unknown";
+  statusCode?: number;
+  requestHeaders: Record<string, string>;
+  responseHeaders: Record<string, string>;
+  requestBytes?: number;
+  responseBytes?: number;
+  durationMs: number;
+  error?: string;
+}
+export interface BrowserWebSocketFrameEvent {
+  sessionId: string;
+  tabId: string;
+  url: string;
+  direction: "client" | "server";
+  opcode: "text" | "binary" | "ping" | "pong" | "close";
+  payloadPreview: string;
+  payloadSha256: string;
+  payloadBytes: number;
+  truncated: boolean;
+}
+export interface BrowserActionEvent {
+  actionId: string;
+  tabId: string;
+  state: "complete" | "failed";
+  result: Record<string, unknown>;
   detail?: string;
 }
 export type BrowserScopeState = "in_scope" | "out_of_scope" | "inactive" | "unconfigured" | "unknown";
@@ -194,14 +234,18 @@ export function formatBrowserContextForAssistant(context: BrowserPageContext, sc
 
 export const workbenchBrowser = {
   capabilities: () => invoke<BrowserCapabilities>("browser_capabilities"),
-  create: (tabId: string, projectId: string, url: string, bounds: BrowserBounds) => invoke<void>("browser_create_tab", { tabId, projectId, url, bounds }),
+  create: (tabId: string, projectId: string, identityPartition: string, sessionId: string, proxyEnabled: boolean, url: string, bounds: BrowserBounds) => invoke<void>("browser_create_tab", { tabId, projectId, identityPartition, sessionId, proxyEnabled, url, bounds }),
   navigate: (tabId: string, projectId: string, url: string) => invoke<void>("browser_navigate", { tabId, projectId, url }),
   control: (tabId: string, projectId: string, action: "back" | "forward" | "stop" | "reload") => invoke<void>("browser_control", { tabId, projectId, action }),
   bounds: (tabId: string, projectId: string, bounds: BrowserBounds) => invoke<void>("browser_set_bounds", { tabId, projectId, bounds }),
   visible: (tabId: string, projectId: string, visible: boolean) => invoke<void>("browser_set_visible", { tabId, projectId, visible }),
   close: (tabId: string, projectId: string) => invoke<void>("browser_close_tab", { tabId, projectId }),
+  openDevtools: (tabId: string, projectId: string) => invoke<void>("browser_open_devtools", { tabId, projectId }),
+  revealProxyCa: (projectId: string) => invoke<string>("browser_reveal_proxy_ca", { projectId }),
+  clearIdentity: (projectId: string, identityPartition: string) => invoke<void>("browser_clear_identity_data", { projectId, identityPartition }),
   clear: (projectId: string) => invoke<void>("browser_clear_project_data", { projectId }),
   importDownload: (downloadId: string, projectId: string, overwrite: boolean) => invoke<BrowserImportResult>("browser_import_download", { downloadId, projectId, overwrite }),
   discardDownload: (downloadId: string, projectId: string) => invoke<void>("browser_discard_download", { downloadId, projectId }),
   captureContext: (tabId: string, projectId: string, requestId: string) => invoke<void>("browser_capture_context", { tabId, projectId, requestId }),
+  executeAction: (tabId: string, projectId: string, request: { actionId: string; kind: string; locator: Record<string, string>; arguments: Record<string, unknown>; pageUrl: string }) => invoke<void>("browser_execute_action", { tabId, projectId, request }),
 };

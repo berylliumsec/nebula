@@ -2795,15 +2795,18 @@ export function SessionsPage() {
           {api && engagement && <div className="persistent-code-editor" hidden={view !== "code"}>
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} /></Suspense>
           </div>}
-          {engagement && <div className="persistent-browser" hidden={view !== "browser"}>
+          {api && engagement && <div className="persistent-browser" hidden={view !== "browser"}>
             <WorkbenchBrowser
               active={view === "browser"}
+              api={api}
+              operatorId={activeOperator?.id}
               projectId={engagement.id}
               scope={browserScope}
               scopeLoading={browserScopeLoading}
               onAddKnowledgeUrl={(url) => ingestKnowledgeUrlSource({ engagementId: engagement.id, url })}
               onAskNebula={requestNebulaDraft}
               onOpenFiles={() => setView("workspace")}
+              onUploadEvidence={uploadEvidence}
             />
           </div>}
           {(view === "terminal" || view === "code") && (!api || !engagement) ? (

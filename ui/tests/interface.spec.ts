@@ -245,6 +245,18 @@ async function installTruthfulCore(page: Page) {
         grants: [],
         revision: 3,
       };
+    } else if (path.endsWith("/engagements/scratch-project/browser-workspace")) {
+      body = {
+        identities: [{ ...entity, id: "browser-identity-preview", engagement_id: "scratch-project", name: "Default identity", description: "Project-isolated preview profile", color: "#7c6cff", storage_partition: "browser-00000000-0000-0000-0000-000000000000", ephemeral: false, is_default: true, revoked_at: null, metadata: {} }],
+        sessions: [{ ...entity, id: "browser-session-preview", engagement_id: "scratch-project", name: "Research session", identity_id: "browser-identity-preview", status: "active", capture_mode: "headers", proxy_enabled: false, tabs: [], active_tab_id: null, upstream_proxy_enabled: false, upstream_proxy_url: null, interception_enabled: false, device_owner: null, last_seen_at: entity.updated_at, metadata: {} }],
+        traffic: [],
+        frames: [],
+        actions: [],
+        handoffs: [],
+      };
+    } else if (path.endsWith("/browser-sessions/browser-session-preview/tabs") && request.method() === "PUT") {
+      const update = request.postDataJSON() as { tabs: unknown[]; active_tab_id: string | null; device_owner: string };
+      body = { ...entity, revision: 2, id: "browser-session-preview", engagement_id: "scratch-project", name: "Research session", identity_id: "browser-identity-preview", status: "active", capture_mode: "headers", proxy_enabled: false, tabs: update.tabs, active_tab_id: update.active_tab_id, upstream_proxy_enabled: false, upstream_proxy_url: null, interception_enabled: false, device_owner: update.device_owner, last_seen_at: entity.updated_at, metadata: {} };
     } else if (path.endsWith("/engagements")) {
       body = [{
         ...entity,
