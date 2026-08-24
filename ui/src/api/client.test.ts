@@ -794,6 +794,7 @@ describe("ApiClient", () => {
       severity: "high",
       severityRationale: "  Internet reachable.  ",
       assetIds: ["asset-1", "asset-1"],
+      evidenceIds: ["evidence-1", "evidence-1"],
       cveIds: ["cve-2026-1234"],
       cweIds: ["cwe-79", "CWE-79"],
     });
@@ -808,11 +809,12 @@ describe("ApiClient", () => {
       severity: "high",
       severity_rationale: "Internet reachable.",
       asset_ids: ["asset-1"],
+      evidence_ids: ["evidence-1"],
       cve_ids: ["CVE-2026-1234"],
       cwe_ids: ["CWE-79"],
       metadata: { origin: "manual_operator_entry" },
     });
-    expect(created).toMatchObject({ id: "finding-new", status: "candidate", verifierId: undefined, evidenceCount: 0 });
+    expect(created).toMatchObject({ id: "finding-new", status: "candidate", verifierId: undefined, evidenceCount: 1 });
   });
 
   it("updates every editable finding field with normalized, revision-checked changes", async () => {
@@ -1579,6 +1581,115 @@ describe("ApiClient", () => {
     });
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://127.0.0.1:8765/api/v1/harness-turns/turn%2Fone/events?after=3&limit=10000",
+    );
+  });
+
+  it("maps bounded workspace search results and encodes the project path", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      engagement_id: "project/one",
+      query: "scan target",
+      mode: "text",
+      matches: [{
+        path: "src/scanner.py",
+        kind: "content",
+        line: 7,
+        column: 3,
+        preview: "scan_target(host)",
+      }],
+      scanned_files: 12,
+      truncated: false,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.searchWorkspace("project/one", "scan target", "text", "src tools")).resolves.toEqual({
+      engagementId: "project/one",
+      query: "scan target",
+      mode: "text",
+      matches: [{ path: "src/scanner.py", kind: "content", line: 7, column: 3, preview: "scan_target(host)" }],
+      scannedFiles: 12,
+      truncated: false,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/engagements/project%2Fone/workspace/search?query=scan+target&mode=text&path=src+tools&limit=100",
+    );
+  });
+
+  it("maps bounded VS Code launch profiles and preserves disabled reasons", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      engagement_id: "project/one",
+      active_path: "research/parser.py",
+      configurations: [{
+        id: "profile-1",
+        name: "Debug parser",
+        path: "research/parser.py",
+        arguments: ["--fixture", "/workspace/sample.bin"],
+        source: ".vscode/launch.json",
+        detail: "VS Code Python launch profile",
+        supported: false,
+        unsupported_reason: "Save the profile before use.",
+      }],
+      truncated: false,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.workspaceDebugConfigurations("project/one", "research/parser.py")).resolves.toEqual({
+      engagementId: "project/one",
+      activePath: "research/parser.py",
+      configurations: [{
+        id: "profile-1",
+        name: "Debug parser",
+        path: "research/parser.py",
+        arguments: ["--fixture", "/workspace/sample.bin"],
+        source: ".vscode/launch.json",
+        detail: "VS Code Python launch profile",
+        supported: false,
+        unsupportedReason: "Save the profile before use.",
+      }],
+      truncated: false,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/engagements/project%2Fone/workspace/debug-configurations?path=research%2Fparser.py",
+    );
+  });
+
+  it("maps source-control status and requests hardened diffs", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        engagement_id: "project/one",
+        state: "ready",
+        branch: "research/fix",
+        head: "abcdef123456",
+        files: [{
+          path: "src/scanner.py",
+          index_status: "unmodified",
+          worktree_status: "modified",
+          original_path: null,
+        }],
+        truncated: false,
+        detail: "1 changed path.",
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        engagement_id: "project/one",
+        path: "src/scanner.py",
+        staged: false,
+        text: "@@ -1 +1 @@",
+        truncated: false,
+        head: "abcdef123456",
+      }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.sourceControlStatus("project/one")).resolves.toMatchObject({
+      engagementId: "project/one",
+      state: "ready",
+      branch: "research/fix",
+      files: [{ path: "src/scanner.py", worktreeStatus: "modified" }],
+    });
+    await expect(client.sourceControlDiff("project/one", "src/scanner.py")).resolves.toMatchObject({
+      path: "src/scanner.py",
+      text: "@@ -1 +1 @@",
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/engagements/project%2Fone/workspace/source-control/diff?path=src%2Fscanner.py&staged=false",
     );
   });
 });

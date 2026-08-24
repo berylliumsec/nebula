@@ -5,7 +5,7 @@ import { WorkbenchEditorProvider } from "../state/WorkbenchEditorContext";
 import { ReleaseUpdateProvider } from "../state/ReleaseUpdateContext";
 import { useTheme } from "../state/ThemeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
-import { ChromeProvider } from "../state/ChromeContext";
+import { ChromeProvider, type ContextualCommand } from "../state/ChromeContext";
 import { ActivityCenter, type ActivityCenterView } from "./ActivityCenter";
 import { CommandPalette } from "./CommandPalette";
 import { SideNav } from "./SideNav";
@@ -44,6 +44,7 @@ export function AppShell() {
     return stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "true";
   });
   const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
+  const [contextualCommands, setContextualCommands] = useState<ContextualCommand[]>([]);
   const authorizationRecovery = runtime?.reason === "browser_session_token_missing"
     ? browserAuthorizationRecovery(window.location.hostname)
     : undefined;
@@ -129,16 +130,18 @@ export function AppShell() {
 
   const chrome = useMemo(() => ({
     activityOpen,
+    contextualCommands,
     paletteOpen,
     sidebarCollapsed,
     toolbarHost,
     openPalette,
     setActivityOpen,
+    setContextualCommands,
     setPaletteOpen,
     setToolbarHost,
     toggleActivity,
     toggleSidebar,
-  }), [activityOpen, openPalette, paletteOpen, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
+  }), [activityOpen, contextualCommands, openPalette, paletteOpen, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
   return (
     <ReleaseUpdateProvider>
       <WorkbenchEditorProvider>
@@ -176,6 +179,7 @@ export function AppShell() {
               </main>
               <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />
               <CommandPalette
+                contextualCommands={contextualCommands}
                 open={paletteOpen}
                 onClose={() => setPaletteOpen(false)}
                 onToggleActivity={toggleActivity}

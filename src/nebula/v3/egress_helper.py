@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import ipaddress
 import signal
 import socket
@@ -20,6 +21,9 @@ ENABLE_REQUEST = Path("/run/nebula-egress-enable")
 ENABLE_ACK = Path("/run/nebula-egress-enabled")
 POLICY_RESOLVER = "127.0.0.53"
 DNS_PORT = 53
+SIOCGIFFLAGS = 0x8913
+SIOCSIFFLAGS = 0x8914
+IFF_UP = 0x1
 
 
 def _rule(value: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]:
@@ -50,6 +54,31 @@ def _cidr_rule(
 
 def _run(*arguments: str) -> None:
     subprocess.run(arguments, check=True, stdin=subprocess.DEVNULL)
+
+
+def _bring_loopback_up() -> None:
+    """Enable only ``lo`` inside an otherwise empty network namespace."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as control:
+        request = struct.pack("16sH14s", b"lo", 0, b"")
+        response = fcntl.ioctl(control.fileno(), SIOCGIFFLAGS, request)
+        _name, flags, _padding = struct.unpack("16sH14s", response)
+        fcntl.ioctl(
+            control.fileno(),
+            SIOCSIFFLAGS,
+            struct.pack("16sH14s", b"lo", flags | IFF_UP, b""),
+        )
+
+
+def loopback() -> int:
+    _bring_loopback_up()
+    stopped = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopped.set())
+    signal.signal(signal.SIGINT, lambda *_: stopped.set())
+    print("READY", flush=True)
+    while not stopped.wait(0.1):
+        pass
+    return 0
 
 
 def _base(binary: str) -> None:
@@ -504,10 +533,13 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--domain-port", action="append", type=int, default=[])
     serve_parser.add_argument("--disabled", action="store_true")
     subparsers.add_parser("enable")
+    subparsers.add_parser("loopback")
     options = parser.parse_args(argv)
     try:
         if options.operation == "enable":
             return enable()
+        if options.operation == "loopback":
+            return loopback()
         if any(not 1 <= port <= 65_535 for port in options.domain_port):
             raise ValueError("domain ports must be between 1 and 65535")
         return serve(

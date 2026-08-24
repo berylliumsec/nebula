@@ -503,6 +503,7 @@ export interface FindingCreateRequest {
   severity: FindingSummary["severity"];
   severityRationale?: string;
   assetIds?: Identifier[];
+  evidenceIds?: Identifier[];
   cveIds?: string[];
   cweIds?: string[];
   sourceRunId?: Identifier;
@@ -1968,6 +1969,111 @@ export interface WorkspaceListing {
   offset: number;
   nextOffset?: number;
   total: number;
+}
+
+export interface WorkspaceSearchMatch {
+  path: string;
+  kind: "path" | "content";
+  line?: number;
+  column?: number;
+  preview: string;
+}
+
+export interface WorkspaceSearchResult {
+  engagementId: Identifier;
+  query: string;
+  mode: "files" | "text";
+  matches: WorkspaceSearchMatch[];
+  scannedFiles: number;
+  truncated: boolean;
+}
+
+export interface WorkspaceTask {
+  id: string;
+  label: string;
+  command: string;
+  kind: "test" | "build" | "run" | "lint" | "custom";
+  source: "package.json" | "Makefile" | "pytest" | "go.mod" | "Cargo.toml" | ".vscode/tasks.json";
+  detail: string;
+  path?: string;
+  supported: boolean;
+  unsupportedReason?: string;
+}
+
+export interface WorkspaceTaskList {
+  engagementId: Identifier;
+  tasks: WorkspaceTask[];
+  scannedEntries: number;
+  truncated: boolean;
+}
+
+export interface WorkspaceDebugConfiguration {
+  id: string;
+  name: string;
+  path?: string;
+  arguments: string[];
+  source: ".vscode/launch.json";
+  detail: string;
+  supported: boolean;
+  unsupportedReason?: string;
+}
+
+export interface WorkspaceDebugConfigurationList {
+  engagementId: Identifier;
+  activePath: string;
+  configurations: WorkspaceDebugConfiguration[];
+  truncated: boolean;
+}
+
+export interface DebugSessionStart {
+  sessionId: string;
+  websocketPath: string;
+  websocketTicket: string;
+  protocol: "nebula.debug.v1";
+  path: string;
+  sourceSha256: string;
+  imageDigest: string;
+  workspaceAccess: "read-only";
+  network: "none";
+  expiresAt: string;
+}
+
+export type SourceControlFileStatus =
+  | "unmodified"
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "unmerged"
+  | "untracked"
+  | "ignored"
+  | "unknown";
+
+export interface SourceControlFile {
+  path: string;
+  indexStatus: SourceControlFileStatus;
+  worktreeStatus: SourceControlFileStatus;
+  originalPath?: string;
+}
+
+export interface SourceControlStatus {
+  engagementId: Identifier;
+  state: "ready" | "not_repository" | "unavailable";
+  branch?: string;
+  head?: string;
+  files: SourceControlFile[];
+  truncated: boolean;
+  detail: string;
+}
+
+export interface SourceControlDiff {
+  engagementId: Identifier;
+  path: string;
+  staged: boolean;
+  text: string;
+  truncated: boolean;
+  head?: string;
 }
 
 export interface WorkspacePreview {

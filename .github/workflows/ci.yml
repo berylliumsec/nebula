@@ -170,7 +170,7 @@ jobs:
           repository_digest="$(podman image inspect docker.io/kalilinux/kali-rolling:latest --format '{{index .RepoDigests 0}}')"
           image_digest="${repository_digest##*@}"
           source_reference="docker.io/kalilinux/kali-rolling@${image_digest}"
-          derived_tag="localhost/nebula-kali-headless:v4-${image_digest#sha256:}"
+          derived_tag="localhost/nebula-kali-headless:v5-${image_digest#sha256:}"
           echo "NEBULA_KALI_SOURCE_IMAGE=${source_reference}" >> "${GITHUB_ENV}"
           echo "NEBULA_TEST_CONTAINER_RUNTIME=/usr/bin/podman" >> "${GITHUB_ENV}"
           echo "NEBULA_TEST_CONTAINER_SOCKET=unix://${socket_path}" >> "${GITHUB_ENV}"

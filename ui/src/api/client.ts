@@ -26,6 +26,7 @@ import type {
   ContextSnapshot,
   ContextSourceReference,
   ContextStatus,
+  DebugSessionStart,
   CredentialStatus,
   EngagementSummary,
   EngagementCreateRequest,
@@ -96,6 +97,8 @@ import type {
   RunStopRequest,
   RunnerProfile,
   RunnerProfileUpdateRequest,
+  SourceControlDiff,
+  SourceControlStatus,
   SetupControlResponse,
   SetupStatus,
   ToolArtifactReference,
@@ -105,6 +108,9 @@ import type {
   WorkspacePreview,
   WorkspaceResetResult,
   WorkspaceResetStatus,
+  WorkspaceSearchResult,
+  WorkspaceTaskList,
+  WorkspaceDebugConfigurationList,
   WorkspaceUploadResult,
   WritingTransformRequest,
   WritingTransformResponse,
@@ -1206,6 +1212,45 @@ interface WireWorkspaceListing extends JsonObject {
   offset: number;
   next_offset?: number | null;
   total: number;
+}
+
+interface WireWorkspaceSearchResult extends JsonObject {
+  engagement_id: string;
+  query: string;
+  mode: "files" | "text";
+  matches: Array<{
+    path: string;
+    kind: "path" | "content";
+    line?: number | null;
+    column?: number | null;
+    preview: string;
+  }>;
+  scanned_files: number;
+  truncated: boolean;
+}
+
+interface WireSourceControlStatus extends JsonObject {
+  engagement_id: string;
+  state: SourceControlStatus["state"];
+  branch?: string | null;
+  head?: string | null;
+  files: Array<{
+    path: string;
+    index_status: SourceControlStatus["files"][number]["indexStatus"];
+    worktree_status: SourceControlStatus["files"][number]["worktreeStatus"];
+    original_path?: string | null;
+  }>;
+  truncated: boolean;
+  detail: string;
+}
+
+interface WireSourceControlDiff extends JsonObject {
+  engagement_id: string;
+  path: string;
+  staged: boolean;
+  text: string;
+  truncated: boolean;
+  head?: string | null;
 }
 
 interface WireWorkspacePreview extends JsonObject {
@@ -2385,6 +2430,51 @@ function mapWorkspaceListing(value: WireWorkspaceListing): WorkspaceListing {
     offset: value.offset,
     nextOffset: value.next_offset ?? undefined,
     total: value.total,
+  };
+}
+
+function mapWorkspaceSearchResult(value: WireWorkspaceSearchResult): WorkspaceSearchResult {
+  return {
+    engagementId: value.engagement_id,
+    query: value.query,
+    mode: value.mode,
+    matches: value.matches.map((match) => ({
+      path: match.path,
+      kind: match.kind,
+      line: match.line ?? undefined,
+      column: match.column ?? undefined,
+      preview: match.preview,
+    })),
+    scannedFiles: value.scanned_files,
+    truncated: value.truncated,
+  };
+}
+
+function mapSourceControlStatus(value: WireSourceControlStatus): SourceControlStatus {
+  return {
+    engagementId: value.engagement_id,
+    state: value.state,
+    branch: value.branch ?? undefined,
+    head: value.head ?? undefined,
+    files: value.files.map((file) => ({
+      path: file.path,
+      indexStatus: file.index_status,
+      worktreeStatus: file.worktree_status,
+      originalPath: file.original_path ?? undefined,
+    })),
+    truncated: value.truncated,
+    detail: value.detail,
+  };
+}
+
+function mapSourceControlDiff(value: WireSourceControlDiff): SourceControlDiff {
+  return {
+    engagementId: value.engagement_id,
+    path: value.path,
+    staged: value.staged,
+    text: value.text,
+    truncated: value.truncated,
+    head: value.head ?? undefined,
   };
 }
 
@@ -4449,6 +4539,7 @@ export class ApiClient {
         severity: body.severity,
         severity_rationale: body.severityRationale?.trim() ?? "",
         asset_ids: [...new Set(body.assetIds ?? [])],
+        evidence_ids: [...new Set(body.evidenceIds ?? [])],
         cve_ids: normalizedIdentifiers(body.cveIds),
         cwe_ids: normalizedIdentifiers(body.cweIds),
         metadata: body.sourceRunId
@@ -5683,6 +5774,111 @@ export class ApiClient {
       `engagements/${encodeURIComponent(engagementId)}/workspace?${parameters}`,
       { signal },
     ).then(mapWorkspaceListing);
+  }
+
+  searchWorkspace(
+    engagementId: string,
+    query: string,
+    mode: "files" | "text" = "files",
+    path = "",
+    signal?: AbortSignal,
+  ): Promise<WorkspaceSearchResult> {
+    const parameters = new URLSearchParams({ query, mode, path, limit: "100" });
+    return this.request<WireWorkspaceSearchResult>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/search?${parameters}`,
+      { signal },
+    ).then(mapWorkspaceSearchResult);
+  }
+
+  workspaceTasks(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceTaskList> {
+    return this.request<{
+      engagement_id: string;
+      tasks: Array<{ id: string; label: string; command: string; kind: "test" | "build" | "run" | "lint" | "custom"; source: "package.json" | "Makefile" | "pytest" | "go.mod" | "Cargo.toml" | ".vscode/tasks.json"; detail: string; path?: string | null; supported?: boolean; unsupported_reason?: string | null }>;
+      scanned_entries: number;
+      truncated: boolean;
+    }>(`engagements/${encodeURIComponent(engagementId)}/workspace/tasks`, { signal }).then((value) => ({
+      engagementId: value.engagement_id,
+      tasks: value.tasks.map(({ path, unsupported_reason: unsupportedReason, ...task }) => ({ ...task, path: path ?? undefined, supported: task.supported !== false, unsupportedReason: unsupportedReason ?? undefined })),
+      scannedEntries: value.scanned_entries,
+      truncated: value.truncated,
+    }));
+  }
+
+  workspaceDebugConfigurations(
+    engagementId: string,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDebugConfigurationList> {
+    const parameters = new URLSearchParams({ path });
+    return this.request<{
+      engagement_id: string;
+      active_path: string;
+      configurations: Array<{ id: string; name: string; path?: string | null; arguments: string[]; source: ".vscode/launch.json"; detail: string; supported: boolean; unsupported_reason?: string | null }>;
+      truncated: boolean;
+    }>(`engagements/${encodeURIComponent(engagementId)}/workspace/debug-configurations?${parameters}`, { signal }).then((value) => ({
+      engagementId: value.engagement_id,
+      activePath: value.active_path,
+      configurations: value.configurations.map(({ path, unsupported_reason: unsupportedReason, ...configuration }) => ({ ...configuration, path: path ?? undefined, unsupportedReason: unsupportedReason ?? undefined })),
+      truncated: value.truncated,
+    }));
+  }
+
+  startDebugSession(
+    engagementId: string,
+    body: { path: string; expectedSha256: string; arguments?: string[] },
+  ): Promise<DebugSessionStart> {
+    return this.request<{
+      session_id: string;
+      websocket_path: string;
+      websocket_ticket: string;
+      protocol: "nebula.debug.v1";
+      path: string;
+      source_sha256: string;
+      image_digest: string;
+      workspace_access: "read-only";
+      network: "none";
+      expires_at: string;
+    }>(`engagements/${encodeURIComponent(engagementId)}/debug-sessions`, {
+      method: "POST",
+      body: JSON.stringify({ path: body.path, expected_sha256: body.expectedSha256, arguments: body.arguments ?? [] }),
+    }).then((value) => ({
+      sessionId: value.session_id,
+      websocketPath: value.websocket_path,
+      websocketTicket: value.websocket_ticket,
+      protocol: value.protocol,
+      path: value.path,
+      sourceSha256: value.source_sha256,
+      imageDigest: value.image_digest,
+      workspaceAccess: value.workspace_access,
+      network: value.network,
+      expiresAt: value.expires_at,
+    }));
+  }
+
+  sourceControlStatus(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<SourceControlStatus> {
+    return this.request<WireSourceControlStatus>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/source-control`,
+      { signal },
+    ).then(mapSourceControlStatus);
+  }
+
+  sourceControlDiff(
+    engagementId: string,
+    path: string,
+    staged = false,
+    signal?: AbortSignal,
+  ): Promise<SourceControlDiff> {
+    const parameters = new URLSearchParams({ path, staged: String(staged) });
+    return this.request<WireSourceControlDiff>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/source-control/diff?${parameters}`,
+      { signal },
+    ).then(mapSourceControlDiff);
   }
 
   listHostWorkspaceFolders(path?: string): Promise<{

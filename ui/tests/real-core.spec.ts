@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
@@ -16,20 +17,29 @@ interface RealCore {
 
 async function startRealCore(options: { bindHost?: string; browserHost?: string } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
+  const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+  // Match the production-test override used by the shared real-Core harness.
+  const coreCandidates = [
+    process.env.NEBULA_TEST_CORE_BIN,
+    process.env.NEBULA_CORE_BINARY,
+    path.join(repository, ".venv/bin/nebula-core"),
+    commonGitDir ? path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core") : undefined,
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  const coreBinary = coreCandidates.find(existsSync);
+  if (!coreBinary) throw new Error(`No nebula-core test binary was found in: ${coreCandidates.join(", ")}`);
   const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
   const token = "playwright-real-core-token-2026";
   const bindHost = options.bindHost ?? "127.0.0.1";
   const browserHost = options.browserHost ?? bindHost;
-  const coreExecutable = process.env.NEBULA_TEST_CORE_BIN ?? path.join(repository, ".venv/bin/nebula-core");
   const child = spawn(
-    coreExecutable,
+    coreBinary,
     [
       "serve",
       "--host", bindHost,
       "--port", "0",
       "--token", token,
-      ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
       "--allow-insecure-device-pairing",
+      ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
       "--data-dir", dataDir,
       "--static-dir", path.join(repository, "ui/dist"),
     ],
@@ -54,7 +64,10 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
       }
     };
     child.stdout.on("data", inspect);
-    child.stderr.on("data", (chunk) => { output += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => {
+      output += chunk.toString("utf8");
+      if (process.env.NEBULA_TEST_CORE_LOG === "1") process.stderr.write(chunk);
+    });
     child.once("exit", (code) => {
       clearTimeout(timeout);
       reject(new Error(`Real Core exited with ${code}.\n${output}`));
@@ -406,7 +419,7 @@ test("a paired browser can revoke itself without a stale authentication error", 
 });
 
 test("mobile Code keeps its controls readable and saves to authoritative real-Core state", async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const core = await startRealCore();
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
@@ -440,7 +453,7 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
       }
     }
 
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("textbox", { name: "Code editor" }).press("Control+S");
     await expect(page.getByText("Saved /workspace/mobile-proof.txt. Use it from Terminal when you're ready.")).toBeVisible();
     const listingResponse = await api.get(`engagements/${projectId}/workspace?path=&offset=0&limit=100`);
     expect(listingResponse.ok()).toBe(true);
@@ -448,6 +461,251 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     const fileResponse = await api.get(`engagements/${projectId}/workspace/download?path=mobile-proof.txt`);
     expect(fileResponse.ok()).toBe(true);
     expect(await fileResponse.text()).toBe("real Core mobile proof\n");
+
+    await page.getByRole("button", { name: "New editor file" }).click();
+    await page.getByRole("textbox", { name: "File path" }).fill("scanner.py");
+    await page.getByRole("textbox", { name: "Code editor" }).fill("def scan_target():\n    return True\n");
+    await page.getByRole("textbox", { name: "Code editor" }).press("Control+S");
+    await expect(page.getByText("Saved /workspace/scanner.py. Use it from Terminal when you're ready.")).toBeVisible();
+    const workspaceRoot = path.join(core.dataDir, "engagement-workspaces", createHash("sha256").update(projectId!).digest("hex"));
+    await mkdir(path.join(workspaceRoot, ".vscode"), { recursive: true });
+    await writeFile(path.join(workspaceRoot, ".vscode", "tasks.json"), `{
+      // Real-Core compatibility fixture.
+      tasks: [
+        { label: 'Inspect Python', type: 'process', command: 'python', args: ['--version'], group: 'test' },
+        { label: 'Extension-owned task', type: 'npm', command: 'test' },
+      ],
+    }`, "utf8");
+    await writeFile(path.join(workspaceRoot, ".vscode", "launch.json"), `{
+      configurations: [
+        { name: 'Debug active scanner', type: 'debugpy', request: 'launch', program: '${"${file}"}', args: ['--fixture', '${"${workspaceFolder}"}/sample.bin'] },
+        { name: 'Attach process', type: 'debugpy', request: 'attach' },
+      ],
+    }`, "utf8");
+    const configuredTasks = await api.get(`engagements/${projectId}/workspace/tasks`);
+    expect(configuredTasks.ok(), await configuredTasks.text()).toBe(true);
+    expect(JSON.stringify(await configuredTasks.json())).toContain("Inspect Python");
+    const configuredLaunch = await api.get(`engagements/${projectId}/workspace/debug-configurations`, { params: { path: "scanner.py" } });
+    expect(configuredLaunch.ok(), await configuredLaunch.text()).toBe(true);
+    expect(JSON.stringify(await configuredLaunch.json())).toContain("Debug active scanner");
+    await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("button", { name: "Project tasks and tests" })).toBeVisible();
+    const taskRequest = page.waitForResponse((response) => response.url().includes("/workspace/tasks"));
+    await page.getByRole("button", { name: "Project tasks and tests" }).click();
+    const taskResponse = await taskRequest;
+    expect(taskResponse.url()).toContain(encodeURIComponent(projectId!));
+    expect(JSON.stringify(await taskResponse.json())).toContain("Inspect Python");
+    const taskReview = page.getByRole("dialog", { name: "Project tasks and tests" });
+    await expect(taskReview.getByRole("option", { name: /Inspect Python/ })).toBeEnabled();
+    await expect(taskReview.getByRole("option", { name: /Extension-owned task/ })).toBeDisabled();
+    await expect(taskReview).toContainText("requires a VS Code extension");
+    await taskReview.getByRole("button", { name: "Close project tasks" }).click();
+    await page.getByRole("button", { name: "Debug saved Python" }).click();
+    const debuggerReview = page.getByRole("dialog", { name: "Python debugger" });
+    await expect(debuggerReview).toContainText("Isolated launch review");
+    await expect(debuggerReview).toContainText("project is read-only, networking is disabled");
+    await expect(debuggerReview.getByRole("button", { name: "Start isolated debugger" })).toBeEnabled();
+    await expect(debuggerReview.getByLabel("Launch profile").locator("option:checked")).toHaveText("Debug active scanner");
+    await expect(debuggerReview.getByLabel("Python arguments (JSON array)")).toHaveValue('["--fixture","/workspace/sample.bin"]');
+    await expect(debuggerReview.getByLabel("Unsupported launch profiles")).toContainText("Attach profiles cannot cross Nebula's isolated debug boundary.");
+    await debuggerReview.getByRole("button", { name: "Close debugger" }).click();
+
+    await page.keyboard.press("Control+P");
+    const quickOpen = page.getByRole("dialog", { name: "Quick open" });
+    await expect(quickOpen).toBeVisible();
+    await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("mobile-proof");
+    await quickOpen.getByRole("option", { name: /mobile-proof\.txt/ }).click();
+    await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".cm-line").first()).toHaveText("real Core mobile proof");
+
+    await page.keyboard.press("Control+Shift+F");
+    const textSearch = page.getByRole("dialog", { name: "Search workspace text" });
+    await textSearch.getByRole("textbox", { name: "Search workspace text" }).fill("scan_target");
+    await textSearch.getByRole("option", { name: /scanner\.py.*Line 1/ }).click();
+    await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
+
+    await page.getByRole("button", { name: "Preserve as Evidence" }).click();
+    const preserveDialog = page.getByRole("dialog", { name: "Preserve scanner.py as Evidence?" });
+    await preserveDialog.getByRole("button", { name: "Preserve as Evidence" }).click();
+    await expect(page.getByText(/Preserved scanner\.py as Evidence/)).toBeVisible();
+    const evidenceResponse = await api.get(`evidence?engagement_id=${projectId}&offset=0&limit=100`);
+    expect(evidenceResponse.ok()).toBe(true);
+    expect(JSON.stringify(await evidenceResponse.json())).toContain("scanner.py");
+
+    await writeFile(path.join(workspaceRoot, "scanner.py"), "def scan_target():\n    return False  # Terminal edit\n", "utf8");
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Code/ }).click();
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("return False  # Terminal edit");
+    await expect(page.getByText("Workspace synchronized: 1 reloaded.")).toBeVisible();
+
+    await page.getByRole("textbox", { name: "Code editor" }).fill("def scan_target():\n    return 'unsaved operator draft'\n");
+    await writeFile(path.join(workspaceRoot, "scanner.py"), "def scan_target():\n    return 'newer agent edit'\n\nscan_target()\n", "utf8");
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Code/ }).click();
+    await expect(page.getByText("Newer workspace version detected")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("unsaved operator draft");
+    await page.getByRole("button", { name: "Reload", exact: true }).click();
+    const reload = page.getByRole("dialog", { name: "Reload the workspace file?" });
+    await reload.getByRole("button", { name: "Reload file" }).click();
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("newer agent edit");
+
+    await expect(page.getByText(/Python · open-buffer intelligence ready/)).toBeVisible({ timeout: 20_000 });
+    const editor = page.getByRole("textbox", { name: "Code editor" });
+    await page.locator(".cm-line").nth(3).click();
+    await editor.press("Home");
+    await editor.press("ArrowRight");
+    await page.getByRole("button", { name: "Go to definition" }).click();
+    await expect(page.getByText(/^Ln 1, Col /)).toBeVisible();
+    await page.locator(".cm-line").nth(3).click();
+    await editor.press("Home");
+    await editor.press("ArrowRight");
+    await page.getByRole("button", { name: "Find references" }).click();
+    const references = page.getByRole("listbox", { name: "Reference list" });
+    await expect(references).toBeVisible();
+    await expect(references.getByRole("option")).toHaveCount(2);
+
+    await page.getByRole("button", { name: "Candidate finding" }).click();
+    const findingHandoff = page.getByRole("dialog", { name: "Draft an evidence-backed candidate finding?" });
+    await expect(findingHandoff).toContainText("Nothing is validated or confirmed automatically");
+    await findingHandoff.getByRole("button", { name: "Continue to Findings" }).click();
+    await expect(page).toHaveURL(/\/findings$/);
+    const candidate = page.getByRole("dialog", { name: "Create candidate finding" });
+    await expect(candidate.getByLabel("Title")).toHaveValue(/scanner\.py:\d+ security observation/);
+    await expect(candidate.getByLabel("Description")).toContainText("Source: /workspace/scanner.py:");
+    await expect(candidate.getByLabel("Description")).toContainText("Evidence record:");
+    await expect(candidate.getByRole("combobox", { name: "Severity", exact: true })).toHaveValue("info");
+    await candidate.getByRole("button", { name: "Create candidate" }).click();
+    await expect(candidate).toBeHidden();
+    const findingsResponse = await api.get(`findings?engagement_id=${projectId}&offset=0&limit=100`);
+    expect(findingsResponse.ok()).toBe(true);
+    const createdFindings = await findingsResponse.json() as Array<{ status: string; evidence_ids: string[] }>;
+    expect(createdFindings.some((finding) => finding.status === "candidate" && finding.evidence_ids.length === 1)).toBe(true);
+
+    await page.waitForTimeout(350);
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("scan_target");
+
+    await page.getByRole("button", { name: "New editor file" }).click();
+    await page.getByRole("textbox", { name: "File path" }).fill("hot-exit-notes.txt");
+    await page.getByRole("textbox", { name: "Code editor" }).fill("exact unsaved λ research draft\n");
+    await expect(page.getByText(/^3 open · 1 unsaved · recovery on$/)).toHaveText("3 open · 1 unsaved · recovery on");
+    await page.waitForTimeout(350);
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("hot-exit-notes.txt");
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("exact unsaved λ research draft");
+    await expect(page.getByText(/^3 open · 1 unsaved · recovery on$/)).toHaveText("3 open · 1 unsaved · recovery on");
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
+test("production Code reads real Git changes and hands mutations to Nebula Terminal", async ({ page }) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore();
+  const projectFolder = await mkdtemp(path.join(tmpdir(), "nebula-source-control-project-"));
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  const git = (...gitArguments: string[]) => {
+    const result = spawnSync("git", ["-C", projectFolder, ...gitArguments], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+  };
+  try {
+    git("init", "-b", "research");
+    git("config", "user.name", "Nebula Acceptance");
+    git("config", "user.email", "nebula@example.invalid");
+    await writeFile(path.join(projectFolder, "scanner.py"), "def scan():\n    return 'baseline'\n", "utf8");
+    await writeFile(path.join(projectFolder, "Makefile"), "lint:\n\tpython -m compileall scanner.py\n", "utf8");
+    git("add", "scanner.py", "Makefile");
+    git("commit", "-m", "baseline");
+    await writeFile(path.join(projectFolder, "scanner.py"), "def scan():\n    return 'changed'\n", "utf8");
+
+    const create = await api.post("engagements", { data: {
+      name: "Source Control Acceptance",
+      description: "",
+      client_name: null,
+      status: "draft",
+      tags: [],
+      workspace_path: projectFolder,
+      metadata: {},
+    } });
+    expect(create.ok(), await create.text()).toBe(true);
+    const project = await create.json() as { id: string };
+    await page.addInitScript((projectId) => localStorage.setItem("nebula.engagement", projectId), project.id);
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 20_000 });
+
+    await page.getByRole("tab", { name: "Changes" }).click();
+    await expect(page.getByText("research", { exact: true })).toBeVisible();
+    await expect(page.getByText("1 changed path.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Working diff" }).click();
+    const diff = page.getByRole("dialog", { name: "scanner.py" });
+    await expect(diff.getByLabel("Diff for scanner.py")).toContainText("+    return 'changed'");
+    await diff.getByRole("button", { name: "Close source-control diff" }).click();
+
+    await page.getByRole("button", { name: /scanner\.py/ }).click();
+    await expect(page.locator(".cm-line").nth(1)).toHaveText("    return 'changed'");
+    await expect(page.getByText(/open-buffer intelligence ready/)).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Problems" }).click();
+    await expect(page.locator(".cm-panel-lint")).toBeVisible();
+    await page.getByRole("button", { name: "Tasks" }).click();
+    const tasks = page.getByRole("dialog", { name: "Project tasks and tests" });
+    await tasks.getByRole("option", { name: /make: lint/ }).click();
+    const executionReview = page.getByRole("dialog", { name: "Review exact code execution" });
+    await expect(executionReview.locator(".execution-source-review")).toContainText("make lint");
+    await executionReview.getByRole("button", { name: "Close execution review" }).click();
+    await page.getByRole("tab", { name: "Changes" }).click();
+    await expect(page.getByText(/Stage, commit, branch, pull, and push remain in Nebula Terminal/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open Terminal" })).toBeVisible();
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+    if (path.basename(projectFolder).startsWith("nebula-source-control-project-")) {
+      await rm(projectFolder, { recursive: true, force: true });
+    }
+  }
+});
+
+test("production Code quick-open works from a non-loopback LAN origin", async ({ page }) => {
+  test.setTimeout(60_000);
+  const lanAddress = Object.values(networkInterfaces())
+    .flat()
+    .find((address) => address?.family === "IPv4" && !address.internal)?.address;
+  test.skip(!lanAddress, "No non-loopback IPv4 interface is available for the LAN-origin gate.");
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagementsResponse = await api.get("engagements");
+    expect(engagementsResponse.ok()).toBe(true);
+    const projectId = (await engagementsResponse.json() as Array<{ id: string }>)[0]?.id;
+    expect(projectId).toBeTruthy();
+    const upload = await api.put(
+      `engagements/${projectId}/workspace/file?path=lan-proof.py&overwrite=false`,
+      { data: Buffer.from("print('lan production proof')\n"), headers: { "Content-Type": "text/plain" } },
+    );
+    expect(upload.ok(), await upload.text()).toBe(true);
+
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 20_000 });
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+    await page.getByRole("button", { name: /lan-proof\.py/ }).click();
+    await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
+    await expect(page.getByText(/open-buffer intelligence ready/)).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Open", exact: true }).click();
+    const quickOpen = page.getByRole("dialog", { name: "Quick open" });
+    await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("lan-proof");
+    await quickOpen.getByRole("option", { name: /lan-proof\.py/ }).click();
+    await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
   } finally {
     await api.dispose();
     await stopRealCore(core);
@@ -588,6 +846,28 @@ test("clean real Core completes reviewed work and exposes every recovery state",
       max_concurrency: 1,
     });
 
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await page.getByRole("button", { name: "New file", exact: true }).first().click();
+    await page.getByRole("textbox", { name: "File path" }).fill("debug-proof.py");
+    const debugEditor = page.getByRole("textbox", { name: "Code editor" });
+    await debugEditor.fill("value = 41\nprint(f'debug-finished:{value + 1}')\n");
+    await debugEditor.press("Control+S");
+    await expect(
+      page.getByText("Saved /workspace/debug-proof.py. Use it from Terminal when you're ready."),
+    ).toBeVisible({ timeout: 30_000 });
+    await debugEditor.press("Control+Home");
+    await page.getByRole("button", { name: "Debug saved Python" }).click();
+    const debuggerPanel = page.getByRole("dialog", { name: "Python debugger" });
+    await debuggerPanel.getByRole("button", { name: "Toggle breakpoint at line 1" }).click();
+    await debuggerPanel.getByRole("button", { name: "Start isolated debugger" }).click();
+    await expect(debuggerPanel.getByText(/^stopped/)).toBeVisible({ timeout: 30_000 });
+    await expect(debuggerPanel.getByText(/debug-proof\.py:1/)).toBeVisible();
+    await debuggerPanel.getByRole("button", { name: "Continue" }).click();
+    await expect(debuggerPanel.getByText(/^ended/)).toBeVisible({ timeout: 30_000 });
+    await expect(debuggerPanel.getByText(/debug-finished:42/)).toBeVisible();
+    await debuggerPanel.getByRole("button", { name: "Close debugger" }).click();
+    await page.goto(`${core.origin}/#token=${encodeURIComponent(core.token)}`);
+
     const source = "sleep 5\nprintf 'real-core-ready\\n'\nprintf 'workspace-result\\n' > /workspace/result.txt\n";
     const sourceSha256 = createHash("sha256").update(source).digest("hex");
     const executionRequest = {
@@ -659,7 +939,7 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await page.getByRole("button", { name: "Reset workspace" }).click();
     const resetDialog = page.getByRole("dialog", { name: "Reset the project workspace?" });
     await resetDialog.getByRole("button", { name: "Reset workspace" }).click();
-    await expect(page.getByText(/Removed 1 workspace entry/)).toBeVisible();
+    await expect(page.getByText(/Removed 2 workspace entries/)).toBeVisible({ timeout: 30_000 });
 
     const diagnostic = await api.post("diagnostics/events", { data: { events: [{
       schema: "nebula.diagnostic/v1",

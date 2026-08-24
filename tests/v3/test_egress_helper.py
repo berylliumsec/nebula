@@ -4,6 +4,27 @@ import struct
 from nebula.v3 import egress_helper
 
 
+def test_loopback_helper_enables_only_the_loopback_interface(monkeypatch):
+    calls: list[tuple[int, bytes]] = []
+
+    def ioctl(_descriptor, operation, request):
+        calls.append((operation, request))
+        if operation == egress_helper.SIOCGIFFLAGS:
+            return struct.pack("16sH14s", b"lo", 0, b"")
+        return request
+
+    monkeypatch.setattr(egress_helper.fcntl, "ioctl", ioctl)
+
+    egress_helper._bring_loopback_up()
+
+    assert [operation for operation, _request in calls] == [
+        egress_helper.SIOCGIFFLAGS,
+        egress_helper.SIOCSIFFLAGS,
+    ]
+    _name, flags, _padding = struct.unpack("16sH14s", calls[-1][1])
+    assert flags & egress_helper.IFF_UP
+
+
 def _dns_name(value: str) -> bytes:
     return (
         b"".join(

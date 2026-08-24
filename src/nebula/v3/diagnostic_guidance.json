@@ -214,6 +214,7 @@
     "harnesses": {"label": "Agent harnesses", "operation": "Harness turn", "destination": "/settings#advanced-settings", "help_article": "provider-model"},
     "missions": {"label": "Missions", "operation": "Mission run", "destination": "/?view=missions", "help_article": "provider-model"},
     "runtime": {"label": "Automation runtime", "operation": "Runtime operation", "destination": "/settings#advanced-settings", "help_article": "automation-runtime"},
+    "debugger": {"label": "Code debugger", "operation": "Debugger operation", "destination": "/?view=code", "help_article": "automation-runtime"},
     "sandbox": {"label": "Execution sandbox", "operation": "Sandbox boundary", "destination": "/settings#advanced-settings", "help_article": "runner-setup"},
     "executions": {"label": "Reviewed executions", "operation": "Reviewed execution", "destination": "/?view=activity", "help_article": "human-terminal"},
     "findings": {"label": "Findings", "operation": "Finding operation", "destination": "/findings", "help_article": "diagnostics"},

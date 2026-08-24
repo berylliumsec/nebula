@@ -68,6 +68,7 @@ FEATURE_FILES: dict[str, str] = {
     "harnesses": "harnesses.log",
     "missions": "missions.log",
     "runtime": "runtime.log",
+    "debugger": "debugger.log",
     "sandbox": "sandbox.log",
     "executions": "executions.log",
     "findings": "findings.log",

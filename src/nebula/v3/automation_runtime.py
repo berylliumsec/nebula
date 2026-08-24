@@ -218,6 +218,9 @@ class SessionLaunch:
     egress_ports: tuple[int, ...] = ()
     resolv_conf: Path | None = None
     network_granted: bool = False
+    workspace_access: SandboxWorkspaceAccess = SandboxWorkspaceAccess.WRITE
+    container_user: SandboxContainerUser = SandboxContainerUser.NON_ROOT
+    loopback_only: bool = False
 
 
 class _ContainerProcess(RuntimeBackendProcess):
@@ -298,6 +301,10 @@ class ContainerRuntimeSession(RuntimeBackendSession):
         if not healthy:
             raise AutomationRuntimeUnavailable(detail)
         has_boundary = bool(launch.egress_rules or launch.egress_domains)
+        if launch.loopback_only and has_boundary:
+            raise AutomationRuntimeUnavailable(
+                "loopback-only sessions cannot request an egress boundary"
+            )
         network = SandboxNetwork.SCOPED if has_boundary else SandboxNetwork.NONE
         request = SandboxRequest(
             image=launch.image,
@@ -310,14 +317,14 @@ class ContainerRuntimeSession(RuntimeBackendSession):
                 "while :; do sleep 3600 & wait $!; done",
             ],
             workspace=launch.workspace,
-            workspace_access=SandboxWorkspaceAccess.WRITE,
+            workspace_access=launch.workspace_access,
             network=network,
             execution_kind=(
                 SandboxExecutionKind.NETWORK_TOOL
                 if has_boundary
                 else SandboxExecutionKind.LOCAL_TOOL
             ),
-            container_user=SandboxContainerUser.NON_ROOT,
+            container_user=launch.container_user,
             root_filesystem=SandboxRootFilesystem.READ_ONLY,
             egress_rules=list(launch.egress_rules),
             egress_domains=list(launch.egress_domains),
@@ -345,6 +352,22 @@ class ContainerRuntimeSession(RuntimeBackendSession):
                 runtime_argv=launch.runner._runtime_argv(),
                 runtime_environment=_runtime_environment(),
                 request=request,
+                container_name=container_name,
+                seccomp_profile=(
+                    launch.runner.profile.seccomp_profile
+                    if launch.runner.profile is not None
+                    else None
+                ),
+            )
+        elif launch.loopback_only:
+            # The prepared runtime image is digest-pinned and its loopback helper
+            # was verified before this session was admitted. Use that same image
+            # as the namespace owner so offline DAP does not depend on project
+            # egress configuration.
+            controller = ContainerEgressController(helper_image=launch.image)
+            lease = await controller.acquire_loopback(
+                runtime_argv=launch.runner._runtime_argv(),
+                runtime_environment=_runtime_environment(),
                 container_name=container_name,
                 seccomp_profile=(
                     launch.runner.profile.seccomp_profile

@@ -60,6 +60,7 @@ const FEATURES: &[&str] = &[
     "harnesses",
     "missions",
     "runtime",
+    "debugger",
     "sandbox",
     "executions",
     "findings",

@@ -388,6 +388,47 @@ async function installTruthfulCore(page: Page) {
         reason_code: null,
         detail: "No active terminal or reviewed execution is using the workspace.",
       };
+    } else if (path.endsWith("/workspace/source-control/diff")) {
+      body = {
+        engagement_id: "scratch-project",
+        path: "scanner.py",
+        staged: false,
+        text: "@@ -1 +1 @@\n-return 'old'\n+return 'changed'",
+        truncated: false,
+        head: "abcdef123456",
+      };
+    } else if (path.endsWith("/workspace/source-control")) {
+      body = {
+        engagement_id: "scratch-project",
+        state: "ready",
+        branch: "research/mock",
+        head: "abcdef123456",
+        files: [{
+          path: "scanner.py",
+          index_status: "unmodified",
+          worktree_status: "modified",
+          original_path: null,
+        }],
+        truncated: false,
+        detail: "1 changed path.",
+      };
+    } else if (path.endsWith("/workspace/tasks")) {
+      body = {
+        engagement_id: "scratch-project",
+        tasks: [
+          { id: "a".repeat(64), label: "Inspect Python", command: "python --version", kind: "test", source: ".vscode/tasks.json", detail: "VS Code process task", supported: true, unsupported_reason: null },
+          { id: "b".repeat(64), label: "Extension-owned task", command: ":", kind: "custom", source: ".vscode/tasks.json", detail: "VS Code task", supported: false, unsupported_reason: "Task type 'npm' requires a VS Code extension and is not executed by Nebula." },
+        ],
+        scanned_entries: 4,
+        truncated: false,
+      };
+    } else if (path.endsWith("/workspace/debug-configurations")) {
+      body = {
+        engagement_id: "scratch-project",
+        active_path: "scanner.py",
+        configurations: [],
+        truncated: false,
+      };
     } else if (path.endsWith("/workspace")) {
       body = {
         engagement_id: "scratch-project",
@@ -2341,6 +2382,7 @@ test("both Zero themes snap primary workbench surfaces to the available screen",
 });
 
 test("the code editor keeps its caret and syntax layers aligned while typing", async ({ page }, testInfo) => {
+  test.slow();
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await page.goto("/?view=code");
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
@@ -2349,6 +2391,13 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   } else {
     await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 15_000 });
   }
+  await page.getByRole("tab", { name: "Changes" }).click();
+  await expect(page.getByText("research/mock", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Working diff" }).click();
+  const sourceDiff = page.getByRole("dialog", { name: "scanner.py" });
+  await expect(sourceDiff.getByLabel("Diff for scanner.py")).toContainText("+return 'changed'");
+  await sourceDiff.getByRole("button", { name: "Close source-control diff" }).click();
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.evaluate(() => document.fonts.ready);
   await page.getByRole("button", { name: "New file", exact: true }).first().click();
   const filePath = page.getByRole("textbox", { name: "File path" });
@@ -2358,6 +2407,36 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   });
   await expect(filePath).toHaveValue("example.c");
   await expect(page.locator(".code-mirror-host")).toHaveAttribute("data-language-ready", "example.c");
+
+  const toolbarControls = await page.locator(".code-editor-file-row > label:visible, .code-editor-toolbar button:visible, .code-editor-toolbar .code-editor-dirty:visible").evaluateAll((elements) => elements.map((element) => {
+    const box = element.getBoundingClientRect();
+    const clip = element.closest(".code-editor-secondary-actions")?.getBoundingClientRect();
+    return { label: element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName, left: Math.max(box.left, clip?.left ?? box.left), right: Math.min(box.right, clip?.right ?? box.right), top: box.top, bottom: box.bottom };
+  }).filter((box) => box.right - box.left > 1));
+  for (let left = 0; left < toolbarControls.length; left += 1) {
+    for (let right = left + 1; right < toolbarControls.length; right += 1) {
+      const a = toolbarControls[left];
+      const b = toolbarControls[right];
+      const intersects = a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1;
+      expect(intersects, `${a.label} overlaps ${b.label}`).toBe(false);
+    }
+  }
+
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("textbox", { name: "Search commands" }).fill("Editor: Workspace Environment");
+    await palette.getByRole("option", { name: /Editor: Workspace Environment/ }).click();
+  } else {
+    await page.getByRole("button", { name: "Environment", exact: true }).click();
+  }
+  const environment = page.getByRole("dialog", { name: "Workspace environment" });
+  await expect(environment.getByText("Nebula-managed project workspace")).toBeVisible();
+  await expect(environment.getByText("Kali runtime ready")).toBeVisible();
+  await expect(environment).toContainText("/workspace");
+  const environmentAccessibility = await new AxeBuilder({ page }).include(".editor-environment-dialog").analyze();
+  expect(environmentAccessibility.violations).toEqual([]);
+  await environment.getByRole("button", { name: "Close", exact: true }).click();
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     await page.getByRole("button", { name: "More editor actions" }).click();
@@ -2382,6 +2461,14 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(findInput).toBeVisible();
   await findInput.press("Escape");
   await expect(findInput).toBeHidden();
+
+  await page.keyboard.press("Control+Shift+B");
+  const compatibleTasks = page.getByRole("dialog", { name: "Project tasks and tests" });
+  await expect(compatibleTasks.getByRole("option", { name: /Inspect Python/ })).toBeEnabled();
+  await expect(compatibleTasks.getByRole("option", { name: /Extension-owned task/ })).toBeDisabled();
+  await expect(compatibleTasks).toContainText("requires a VS Code extension");
+  await compatibleTasks.getByRole("button", { name: "Close project tasks" }).click();
+  await expect(compatibleTasks).toBeHidden();
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     const panel = page.locator(".code-editor-panel");
@@ -2471,7 +2558,8 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
     };
   });
   expect(geometry.hasShadowBoundary).toBe(true);
-  expect(geometry.hostHeight).toBeGreaterThan(testInfo.project.name === "compact" ? 250 : 400);
+  const compactEditor = testInfo.project.name === "compact" || (page.viewportSize()?.width ?? 1_000) <= 760;
+  expect(geometry.hostHeight).toBeGreaterThan(compactEditor ? 240 : 400);
   expect(geometry.lineTops).toHaveLength(5);
   expect(geometry.numberTops).toHaveLength(5);
   geometry.lineTops.forEach((lineTop, index) => expect(Math.abs(lineTop - geometry.numberTops[index])).toBeLessThan(2));
@@ -2483,6 +2571,44 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(inputSurface).not.toHaveCSS("caret-color", "rgba(0, 0, 0, 0)");
   await expect(page.getByText(/Ln 4, Col 12/, { exact: true })).toBeVisible();
   await expect(editor.locator(".cm-cursor-primary")).toHaveCount(0);
+
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.getByRole("button", { name: "More editor actions" }).click();
+    await page.getByRole("button", { name: "Editor settings" }).click();
+  } else {
+    await page.getByRole("button", { name: "Editor settings" }).click();
+  }
+  const editorSettings = page.getByRole("dialog", { name: "Editor settings and keybindings" });
+  await editorSettings.getByLabel("Font size").selectOption("16");
+  await editorSettings.getByLabel("Tab size").selectOption("4");
+  await editorSettings.getByRole("checkbox", { name: /Word wrap/ }).check();
+  await editorSettings.getByRole("button", { name: "Apply settings" }).click();
+  await expect.poll(() => page.locator(".code-mirror-host").evaluate((host) => getComputedStyle(host.shadowRoot!.querySelector(".cm-editor")!).fontSize)).toBe("16px");
+
+  await page.keyboard.press("Control+Shift+P");
+  const editorPalette = page.getByRole("dialog", { name: "Command palette" });
+  await expect(editorPalette).toBeVisible();
+  await editorPalette.getByRole("textbox", { name: "Search commands" }).fill("Editor: Debug Saved Python");
+  const unavailableDebugger = editorPalette.getByRole("option", { name: /Editor: Debug Saved Python/ });
+  await expect(unavailableDebugger).toBeDisabled();
+  await expect(unavailableDebugger).toContainText("Debugging requires an open Python file");
+  await expect(unavailableDebugger).toContainText("F5");
+  await page.keyboard.press("Escape");
+  await expect(editorPalette).toBeHidden();
+
+  await page.getByRole("button", { name: "New editor file" }).click();
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.getByRole("button", { name: "More editor actions" }).click();
+    await page.getByRole("button", { name: "Split editor" }).click();
+  } else {
+    await page.getByRole("button", { name: "Split" }).click();
+  }
+  await expect(page.getByRole("textbox", { name: "Primary code editor: untitled.txt" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Secondary code editor: example.c" })).toBeVisible();
+  await page.getByRole("button", { name: "Focus example.c editor" }).click();
+  await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("example.c");
+  await page.getByRole("button", { name: "Close split editor" }).click();
+  await expect(page.getByRole("textbox", { name: "Code editor" })).toBeVisible();
 });
 
 test("settings shows the live Kali preparation stage instead of a passive runtime check", async ({ page }) => {

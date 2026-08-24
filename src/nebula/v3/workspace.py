@@ -8,10 +8,18 @@ import asyncio
 import errno
 import hashlib
 import hmac
+import json
+
+# The locked parser does not publish a py.typed marker.
+import json5  # type: ignore[import-untyped]
 import mimetypes
 import os
+import re
+import shlex
+import shutil
 import stat
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Literal
@@ -37,6 +45,13 @@ from .storage import NebulaStore
 from .runtime_platform import RuntimePlatform
 
 MAX_PREVIEW_BYTES = 256 * 1024
+MAX_SEARCH_FILE_BYTES = 1024 * 1024
+MAX_SEARCH_SCANNED_FILES = 5_000
+MAX_SOURCE_CONTROL_FILES = 500
+MAX_SOURCE_CONTROL_OUTPUT_BYTES = 4 * 1024 * 1024
+MAX_SOURCE_CONTROL_DIFF_BYTES = 512 * 1024
+MAX_VSCODE_CONFIGURATION_BYTES = 128 * 1024
+SOURCE_CONTROL_TIMEOUT_SECONDS = 8.0
 _BUSY_STATUSES = {
     OperatorExecutionStatus.QUEUED,
     OperatorExecutionStatus.RUNNING,
@@ -59,6 +74,113 @@ class WorkspaceListing(NebulaModel):
     offset: int = Field(ge=0)
     next_offset: int | None = Field(default=None, ge=0)
     total: int = Field(ge=0)
+
+
+class WorkspaceSearchMatch(NebulaModel):
+    path: str
+    kind: Literal["path", "content"]
+    line: int | None = Field(default=None, ge=1)
+    column: int | None = Field(default=None, ge=1)
+    preview: str = Field(default="", max_length=500)
+
+
+class WorkspaceSearchResult(NebulaModel):
+    engagement_id: str
+    query: str
+    mode: Literal["files", "text"]
+    matches: list[WorkspaceSearchMatch]
+    scanned_files: int = Field(ge=0)
+    truncated: bool = False
+
+
+WorkspaceTaskKind = Literal["test", "build", "run", "lint", "custom"]
+WorkspaceTaskSource = Literal[
+    "package.json",
+    "Makefile",
+    "pytest",
+    "go.mod",
+    "Cargo.toml",
+    ".vscode/tasks.json",
+]
+
+
+class WorkspaceTask(NebulaModel):
+    id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    label: str = Field(min_length=1, max_length=300)
+    command: str = Field(min_length=1, max_length=20_000)
+    kind: WorkspaceTaskKind
+    source: WorkspaceTaskSource
+    detail: str = Field(max_length=1_000)
+    path: str | None = Field(default=None, max_length=4096)
+    supported: bool = True
+    unsupported_reason: str | None = Field(default=None, max_length=1_000)
+
+
+class WorkspaceTaskList(NebulaModel):
+    engagement_id: str
+    tasks: list[WorkspaceTask] = Field(default_factory=list, max_length=300)
+    scanned_entries: int = Field(ge=0)
+    truncated: bool = False
+
+
+class WorkspaceDebugConfiguration(NebulaModel):
+    id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    name: str = Field(min_length=1, max_length=300)
+    path: str | None = Field(default=None, max_length=4096)
+    arguments: list[str] = Field(default_factory=list, max_length=50)
+    source: Literal[".vscode/launch.json"] = ".vscode/launch.json"
+    detail: str = Field(max_length=1_000)
+    supported: bool = True
+    unsupported_reason: str | None = Field(default=None, max_length=1_000)
+
+
+class WorkspaceDebugConfigurationList(NebulaModel):
+    engagement_id: str
+    active_path: str
+    configurations: list[WorkspaceDebugConfiguration] = Field(
+        default_factory=list, max_length=100
+    )
+    truncated: bool = False
+
+
+SourceControlFileStatus = Literal[
+    "unmodified",
+    "modified",
+    "added",
+    "deleted",
+    "renamed",
+    "copied",
+    "unmerged",
+    "untracked",
+    "ignored",
+    "unknown",
+]
+
+
+class SourceControlFile(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    index_status: SourceControlFileStatus
+    worktree_status: SourceControlFileStatus
+    original_path: str | None = Field(default=None, max_length=4096)
+
+
+class SourceControlStatus(NebulaModel):
+    engagement_id: str
+    state: Literal["ready", "not_repository", "unavailable"]
+    branch: str | None = Field(default=None, max_length=500)
+    head: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")
+    files: list[SourceControlFile] = Field(default_factory=list)
+    truncated: bool = False
+    detail: str = Field(max_length=2_000)
+
+
+class SourceControlDiff(NebulaModel):
+    engagement_id: str
+    path: str = Field(min_length=1, max_length=4096)
+    staged: bool = False
+    text: str
+    truncated: bool = False
+    head: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")
 
 
 class WorkspacePreview(NebulaModel):
@@ -223,6 +345,617 @@ class WorkspaceService:
             total=len(rows),
         )
 
+    def tasks(self, engagement_id: str) -> WorkspaceTaskList:
+        """Discover declarative project tasks without evaluating project code."""
+        self.store.get(Engagement, engagement_id)
+        tasks: list[WorkspaceTask] = []
+
+        def add(
+            label: str,
+            command: str,
+            kind: WorkspaceTaskKind,
+            source: WorkspaceTaskSource,
+            detail: str,
+            path: str | None = None,
+            supported: bool = True,
+            unsupported_reason: str | None = None,
+        ) -> None:
+            identity = hashlib.sha256(
+                f"{source}\0{path or ''}\0{label}\0{command}".encode()
+            ).hexdigest()
+            tasks.append(
+                WorkspaceTask(
+                    id=identity,
+                    label=label,
+                    command=command,
+                    kind=kind,
+                    source=source,
+                    detail=detail,
+                    path=path,
+                    supported=supported,
+                    unsupported_reason=unsupported_reason,
+                )
+            )
+
+        vscode_tasks, vscode_tasks_error = self._read_vscode_manifest(
+            engagement_id, ".vscode/tasks.json"
+        )
+        if vscode_tasks_error:
+            add(
+                "VS Code tasks need attention",
+                ":",
+                "custom",
+                ".vscode/tasks.json",
+                "Nebula could not read .vscode/tasks.json.",
+                supported=False,
+                unsupported_reason=vscode_tasks_error,
+            )
+        elif vscode_tasks is not None:
+            try:
+                parsed_tasks = json5.loads(vscode_tasks, allow_duplicate_keys=False)
+            except (RecursionError, ValueError):
+                # diagnostic-expected: the invalid manifest is returned as a visible,
+                # disabled task with an in-place recovery instruction.
+                add(
+                    "VS Code tasks need attention",
+                    ":",
+                    "custom",
+                    ".vscode/tasks.json",
+                    "Nebula could not parse .vscode/tasks.json.",
+                    supported=False,
+                    unsupported_reason=(
+                        "Fix the JSON-with-comments syntax or duplicate keys, then refresh."
+                    ),
+                )
+            else:
+                declared = (
+                    parsed_tasks.get("tasks")
+                    if isinstance(parsed_tasks, dict)
+                    else None
+                )
+                if isinstance(declared, list):
+                    for index, task in enumerate(declared[:200]):
+                        normalized = self._normalize_vscode_task(task, index)
+                        if normalized is None:
+                            continue
+                        add(*normalized)
+
+        package = self._read_task_manifest(engagement_id, "package.json")
+        if package is not None:
+            try:
+                parsed = json.loads(package)
+            except json.JSONDecodeError:
+                # diagnostic-expected: an invalid optional package manifest is
+                # ignored while other bounded task sources remain available.
+                parsed = None
+            scripts = parsed.get("scripts") if isinstance(parsed, dict) else None
+            if isinstance(scripts, dict):
+                for name, value in list(scripts.items())[:200]:
+                    if (
+                        not isinstance(name, str)
+                        or not isinstance(value, str)
+                        or not name
+                        or len(name) > 200
+                    ):
+                        continue
+                    kind: WorkspaceTaskKind = (
+                        "test"
+                        if name == "test" or name.startswith("test:")
+                        else "build"
+                        if name == "build" or name.startswith("build:")
+                        else "lint"
+                        if name == "lint" or name.startswith("lint:")
+                        else "run"
+                        if name in {"start", "dev"}
+                        else "custom"
+                    )
+                    add(
+                        f"npm: {name}",
+                        f"npm run {shlex.quote(name)}",
+                        kind,
+                        "package.json",
+                        value[:1_000],
+                    )
+
+        makefile = self._read_task_manifest(engagement_id, "Makefile")
+        if makefile is not None:
+            for target in re.findall(
+                r"(?m)^([A-Za-z0-9][A-Za-z0-9_.-]*):(?:\s|$)", makefile
+            ):
+                if target.startswith(".") or any(
+                    task.command == f"make {target}" for task in tasks
+                ):
+                    continue
+                kind = (
+                    "test"
+                    if "test" in target
+                    else "build"
+                    if target in {"all", "build", "dist", "release"}
+                    else "lint"
+                    if target in {"lint", "check"}
+                    else "custom"
+                )
+                add(
+                    f"make: {target}",
+                    f"make {target}",
+                    kind,
+                    "Makefile",
+                    "Declared Make target",
+                )
+
+        root = self._workspace_root(engagement_id)
+        scanned = 0
+        truncated = False
+        pytest_files: list[str] = []
+        for directory, names, files in os.walk(root, followlinks=False):
+            names[:] = [
+                name
+                for name in names
+                if name
+                not in {
+                    ".git",
+                    "node_modules",
+                    ".venv",
+                    "venv",
+                    "dist",
+                    "build",
+                    "__pycache__",
+                }
+                and not (Path(directory) / name).is_symlink()
+            ]
+            for filename in files:
+                scanned += 1
+                if scanned > 5_000:
+                    truncated = True
+                    break
+                candidate = Path(directory) / filename
+                if candidate.is_symlink():
+                    continue
+                relative = candidate.relative_to(root).as_posix()
+                if (
+                    filename.startswith("test_") or filename.endswith("_test.py")
+                ) and filename.endswith(".py"):
+                    pytest_files.append(relative)
+            if truncated:
+                break
+        if pytest_files:
+            add(
+                "pytest: all discovered tests",
+                "python -m pytest",
+                "test",
+                "pytest",
+                f"{len(pytest_files)} test files discovered",
+            )
+            for path in sorted(pytest_files)[:100]:
+                add(
+                    f"pytest: {path}",
+                    f"python -m pytest {shlex.quote(path)}",
+                    "test",
+                    "pytest",
+                    "Run this discovered test file",
+                    path,
+                )
+        if self._read_task_manifest(engagement_id, "go.mod") is not None:
+            add(
+                "Go: test workspace",
+                "go test ./...",
+                "test",
+                "go.mod",
+                "Go module test suite",
+            )
+        if self._read_task_manifest(engagement_id, "Cargo.toml") is not None:
+            add(
+                "Cargo: test workspace",
+                "cargo test",
+                "test",
+                "Cargo.toml",
+                "Cargo workspace test suite",
+            )
+        return WorkspaceTaskList(
+            engagement_id=engagement_id,
+            tasks=tasks[:300],
+            scanned_entries=scanned,
+            truncated=truncated or len(tasks) > 300,
+        )
+
+    @staticmethod
+    def _normalize_vscode_task(
+        task: object, index: int
+    ) -> (
+        tuple[
+            str,
+            str,
+            WorkspaceTaskKind,
+            WorkspaceTaskSource,
+            str,
+            str | None,
+            bool,
+            str | None,
+        ]
+        | None
+    ):
+        if not isinstance(task, dict):
+            return None
+        label = task.get("label")
+        command = task.get("command")
+        if not isinstance(label, str) or not label.strip() or len(label) > 300:
+            return None
+        label = label.strip()
+        source: WorkspaceTaskSource = ".vscode/tasks.json"
+        detail = f"VS Code task #{index + 1}"
+
+        def unsupported(
+            reason: str,
+        ) -> tuple[
+            str,
+            str,
+            WorkspaceTaskKind,
+            WorkspaceTaskSource,
+            str,
+            str | None,
+            bool,
+            str | None,
+        ]:
+            return (label, ":", "custom", source, detail, None, False, reason)
+
+        task_type = task.get("type", "shell")
+        if task_type not in {"shell", "process"}:
+            return unsupported(
+                f"Task type {str(task_type)[:200]!r} requires a VS Code extension and is not executed by Nebula."
+            )
+        if not isinstance(command, str) or not command or len(command) > 10_000:
+            return unsupported("The task command must be a non-empty bounded string.")
+        args = task.get("args", [])
+        if (
+            not isinstance(args, list)
+            or len(args) > 50
+            or any(
+                not isinstance(value, str) or "\x00" in value or len(value) > 4096
+                for value in args
+            )
+        ):
+            return unsupported("Task arguments must be at most 50 bounded strings.")
+        if task.get("dependsOn") is not None:
+            return unsupported(
+                "Compound dependsOn tasks require orchestration; run their reviewed tasks individually."
+            )
+        if task.get("isBackground") is True:
+            return unsupported(
+                "Background tasks are disabled because reviewed executions must reach a terminal result."
+            )
+        options = task.get("options", {})
+        if not isinstance(options, dict):
+            return unsupported("Task options must be an object.")
+        if options.get("shell") is not None:
+            return unsupported(
+                "Custom task shells cannot replace Nebula's isolated reviewed runtime."
+            )
+
+        def substitute(value: str) -> str | None:
+            resolved = value.replace("${workspaceFolder}", "/workspace")
+            return None if re.search(r"\$\{[^}]+\}", resolved) else resolved
+
+        resolved_command = substitute(command)
+        resolved_args = [substitute(value) for value in args]
+        if resolved_command is None or any(value is None for value in resolved_args):
+            return unsupported(
+                "Only the ${workspaceFolder} VS Code variable is supported in reviewed tasks."
+            )
+        command_line = (
+            shlex.quote(resolved_command)
+            if task_type == "process"
+            else resolved_command
+        )
+        command_line += "".join(
+            f" {shlex.quote(value)}" for value in resolved_args if value is not None
+        )
+        env = options.get("env", {})
+        if not isinstance(env, dict) or len(env) > 100:
+            return unsupported("Task environment must be a bounded object.")
+        environment: list[str] = []
+        for key, value in env.items():
+            if (
+                not isinstance(key, str)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
+                or not isinstance(value, str)
+                or "\x00" in value
+                or len(value) > 4096
+            ):
+                return unsupported(
+                    "Task environment keys and values must be bounded shell-safe strings."
+                )
+            resolved = substitute(value)
+            if resolved is None:
+                return unsupported(
+                    "Only the ${workspaceFolder} VS Code variable is supported in task environment values."
+                )
+            environment.append(f"{key}={shlex.quote(resolved)}")
+        if environment:
+            command_line = f"env {' '.join(environment)} {command_line}"
+        cwd = options.get("cwd")
+        if cwd is not None:
+            if not isinstance(cwd, str):
+                return unsupported("Task working directory must be a string.")
+            resolved_cwd = substitute(cwd)
+            if resolved_cwd is None or not (
+                resolved_cwd == "/workspace" or resolved_cwd.startswith("/workspace/")
+            ):
+                return unsupported(
+                    "Task working directory must remain inside ${workspaceFolder}."
+                )
+            relative = PurePosixPath(resolved_cwd).relative_to("/workspace")
+            if any(part in {"", ".", ".."} for part in relative.parts):
+                return unsupported(
+                    "Task working directory must remain inside ${workspaceFolder}."
+                )
+            command_line = f"cd -- {shlex.quote(resolved_cwd)} && {command_line}"
+        if len(command_line) > 20_000 or "\x00" in command_line:
+            return unsupported("The normalized task command exceeds Nebula's limit.")
+        group = task.get("group")
+        group_kind = group.get("kind") if isinstance(group, dict) else group
+        kind: WorkspaceTaskKind = (
+            "test"
+            if group_kind == "test"
+            else "build"
+            if group_kind == "build"
+            else "lint"
+            if "lint" in label.casefold()
+            else "run"
+        )
+        detail = f"VS Code {task_type} task"
+        return (label, command_line, kind, source, detail, None, True, None)
+
+    def _read_task_manifest(
+        self, engagement_id: str, path: str, *, max_bytes: int = 512 * 1024
+    ) -> str | None:
+        try:
+            stream, metadata = self._open_regular(engagement_id, (path,))
+        except ExecutionServiceError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        with stream:
+            if metadata.st_size > max_bytes:
+                return None
+            payload = stream.read(max_bytes + 1)
+        if len(payload) > max_bytes or b"\0" in payload:
+            return None
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError:
+            # diagnostic-expected: non-UTF-8 optional task manifests are unsupported.
+            return None
+
+    def _read_vscode_manifest(
+        self, engagement_id: str, path: str
+    ) -> tuple[str | None, str | None]:
+        try:
+            stream, metadata = self._open_regular(engagement_id, (path,))
+        except ExecutionServiceError as exc:
+            if exc.status_code == 404:
+                return None, None
+            raise
+        with stream:
+            if metadata.st_size > MAX_VSCODE_CONFIGURATION_BYTES:
+                return None, (
+                    f"{path} exceeds Nebula's {MAX_VSCODE_CONFIGURATION_BYTES // 1024} KiB configuration limit."
+                )
+            payload = stream.read(MAX_VSCODE_CONFIGURATION_BYTES + 1)
+        if len(payload) > MAX_VSCODE_CONFIGURATION_BYTES:
+            return None, (
+                f"{path} exceeds Nebula's {MAX_VSCODE_CONFIGURATION_BYTES // 1024} KiB configuration limit."
+            )
+        if b"\0" in payload:
+            return None, f"{path} must be a plain-text configuration file."
+        try:
+            return payload.decode("utf-8"), None
+        except UnicodeDecodeError:
+            # diagnostic-expected: the caller renders this exact configuration error.
+            return None, f"{path} must use UTF-8 text."
+
+    def debug_configurations(
+        self, engagement_id: str, active_path: str
+    ) -> WorkspaceDebugConfigurationList:
+        """Read bounded Python launch profiles without allowing runtime overrides."""
+        self.store.get(Engagement, engagement_id)
+        active = PurePosixPath(
+            *_relative_parts(active_path, require_value=True)
+        ).as_posix()
+        configurations: list[WorkspaceDebugConfiguration] = []
+
+        def add(
+            name: str,
+            path: str | None,
+            arguments: list[str],
+            detail: str,
+            *,
+            supported: bool = True,
+            unsupported_reason: str | None = None,
+        ) -> None:
+            identity = hashlib.sha256(
+                json.dumps(
+                    [len(configurations), name, path, arguments],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            configurations.append(
+                WorkspaceDebugConfiguration(
+                    id=identity,
+                    name=name,
+                    path=path,
+                    arguments=arguments,
+                    detail=detail,
+                    supported=supported,
+                    unsupported_reason=unsupported_reason,
+                )
+            )
+
+        manifest, manifest_error = self._read_vscode_manifest(
+            engagement_id, ".vscode/launch.json"
+        )
+        if manifest_error:
+            add(
+                "VS Code launch profiles need attention",
+                None,
+                [],
+                "Nebula could not read .vscode/launch.json.",
+                supported=False,
+                unsupported_reason=manifest_error,
+            )
+            return WorkspaceDebugConfigurationList(
+                engagement_id=engagement_id,
+                active_path=active,
+                configurations=configurations,
+            )
+        if manifest is None:
+            return WorkspaceDebugConfigurationList(
+                engagement_id=engagement_id,
+                active_path=active,
+            )
+        try:
+            parsed = json5.loads(manifest, allow_duplicate_keys=False)
+        except (RecursionError, ValueError):
+            # diagnostic-expected: the invalid manifest becomes a visible disabled
+            # launch profile with an in-place recovery instruction.
+            add(
+                "VS Code launch profiles need attention",
+                None,
+                [],
+                "Nebula could not parse .vscode/launch.json.",
+                supported=False,
+                unsupported_reason=(
+                    "Fix the JSON-with-comments syntax or duplicate keys, then retry."
+                ),
+            )
+            return WorkspaceDebugConfigurationList(
+                engagement_id=engagement_id,
+                active_path=active,
+                configurations=configurations,
+            )
+        declared = parsed.get("configurations") if isinstance(parsed, dict) else None
+        if not isinstance(declared, list):
+            return WorkspaceDebugConfigurationList(
+                engagement_id=engagement_id,
+                active_path=active,
+            )
+        for index, configuration in enumerate(declared[:100]):
+            if not isinstance(configuration, dict):
+                continue
+            name = configuration.get("name")
+            if not isinstance(name, str) or not name.strip() or len(name) > 300:
+                continue
+            name = name.strip()
+
+            def reject(reason: str) -> None:
+                add(
+                    name,
+                    None,
+                    [],
+                    f"VS Code launch profile #{index + 1}",
+                    supported=False,
+                    unsupported_reason=reason,
+                )
+
+            if configuration.get("type") not in {"debugpy", "python"}:
+                reject("Only Python debugpy launch profiles are supported.")
+                continue
+            if configuration.get("request") != "launch":
+                reject("Attach profiles cannot cross Nebula's isolated debug boundary.")
+                continue
+            restricted = next(
+                (
+                    key
+                    for key in (
+                        "code",
+                        "module",
+                        "python",
+                        "pythonArgs",
+                        "env",
+                        "envFile",
+                        "preLaunchTask",
+                        "postDebugTask",
+                    )
+                    if configuration.get(key) is not None
+                ),
+                None,
+            )
+            if restricted:
+                reject(
+                    f"{restricted} would change the reviewed launch boundary and is not imported."
+                )
+                continue
+            cwd = configuration.get("cwd", "${workspaceFolder}")
+            if cwd not in {"${workspaceFolder}", "/workspace"}:
+                reject("Debug working directory must be ${workspaceFolder}.")
+                continue
+            program = configuration.get("program", "${file}")
+            if not isinstance(program, str):
+                reject("Debug program must be a workspace Python path.")
+                continue
+            if program == "${file}":
+                resolved_path = active
+            elif program.startswith("${workspaceFolder}/"):
+                resolved_path = program.removeprefix("${workspaceFolder}/")
+            elif not program.startswith("${"):
+                resolved_path = program
+            else:
+                reject(
+                    "Only ${file} and ${workspaceFolder} program variables are supported."
+                )
+                continue
+            try:
+                resolved_path = PurePosixPath(
+                    *_relative_parts(resolved_path, require_value=True)
+                ).as_posix()
+            except ExecutionServiceError:
+                # diagnostic-expected: the profile is retained as an explicit,
+                # disabled out-of-workspace configuration.
+                reject("Debug program must remain inside the project workspace.")
+                continue
+            if not resolved_path.endswith(".py"):
+                reject("Debug program must be a Python file.")
+                continue
+            args = configuration.get("args", [])
+            if (
+                not isinstance(args, list)
+                or len(args) > 50
+                or any(
+                    not isinstance(value, str) or "\x00" in value or len(value) > 4096
+                    for value in args
+                )
+            ):
+                reject("Debug arguments must be at most 50 bounded strings.")
+                continue
+            resolved_args = [
+                value.replace("${workspaceFolder}", "/workspace") for value in args
+            ]
+            if any(re.search(r"\$\{[^}]+\}", value) for value in resolved_args):
+                reject("Debug arguments contain an unsupported VS Code variable.")
+                continue
+            if resolved_path != active:
+                add(
+                    name,
+                    resolved_path,
+                    resolved_args,
+                    "VS Code Python launch profile",
+                    supported=False,
+                    unsupported_reason=f"Open {resolved_path} to use this profile.",
+                )
+                continue
+            add(
+                name,
+                resolved_path,
+                resolved_args,
+                "VS Code Python launch profile; Nebula enforces its prepared runtime, read-only workspace, and disabled network.",
+            )
+        return WorkspaceDebugConfigurationList(
+            engagement_id=engagement_id,
+            active_path=active,
+            configurations=configurations,
+            truncated=len(declared) > 100,
+        )
+
     def preview(self, engagement_id: str, path: str) -> WorkspacePreview:
         relative = _relative_parts(path, require_value=True)
         stream, metadata = self._open_regular(engagement_id, relative)
@@ -259,6 +992,282 @@ class WorkspaceService:
             bytes_returned=len(visible),
             truncated=metadata.st_size > len(visible),
             preview_sha256=hashlib.sha256(visible).hexdigest(),
+        )
+
+    def search(
+        self,
+        engagement_id: str,
+        query: str,
+        *,
+        mode: Literal["files", "text"] = "files",
+        path: str = "",
+        limit: int = 100,
+    ) -> WorkspaceSearchResult:
+        """Search one workspace without following links or escaping its root."""
+
+        self.store.get(Engagement, engagement_id)
+        normalized_query = query.strip()
+        if not normalized_query:
+            raise ExecutionServiceError(
+                "workspace_search_invalid",
+                "workspace search requires a non-empty query",
+                status_code=422,
+            )
+        relative = _relative_parts(path)
+        root_descriptor = self._open_directory(engagement_id, relative)
+        needle = normalized_query.casefold()
+        matches: list[WorkspaceSearchMatch] = []
+        scanned_files = 0
+        truncated = False
+        pending: list[tuple[tuple[str, ...], int]] = [(relative, root_descriptor)]
+
+        try:
+            while pending and not truncated:
+                directory_parts, descriptor = pending.pop()
+                try:
+                    with os.scandir(descriptor) as entries:
+                        rows = sorted(entries, key=lambda entry: entry.name.casefold())
+                    for entry in rows:
+                        try:
+                            metadata = os.stat(
+                                entry.name, dir_fd=descriptor, follow_symlinks=False
+                            )
+                        except OSError:
+                            # diagnostic-expected: an entry can disappear while a live
+                            # Terminal is mutating the same workspace.
+                            continue
+                        entry_parts = (*directory_parts, entry.name)
+                        entry_path = PurePosixPath(*entry_parts).as_posix()
+                        if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(
+                            metadata.st_mode
+                        ):
+                            try:
+                                child = os.open(
+                                    entry.name,
+                                    os.O_RDONLY
+                                    | os.O_DIRECTORY
+                                    | getattr(os, "O_NOFOLLOW", 0),
+                                    dir_fd=descriptor,
+                                )
+                            except OSError:
+                                # diagnostic-expected: skip raced or unreadable folders.
+                                continue
+                            pending.append((entry_parts, child))
+                            continue
+                        if not stat.S_ISREG(metadata.st_mode):
+                            continue
+                        scanned_files += 1
+                        if scanned_files > MAX_SEARCH_SCANNED_FILES:
+                            truncated = True
+                            break
+                        if mode == "files":
+                            if needle in entry_path.casefold():
+                                matches.append(
+                                    WorkspaceSearchMatch(
+                                        path=entry_path,
+                                        kind="path",
+                                        preview=entry_path,
+                                    )
+                                )
+                        elif metadata.st_size <= MAX_SEARCH_FILE_BYTES:
+                            file_descriptor: int | None = None
+                            try:
+                                file_descriptor = os.open(
+                                    entry.name,
+                                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                                    dir_fd=descriptor,
+                                )
+                                if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+                                    continue
+                                with os.fdopen(file_descriptor, "rb") as stream:
+                                    file_descriptor = None
+                                    payload = stream.read(MAX_SEARCH_FILE_BYTES + 1)
+                                if (
+                                    len(payload) > MAX_SEARCH_FILE_BYTES
+                                    or b"\x00" in payload
+                                ):
+                                    continue
+                                content = payload.decode("utf-8", errors="strict")
+                            except (OSError, UnicodeDecodeError):
+                                # diagnostic-expected: binary, invalid UTF-8, or raced
+                                # files are omitted from bounded text search.
+                                continue
+                            finally:
+                                if file_descriptor is not None:
+                                    os.close(file_descriptor)
+                            for line_number, line in enumerate(content.splitlines(), 1):
+                                column = line.casefold().find(needle)
+                                if column < 0:
+                                    continue
+                                matches.append(
+                                    WorkspaceSearchMatch(
+                                        path=entry_path,
+                                        kind="content",
+                                        line=line_number,
+                                        column=column + 1,
+                                        preview=line.strip()[:500],
+                                    )
+                                )
+                                if len(matches) >= limit:
+                                    break
+                        if len(matches) >= limit:
+                            truncated = True
+                            break
+                finally:
+                    os.close(descriptor)
+        finally:
+            for _parts, descriptor in pending:
+                os.close(descriptor)
+
+        return WorkspaceSearchResult(
+            engagement_id=engagement_id,
+            query=normalized_query,
+            mode=mode,
+            matches=matches[:limit],
+            scanned_files=min(scanned_files, MAX_SEARCH_SCANNED_FILES),
+            truncated=truncated,
+        )
+
+    async def source_control_status(self, engagement_id: str) -> SourceControlStatus:
+        """Return bounded Git status without executing repository-configured helpers."""
+
+        self.store.get(Engagement, engagement_id)
+        root = self._workspace_root(engagement_id).resolve(strict=True)
+        executable = shutil.which("git")
+        if executable is None:
+            return SourceControlStatus(
+                engagement_id=engagement_id,
+                state="unavailable",
+                detail="Git is not installed on the Nebula Core host. The workspace remains editable.",
+            )
+
+        repository = await _run_git(
+            executable,
+            root,
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+        )
+        if repository.returncode != 0:
+            return SourceControlStatus(
+                engagement_id=engagement_id,
+                state="not_repository",
+                detail="This project folder is not a Git repository. Initialize it from Nebula Terminal if source control is needed.",
+            )
+        try:
+            repository_root = Path(
+                repository.output.decode("utf-8", errors="strict").strip()
+            ).resolve()
+        except (OSError, UnicodeDecodeError):
+            # diagnostic-expected: invalid Git output fails closed to not_repository.
+            repository_root = Path("/")
+        if repository_root != root:
+            return SourceControlStatus(
+                engagement_id=engagement_id,
+                state="not_repository",
+                detail="This project folder is nested inside a parent Git repository. Nebula will not expose source-control paths outside the selected project boundary.",
+            )
+
+        status_result = await _run_git(
+            executable,
+            root,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            ".",
+        )
+        if status_result.returncode != 0:
+            return SourceControlStatus(
+                engagement_id=engagement_id,
+                state="unavailable",
+                detail=_safe_git_detail(
+                    status_result.output, "Git status is unavailable for this project."
+                ),
+            )
+
+        branch_result, head_result = await asyncio.gather(
+            _run_git(executable, root, "symbolic-ref", "--quiet", "--short", "HEAD"),
+            _run_git(executable, root, "rev-parse", "--verify", "--short=12", "HEAD"),
+        )
+        branch = (
+            _decode_git_scalar(branch_result.output)
+            if branch_result.returncode == 0
+            else None
+        )
+        head = (
+            _decode_git_scalar(head_result.output)
+            if head_result.returncode == 0
+            else None
+        )
+        files, truncated = _parse_porcelain_status(status_result.output)
+        return SourceControlStatus(
+            engagement_id=engagement_id,
+            state="ready",
+            branch=branch,
+            head=head,
+            files=files,
+            truncated=truncated,
+            detail=(
+                "Working tree clean."
+                if not files
+                else f"{len(files)} changed path{'s' if len(files) != 1 else ''}."
+            ),
+        )
+
+    async def source_control_diff(
+        self, engagement_id: str, path: str, *, staged: bool = False
+    ) -> SourceControlDiff:
+        """Render a bounded patch while disabling external diff and textconv drivers."""
+
+        relative = _relative_parts(path, require_value=True)
+        normalized = PurePosixPath(*relative).as_posix()
+        status = await self.source_control_status(engagement_id)
+        if status.state != "ready":
+            raise ExecutionServiceError(
+                "source_control_unavailable", status.detail, status_code=409
+            )
+        root = self._workspace_root(engagement_id).resolve(strict=True)
+        executable = shutil.which("git")
+        if (
+            executable is None
+        ):  # guarded by source_control_status; retain fail-closed behavior
+            raise ExecutionServiceError(
+                "source_control_unavailable",
+                "Git is not installed on the Nebula Core host.",
+                status_code=409,
+            )
+        arguments = [
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--unified=3",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ]
+        if staged:
+            arguments.append("--cached")
+        arguments.extend(("--", normalized))
+        result = await _run_git(
+            executable,
+            root,
+            *arguments,
+            output_limit=MAX_SOURCE_CONTROL_DIFF_BYTES,
+        )
+        if result.returncode != 0:
+            raise ExecutionServiceError(
+                "source_control_diff_failed",
+                _safe_git_detail(result.output, "Git could not render this diff."),
+                status_code=409,
+            )
+        return SourceControlDiff(
+            engagement_id=engagement_id,
+            path=normalized,
+            staged=staged,
+            text=result.output.decode("utf-8", errors="replace"),
+            truncated=result.truncated,
+            head=status.head,
         )
 
     def download(self, engagement_id: str, path: str) -> WorkspaceDownload:
@@ -812,6 +1821,163 @@ class WorkspaceService:
         return os.fdopen(descriptor, "rb"), metadata
 
 
+@dataclass(frozen=True)
+class _GitResult:
+    returncode: int
+    output: bytes
+    truncated: bool = False
+
+
+async def _run_git(
+    executable: str,
+    root: Path,
+    *arguments: str,
+    output_limit: int = MAX_SOURCE_CONTROL_OUTPUT_BYTES,
+) -> _GitResult:
+    """Run a bounded, non-interactive Git query without a shell or global config."""
+
+    environment = {
+        **os.environ,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "LC_ALL": "C.UTF-8",
+    }
+    command = (
+        executable,
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        "-c",
+        "commit.gpgSign=false",
+        "-C",
+        str(root),
+        *arguments,
+    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=environment,
+        )
+    except OSError as exc:
+        # diagnostic-expected: the caller converts this result into visible
+        # source-control unavailable state and retains the bounded detail.
+        return _GitResult(127, str(exc).encode("utf-8", errors="replace"))
+
+    output = bytearray()
+
+    async def consume() -> bool:
+        assert process.stdout is not None
+        while chunk := await process.stdout.read(64 * 1024):
+            remaining = output_limit + 1 - len(output)
+            output.extend(chunk[:remaining])
+            if len(output) > output_limit:
+                return True
+        return False
+
+    try:
+        truncated = await asyncio.wait_for(consume(), SOURCE_CONTROL_TIMEOUT_SECONDS)
+        if truncated and process.returncode is None:
+            process.kill()
+        await asyncio.wait_for(process.wait(), 1.0)
+    except TimeoutError:
+        # diagnostic-expected: timeout is returned as visible bounded Git detail.
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        return _GitResult(124, b"Git query timed out before it completed.")
+    return _GitResult(
+        0 if truncated else process.returncode or 0,
+        bytes(output[:output_limit]),
+        truncated,
+    )
+
+
+def _decode_git_scalar(payload: bytes) -> str | None:
+    try:
+        value = payload.decode("utf-8", errors="strict").strip()
+    except UnicodeDecodeError:
+        # diagnostic-expected: invalid optional Git scalar becomes absent metadata.
+        return None
+    return value[:500] or None
+
+
+def _safe_git_detail(payload: bytes, fallback: str) -> str:
+    detail = payload.decode("utf-8", errors="replace").strip()
+    return detail[:2_000] or fallback
+
+
+_GIT_STATUS_NAMES: dict[str, SourceControlFileStatus] = {
+    " ": "unmodified",
+    "M": "modified",
+    "A": "added",
+    "D": "deleted",
+    "R": "renamed",
+    "C": "copied",
+    "U": "unmerged",
+    "?": "untracked",
+    "!": "ignored",
+}
+
+
+def _parse_porcelain_status(payload: bytes) -> tuple[list[SourceControlFile], bool]:
+    records = payload.split(b"\0")
+    files: list[SourceControlFile] = []
+    truncated = False
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record:
+            continue
+        if len(record) < 4 or record[2:3] != b" ":
+            truncated = True
+            continue
+        try:
+            x = record[0:1].decode("ascii")
+            y = record[1:2].decode("ascii")
+            path = record[3:].decode("utf-8", errors="strict")
+            _relative_parts(path, require_value=True)
+        except (UnicodeDecodeError, ExecutionServiceError):
+            # diagnostic-expected: malformed Git records are omitted and the
+            # response is marked truncated for the operator.
+            truncated = True
+            continue
+        original_path: str | None = None
+        if x in {"R", "C"} or y in {"R", "C"}:
+            if index >= len(records):
+                truncated = True
+                break
+            try:
+                original_path = records[index].decode("utf-8", errors="strict")
+                _relative_parts(original_path, require_value=True)
+            except (UnicodeDecodeError, ExecutionServiceError):
+                # diagnostic-expected: malformed rename provenance is omitted and
+                # the response is marked truncated for the operator.
+                truncated = True
+                original_path = None
+            index += 1
+        files.append(
+            SourceControlFile(
+                path=path,
+                index_status=_GIT_STATUS_NAMES.get(x, "unknown"),
+                worktree_status=_GIT_STATUS_NAMES.get(y, "unknown"),
+                original_path=original_path,
+            )
+        )
+        if len(files) >= MAX_SOURCE_CONTROL_FILES:
+            truncated = index < len(records) - 1
+            break
+    return files, truncated
+
+
 def _relative_parts(path: str, *, require_value: bool = False) -> tuple[str, ...]:
     if "\x00" in path or "\\" in path:
         raise ExecutionServiceError(
@@ -878,6 +2044,9 @@ def _workspace_usage(root: Path, *, exclude: set[str]) -> tuple[int, int]:
 
 __all__ = [
     "MAX_PREVIEW_BYTES",
+    "SourceControlDiff",
+    "SourceControlFile",
+    "SourceControlStatus",
     "WorkspaceDownload",
     "WorkspaceEntry",
     "WorkspaceListing",
@@ -888,6 +2057,8 @@ __all__ = [
     "WorkspaceResetRequest",
     "WorkspaceResetResult",
     "WorkspaceResetStatus",
+    "WorkspaceSearchMatch",
+    "WorkspaceSearchResult",
     "WorkspaceUploadResult",
     "WorkspaceService",
 ]

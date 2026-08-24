@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Bug, CheckCircle2, FilePlus2, Link2, LoaderCircle, MessageSquareQuote, Paperclip, Plus, Save, Search, ShieldAlert, X } from "lucide-react";
 import type { FindingStatus, FindingSummary } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
@@ -114,8 +114,8 @@ function findingEditMatches(value: ValidatedFindingEdit, finding: FindingSummary
 
 export function FindingsPage() {
   const confirm = useConfirmation();
-  const { requestNebulaDraft } = useWorkbenchDrafts();
-  const { assets, createFinding, engagement, evidence, findings, reports, updateFinding, updateReport } = useWorkspace();
+  const { clearFindingDraft, findingDraft, requestNebulaDraft } = useWorkbenchDrafts();
+  const { assets, createFinding, engagement, evidence, findings, reports, retryResource, updateFinding, updateReport } = useWorkspace();
   const [query, setQuery] = useState("");
   const [severity, setSeverity] = useState<"all" | FindingSummary["severity"]>("all");
   const [status, setStatus] = useState<"all" | FindingStatus>("all");
@@ -126,6 +126,7 @@ export function FindingsPage() {
   const [candidateSeverity, setCandidateSeverity] = useState<FindingSummary["severity"]>("medium");
   const [severityRationale, setSeverityRationale] = useState("");
   const [assetIds, setAssetIds] = useState<string[]>([]);
+  const [candidateEvidenceIds, setCandidateEvidenceIds] = useState<string[]>([]);
   const [cveText, setCveText] = useState("");
   const [cweText, setCweText] = useState("");
   const [saving, setSaving] = useState(false);
@@ -160,11 +161,28 @@ export function FindingsPage() {
     setCandidateSeverity("medium");
     setSeverityRationale("");
     setAssetIds([]);
+    setCandidateEvidenceIds([]);
     setCveText("");
     setCweText("");
     setFormError(undefined);
     setAdding(true);
   };
+
+  useEffect(() => {
+    if (!findingDraft || !engagement || findingDraft.engagementId !== engagement.id) return;
+    setTitle(findingDraft.title);
+    setDescription(findingDraft.description);
+    setCandidateSeverity("info");
+    setSeverityRationale("");
+    setAssetIds([]);
+    setCandidateEvidenceIds([findingDraft.evidenceId]);
+    setCveText("");
+    setCweText("");
+    setFormError(undefined);
+    setAdding(true);
+    clearFindingDraft();
+    void retryResource("evidence");
+  }, [clearFindingDraft, engagement, findingDraft, retryResource]);
 
   const toggleAsset = (id: string) => {
     setAssetIds((current) => current.includes(id)
@@ -198,6 +216,7 @@ export function FindingsPage() {
         severity: candidateSeverity,
         severityRationale: severityRationale.trim(),
         assetIds,
+        evidenceIds: candidateEvidenceIds,
         cveIds: cves.values,
         cweIds: cwes.values,
       });
