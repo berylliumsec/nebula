@@ -620,7 +620,7 @@ describe("Nebula workspace", () => {
     rendered.unmount();
     renderApp("/sessions");
     const recoveredComposer = await screen.findByRole("textbox", { name: "Message the analyst assistant" });
-    expect(recoveredComposer).toHaveValue("draft");
+    await waitFor(() => expect(recoveredComposer).toHaveValue("draft"));
     expect(await screen.findByText("Port retained")).toBeVisible();
     const assistantMessage = screen.getByText("Port retained").closest("article");
     expect(assistantMessage).not.toBeNull();
