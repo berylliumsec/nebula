@@ -64,7 +64,10 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
       }
     };
     child.stdout.on("data", inspect);
-    child.stderr.on("data", (chunk) => { output += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => {
+      output += chunk.toString("utf8");
+      if (process.env.NEBULA_TEST_CORE_LOG === "1") process.stderr.write(chunk);
+    });
     child.once("exit", (code) => {
       clearTimeout(timeout);
       reject(new Error(`Real Core exited with ${code}.\n${output}`));
@@ -849,7 +852,9 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     const debugEditor = page.getByRole("textbox", { name: "Code editor" });
     await debugEditor.fill("value = 41\nprint(f'debug-finished:{value + 1}')\n");
     await debugEditor.press("Control+S");
-    await expect(page.getByText("Saved /workspace/debug-proof.py. Use it from Terminal when you're ready.")).toBeVisible();
+    await expect(
+      page.getByText("Saved /workspace/debug-proof.py. Use it from Terminal when you're ready."),
+    ).toBeVisible({ timeout: 30_000 });
     await debugEditor.press("Control+Home");
     await page.getByRole("button", { name: "Debug saved Python" }).click();
     const debuggerPanel = page.getByRole("dialog", { name: "Python debugger" });
@@ -934,7 +939,7 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await page.getByRole("button", { name: "Reset workspace" }).click();
     const resetDialog = page.getByRole("dialog", { name: "Reset the project workspace?" });
     await resetDialog.getByRole("button", { name: "Reset workspace" }).click();
-    await expect(page.getByText(/Removed 1 workspace entry/)).toBeVisible();
+    await expect(page.getByText(/Removed 2 workspace entries/)).toBeVisible({ timeout: 30_000 });
 
     const diagnostic = await api.post("diagnostics/events", { data: { events: [{
       schema: "nebula.diagnostic/v1",

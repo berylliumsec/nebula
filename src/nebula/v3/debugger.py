@@ -22,7 +22,7 @@ from .automation_runtime import (
 )
 from .domain import utc_now
 from .runtime_platform import HumanTerminalRuntimeResolution
-from .sandbox import SandboxLimits, SandboxWorkspaceAccess
+from .sandbox import SandboxContainerUser, SandboxLimits, SandboxWorkspaceAccess
 from .workspace import WorkspaceService
 
 
@@ -210,6 +210,8 @@ class DebugService:
                     output_bytes=MAX_DAP_MESSAGE_BYTES,
                 ),
                 workspace_access=SandboxWorkspaceAccess.READ,
+                container_user=SandboxContainerUser.WORKSPACE_OWNER,
+                loopback_only=True,
             )
         )
         try:

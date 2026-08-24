@@ -206,6 +206,24 @@ def test_container_namespace_argv_leaves_host_pins_on_egress_owner(tmp_path):
     assert not any(value.startswith("--add-host=") for value in argv)
 
 
+def test_container_none_argv_can_join_a_loopback_only_helper_namespace(tmp_path):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    request = _request(tmp_path, network=SandboxNetwork.NONE)
+
+    argv = runner._argv(
+        request,
+        tmp_path,
+        network_mode="container:nebula-debug-egress",
+    )
+
+    assert "--network=container:nebula-debug-egress" in argv
+    assert "--network=none" not in argv
+    assert not any(value.startswith("--add-host=") for value in argv)
+
+    with pytest.raises(SandboxError, match="explicit container namespace"):
+        runner._argv(request, tmp_path, network_mode="bridge")
+
+
 def test_container_terminal_argv_adds_tty_without_host_shell_fallback(tmp_path):
     runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
     request = _request(
@@ -284,6 +302,39 @@ def test_human_terminal_alone_can_be_root_writable_and_unrestricted(tmp_path):
             _request(
                 tmp_path, execution_kind=SandboxExecutionKind.LOCAL_TOOL, **changes
             )
+
+
+def test_workspace_owner_is_limited_to_offline_read_only_workspace_tools(tmp_path):
+    request = _request(
+        tmp_path,
+        workspace_access=SandboxWorkspaceAccess.READ,
+        container_user=SandboxContainerUser.WORKSPACE_OWNER,
+    )
+
+    assert request.container_user is SandboxContainerUser.WORKSPACE_OWNER
+
+    with pytest.raises(ValidationError, match="offline read-only workspace tools"):
+        _request(
+            tmp_path,
+            workspace_access=SandboxWorkspaceAccess.WRITE,
+            container_user=SandboxContainerUser.WORKSPACE_OWNER,
+        )
+
+
+def test_workspace_owner_resolves_to_isolated_namespace_owner(tmp_path):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
+    request = _request(
+        tmp_path,
+        workspace_access=SandboxWorkspaceAccess.READ,
+        container_user=SandboxContainerUser.WORKSPACE_OWNER,
+    )
+
+    argv = runner._argv(request, runner._validate(request))
+
+    assert "--user=0:0" in argv
+    assert "--cap-drop=ALL" in argv
+    assert "--read-only" in argv
+    assert "--network=none" in argv
 
 
 def test_shell_history_environment_is_reserved_for_human_terminals(tmp_path):
@@ -870,6 +921,57 @@ def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
     assert "tcp://[2001:db8::1]:8443" in helper_argv
     assert not any(value.startswith("--mount=") for value in helper_argv)
     assert calls[1][0][-3:] == ["stop", "--time=0", "nebula-call-egress"]
+
+
+def test_egress_helper_creates_loopback_only_namespace_without_external_network(
+    monkeypatch,
+):
+    calls = []
+
+    class FakeProcess:
+        def __init__(self, *, ready=False):
+            self.returncode = None
+            self.stdout = asyncio.StreamReader() if ready else None
+            if self.stdout is not None:
+                self.stdout.feed_data(b"READY\n")
+
+        async def wait(self):
+            self.returncode = 0
+            return 0
+
+        def kill(self):
+            self.returncode = -9
+            if self.stdout is not None:
+                self.stdout.feed_eof()
+
+    async def create_process(*argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return FakeProcess(ready=len(calls) == 1)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    controller = ContainerEgressController(
+        helper_image="example.invalid/helper@sha256:" + "b" * 64
+    )
+
+    async def scenario():
+        lease = await controller.acquire_loopback(
+            runtime_argv=["/usr/bin/podman"],
+            runtime_environment={"HOME": "/tmp/home"},
+            container_name="nebula-debug",
+            seccomp_profile=None,
+        )
+        assert lease.network_mode == "container:nebula-debug-egress"
+        assert lease.enabled is False
+        await lease.close()
+
+    asyncio.run(scenario())
+    helper_argv = calls[0][0]
+    assert "--network=none" in helper_argv
+    assert "--network=bridge" not in helper_argv
+    assert "--cap-add=NET_ADMIN" in helper_argv
+    assert helper_argv[-1] == "loopback"
+    assert not any(value.startswith("--add-host=") for value in helper_argv)
+    assert calls[1][0][-3:] == ["stop", "--time=0", "nebula-debug-egress"]
 
 
 def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request(

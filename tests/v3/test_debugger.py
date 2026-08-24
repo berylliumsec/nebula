@@ -19,7 +19,7 @@ from nebula.v3.debugger import (
     DebuggerError,
 )
 from nebula.v3.domain import utc_now
-from nebula.v3.sandbox import SandboxWorkspaceAccess
+from nebula.v3.sandbox import SandboxContainerUser, SandboxWorkspaceAccess
 from nebula.v3.storage import NebulaStore
 
 
@@ -112,6 +112,8 @@ def test_debug_service_freezes_source_and_read_only_runtime(monkeypatch) -> None
         assert started.workspace_access == "read-only"
         assert started.network == "none"
         assert launches[0].workspace_access is SandboxWorkspaceAccess.READ
+        assert launches[0].container_user is SandboxContainerUser.WORKSPACE_OWNER
+        assert launches[0].loopback_only is True
         assert not launches[0].egress_rules
 
         session = await service.attach(started.session_id, started.websocket_ticket)

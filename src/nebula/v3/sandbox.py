@@ -63,6 +63,7 @@ class SandboxExecutionKind(str, Enum):
 
 class SandboxContainerUser(str, Enum):
     NON_ROOT = "65532:65532"
+    WORKSPACE_OWNER = "workspace-owner"
     ROOT = "0:0"
 
 
@@ -384,8 +385,16 @@ class SandboxRequest(BaseModel):
         if self.execution_kind != SandboxExecutionKind.HUMAN_TERMINAL:
             if self.published_ports:
                 raise ValueError("published ports are reserved for human terminals")
-            if self.container_user != SandboxContainerUser.NON_ROOT:
+            if self.container_user == SandboxContainerUser.ROOT:
                 raise ValueError("only human terminals may use the container root user")
+            if self.container_user == SandboxContainerUser.WORKSPACE_OWNER and not (
+                self.execution_kind == SandboxExecutionKind.LOCAL_TOOL
+                and self.network == SandboxNetwork.NONE
+                and self.workspace_access == SandboxWorkspaceAccess.READ
+            ):
+                raise ValueError(
+                    "the workspace owner is reserved for offline read-only workspace tools"
+                )
             if self.root_filesystem != SandboxRootFilesystem.READ_ONLY:
                 raise ValueError(
                     "only human terminals may use a writable root filesystem"
@@ -631,6 +640,85 @@ class ContainerEgressController(EgressController):
         self.helper_image = helper_image
         self.helper_executable = helper_executable
         self.readiness_timeout_seconds = readiness_timeout_seconds
+
+    async def acquire_loopback(
+        self,
+        *,
+        runtime_argv: list[str],
+        runtime_environment: dict[str, str],
+        container_name: str,
+        seccomp_profile: Path | None,
+    ) -> EgressLease:
+        """Create a namespace with an enabled loopback interface and no egress."""
+
+        helper_name = f"{container_name}-egress"
+        argv = [
+            *runtime_argv,
+            "run",
+            "--rm",
+            f"--name={helper_name}",
+            "--pull=never",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--cap-add=NET_ADMIN",
+            "--security-opt=no-new-privileges",
+            "--network=none",
+            "--user=0:0",
+            "--pids-limit=16",
+            "--memory=64m",
+            "--cpus=0.1",
+            f"--entrypoint={self.helper_executable}",
+        ]
+        if seccomp_profile is not None:
+            argv.append(f"--security-opt=seccomp={seccomp_profile}")
+        argv.extend([self.helper_image, "loopback"])
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=runtime_environment,
+            )
+        except OSError as exc:
+            raise SandboxUnavailable(
+                f"could not start loopback namespace helper: {exc}"
+            ) from exc
+        assert process.stdout is not None
+        try:
+            line = await asyncio.wait_for(
+                process.stdout.readline(), timeout=self.readiness_timeout_seconds
+            )
+        except asyncio.TimeoutError as exc:
+            process.kill()
+            await process.wait()
+            raise SandboxUnavailable(
+                "loopback namespace helper did not become ready"
+            ) from exc
+        if line.rstrip(b"\r\n") != b"READY" or process.returncode is not None:
+            process.kill()
+            await process.wait()
+            detail = line.decode("utf-8", errors="replace").strip()
+            raise SandboxUnavailable(
+                "loopback namespace failed closed before readiness: "
+                + (detail or "no status")
+            )
+        drain_task = create_diagnostic_task(
+            _discard_stream(process.stdout),
+            feature="sandbox",
+            event_code="sandbox.loopback_output_drain",
+            failure_message="The loopback namespace supervisor stopped unexpectedly.",
+            name=f"nebula-loopback-drain-{helper_name}",
+        )
+        return _ContainerEgressLease(
+            network_mode=f"container:{helper_name}",
+            helper_name=helper_name,
+            runtime_argv=runtime_argv,
+            runtime_environment=runtime_environment,
+            process=process,
+            drain_task=drain_task,
+            _enabled=False,
+        )
 
     async def acquire(
         self,
@@ -1521,6 +1609,12 @@ class ContainerSandboxRunner(SandboxRunner):
         if not self.runtime or self.profile is None:
             raise SandboxUnavailable("no container runtime is configured")
         limits = request.limits
+        container_user = request.container_user.value
+        if request.container_user == SandboxContainerUser.WORKSPACE_OWNER:
+            # Certified Linux runners are rootless and macOS runners are isolated
+            # inside a VM. Namespace UID 0 is therefore the private bind-mount
+            # owner, not host root; capabilities remain dropped for the worker.
+            container_user = SandboxContainerUser.ROOT.value
         argv = [
             *self._runtime_argv(),
             "run",
@@ -1532,7 +1626,7 @@ class ContainerSandboxRunner(SandboxRunner):
             f"--cpus={limits.cpu_count}",
             f"--memory={limits.memory_mb}m",
             f"--pids-limit={limits.pids}",
-            f"--user={request.container_user.value}",
+            f"--user={container_user}",
             "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m",
         ]
         if request.root_filesystem == SandboxRootFilesystem.READ_ONLY:
@@ -1572,7 +1666,15 @@ class ContainerSandboxRunner(SandboxRunner):
         if request.network == SandboxNetwork.NONE:
             if request.published_ports:
                 raise SandboxError("published ports require bridge networking")
-            argv.append("--network=none")
+            if network_mode is not None and not re.fullmatch(
+                r"container:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", network_mode
+            ):
+                raise SandboxError(
+                    "offline execution can join only an explicit container namespace"
+                )
+            argv.append(
+                f"--network={network_mode}" if network_mode else "--network=none"
+            )
         elif request.network == SandboxNetwork.UNRESTRICTED:
             argv.append("--network=bridge")
         else:
