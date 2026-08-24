@@ -371,6 +371,19 @@
   border-color: rgb(135 188 255 / 56%);
   box-shadow: 0 0 0 3px rgb(106 170 255 / 10%), inset 0 1px rgb(255 255 255 / 4%);
 }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .browser-toolbar input,
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .browser-toolbar input:focus,
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .browser-toolbar input:focus-visible {
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+}
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .browser-toolbar form:focus-within {
+  border-color: var(--blue);
+  box-shadow: none;
+}
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) code,
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) kbd { color: #b9d9ff; }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) kbd { border-color: rgb(213 229 255 / 13%); border-radius: 6px; background: rgb(255 255 255 / 5%); }

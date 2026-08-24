@@ -275,6 +275,99 @@ test("production assistant preserves exact research context and relaunch-safe dr
   }
 });
 
+test("real Core Browser shows durable scope and an honest device-browser handoff", async ({ page }) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagementsResponse = await api.get("engagements");
+    expect(engagementsResponse.ok()).toBe(true);
+    const engagements = await engagementsResponse.json() as Array<{ id: string }>;
+    const projectId = engagements[0]?.id;
+    expect(projectId).toBeTruthy();
+    const scopeResponse = await api.get(`engagements/${projectId}/scope`);
+    const scope = await scopeResponse.json() as { revision: number };
+    const update = await api.put(`engagements/${projectId}/scope`, { data: {
+      allowed_cidrs: [],
+      allowed_domains: ["example.com"],
+      allowed_urls: [],
+      allowed_ports: [443],
+      not_before: null,
+      not_after: null,
+      prohibited_actions: [],
+      local_only: true,
+      max_concurrency: 1,
+      grants: [],
+      expected_revision: scope.revision,
+    } });
+    expect(update.ok(), await update.text()).toBe(true);
+
+    await page.addInitScript(() => {
+      window.open = () => ({}) as Window;
+    });
+    await page.goto(`${core.origin}/?view=browser#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("Browse from this device")).toBeVisible();
+    await expect(page.getByText(/No target · Open a page to compare it with Project scope/)).toBeVisible();
+    const address = page.getByRole("textbox", { name: "Web address" });
+    await address.fill("https://example.com/account");
+    await page.getByRole("button", { name: "Open", exact: true }).click();
+    await expect(page.getByText(/In scope · Matches Project scope revision 2/)).toBeVisible();
+    await expect(page.getByText("The isolated embedded webview is a desktop-app capability.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Ask Nebula about the live page" })).toHaveCount(0);
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
+test("real Core persists normalized domains and explicit all-target scope through Settings", async ({ page }) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+    await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+    await page.getByLabel("Allowed domains").fill("https://www.Google.com/");
+    await page.getByLabel("All targets and ports").check();
+    await page.getByRole("button", { name: "Save scope" }).click();
+    const confirmation = page.getByRole("dialog", { name: "Allow every network target and port?" });
+    await expect(confirmation).toBeVisible();
+    await confirmation.getByRole("button", { name: "Allow all targets" }).click();
+    await expect(page.getByRole("status")).toContainText("Network scope updated");
+
+    const engagements = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const saved = await api.get(`engagements/${engagements[0].id}/scope`);
+    expect(saved.ok(), await saved.text()).toBe(true);
+    expect(await saved.json()).toMatchObject({
+      allowed_domains: ["www.google.com"],
+      allow_all_targets: true,
+    });
+
+    await page.goto("about:blank");
+    const reloadedScope = page.waitForResponse((response) => response.url().endsWith("/scope") && response.request().method() === "GET");
+    await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
+    expect(await (await reloadedScope).json()).toMatchObject({ allow_all_targets: true });
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+    await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+    await expect(page.getByLabel("All targets and ports")).toBeChecked();
+    await expect(page.getByLabel("Allowed domains")).toHaveValue("www.google.com");
+    await expect(page.getByLabel("Allowed domains")).toBeDisabled();
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
 test("a paired browser can revoke itself without a stale authentication error", async ({ page }) => {
   test.setTimeout(60_000);
   const core = await startRealCore();

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, Url, WebviewUrl,
+    menu::{MenuBuilder, MenuItemBuilder},
     webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder},
 };
 
@@ -34,16 +35,55 @@ use crate::{
 const MAX_TABS_PER_PROJECT: usize = 16;
 const MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+const MAX_CAPTURE_TEXT_CHARS: usize = 16_000;
+const MAX_CAPTURE_SELECTION_CHARS: usize = 4_000;
+const MAX_CAPTURE_FORMS: usize = 40;
+const MAX_CAPTURE_LINKS: usize = 80;
+const MAX_CAPTURE_RAW_BYTES: usize = 2 * 1024 * 1024;
+const BROWSER_CONTEXT_SCHEME: &str = "nebula-browser-context";
+const BROWSER_CONTEXT_MENU_PREFIX: &str = "browser-context-";
+
+const BROWSER_CONTEXT_SCRIPT: &str = r#"(() => {
+  const text = String(document.body?.innerText ?? "");
+  const selectedText = String(window.getSelection?.()?.toString() ?? "");
+  const forms = Array.from(document.forms ?? []).slice(0, 40).map((form) => ({
+    method: String(form.method || "GET").toUpperCase().slice(0, 16),
+    action: String(form.action || location.href).slice(0, 2048),
+    fields: Array.from(form.elements ?? []).slice(0, 40).map((element) => ({
+      name: String(element.getAttribute?.("name") ?? "").slice(0, 200),
+      id: String(element.id ?? "").slice(0, 200),
+      type: String(element.getAttribute?.("type") ?? element.tagName ?? "").toLowerCase().slice(0, 40),
+      autocomplete: String(element.getAttribute?.("autocomplete") ?? "").slice(0, 100),
+      required: Boolean(element.required),
+    })),
+  }));
+  const links = Array.from(document.links ?? []).slice(0, 80).map((link) => ({
+    text: String(link.innerText ?? link.textContent ?? "").trim().slice(0, 300),
+    href: String(link.href ?? "").slice(0, 2048),
+  }));
+  return {
+    url: String(location.href).slice(0, 4096),
+    title: String(document.title ?? "").slice(0, 500),
+    selectedText: selectedText.slice(0, 6000),
+    text: text.slice(0, 24000),
+    truncated: text.length > 24000 || selectedText.length > 6000,
+    forms,
+    links,
+  };
+})()"#;
 
 #[derive(Default)]
 pub(crate) struct BrowserState {
     tabs: Mutex<HashMap<String, BrowserTab>>,
     downloads: Mutex<HashMap<PathBuf, PendingDownload>>,
+    context_targets: Mutex<HashMap<String, PendingBrowserContext>>,
 }
 
 struct BrowserTab {
     project_id: String,
+    identity_partition: String,
     label: String,
+    proxy: Option<crate::browser_proxy::BrowserProxyHandle>,
 }
 
 struct PendingDownload {
@@ -53,6 +93,12 @@ struct PendingDownload {
     filename: String,
     path: PathBuf,
     finished: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+struct PendingBrowserContext {
+    project_id: String,
+    url: String,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy)]
@@ -76,12 +122,140 @@ struct BrowserPageEvent {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct BrowserScopeRequestEvent {
+    tab_id: String,
+    project_id: String,
+    url: String,
+    state: &'static str,
+    detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct BrowserDownloadEvent {
     tab_id: String,
     download_id: Option<String>,
     filename: Option<String>,
     size: Option<u64>,
     state: &'static str,
+    detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBrowserPageContext {
+    url: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    selected_text: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    truncated: bool,
+    #[serde(default)]
+    forms: Vec<RawBrowserPageForm>,
+    #[serde(default)]
+    links: Vec<RawBrowserPageLink>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBrowserPageForm {
+    #[serde(default)]
+    method: String,
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    fields: Vec<RawBrowserPageFormField>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBrowserPageFormField {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    r#type: String,
+    #[serde(default)]
+    autocomplete: String,
+    #[serde(default)]
+    required: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBrowserPageLink {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    href: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPageContext {
+    url: String,
+    title: String,
+    selected_text: String,
+    text: String,
+    truncated: bool,
+    forms: Vec<BrowserPageForm>,
+    links: Vec<BrowserPageLink>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPageForm {
+    method: String,
+    action: String,
+    fields: Vec<BrowserPageFormField>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPageFormField {
+    name: String,
+    id: String,
+    r#type: String,
+    autocomplete: String,
+    required: bool,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+struct BrowserPageLink {
+    text: String,
+    href: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserContextEvent {
+    request_id: String,
+    tab_id: String,
+    state: &'static str,
+    context: Option<BrowserPageContext>,
+    detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrowserActionRequest {
+    action_id: String,
+    kind: String,
+    locator: serde_json::Map<String, serde_json::Value>,
+    arguments: serde_json::Map<String, serde_json::Value>,
+    page_url: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserActionEvent {
+    action_id: String,
+    tab_id: String,
+    state: &'static str,
+    result: serde_json::Value,
     detail: Option<String>,
 }
 
@@ -101,6 +275,11 @@ pub(crate) struct BrowserImportResult {
 pub(crate) struct BrowserCapabilities {
     engine: &'static str,
     project_storage: &'static str,
+    identity_partitions: bool,
+    devtools: bool,
+    interception_proxy: bool,
+    http2_capture: bool,
+    websocket_capture: bool,
 }
 
 #[tauri::command]
@@ -118,6 +297,11 @@ pub(crate) fn browser_capabilities() -> BrowserCapabilities {
         } else {
             "ephemeral"
         },
+        identity_partitions: true,
+        devtools: true,
+        interception_proxy: true,
+        http2_capture: true,
+        websocket_capture: true,
     }
 }
 
@@ -138,6 +322,157 @@ fn validated_url(value: &str) -> Result<Url, String> {
         return Err("Addresses containing embedded credentials are not accepted.".to_string());
     }
     Ok(url)
+}
+
+fn browser_context_menu_script(token: &str) -> Result<String, String> {
+    let endpoint = serde_json::to_string(&format!("{BROWSER_CONTEXT_SCHEME}://menu/{token}?url="))
+        .map_err(|error| format!("cannot prepare browser context menu: {error}"))?;
+    Ok(format!(
+        r#"(() => {{
+          const endpoint = {endpoint};
+          document.addEventListener("contextmenu", (event) => {{
+            if (!event.isTrusted) return;
+            event.preventDefault();
+            const target = String(location.href ?? "").slice(0, 4096);
+            location.assign(endpoint + encodeURIComponent(target));
+          }}, true);
+        }})()"#
+    ))
+}
+
+fn context_menu_target(next: &Url, token: &str) -> Result<Option<String>, String> {
+    if next.scheme() != BROWSER_CONTEXT_SCHEME {
+        return Ok(None);
+    }
+    if next.host_str() != Some("menu") || next.path() != format!("/{token}") {
+        return Err("The browser context-menu request was not authentic.".to_string());
+    }
+    let value = next
+        .query_pairs()
+        .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
+        .ok_or_else(|| "The browser context-menu target is missing.".to_string())?;
+    if value.len() > 4096 {
+        return Err("The browser context-menu target is too long.".to_string());
+    }
+    Ok(Some(validated_url(&value)?.to_string()))
+}
+
+fn context_menu_id(action: &str, tab_id: &str) -> String {
+    format!("{BROWSER_CONTEXT_MENU_PREFIX}{action}-{tab_id}")
+}
+
+fn show_browser_context_menu(
+    app: &AppHandle,
+    tab_id: &str,
+    project_id: &str,
+    url: String,
+) -> Result<(), String> {
+    let state = app.state::<BrowserState>();
+    let label = find_tab(&state, tab_id, project_id)?;
+    state
+        .context_targets
+        .lock()
+        .map_err(|_| "Browser context-menu state is unavailable.".to_string())?
+        .insert(
+            tab_id.to_string(),
+            PendingBrowserContext {
+                project_id: project_id.to_string(),
+                url,
+            },
+        );
+    let add_scope = MenuItemBuilder::with_id(context_menu_id("add-scope", tab_id), "Add to scope")
+        .build(app)
+        .map_err(|error| format!("cannot prepare Add to scope: {error}"))?;
+    let back = MenuItemBuilder::with_id(context_menu_id("back", tab_id), "Back")
+        .build(app)
+        .map_err(|error| format!("cannot prepare browser Back: {error}"))?;
+    let forward = MenuItemBuilder::with_id(context_menu_id("forward", tab_id), "Forward")
+        .build(app)
+        .map_err(|error| format!("cannot prepare browser Forward: {error}"))?;
+    let reload = MenuItemBuilder::with_id(context_menu_id("reload", tab_id), "Reload")
+        .build(app)
+        .map_err(|error| format!("cannot prepare browser Reload: {error}"))?;
+    let inspect = MenuItemBuilder::with_id(context_menu_id("inspect", tab_id), "Open DevTools")
+        .build(app)
+        .map_err(|error| format!("cannot prepare browser DevTools: {error}"))?;
+    let menu = MenuBuilder::new(app)
+        .item(&add_scope)
+        .separator()
+        .item(&back)
+        .item(&forward)
+        .item(&reload)
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .separator()
+        .item(&inspect)
+        .build()
+        .map_err(|error| format!("cannot prepare browser context menu: {error}"))?;
+    app.get_webview(&label)
+        .ok_or_else(|| "This browser tab is unavailable.".to_string())?
+        .window()
+        .popup_menu(&menu)
+        .map_err(|error| format!("cannot open browser context menu: {error}"))
+}
+
+fn bounded_chars(value: String, limit: usize) -> (String, bool) {
+    let mut characters = value.chars();
+    let bounded: String = characters.by_ref().take(limit).collect();
+    (bounded, characters.next().is_some())
+}
+
+fn decode_browser_context(raw: &str) -> Result<BrowserPageContext, String> {
+    if raw.len() > MAX_CAPTURE_RAW_BYTES {
+        return Err("The live page context snapshot exceeded the safe size limit.".to_string());
+    }
+    let raw: RawBrowserPageContext = serde_json::from_str(raw)
+        .map_err(|_| "The live page returned an invalid context snapshot.".to_string())?;
+    let url = validated_url(&raw.url)?.to_string();
+    let (title, title_truncated) = bounded_chars(raw.title, 500);
+    let (selected_text, selection_truncated) =
+        bounded_chars(raw.selected_text, MAX_CAPTURE_SELECTION_CHARS);
+    let (text, text_truncated) = bounded_chars(raw.text, MAX_CAPTURE_TEXT_CHARS);
+    let forms = raw
+        .forms
+        .into_iter()
+        .take(MAX_CAPTURE_FORMS)
+        .map(|form| BrowserPageForm {
+            method: bounded_chars(form.method.to_uppercase(), 16).0,
+            action: bounded_chars(form.action, 2_048).0,
+            fields: form
+                .fields
+                .into_iter()
+                .take(40)
+                .map(|field| BrowserPageFormField {
+                    name: bounded_chars(field.name, 200).0,
+                    id: bounded_chars(field.id, 200).0,
+                    r#type: bounded_chars(field.r#type.to_lowercase(), 40).0,
+                    autocomplete: bounded_chars(field.autocomplete, 100).0,
+                    required: field.required,
+                })
+                .collect(),
+        })
+        .collect();
+    let links = raw
+        .links
+        .into_iter()
+        .take(MAX_CAPTURE_LINKS)
+        .map(|link| BrowserPageLink {
+            text: bounded_chars(link.text, 300).0,
+            href: bounded_chars(link.href, 2_048).0,
+        })
+        .collect();
+    Ok(BrowserPageContext {
+        url,
+        title,
+        selected_text,
+        text,
+        truncated: raw.truncated || title_truncated || selection_truncated || text_truncated,
+        forms,
+        links,
+    })
 }
 
 fn checked_bounds(bounds: BrowserBounds) -> Result<BrowserBounds, String> {
@@ -381,6 +716,27 @@ fn project_key_hex(project_id: &str) -> String {
         .collect()
 }
 
+const DEFAULT_IDENTITY_PARTITION: &str = "browser-00000000-0000-0000-0000-000000000000";
+
+fn identity_key(project_id: &str, identity_partition: &str) -> [u8; 16] {
+    if identity_partition == DEFAULT_IDENTITY_PARTITION {
+        return project_key(project_id);
+    }
+    let digest = Sha256::digest(
+        format!("nebula-browser-profile-v2:{project_id}:{identity_partition}").as_bytes(),
+    );
+    let mut key = [0_u8; 16];
+    key.copy_from_slice(&digest[..16]);
+    key
+}
+
+fn identity_key_hex(project_id: &str, identity_partition: &str) -> String {
+    identity_key(project_id, identity_partition)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[cfg(target_os = "macos")]
 fn macos_supports_project_store() -> bool {
     use objc2_foundation::NSProcessInfo;
@@ -443,6 +799,91 @@ fn emit_page(app: &AppHandle, event: BrowserPageEvent) {
     }
 }
 
+pub(crate) fn handle_menu_event(app: &AppHandle, command: &str) -> bool {
+    let matched = ["add-scope", "back", "forward", "reload", "inspect"]
+        .into_iter()
+        .find_map(|action| {
+            command
+                .strip_prefix(&format!("{BROWSER_CONTEXT_MENU_PREFIX}{action}-"))
+                .map(|tab_id| (action, tab_id))
+        });
+    let Some((action, tab_id)) = matched else {
+        return false;
+    };
+    let state = app.state::<BrowserState>();
+    let pending = state
+        .context_targets
+        .lock()
+        .ok()
+        .and_then(|mut targets| targets.remove(tab_id));
+    let Some(pending) = pending else {
+        record_browser_failure(
+            app,
+            "desktop.browser.context_menu_stale",
+            "A stale browser context-menu action was ignored.",
+            "context-menu",
+        );
+        return true;
+    };
+    let label = match find_tab(&state, tab_id, &pending.project_id) {
+        Ok(label) => label,
+        Err(_) => return true,
+    };
+    let Some(webview) = app.get_webview(&label) else {
+        return true;
+    };
+    let result = match action {
+        "add-scope" => {
+            let current = webview
+                .url()
+                .map_err(|error| format!("The current page address could not be read: {error}"))
+                .and_then(|value| validated_url(value.as_str()));
+            let expected = validated_url(&pending.url);
+            let (state, detail) = match (current, expected) {
+                (Ok(current), Ok(expected)) if current == expected => ("ready", None),
+                (Ok(_), Ok(_)) => (
+                    "failed",
+                    Some("The page changed after the context menu opened. Right-click the current page and try again.".to_string()),
+                ),
+                (Err(error), _) | (_, Err(error)) => ("failed", Some(error)),
+            };
+            app.emit_to(
+                "main",
+                "nebula-browser-scope-request",
+                BrowserScopeRequestEvent {
+                    tab_id: tab_id.to_string(),
+                    project_id: pending.project_id,
+                    url: pending.url,
+                    state,
+                    detail,
+                },
+            )
+            .map_err(|error| format!("cannot deliver Add to scope: {error}"))
+        }
+        "back" => webview
+            .eval("history.back()")
+            .map_err(|error| error.to_string()),
+        "forward" => webview
+            .eval("history.forward()")
+            .map_err(|error| error.to_string()),
+        "reload" => webview.reload().map_err(|error| error.to_string()),
+        "inspect" => {
+            webview.open_devtools();
+            Ok(())
+        }
+        _ => Ok(()),
+    };
+    if result.is_err() {
+        record_browser_failure(
+            app,
+            "desktop.browser.context_menu_action_failed",
+            "A browser context-menu action failed.",
+            "context-menu",
+        );
+    }
+    true
+}
+
 fn emit_download(app: &AppHandle, event: BrowserDownloadEvent) {
     if app
         .emit_to("main", "nebula-browser-download", event)
@@ -452,6 +893,20 @@ fn emit_download(app: &AppHandle, event: BrowserDownloadEvent) {
             app,
             "desktop.browser.download_event_delivery_failed",
             "A browser download update could not be delivered to the interface.",
+            "event-delivery",
+        );
+    }
+}
+
+fn emit_context(app: &AppHandle, event: BrowserContextEvent) {
+    if app
+        .emit_to("main", "nebula-browser-context", event)
+        .is_err()
+    {
+        record_browser_failure(
+            app,
+            "desktop.browser.context_event_delivery_failed",
+            "A live-page context update could not be delivered to the interface.",
             "event-delivery",
         );
     }
@@ -484,6 +939,9 @@ fn find_tab(state: &BrowserState, tab_id: &str, project_id: &str) -> Result<Stri
 }
 
 fn close_tab_internal(app: &AppHandle, state: &BrowserState, tab_id: &str) -> Result<(), String> {
+    if let Ok(mut targets) = state.context_targets.lock() {
+        targets.remove(tab_id);
+    }
     let tab = state
         .tabs
         .lock()
@@ -504,21 +962,35 @@ fn close_tab_internal(app: &AppHandle, state: &BrowserState, tab_id: &str) -> Re
                 .close()
                 .map_err(|error| format!("cannot close browser tab: {error}"))?;
         }
+        if let Some(proxy) = tab.proxy {
+            proxy.stop();
+        }
     }
     Ok(())
 }
 
 #[tauri::command]
+// Tauri derives this flat named-argument IPC contract; grouping the fields
+// would break the invoke payload shared with the browser interface.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn browser_create_tab(
     app: AppHandle,
     state: State<'_, BrowserState>,
     tab_id: String,
     project_id: String,
+    identity_partition: String,
+    session_id: String,
+    proxy_enabled: bool,
     url: String,
     bounds: BrowserBounds,
 ) -> Result<(), String> {
-    if !valid_identifier(&tab_id) || !valid_identifier(&project_id) {
-        return Err("The browser tab or Project identifier is invalid.".to_string());
+    if !valid_identifier(&tab_id)
+        || !valid_identifier(&project_id)
+        || !valid_identifier(&identity_partition)
+        || !valid_identifier(&session_id)
+        || !identity_partition.starts_with("browser-")
+    {
+        return Err("The browser tab, Project, or identity identifier is invalid.".to_string());
     }
     let url = validated_url(&url)?;
     let bounds = checked_bounds(bounds)?;
@@ -543,17 +1015,28 @@ pub(crate) fn browser_create_tab(
     }
 
     let label = format!("browser-{tab_id}");
-    let profile_dir = app
+    let profile_root = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("cannot locate browser storage: {error}"))?
-        .join("browser-profiles")
-        .join(project_key_hex(&project_id));
+        .join("browser-profiles");
+    let profile_dir = if identity_partition == DEFAULT_IDENTITY_PARTITION {
+        profile_root.join(project_key_hex(&project_id))
+    } else {
+        profile_root
+            .join("identities")
+            .join(project_key_hex(&project_id))
+            .join(identity_key_hex(&project_id, &identity_partition))
+    };
     fs::create_dir_all(&profile_dir)
         .map_err(|error| format!("cannot prepare browser storage: {error}"))?;
 
+    let context_token = random_id("context")?;
+    let context_script = browser_context_menu_script(&context_token)?;
     let navigation_app = app.clone();
     let navigation_tab = tab_id.clone();
+    let navigation_project = project_id.clone();
+    let navigation_token = context_token.clone();
     let popup_app = app.clone();
     let popup_tab = tab_id.clone();
     let load_app = app.clone();
@@ -564,8 +1047,50 @@ pub(crate) fn browser_create_tab(
     let download_tab = tab_id.clone();
     let download_project = project_id.clone();
 
+    let proxy = if proxy_enabled {
+        Some(crate::browser_proxy::start(
+            &app,
+            &project_key_hex(&project_id),
+            &session_id,
+            &tab_id,
+        )?)
+    } else {
+        None
+    };
+
     let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
+        .initialization_script(context_script)
         .on_navigation(move |next| {
+            match context_menu_target(next, &navigation_token) {
+                Ok(Some(target)) => {
+                    if show_browser_context_menu(
+                        &navigation_app,
+                        &navigation_tab,
+                        &navigation_project,
+                        target,
+                    )
+                    .is_err()
+                    {
+                        record_browser_failure(
+                            &navigation_app,
+                            "desktop.browser.context_menu_open_failed",
+                            "The browser context menu could not be opened.",
+                            "context-menu",
+                        );
+                    }
+                    return false;
+                }
+                Err(_) => {
+                    record_browser_failure(
+                        &navigation_app,
+                        "desktop.browser.context_menu_request_rejected",
+                        "An invalid browser context-menu request was rejected.",
+                        "context-menu",
+                    );
+                    return false;
+                }
+                Ok(None) => {}
+            }
             let allowed = validated_url(next.as_str()).is_ok();
             if !allowed {
                 emit_page(&navigation_app, BrowserPageEvent { tab_id: navigation_tab.clone(), url: next.to_string(), state: "blocked", title: None, detail: Some("Nebula Browser blocked a non-HTTP navigation.".to_string()) });
@@ -687,12 +1212,16 @@ pub(crate) fn browser_create_tab(
         .enable_clipboard_access()
         .focused(false)
         .zoom_hotkeys_enabled(true)
-        .devtools(false);
+        .devtools(true);
+
+    if let Some(proxy) = &proxy {
+        builder = builder.proxy_url(proxy.url.clone());
+    }
 
     #[cfg(target_os = "macos")]
     {
         if macos_supports_project_store() {
-            builder = builder.data_store_identifier(project_key(&project_id));
+            builder = builder.data_store_identifier(identity_key(&project_id, &identity_partition));
         } else {
             builder = builder.incognito(true);
         }
@@ -737,8 +1266,28 @@ pub(crate) fn browser_create_tab(
         .tabs
         .lock()
         .map_err(|_| "Browser state is unavailable.".to_string())?
-        .insert(tab_id, BrowserTab { project_id, label });
+        .insert(
+            tab_id,
+            BrowserTab {
+                project_id,
+                identity_partition,
+                label,
+                proxy,
+            },
+        );
     Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn browser_reveal_proxy_ca(
+    app: AppHandle,
+    project_id: String,
+) -> Result<String, String> {
+    if !valid_identifier(&project_id) {
+        return Err("The Project identifier is invalid.".to_string());
+    }
+    crate::browser_proxy::reveal_ca(&app, &project_key_hex(&project_id))
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -754,6 +1303,200 @@ pub(crate) fn browser_navigate(
         .ok_or_else(|| "This browser tab is unavailable.".to_string())?
         .navigate(validated_url(&url)?)
         .map_err(|error| format!("cannot navigate browser tab: {error}"))
+}
+
+#[tauri::command]
+pub(crate) fn browser_capture_context(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    tab_id: String,
+    project_id: String,
+    request_id: String,
+) -> Result<(), String> {
+    if !valid_identifier(&request_id) {
+        return Err("The browser capture identifier is invalid.".to_string());
+    }
+    let label = find_tab(&state, &tab_id, &project_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+    let callback_app = app.clone();
+    let callback_tab = tab_id.clone();
+    webview
+        .eval_with_callback(BROWSER_CONTEXT_SCRIPT, move |raw| {
+            let event = match decode_browser_context(&raw) {
+                Ok(context) => BrowserContextEvent {
+                    request_id: request_id.clone(),
+                    tab_id: callback_tab.clone(),
+                    state: "ready",
+                    context: Some(context),
+                    detail: None,
+                },
+                Err(detail) => BrowserContextEvent {
+                    request_id: request_id.clone(),
+                    tab_id: callback_tab.clone(),
+                    state: "failed",
+                    context: None,
+                    detail: Some(detail),
+                },
+            };
+            emit_context(&callback_app, event);
+        })
+        .map_err(|error| format!("cannot capture live page context: {error}"))
+}
+
+#[tauri::command]
+pub(crate) fn browser_execute_action(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    tab_id: String,
+    project_id: String,
+    request: BrowserActionRequest,
+) -> Result<(), String> {
+    if !valid_identifier(&request.action_id) {
+        return Err("The browser action identifier is invalid.".to_string());
+    }
+    validated_url(&request.page_url)?;
+    let allowed_kinds = [
+        "navigate", "click", "fill", "select", "press", "extract", "replay",
+    ];
+    if !allowed_kinds.contains(&request.kind.as_str()) {
+        return Err(
+            "This browser action kind is not executable by the native browser.".to_string(),
+        );
+    }
+    if request.kind == "navigate" {
+        let target = request
+            .arguments
+            .get("url")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Navigate actions require a URL argument.".to_string())?;
+        validated_url(target)?;
+    }
+    if request.kind == "replay" {
+        let target = request
+            .arguments
+            .get("url")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Replay actions require a URL argument.".to_string())?;
+        validated_url(target)?;
+    }
+    let locator = serde_json::to_string(&request.locator)
+        .map_err(|error| format!("cannot encode browser action locator: {error}"))?;
+    let arguments = serde_json::to_string(&request.arguments)
+        .map_err(|error| format!("cannot encode browser action arguments: {error}"))?;
+    let kind = serde_json::to_string(&request.kind)
+        .map_err(|error| format!("cannot encode browser action kind: {error}"))?;
+    let expected_url = serde_json::to_string(&request.page_url)
+        .map_err(|error| format!("cannot encode browser action page: {error}"))?;
+    let script = format!(
+        r#"(() => {{
+      const kind = {kind};
+      const locator = {locator};
+      const args = {arguments};
+      const expectedUrl = {expected_url};
+      const fail = (error) => ({{ ok: false, error: String(error).slice(0, 2000), pageUrl: String(location.href).slice(0, 4096) }});
+      try {{
+        if (String(location.href) !== expectedUrl) return fail("The page changed after approval.");
+        if (kind === "navigate") {{ location.assign(String(args.url)); return {{ ok: true, kind, pageUrl: expectedUrl, navigation: String(args.url).slice(0, 4096) }}; }}
+        if (kind === "replay") {{
+          const target = new URL(String(args.url), location.href);
+          const requestHeaders = args.headers && typeof args.headers === "object" ? args.headers : {{}};
+          const forbidden = /authorization|cookie|csrf|xsrf|api[-_]?key|token/i;
+          if (Object.keys(requestHeaders).some((name) => forbidden.test(name))) return fail("Replay headers cannot contain reusable secrets.");
+          const xhr = new XMLHttpRequest();
+          xhr.open(String(args.method || "GET").toUpperCase(), target.href, false);
+          xhr.withCredentials = true;
+          for (const [name, value] of Object.entries(requestHeaders)) xhr.setRequestHeader(String(name), String(value));
+          xhr.send(args.body === undefined || args.body === "" ? null : String(args.body).slice(0, 65536));
+          const responseHeaders = Object.fromEntries(String(xhr.getAllResponseHeaders()).trim().split(/[\r\n]+/).filter(Boolean).map((line) => {{ const index = line.indexOf(":"); return index > 0 ? [line.slice(0, index).trim(), line.slice(index + 1).trim()] : [line, ""]; }}));
+          return {{ ok: true, kind, pageUrl: expectedUrl, requestUrl: target.href.slice(0, 4096), method: String(args.method || "GET").toUpperCase(), status: xhr.status, responseHeaders, responsePreview: String(xhr.responseText || "").slice(0, 16000), responseBytes: String(xhr.responseText || "").length }};
+        }}
+        let candidates = [];
+        if (locator.css) candidates = Array.from(document.querySelectorAll(String(locator.css)));
+        else if (locator.label) {{
+          const wanted = String(locator.label).trim().toLocaleLowerCase();
+          candidates = Array.from(document.querySelectorAll("label")).filter((label) => String(label.innerText || label.textContent || "").trim().toLocaleLowerCase() === wanted).map((label) => label.control).filter(Boolean);
+        }} else {{
+          candidates = Array.from(document.querySelectorAll("button,a,input,select,textarea,[role],[tabindex]"));
+          if (locator.role) candidates = candidates.filter((element) => String(element.getAttribute("role") || element.tagName).toLocaleLowerCase() === String(locator.role).toLocaleLowerCase());
+          if (locator.name) {{ const wanted = String(locator.name).trim().toLocaleLowerCase(); candidates = candidates.filter((element) => String(element.getAttribute("aria-label") || element.innerText || element.textContent || element.getAttribute("name") || "").trim().toLocaleLowerCase() === wanted); }}
+          if (locator.text) {{ const wanted = String(locator.text).trim().toLocaleLowerCase(); candidates = candidates.filter((element) => String(element.innerText || element.textContent || "").trim().toLocaleLowerCase() === wanted); }}
+        }}
+        candidates = Array.from(new Set(candidates)).filter((element) => element instanceof HTMLElement && element.isConnected);
+        if (candidates.length !== 1) return fail(`Semantic locator matched ${{candidates.length}} elements; exactly one is required.`);
+        const element = candidates[0];
+        if (kind === "click") element.click();
+        else if (kind === "fill") {{
+          if (!("non_secret_text" in args)) return fail("Fill requires an explicit non_secret_text argument.");
+          if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return fail("Fill target is not a text control.");
+          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")?.set;
+          if (!setter) return fail("Fill target has no value setter.");
+          setter.call(element, String(args.non_secret_text).slice(0, 4000));
+          element.dispatchEvent(new Event("input", {{ bubbles: true }}));
+          element.dispatchEvent(new Event("change", {{ bubbles: true }}));
+        }} else if (kind === "select") {{
+          if (!(element instanceof HTMLSelectElement)) return fail("Select target is not a select control.");
+          element.value = String(args.value || ""); element.dispatchEvent(new Event("change", {{ bubbles: true }}));
+        }} else if (kind === "press") {{
+          const key = String(args.key || "").slice(0, 80); if (!key) return fail("Press requires a key.");
+          element.dispatchEvent(new KeyboardEvent("keydown", {{ key, bubbles: true }})); element.dispatchEvent(new KeyboardEvent("keyup", {{ key, bubbles: true }}));
+        }}
+        const extracted = kind === "extract" ? String(element.innerText || element.textContent || "").slice(0, 16000) : undefined;
+        return {{ ok: true, kind, pageUrl: expectedUrl, matched: 1, extracted, tag: element.tagName.toLocaleLowerCase() }};
+      }} catch (error) {{ return fail(error instanceof Error ? error.message : error); }}
+    }})()"#
+    );
+    let label = find_tab(&state, &tab_id, &project_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+    let callback_app = app.clone();
+    let callback_tab = tab_id.clone();
+    let action_id = request.action_id.clone();
+    webview
+        .eval_with_callback(&script, move |raw| {
+            let decoded = serde_json::from_str::<serde_json::Value>(&raw);
+            let (state, result, detail) = match decoded {
+                Ok(result) if result.get("ok").and_then(|value| value.as_bool()) == Some(true) => {
+                    ("complete", result, None)
+                }
+                Ok(result) => {
+                    let detail = result
+                        .get("error")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("The browser action failed.")
+                        .to_string();
+                    ("failed", result, Some(detail))
+                }
+                Err(_) => (
+                    "failed",
+                    serde_json::json!({}),
+                    Some("The browser returned an invalid action receipt.".to_string()),
+                ),
+            };
+            if callback_app
+                .emit(
+                    "nebula-browser-action",
+                    BrowserActionEvent {
+                        action_id: action_id.clone(),
+                        tab_id: callback_tab.clone(),
+                        state,
+                        result,
+                        detail,
+                    },
+                )
+                .is_err()
+            {
+                record_browser_failure(
+                    &callback_app,
+                    "desktop.browser.action_event_delivery_failed",
+                    "A browser action receipt could not be delivered to the interface.",
+                    "event-delivery",
+                );
+            }
+        })
+        .map_err(|error| format!("cannot execute the approved browser action: {error}"))
 }
 
 #[tauri::command]
@@ -845,6 +1588,76 @@ pub(crate) fn browser_close_tab(
 }
 
 #[tauri::command]
+pub(crate) fn browser_open_devtools(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    tab_id: String,
+    project_id: String,
+) -> Result<(), String> {
+    let label = find_tab(&state, &tab_id, &project_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+    webview.open_devtools();
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn browser_clear_identity_data(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    project_id: String,
+    identity_partition: String,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id)
+        || !valid_identifier(&identity_partition)
+        || !identity_partition.starts_with("browser-")
+    {
+        return Err("The Project or identity identifier is invalid.".to_string());
+    }
+    let tabs: Vec<String> = state
+        .tabs
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .iter()
+        .filter(|(_, tab)| {
+            tab.project_id == project_id && tab.identity_partition == identity_partition
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in tabs {
+        let label = find_tab(&state, &id, &project_id)?;
+        if let Some(webview) = app.get_webview(&label) {
+            webview
+                .clear_all_browsing_data()
+                .map_err(|error| format!("cannot clear browser identity storage: {error}"))?;
+        }
+        close_tab_internal(&app, &state, &id)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let profile_root = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("cannot locate browser storage: {error}"))?
+            .join("browser-profiles");
+        let profile = if identity_partition == DEFAULT_IDENTITY_PARTITION {
+            profile_root.join(project_key_hex(&project_id))
+        } else {
+            profile_root
+                .join("identities")
+                .join(project_key_hex(&project_id))
+                .join(identity_key_hex(&project_id, &identity_partition))
+        };
+        if profile.exists() {
+            fs::remove_dir_all(profile)
+                .map_err(|error| format!("cannot clear browser identity storage: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub(crate) fn browser_clear_project_data(
     app: AppHandle,
     state: State<'_, BrowserState>,
@@ -880,6 +1693,17 @@ pub(crate) fn browser_clear_project_data(
     if profile.exists() {
         fs::remove_dir_all(profile)
             .map_err(|error| format!("cannot clear browser storage: {error}"))?;
+    }
+    let identity_profiles = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("cannot locate browser storage: {error}"))?
+        .join("browser-profiles")
+        .join("identities")
+        .join(project_key_hex(&project_id));
+    if identity_profiles.exists() {
+        fs::remove_dir_all(identity_profiles)
+            .map_err(|error| format!("cannot clear browser identity storage: {error}"))?;
     }
     Ok(())
 }
@@ -1115,6 +1939,89 @@ mod tests {
         assert!(validated_url("file:///etc/passwd").is_err());
         assert!(validated_url("javascript:alert(1)").is_err());
         assert!(validated_url("https://user:secret@example.test/").is_err());
+    }
+
+    #[test]
+    fn context_menu_navigation_requires_the_per_tab_token_and_a_safe_target() {
+        let token = "context-0123456789abcdef";
+        let mut request = Url::parse(&format!("{BROWSER_CONTEXT_SCHEME}://menu/{token}")).unwrap();
+        request
+            .query_pairs_mut()
+            .append_pair("url", "https://example.test/account?view=security");
+        assert_eq!(
+            context_menu_target(&request, token).unwrap().as_deref(),
+            Some("https://example.test/account?view=security")
+        );
+        assert!(context_menu_target(&request, "context-other").is_err());
+        let mut unsafe_request =
+            Url::parse(&format!("{BROWSER_CONTEXT_SCHEME}://menu/{token}")).unwrap();
+        unsafe_request
+            .query_pairs_mut()
+            .append_pair("url", "file:///etc/passwd");
+        assert!(context_menu_target(&unsafe_request, token).is_err());
+    }
+
+    #[test]
+    fn context_menu_script_uses_trusted_right_clicks_without_exposing_tauri_ipc() {
+        let script = browser_context_menu_script("context-safe").unwrap();
+        assert!(script.contains("contextmenu"));
+        assert!(script.contains("event.isTrusted"));
+        assert!(script.contains("nebula-browser-context://menu/context-safe?url="));
+        assert!(!script.contains("__TAURI"));
+        assert!(!script.contains("ipc.postMessage"));
+    }
+
+    #[test]
+    fn live_page_context_is_bounded_and_contains_no_form_values() {
+        let raw = serde_json::json!({
+            "url": "https://app.example.test/login",
+            "title": "Sign in",
+            "selectedText": "csrf token rotates",
+            "text": "x".repeat(MAX_CAPTURE_TEXT_CHARS + 50),
+            "truncated": false,
+            "forms": [{
+                "method": "post",
+                "action": "https://app.example.test/session",
+                "fields": [{
+                    "name": "password",
+                    "id": "password",
+                    "type": "PASSWORD",
+                    "autocomplete": "current-password",
+                    "required": true,
+                    "value": "never-capture-this"
+                }]
+            }],
+            "links": [{"text": "Reset", "href": "https://app.example.test/reset"}]
+        })
+        .to_string();
+
+        let context = decode_browser_context(&raw).unwrap();
+
+        assert_eq!(context.url, "https://app.example.test/login");
+        assert_eq!(context.text.chars().count(), MAX_CAPTURE_TEXT_CHARS);
+        assert!(context.truncated);
+        assert_eq!(context.forms[0].method, "POST");
+        assert_eq!(context.forms[0].fields[0].r#type, "password");
+        let serialized = serde_json::to_string(&context).unwrap();
+        assert!(!serialized.contains("never-capture-this"));
+        assert!(!serialized.contains("\"value\""));
+    }
+
+    #[test]
+    fn live_page_context_rejects_non_network_or_credentialed_provenance() {
+        for url in ["file:///etc/passwd", "https://user:secret@example.test/"] {
+            let raw = serde_json::json!({"url": url, "text": "page"}).to_string();
+            assert!(decode_browser_context(&raw).is_err());
+        }
+    }
+
+    #[test]
+    fn live_page_context_rejects_an_oversized_raw_snapshot_before_decoding() {
+        let raw = "x".repeat(MAX_CAPTURE_RAW_BYTES + 1);
+        assert_eq!(
+            decode_browser_context(&raw).unwrap_err(),
+            "The live page context snapshot exceeded the safe size limit."
+        );
     }
 
     #[test]

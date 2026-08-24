@@ -100,6 +100,33 @@ def test_scope_enforces_ports_domains_and_wildcard_apex_boundaries():
     assert passive("attacker.example").effect == PolicyEffect.DENY
 
 
+def test_explicit_all_target_mode_bypasses_only_target_and_port_boundaries():
+    engine = PolicyEngine()
+    policy = _scope(allow_all_targets=True, prohibited_actions=["delete.production"])
+    outside = engine.evaluate(
+        policy,
+        PolicyRequest(
+            tool_name="recon.headers",
+            risk_class=RiskClass.PASSIVE,
+            target="https://outside.example:9443/",
+            port=9443,
+        ),
+        now=NOW,
+    )
+    prohibited = engine.evaluate(
+        policy,
+        PolicyRequest(
+            tool_name="delete.production",
+            risk_class=RiskClass.PASSIVE,
+            target="https://outside.example/",
+        ),
+        now=NOW,
+    )
+    assert outside.effect == PolicyEffect.ALLOW
+    assert prohibited.effect == PolicyEffect.DENY
+    assert prohibited.rule == "prohibited_action"
+
+
 def test_active_scans_run_without_grants_but_cannot_expand_scope():
     policy = _scope()
     matching = PolicyRequest(

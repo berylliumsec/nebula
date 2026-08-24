@@ -1,6 +1,7 @@
 #![deny(unused_must_use)]
 
 mod browser;
+mod browser_proxy;
 mod diagnostics;
 mod release;
 mod sidecar;
@@ -115,6 +116,9 @@ fn build_app() -> tauri::App<Wry> {
         })
         .on_menu_event(|app, event| {
             let command = event.id().as_ref();
+            if browser::handle_menu_event(app, command) {
+                return;
+            }
             if matches!(
                 command,
                 "home"
@@ -155,10 +159,15 @@ fn build_app() -> tauri::App<Wry> {
             browser::browser_capabilities,
             browser::browser_create_tab,
             browser::browser_navigate,
+            browser::browser_capture_context,
+            browser::browser_execute_action,
             browser::browser_control,
             browser::browser_set_bounds,
             browser::browser_set_visible,
             browser::browser_close_tab,
+            browser::browser_open_devtools,
+            browser::browser_reveal_proxy_ca,
+            browser::browser_clear_identity_data,
             browser::browser_clear_project_data,
             browser::browser_import_download,
             browser::browser_discard_download

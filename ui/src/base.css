@@ -455,7 +455,7 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .mission-event-details { margin-top: 7px; color: var(--muted); font-size: 11px; }
 .mission-event-details summary { cursor: pointer; }
 .mission-event-details pre { max-height: 260px; padding: 9px; overflow: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-muted); color: var(--text); font: 11px/1.5 var(--font-mono); }
-.button.danger { color: var(--red); }
+.button.danger { color: var(--on-danger); }
 
 /* Quiet, consistent confirmation for settings saves. */
 .settings-save-feedback { position: fixed; z-index: 1200; right: 22px; bottom: 22px; display: flex; min-width: 230px; max-width: min(360px, calc(100vw - 32px)); align-items: center; gap: 10px; padding: 10px 13px; border: 1px solid color-mix(in srgb, var(--green) 34%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--surface-raised) 94%, var(--green)); box-shadow: none; animation: settings-save-in .18s ease-out; }

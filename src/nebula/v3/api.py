@@ -59,6 +59,23 @@ from .automation_runtime import (
     RunCommandRequest,
 )
 from .automation_tools import AutomationToolPlatform, PROCESS_IO_NAME, RUN_COMMAND_NAME
+from .browser_security import (
+    BrowserActionDecisionRequest,
+    BrowserActionExecutionRequest,
+    BrowserActionProposalRequest,
+    BrowserActionResultRequest,
+    BrowserCaptureSettingsRequest,
+    BrowserHandoffClaimRequest,
+    BrowserHandoffCreateRequest,
+    BrowserHandoffResultRequest,
+    BrowserIdentityCreateRequest,
+    BrowserSecurityService,
+    BrowserSessionCreateRequest,
+    BrowserSessionSyncRequest,
+    BrowserTrafficRecordRequest,
+    BrowserWebSocketFrameRecordRequest,
+    BrowserWorkspace,
+)
 from .api_validation import ApiEntityValidator
 from .chat import (
     ChatCompletionRequest,
@@ -131,6 +148,12 @@ from .domain import (
     Approval,
     ApprovalStatus,
     Artifact,
+    BrowserAction,
+    BrowserHandoff,
+    BrowserIdentity,
+    BrowserSession,
+    BrowserTrafficExchange,
+    BrowserWebSocketFrame,
     AutomationApprovalPolicy,
     AutomationProjectPolicy,
     AutomationSession,
@@ -353,6 +376,12 @@ CUSTOM_RESOURCES = {
     "library_items",
     "operator_profiles",
     "runner_profiles",
+    "browser_actions",
+    "browser_handoffs",
+    "browser_identities",
+    "browser_sessions",
+    "browser_traffic",
+    "browser_websocket_frames",
 }
 
 API_PREFIX = "/api/v1"
@@ -729,6 +758,7 @@ class ScopePolicyUpdateRequest(NebulaModel):
     allowed_domains: list[str] = Field(default_factory=list)
     allowed_urls: list[str] = Field(default_factory=list)
     allowed_ports: list[int] = Field(default_factory=list)
+    allow_all_targets: bool = False
     not_before: datetime | None = None
     not_after: datetime | None = None
     prohibited_actions: list[str] = Field(default_factory=list)
@@ -7497,6 +7527,180 @@ def create_app(
                     ).lower(),
                 },
             )
+
+    browser_security = BrowserSecurityService(store)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-workspace",
+        response_model=BrowserWorkspace,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def browser_workspace(engagement_id: str) -> BrowserWorkspace:
+        return browser_security.workspace(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-identities",
+        response_model=BrowserIdentity,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_browser_identity(
+        engagement_id: str,
+        request: BrowserIdentityCreateRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserIdentity:
+        return browser_security.create_identity(engagement_id, request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-sessions",
+        response_model=BrowserSession,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_browser_session(
+        engagement_id: str,
+        request: BrowserSessionCreateRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserSession:
+        return browser_security.create_session(engagement_id, request, x_nebula_actor)
+
+    @app.put(
+        f"{API_PREFIX}/browser-sessions/{{session_id}}/tabs",
+        response_model=BrowserSession,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def sync_browser_session_tabs(
+        session_id: str, request: BrowserSessionSyncRequest
+    ) -> BrowserSession:
+        return browser_security.sync_session(session_id, request)
+
+    @app.put(
+        f"{API_PREFIX}/browser-sessions/{{session_id}}/capture-settings",
+        response_model=BrowserSession,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_browser_capture_settings(
+        session_id: str,
+        request: BrowserCaptureSettingsRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserSession:
+        return browser_security.update_capture_settings(
+            session_id, request, x_nebula_actor
+        )
+
+    @app.post(
+        f"{API_PREFIX}/browser-sessions/{{session_id}}/traffic",
+        response_model=BrowserTrafficExchange,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def record_browser_traffic(
+        session_id: str,
+        request: BrowserTrafficRecordRequest,
+        x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
+    ) -> BrowserTrafficExchange:
+        return browser_security.record_traffic(session_id, request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/browser-sessions/{{session_id}}/websocket-frames",
+        response_model=BrowserWebSocketFrame,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def record_browser_websocket_frame(
+        session_id: str,
+        request: BrowserWebSocketFrameRecordRequest,
+        x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
+    ) -> BrowserWebSocketFrame:
+        return browser_security.record_websocket_frame(
+            session_id, request, x_nebula_actor
+        )
+
+    @app.post(
+        f"{API_PREFIX}/browser-sessions/{{session_id}}/actions",
+        response_model=BrowserAction,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def propose_browser_action(
+        session_id: str, request: BrowserActionProposalRequest
+    ) -> BrowserAction:
+        return browser_security.propose_action(session_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-actions/{{action_id}}/decision",
+        response_model=BrowserAction,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def decide_browser_action(
+        action_id: str, request: BrowserActionDecisionRequest
+    ) -> BrowserAction:
+        return browser_security.decide_action(action_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-actions/{{action_id}}/start",
+        response_model=BrowserAction,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_browser_action(
+        action_id: str, request: BrowserActionExecutionRequest
+    ) -> BrowserAction:
+        return browser_security.start_action(action_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-actions/{{action_id}}/result",
+        response_model=BrowserAction,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def finish_browser_action(
+        action_id: str, request: BrowserActionResultRequest
+    ) -> BrowserAction:
+        return browser_security.finish_action(action_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-sessions/{{session_id}}/handoffs",
+        response_model=BrowserHandoff,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_browser_handoff(
+        session_id: str, request: BrowserHandoffCreateRequest
+    ) -> BrowserHandoff:
+        return browser_security.create_handoff(session_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-handoffs/{{handoff_id}}/claim",
+        response_model=BrowserHandoff,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def claim_browser_handoff(
+        handoff_id: str, request: BrowserHandoffClaimRequest
+    ) -> BrowserHandoff:
+        return browser_security.claim_handoff(handoff_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-handoffs/{{handoff_id}}/result",
+        response_model=BrowserHandoff,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def finish_browser_handoff(
+        handoff_id: str, request: BrowserHandoffResultRequest
+    ) -> BrowserHandoff:
+        return browser_security.finish_handoff(handoff_id, request)
 
     for resource, model in ENTITY_MODEL_BY_KIND.items():
         if resource in CUSTOM_RESOURCES:

@@ -291,6 +291,80 @@ class NebulaStore:
         finally:
             connection.close()
 
+    def create_with_operation_event(
+        self,
+        entity: EntityT,
+        *,
+        operation_id: str,
+        operation_kind: str,
+        engagement_id: str,
+        event_type: str,
+        event_payload: dict[str, Any],
+        actor_id: str | None = None,
+        idempotency_key: str | None = None,
+        occurred_at: datetime | None = None,
+    ) -> tuple[EntityT, OperationEvent]:
+        """Atomically create an entity and its first durable workflow event."""
+
+        if not all((operation_id, operation_kind, engagement_id, event_type)):
+            raise ValueError("operation event identifiers and type are required")
+        if entity_engagement_id(entity) != engagement_id:
+            raise ValueError("operation event engagement must own the entity")
+        connection = self.database.engine.connect()
+        try:
+            self._begin_run_write(connection, f"operation:{operation_id}")
+            connection.execute(
+                insert(EntityRow).values(
+                    id=entity.id,
+                    kind=entity.entity_kind,
+                    engagement_id=engagement_id,
+                    revision=entity.revision,
+                    payload=_dump_entity(entity),
+                    created_at=entity.created_at,
+                    updated_at=entity.updated_at,
+                )
+            )
+            event = self._next_operation_event(
+                connection,
+                operation_id=operation_id,
+                operation_kind=operation_kind,
+                engagement_id=engagement_id,
+                event_type=event_type,
+                payload=event_payload,
+                actor_id=actor_id,
+                idempotency_key=idempotency_key,
+                occurred_at=occurred_at,
+            )
+            connection.execute(
+                insert(OperationEventRow).values(**event.model_dump(mode="python"))
+            )
+            connection.commit()
+            return entity, event
+        except IntegrityError as exc:
+            record_caught_exception(
+                "storage",
+                "storage.storage.browser_operation_conflict",
+                "A browser workflow create conflicted with durable state.",
+                exc,
+                stage="storage",
+            )
+            connection.rollback()
+            raise ConflictError(
+                f"entity or operation event already exists: {entity.id}"
+            ) from exc
+        except Exception as caught_error:
+            record_caught_exception(
+                "storage",
+                "storage.storage.browser_operation_failed",
+                "A browser workflow create failed.",
+                caught_error,
+                stage="storage",
+            )
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def reserve_tool_call(self, call: ToolCall) -> ToolCall:
         """Atomically reserve one durable run tool-call slot and create the call."""
 

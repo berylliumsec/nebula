@@ -23,6 +23,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from .artifacts import ArtifactStore
+from .browser_tools import BrowserToolPlatform, combine_tool_components
 
 from .domain import (
     Approval,
@@ -511,6 +512,7 @@ class ChatService:
         self.store = store
         self.tool_platform = tool_platform
         self.automation_tool_platform = automation_tool_platform
+        self.browser_tool_platform = BrowserToolPlatform(store)
         self.provider_factory = provider_factory or provider_from_profile
         self.operator_id = operator_id or (lambda: "system")
         self.knowledge_index = knowledge_index
@@ -863,7 +865,19 @@ class ChatService:
                 mcp_profiles = resolve_mcp_profiles(self.store, request.mcp_server_ids)
             except (McpProbeError, ValueError) as exc:
                 raise ChatConfigurationError(str(exc)) from exc
-        tools_enabled = request.tools_enabled or bool(mcp_profiles)
+        browser_session_ids = {
+            item.source_id
+            for item in request.context_attachments
+            if item.source_kind == "browser_page" and item.source_id
+        }
+        if len(browser_session_ids) > 1:
+            raise ChatConfigurationError(
+                "one chat turn cannot control more than one browser session"
+            )
+        browser_session_id = next(iter(browser_session_ids), None)
+        tools_enabled = (
+            request.tools_enabled or bool(mcp_profiles) or bool(browser_session_id)
+        )
         if tools_enabled:
             if engagement_id is None:
                 raise ChatConfigurationError(
@@ -917,9 +931,18 @@ class ChatService:
                     )
                 elif extra_components is not None:
                     tool_components = extra_components
-                else:
+                elif browser_session_id is None:
                     raise ChatConfigurationError(
                         "no runtime capabilities were selected"
+                    )
+                if browser_session_id is not None:
+                    browser_components = self.browser_tool_platform.chat_components(
+                        engagement_id=engagement_id,
+                        browser_session_id=browser_session_id,
+                    )
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        browser_components,
                     )
             except Exception as exc:
                 record_caught_exception(
@@ -930,6 +953,10 @@ class ChatService:
                     stage="chat",
                 )
                 raise ChatConfigurationError(str(exc)) from exc
+            if tool_components is None:
+                raise ChatConfigurationError(
+                    "no command, automation, MCP, or browser runtime capabilities were selected"
+                )
             session_id = (
                 session.id
                 if session is not None
@@ -956,6 +983,7 @@ class ChatService:
                         item.model_dump(mode="json") for item in mcp_profiles
                     ],
                     "include_oci_tools": request.tools_enabled,
+                    "browser_session_id": browser_session_id,
                     "automation_runtime_digest": getattr(
                         tool_components, "runtime_digest", None
                     ),

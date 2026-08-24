@@ -50,6 +50,7 @@ import type {
   ContextStatus,
   ExecutionCapabilities,
   ExecutionLanguage,
+  EngagementScopePolicy,
   HarnessProfile,
   HarnessActivityEvent,
   HarnessInteraction,
@@ -497,6 +498,8 @@ export function SessionsPage() {
     updateObservation,
   } = useWorkspace();
   const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
+  const [browserScope, setBrowserScope] = useState<EngagementScopePolicy>();
+  const [browserScopeLoading, setBrowserScopeLoading] = useState(false);
   const workbenchActionsButtonRef = useRef<HTMLButtonElement>(null);
   const workbenchActionsMenuRef = useRef<HTMLDivElement>(null);
   const conversationMenuRef = useRef<HTMLDetailsElement>(null);
@@ -812,6 +815,26 @@ export function SessionsPage() {
     });
     return () => { active = false; };
   }, [api, coreState, engagement]);
+
+  useEffect(() => {
+    if (!api || coreState !== "online" || !engagement || view !== "browser") {
+      setBrowserScope(undefined);
+      setBrowserScopeLoading(false);
+      return;
+    }
+    let active = true;
+    setBrowserScope(undefined);
+    setBrowserScopeLoading(true);
+    void api.getEngagementScope(engagement.id).then((next) => {
+      if (active) setBrowserScope(next);
+    }).catch((caughtError) => {
+      void logCaughtDiagnostic("interface.workbench_browser.scope_load_failed", "Project scope could not be loaded for the Browser.", caughtError, "workbench_browser");
+      if (active) setBrowserScope(undefined);
+    }).finally(() => {
+      if (active) setBrowserScopeLoading(false);
+    });
+    return () => { active = false; };
+  }, [api, coreState, engagement?.id, view]);
 
   useEffect(() => {
     if (!api || coreState !== "online" || runtimeKind !== "harness" || !harnessSessionId) {
@@ -2772,12 +2795,19 @@ export function SessionsPage() {
           {api && engagement && <div className="persistent-code-editor" hidden={view !== "code"}>
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} /></Suspense>
           </div>}
-          {engagement && <div className="persistent-browser" hidden={view !== "browser"}>
+          {api && engagement && <div className="persistent-browser" hidden={view !== "browser"}>
             <WorkbenchBrowser
               active={view === "browser"}
+              api={api}
+              operatorId={activeOperator?.id}
               projectId={engagement.id}
+              scope={browserScope}
+              scopeLoading={browserScopeLoading}
               onAddKnowledgeUrl={(url) => ingestKnowledgeUrlSource({ engagementId: engagement.id, url })}
+              onAskNebula={requestNebulaDraft}
               onOpenFiles={() => setView("workspace")}
+              onScopeUpdated={setBrowserScope}
+              onUploadEvidence={uploadEvidence}
             />
           </div>}
           {(view === "terminal" || view === "code") && (!api || !engagement) ? (

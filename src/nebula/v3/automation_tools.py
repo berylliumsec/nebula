@@ -635,6 +635,7 @@ class AutomationToolPlatform:
                 "runtime_digest": self.manager.runtime_digest,
                 "scope_summary": json.dumps(
                     {
+                        "allow_all_targets": components.scope.allow_all_targets,
                         "cidrs": components.scope.allowed_cidrs,
                         "domains": components.scope.allowed_domains,
                         "ports": components.scope.allowed_ports,

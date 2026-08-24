@@ -12,11 +12,12 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal, cast
+from typing import Any, Awaitable, Callable, Literal, Protocol, cast
 
 from .artifacts import ArtifactStore
 from .diagnostics import gather_diagnostic, record_caught_exception
 from .domain import (
+    Approval,
     Engagement,
     McpServerProfile,
     RunnerIsolation,
@@ -47,6 +48,8 @@ from .tools import (
     StoreToolEvidenceRecorder,
     StoreToolLedger,
     ToolBroker,
+    ToolExecutionResult,
+    ToolInvocation,
     ToolRegistry,
     ToolSpec,
     register_artifact_retrieval_tools,
@@ -68,6 +71,18 @@ class RuntimePlatformError(RuntimeError):
     """The local Kali runtime or its runner cannot satisfy a request."""
 
 
+class ToolExecutionBroker(Protocol):
+    """Shared execution boundary for native, browser, and composite brokers."""
+
+    async def execute(
+        self,
+        invocation: ToolInvocation,
+        scope: ScopePolicy,
+        *,
+        approval: Approval | None = None,
+    ) -> ToolExecutionResult: ...
+
+
 def _runner_profile_fingerprint(profile: StoredRunnerProfile) -> str:
     """Bind preparation to runner security configuration, not health telemetry."""
 
@@ -87,7 +102,7 @@ def _runner_profile_fingerprint(profile: StoredRunnerProfile) -> str:
 
 @dataclass(frozen=True)
 class RuntimeToolComponents:
-    broker: ToolBroker
+    broker: ToolExecutionBroker
     scope: ScopePolicy
     workspace: Path
     specs: Mapping[str, ToolSpec]
@@ -624,5 +639,6 @@ __all__ = [
     "RuntimePlatform",
     "RuntimePlatformError",
     "RuntimeToolComponents",
+    "ToolExecutionBroker",
     "default_runtime_platform",
 ]

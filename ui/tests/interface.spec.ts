@@ -228,6 +228,36 @@ async function installTruthfulCore(page: Page) {
         }] : [],
         truncated: false,
       };
+    } else if (path.endsWith("/engagements/scratch-project/scope")) {
+      body = {
+        ...entity,
+        id: "scope-scratch",
+        engagement_id: "scratch-project",
+        allowed_cidrs: [],
+        allowed_domains: ["example.com"],
+        allowed_urls: [],
+        allowed_ports: [443],
+        allow_all_targets: false,
+        not_before: null,
+        not_after: null,
+        prohibited_actions: [],
+        local_only: true,
+        max_concurrency: 1,
+        grants: [],
+        revision: 3,
+      };
+    } else if (path.endsWith("/engagements/scratch-project/browser-workspace")) {
+      body = {
+        identities: [{ ...entity, id: "browser-identity-preview", engagement_id: "scratch-project", name: "Default identity", description: "Project-isolated preview profile", color: "#7c6cff", storage_partition: "browser-00000000-0000-0000-0000-000000000000", ephemeral: false, is_default: true, revoked_at: null, metadata: {} }],
+        sessions: [{ ...entity, id: "browser-session-preview", engagement_id: "scratch-project", name: "Research session", identity_id: "browser-identity-preview", status: "active", capture_mode: "headers", proxy_enabled: false, tabs: [], active_tab_id: null, upstream_proxy_enabled: false, upstream_proxy_url: null, interception_enabled: false, device_owner: null, last_seen_at: entity.updated_at, metadata: {} }],
+        traffic: [],
+        frames: [],
+        actions: [],
+        handoffs: [],
+      };
+    } else if (path.endsWith("/browser-sessions/browser-session-preview/tabs") && request.method() === "PUT") {
+      const update = request.postDataJSON() as { tabs: unknown[]; active_tab_id: string | null; device_owner: string };
+      body = { ...entity, revision: 2, id: "browser-session-preview", engagement_id: "scratch-project", name: "Research session", identity_id: "browser-identity-preview", status: "active", capture_mode: "headers", proxy_enabled: false, tabs: update.tabs, active_tab_id: update.active_tab_id, upstream_proxy_enabled: false, upstream_proxy_url: null, interception_enabled: false, device_owner: update.device_owner, last_seen_at: entity.updated_at, metadata: {} };
     } else if (path.endsWith("/engagements")) {
       body = [{
         ...entity,
@@ -467,7 +497,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   }
 });
 
-test("browser address bar stays above logical native bounds at 2x scale", async ({ browser }, testInfo) => {
+test("browser keeps native bounds and opens scoped live context as a reviewed AI draft", async ({ browser }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Native browser geometry needs one explicit desktop run.");
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
@@ -480,6 +510,13 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
   await page.addInitScript(() => {
     localStorage.setItem("nebula.theme", "zero-dark");
     const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const callbacks = new Map<number, (value: unknown) => void>();
+    const eventHandlers = new Map<string, number>();
+    let callbackId = 0;
+    const emit = (event: string, payload: unknown) => {
+      const handler = eventHandlers.get(event);
+      if (handler !== undefined) callbacks.get(handler)?.({ event, id: 1, payload });
+    };
     Object.assign(window, { __NEBULA_BROWSER_CALLS__: calls });
     Object.assign(window, {
       __TAURI_INTERNALS__: {
@@ -491,10 +528,46 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
           if (command === "browser_capabilities") {
             return { engine: "Playwright native-bounds mock", projectStorage: "persistent" };
           }
+          if (command === "plugin:event|listen") {
+            eventHandlers.set(String(args.event), Number(args.handler));
+            return args.handler;
+          }
+          if (command === "plugin:event|unlisten") return undefined;
+          if (command === "browser_create_tab") {
+            queueMicrotask(() => emit("nebula-browser-page", {
+              tabId: args.tabId,
+              url: args.url,
+              state: "loaded",
+            }));
+          }
+          if (command === "browser_capture_context") {
+            queueMicrotask(() => emit("nebula-browser-context", {
+              requestId: args.requestId,
+              tabId: args.tabId,
+              state: "ready",
+              context: {
+                url: "https://example.com/account",
+                title: "Mock target account",
+                selectedText: "role=analyst",
+                text: "Authenticated account portal",
+                truncated: false,
+                forms: [{
+                  method: "POST",
+                  action: "https://example.com/profile",
+                  fields: [{ name: "display_name", id: "name", type: "text", autocomplete: "name", required: true }],
+                }],
+                links: [{ text: "Billing", href: "https://example.com/billing" }],
+              },
+            }));
+          }
           return undefined;
         },
-        transformCallback: () => 1,
-        unregisterCallback: () => undefined,
+        transformCallback: (callback: (value: unknown) => void) => {
+          callbackId += 1;
+          callbacks.set(callbackId, callback);
+          return callbackId;
+        },
+        unregisterCallback: (id: number) => callbacks.delete(id),
         convertFileSrc: (path: string) => path,
       },
     });
@@ -507,10 +580,33 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
     (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string }> })
       .__NEBULA_BROWSER_CALLS__?.some((call) => call.command === "browser_create_tab")
   ))).toBe(true);
+  const addressField = page.getByRole("textbox", { name: "Address or search" });
+  await addressField.focus();
+  await expect(addressField).toBeFocused();
+  await expect.poll(() => addressField.evaluate((address) => {
+    const addressShell = address.closest("form")!;
+    const addressStyle = getComputedStyle(address);
+    const addressShellStyle = getComputedStyle(addressShell);
+    return {
+      borderWidth: addressStyle.borderTopWidth,
+      boxShadow: addressStyle.boxShadow,
+      outlineStyle: addressStyle.outlineStyle,
+      shellBorderWidth: addressShellStyle.borderTopWidth,
+      shellBorderColor: addressShellStyle.borderTopColor,
+      shellHasFocusWithin: addressShell.matches(":focus-within"),
+    };
+  })).toEqual({
+    borderWidth: "0px",
+    boxShadow: "none",
+    outlineStyle: "none",
+    shellBorderWidth: "1px",
+    shellBorderColor: "rgb(104, 168, 255)",
+    shellHasFocusWithin: true,
+  });
 
   const geometry = await page.evaluate(() => {
     const toolbar = document.querySelector<HTMLElement>(".browser-toolbar")!;
-    const address = document.querySelector<HTMLElement>("#browser-address")!;
+    const address = document.querySelector<HTMLInputElement>("#browser-address")!;
     const surface = document.querySelector<HTMLElement>(".browser-surface")!;
     const browserPanel = document.querySelector<HTMLElement>(".workbench-browser")!;
     const toolbarRect = toolbar.getBoundingClientRect();
@@ -538,7 +634,18 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
   );
   expect(geometry.bounds.y + geometry.bounds.height).toBeLessThanOrEqual(geometry.panelBottom + 1);
   expect(geometry.devicePixelRatio).toBe(2);
+  await expect(page.getByText("In scope")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("browser-address-bar-2x.png") });
+
+  await page.getByRole("button", { name: "Ask Nebula about the live page" }).click();
+  await expect(page).toHaveURL(/view=chat/);
+  const attachment = page.getByRole("region", { name: "Selected context pack" });
+  await expect(attachment).toContainText("Browser · Mock target account");
+  await expect(attachment).toContainText("characters");
+  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+  await expect(composer).toBeDisabled();
+  await expect(composer).toHaveAttribute("placeholder", "Add a model or harness in Settings…");
+  await expect(page.locator(".chat-message")).toHaveCount(0);
   await context.close();
 });
 
@@ -1320,6 +1427,66 @@ test("host folder picker remains usable as a bounded project workflow", async ({
 
   const accessibility = await new AxeBuilder({ page }).include(".engagement-menu").analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("project scope normalizes root URLs and confirms all-target mode", async ({ page }) => {
+  let durableScope = {
+    ...entity,
+    id: "scope-scratch",
+    engagement_id: "scratch-project",
+    allowed_cidrs: [] as string[],
+    allowed_domains: ["example.com"],
+    allowed_urls: [] as string[],
+    allowed_ports: [443],
+    allow_all_targets: false,
+    not_before: null,
+    not_after: null,
+    prohibited_actions: [] as string[],
+    local_only: true,
+    max_concurrency: 1,
+    grants: [] as unknown[],
+    revision: 3,
+  };
+  await page.context().route("**/api/v1/engagements/scratch-project/scope", async (route) => {
+    if (route.request().method() === "PUT") {
+      const request = route.request().postDataJSON() as typeof durableScope & { expected_revision: number };
+      expect(request.expected_revision).toBe(durableScope.revision);
+      durableScope = {
+        ...durableScope,
+        ...request,
+        allowed_domains: request.allowed_domains.map((value) => new URL(value.includes("://") ? value : `https://${value}`).hostname.toLowerCase()),
+        revision: durableScope.revision + 1,
+      };
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(durableScope) });
+  });
+
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+  const domains = page.getByLabel("Allowed domains");
+  await domains.fill("https://www.Google.com/");
+  const allTargets = page.getByLabel("All targets and ports");
+  await allTargets.check();
+  await expect(page.getByText("All-targets mode overrides the destination and port allowlists below.")).toBeVisible();
+  await expect(domains).toBeDisabled();
+  await page.getByRole("button", { name: "Save scope" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Allow every network target and port?" });
+  await expect(confirmation).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include(".dialog-backdrop").analyze();
+  expect(accessibility.violations).toEqual([]);
+  await confirmation.getByRole("button", { name: "Allow all targets" }).click();
+  await expect(page.getByRole("status")).toContainText("Network scope updated");
+  expect(durableScope.allowed_domains).toEqual(["www.google.com"]);
+  expect(durableScope.allow_all_targets).toBe(true);
+
+  await openWorkspace(page, "/", "Workbench");
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+  await expect(page.getByLabel("All targets and ports")).toBeChecked();
+  await expect(page.getByLabel("Allowed domains")).toHaveValue("www.google.com");
+  await expect(page.getByLabel("Allowed domains")).toBeDisabled();
 });
 
 test("streaming chat follows the bottom without overriding reader scroll intent", async ({ page }, testInfo) => {
@@ -3032,8 +3199,10 @@ test("mobile Workbench navigation has one authority and no duplicate tab strip",
   await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Browser/ }).click();
   await expect(page).toHaveURL(/view=browser/);
   await expect(page.getByText("Browse from this device", { exact: true })).toBeVisible();
+  await expect(page.getByText(/No target · Open a page to compare it with Project scope/)).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Web address" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add to Sources" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ask Nebula about the live page" })).toHaveCount(0);
 });
 
 test("Assistant session details are optional and persist as a shell preference", async ({ page }) => {

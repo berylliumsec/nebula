@@ -195,6 +195,7 @@ export interface EngagementScopePolicy {
   allowedDomains: string[];
   allowedUrls: string[];
   allowedPorts: number[];
+  allowAllTargets: boolean;
   notBefore?: string;
   notAfter?: string;
   prohibitedActions: string[];
@@ -216,6 +217,132 @@ export interface MissionGrant {
 export interface EngagementScopeUpdateRequest
   extends Omit<EngagementScopePolicy, "engagementId" | "revision"> {
   expectedRevision: number;
+}
+
+export type BrowserCaptureMode = "metadata" | "headers" | "bodies";
+export type BrowserScopeState = "in_scope" | "out_of_scope" | "inactive" | "unconfigured" | "unknown";
+
+export interface SecurityBrowserIdentity {
+  id: Identifier;
+  name: string;
+  description: string;
+  color: string;
+  storagePartition: string;
+  ephemeral: boolean;
+  isDefault: boolean;
+  revokedAt?: string;
+  revision: number;
+}
+
+export interface SecurityBrowserTab {
+  id: Identifier;
+  url?: string;
+  title: string;
+  position: number;
+  lastScopeState: BrowserScopeState;
+  lastScopeRevision?: number;
+}
+
+export interface SecurityBrowserSession {
+  id: Identifier;
+  name: string;
+  identityId: Identifier;
+  status: "active" | "paused" | "closed";
+  captureMode: BrowserCaptureMode;
+  proxyEnabled: boolean;
+  tabs: SecurityBrowserTab[];
+  activeTabId?: Identifier;
+  upstreamProxyEnabled: boolean;
+  upstreamProxyUrl?: string;
+  interceptionEnabled: boolean;
+  deviceOwner?: string;
+  lastSeenAt: string;
+  revision: number;
+}
+
+export interface SecurityBrowserExchange {
+  id: Identifier;
+  sessionId: Identifier;
+  tabId: Identifier;
+  identityId: Identifier;
+  method: string;
+  url: string;
+  protocol: "http/1.0" | "http/1.1" | "h2" | "h3" | "websocket" | "unknown";
+  statusCode?: number;
+  requestHeaders: Record<string, string>;
+  responseHeaders: Record<string, string>;
+  requestBodyArtifactId?: Identifier;
+  responseBodyArtifactId?: Identifier;
+  requestBytes?: number;
+  responseBytes?: number;
+  durationMs?: number;
+  scopeState: Exclude<BrowserScopeState, "unknown">;
+  scopePolicyRevision: number;
+  startedAt: string;
+  completedAt?: string;
+  replayOfExchangeId?: Identifier;
+  error?: string;
+  truncated: boolean;
+}
+
+export interface SecurityBrowserWebSocketFrame {
+  id: Identifier;
+  sessionId: Identifier;
+  exchangeId: Identifier;
+  direction: "client" | "server";
+  opcode: "text" | "binary" | "ping" | "pong" | "close";
+  payloadPreview: string;
+  payloadSha256: string;
+  payloadBytes: number;
+  observedAt: string;
+  truncated: boolean;
+}
+
+export interface SecurityBrowserAction {
+  id: Identifier;
+  sessionId: Identifier;
+  tabId: Identifier;
+  identityId: Identifier;
+  kind: "navigate" | "click" | "fill" | "select" | "press" | "extract" | "screenshot" | "replay";
+  status: "proposed" | "approved" | "executing" | "complete" | "failed" | "rejected" | "expired";
+  locator: Record<string, string>;
+  arguments: Record<string, unknown>;
+  proposal: string;
+  proposedBy: string;
+  pageUrl: string;
+  scopePolicyRevision: number;
+  actionSha256: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  expiresAt: string;
+  completedAt?: string;
+  result: Record<string, unknown>;
+  evidenceIds: Identifier[];
+  error?: string;
+  revision: number;
+}
+
+export interface SecurityBrowserHandoff {
+  id: Identifier;
+  sessionId: Identifier;
+  requestedByDeviceId: Identifier;
+  command: "navigate" | "focus_tab";
+  tabId?: Identifier;
+  url?: string;
+  status: "queued" | "claimed" | "complete" | "failed" | "cancelled" | "expired";
+  expiresAt: string;
+  claimedByDeviceId?: Identifier;
+  error?: string;
+  revision: number;
+}
+
+export interface SecurityBrowserWorkspace {
+  identities: SecurityBrowserIdentity[];
+  sessions: SecurityBrowserSession[];
+  traffic: SecurityBrowserExchange[];
+  frames: SecurityBrowserWebSocketFrame[];
+  actions: SecurityBrowserAction[];
+  handoffs: SecurityBrowserHandoff[];
 }
 
 export interface ScopeImportCandidate {
