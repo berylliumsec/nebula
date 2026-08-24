@@ -45,7 +45,7 @@ vi.mock("../state/WorkspaceContext", () => ({
 describe("NewMissionButton", () => {
   it("submits frozen harness options, durable stages, and a recurring schedule", async () => {
     const user = userEvent.setup();
-    const scheduledLocal = "2026-08-24T09:30";
+    const scheduledLocal = "2099-08-24T09:30";
     startMission.mockClear();
     render(<DialogProvider><NewMissionButton /></DialogProvider>);
     const trigger = await screen.findByRole("button", { name: "Automate task" });
