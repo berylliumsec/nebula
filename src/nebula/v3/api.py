@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .diagnostics import record_caught_exception
 from .code_completion import complete as complete_code
-
 import asyncio
 import base64
 import binascii
@@ -126,6 +125,13 @@ from .diagnostic_guidance import (
     reason_code_for,
 )
 from .diagnostic_sensitive import SensitiveDetailUnavailable
+from .language_server import (
+    MAX_MESSAGE_BYTES,
+    LanguageDiagnosticsRequest,
+    LanguageDiagnosticsResponse,
+    LanguageServerSession,
+    analyze_documents,
+)
 from .context import (
     DEFAULT_CONTEXT_WINDOW,
     ContextCompactor,
@@ -4623,6 +4629,18 @@ def create_app(
         )
 
     @app.post(
+        f"{API_PREFIX}/code/diagnostics",
+        response_model=LanguageDiagnosticsResponse,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def code_diagnostics(
+        request: LanguageDiagnosticsRequest,
+    ) -> LanguageDiagnosticsResponse:
+        store.get(Engagement, request.engagement_id)
+        return await analyze_documents(request)
+
+    @app.post(
         f"{API_PREFIX}/code/completions",
         response_model=CodeCompletionResponse,
         tags=["workspace"],
@@ -4631,9 +4649,75 @@ def create_app(
     async def code_completions(
         request: CodeCompletionRequest,
     ) -> CodeCompletionResponse:
+        store.get(Engagement, request.engagement_id)
         return CodeCompletionResponse(
             items=complete_code(request.source, request.path, request.offset)
         )
+
+    @app.websocket(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/language-server/ws"
+    )
+    async def language_server_socket(
+        websocket: WebSocket,
+        engagement_id: str,
+    ) -> None:
+        offered_protocols = [
+            value.strip()
+            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if value.strip()
+        ]
+        if "nebula.language-server.v1" not in offered_protocols:
+            await websocket.close(code=4406, reason="language-server protocol required")
+            return
+        supplied: str | None = None
+        authorization = websocket.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:]
+        protocol_token = _websocket_protocol_secret(
+            offered_protocols, "nebula.auth.", decode_base64=True
+        )
+        if supplied and protocol_token and not hmac.compare_digest(
+            supplied, protocol_token
+        ):
+            await websocket.close(code=4401, reason="conflicting authentication tokens")
+            return
+        supplied = protocol_token or supplied
+        if not allow_unauthenticated and (
+            (not supplied or not hmac.compare_digest(supplied, token))
+            and not _cookie_websocket_authenticated(websocket)
+        ):
+            await websocket.close(code=4401, reason="valid bearer token required")
+            return
+        try:
+            store.get(Engagement, engagement_id)
+        except NotFoundError:
+            await websocket.close(code=4404, reason="engagement not found")
+            return
+        await websocket.accept(subprotocol="nebula.language-server.v1")
+        session = LanguageServerSession(engagement_id)
+        try:
+            while not session.shutdown_requested:
+                raw = await websocket.receive_text()
+                if len(raw.encode("utf-8")) > MAX_MESSAGE_BYTES:
+                    await websocket.close(code=4409, reason="language message too large")
+                    return
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    await websocket.send_json(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": None,
+                            "error": {"code": -32700, "message": "Invalid JSON"},
+                        }
+                    )
+                    continue
+                for response in await session.handle(payload):
+                    await websocket.send_json(response)
+        except WebSocketDisconnect:
+            return
+        finally:
+            session.documents.clear()
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/preview",

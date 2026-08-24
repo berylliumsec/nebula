@@ -554,6 +554,9 @@ test("production Code reads real Git changes and hands mutations to Nebula Termi
 
     await page.getByRole("button", { name: /scanner\.py/ }).click();
     await expect(page.locator(".cm-line").nth(1)).toHaveText("    return 'changed'");
+    await expect(page.getByText(/open-buffer intelligence ready/)).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Problems" }).click();
+    await expect(page.locator(".cm-panel-lint")).toBeVisible();
     await page.getByRole("tab", { name: "Changes" }).click();
     await expect(page.getByText(/Stage, commit, branch, pull, and push remain in Nebula Terminal/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Open Terminal" })).toBeVisible();
@@ -593,6 +596,7 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
     expect(new URL(page.url()).hostname).toBe(lanAddress);
     await page.getByRole("button", { name: /lan-proof\.py/ }).click();
     await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
+    await expect(page.getByText(/open-buffer intelligence ready/)).toBeVisible({ timeout: 10_000 });
     await page.getByRole("button", { name: "Open", exact: true }).click();
     const quickOpen = page.getByRole("dialog", { name: "Quick open" });
     await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("lan-proof");

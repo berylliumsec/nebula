@@ -26,6 +26,7 @@ operator-reviewed AI without weakening the linked-workspace boundary.
 | Save and conflict | Saves are atomic and conditional; a Terminal or other-client change cannot be silently overwritten | Core workspace SHA-256 | Core plus component |
 | Search and navigate | File and text search are bounded, symlink-safe, keyboard operable, and open the chosen match | Core search result plus editor selection | Core plus component plus Playwright |
 | Source-control awareness | Code shows the selected project repository, branch, bounded changes, and hardened staged or working diffs without crossing the project root or executing repository helpers | Core Git query plus shared project workspace | Core plus component plus real Core |
+| Language intelligence | Python buffers provide completion, hover, signatures, same-buffer definition/references, and live diagnostics without reading host project configuration or following imports outside editor-supplied bytes | Authenticated ephemeral LSP session; open editor bytes only | language unit plus authenticated WebSocket plus CodeMirror integration |
 | Security workflow | A saved file can be handed to Terminal, assistant, or immutable Evidence from the editor with the exact project path | Core project/workspace/evidence plus Workbench view | real Core plus Playwright |
 | Refresh and reconnect | Saved files reload from Core; dirty drafts trigger unload protection and survive complete Workbench/provider remounts | Core plus React editor session plus bounded IndexedDB cache | component plus real Core |
 | Failure and retry | Listing, open, restore, persistence, search, save, conflict, and evidence failures preserve usable tabs and name the next valid action | Core error contract plus local persistence status | component plus real Core |
@@ -57,6 +58,10 @@ operator-reviewed AI without weakening the linked-workspace boundary.
   compacted away and reloaded from Core. The cache is never authoritative file
   content and never mutates a project until an operator saves.
 - Local storage: validated device-local editor preferences and keybindings only.
+- Ephemeral language session: bounded open-buffer text and monotonically
+  increasing versions. It has no durable authority and is cleared on socket
+  close. Jedi runs against a nonexistent virtual root; Ruff receives stdin with
+  isolated configuration and no cache.
 - Terminal/harness: execution state and output; it reads the same project folder.
 - Terminal/reviewed execution: Git mutations, builds, tasks, debuggers, and other
   command lifecycles. Code hands off to these existing authorities instead of
@@ -65,12 +70,12 @@ operator-reviewed AI without weakening the linked-workspace boundary.
 ## Parity boundary
 
 The current native editor owns the Nebula-specific shell, split documents,
-hot-exit recovery, settings/keybindings, source-control awareness, and safe
-workspace lifecycle. Full language-server, debugger, task, remote-development,
-and extension-host parity requires a sandboxed IDE service or equivalent
-protocol hosts; it must not be simulated with isolated UI buttons. Those hosts
-are admitted only with project-scoped filesystem access, explicit
-network/capability policy, authenticated transport, lifecycle cleanup, and
-production/LAN tests. Terminal, agents, approvals, and findings remain their
-existing Nebula authorities and are integrated by handoff rather than cloned
-inside Code.
+hot-exit recovery, settings/keybindings, source-control awareness, bounded
+open-buffer Python intelligence, and safe workspace lifecycle. Project-wide
+language indexes, debugger, task, remote-development, and extension-host parity
+require a sandboxed IDE service or equivalent protocol hosts; they must not be
+simulated with isolated UI buttons. Those hosts are admitted only with
+project-scoped filesystem access, explicit network/capability policy,
+authenticated transport, lifecycle cleanup, and production/LAN tests. Terminal,
+agents, approvals, and findings remain their existing Nebula authorities and are
+integrated by handoff rather than cloned inside Code.

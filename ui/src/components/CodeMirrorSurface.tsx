@@ -5,6 +5,8 @@ import { crosshairCursor, dropCursor, EditorView, highlightActiveLine, highlight
 import { useEffect, useRef } from "react";
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
+import { openLintPanel } from "@codemirror/lint";
+import { createLanguageServer, type LanguageServerState } from "../api/languageServer";
 
 interface CodeMirrorSurfaceProps {
   active: boolean;
@@ -18,11 +20,13 @@ interface CodeMirrorSurfaceProps {
   onSelectionChange?(text: string): void;
   completionSource?(context: CompletionContext): Promise<CompletionResult | null>;
   findRequest?: number;
+  problemsRequest?: number;
   reveal?: { line: number; column: number; request: number };
   saveKey?: string;
   tabSize?: 2 | 4;
   value: string;
   wordWrap?: boolean;
+  languageServer?: { apiBaseUrl: string; engagementId: string; token?: string; onState(state: LanguageServerState): void };
 }
 
 export function languageLabelForPath(path: string): string {
@@ -84,7 +88,7 @@ const nebulaTheme = EditorView.theme({
   ".cm-foldGutter .cm-gutterElement": { cursor: "pointer" },
 });
 
-export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, findRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, findRequest = 0, problemsRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
@@ -96,6 +100,8 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
   const onSaveRef = useRef(onSave);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const completionSourceRef = useRef(completionSource);
+  const languageServerRef = useRef(languageServer);
+  languageServerRef.current = languageServer;
   onChangeRef.current = onChange;
   onCursorChangeRef.current = onCursorChange;
   onSaveRef.current = onSave;
@@ -116,6 +122,9 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
     const mount = document.createElement("div");
     mount.className = "code-mirror-mount";
     root.append(boundaryStyle, mount);
+    const lsp = filePath.endsWith(".py") && languageServerRef.current
+      ? createLanguageServer(languageServerRef.current.apiBaseUrl, languageServerRef.current.engagementId, languageServerRef.current.token, languageServerRef.current.onState)
+      : undefined;
     const view = new EditorView({
       parent: mount,
       root,
@@ -150,6 +159,7 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
             maxRenderedOptions: 30,
             override: completionSource ? [(context) => completionSourceRef.current?.(context) ?? null] : undefined,
           }),
+          lsp?.client.plugin(`file:///workspace/${filePath.split("/").map(encodeURIComponent).join("/")}`, "python") ?? [],
           keymapRef.current.of(editorKeymap(saveKey, () => onSaveRef.current())),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
@@ -177,6 +187,7 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
       cancelAnimationFrame(measureFrame);
       resizeObserver.disconnect();
       view.destroy();
+      lsp?.close();
       root.replaceChildren();
       viewRef.current = undefined;
     };
@@ -220,6 +231,11 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
     if (!findRequest || !viewRef.current) return;
     openSearchPanel(viewRef.current);
   }, [findRequest]);
+
+  useEffect(() => {
+    if (!problemsRequest || !viewRef.current) return;
+    openLintPanel(viewRef.current);
+  }, [problemsRequest]);
 
   useEffect(() => {
     const view = viewRef.current;
