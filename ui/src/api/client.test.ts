@@ -794,6 +794,7 @@ describe("ApiClient", () => {
       severity: "high",
       severityRationale: "  Internet reachable.  ",
       assetIds: ["asset-1", "asset-1"],
+      evidenceIds: ["evidence-1", "evidence-1"],
       cveIds: ["cve-2026-1234"],
       cweIds: ["cwe-79", "CWE-79"],
     });
@@ -808,11 +809,12 @@ describe("ApiClient", () => {
       severity: "high",
       severity_rationale: "Internet reachable.",
       asset_ids: ["asset-1"],
+      evidence_ids: ["evidence-1"],
       cve_ids: ["CVE-2026-1234"],
       cwe_ids: ["CWE-79"],
       metadata: { origin: "manual_operator_entry" },
     });
-    expect(created).toMatchObject({ id: "finding-new", status: "candidate", verifierId: undefined, evidenceCount: 0 });
+    expect(created).toMatchObject({ id: "finding-new", status: "candidate", verifierId: undefined, evidenceCount: 1 });
   });
 
   it("updates every editable finding field with normalized, revision-checked changes", async () => {

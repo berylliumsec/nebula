@@ -4539,6 +4539,7 @@ export class ApiClient {
         severity: body.severity,
         severity_rationale: body.severityRationale?.trim() ?? "",
         asset_ids: [...new Set(body.assetIds ?? [])],
+        evidence_ids: [...new Set(body.evidenceIds ?? [])],
         cve_ids: normalizedIdentifiers(body.cveIds),
         cwe_ids: normalizedIdentifiers(body.cweIds),
         metadata: body.sourceRunId

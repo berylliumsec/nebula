@@ -503,6 +503,7 @@ export interface FindingCreateRequest {
   severity: FindingSummary["severity"];
   severityRationale?: string;
   assetIds?: Identifier[];
+  evidenceIds?: Identifier[];
   cveIds?: string[];
   cweIds?: string[];
   sourceRunId?: Identifier;

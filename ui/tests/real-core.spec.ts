@@ -549,6 +549,23 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     await reload.getByRole("button", { name: "Reload file" }).click();
     await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("newer agent edit");
 
+    await page.getByRole("button", { name: "Candidate finding" }).click();
+    const findingHandoff = page.getByRole("dialog", { name: "Draft an evidence-backed candidate finding?" });
+    await expect(findingHandoff).toContainText("Nothing is validated or confirmed automatically");
+    await findingHandoff.getByRole("button", { name: "Continue to Findings" }).click();
+    await expect(page).toHaveURL(/\/findings$/);
+    const candidate = page.getByRole("dialog", { name: "Create candidate finding" });
+    await expect(candidate.getByLabel("Title")).toHaveValue(/scanner\.py:\d+ security observation/);
+    await expect(candidate.getByLabel("Description")).toContainText("Source: /workspace/scanner.py:");
+    await expect(candidate.getByLabel("Description")).toContainText("Evidence record:");
+    await expect(candidate.getByRole("combobox", { name: "Severity", exact: true })).toHaveValue("info");
+    await candidate.getByRole("button", { name: "Create candidate" }).click();
+    await expect(candidate).toBeHidden();
+    const findingsResponse = await api.get(`findings?engagement_id=${projectId}&offset=0&limit=100`);
+    expect(findingsResponse.ok()).toBe(true);
+    const createdFindings = await findingsResponse.json() as Array<{ status: string; evidence_ids: string[] }>;
+    expect(createdFindings.some((finding) => finding.status === "candidate" && finding.evidence_ids.length === 1)).toBe(true);
+
     await page.waitForTimeout(350);
     await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");

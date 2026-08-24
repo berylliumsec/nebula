@@ -323,6 +323,40 @@ describe("CodeEditorPanel", () => {
     expect(screen.queryByRole("dialog", { name: "Workspace environment" })).not.toBeInTheDocument();
   });
 
+  it("preserves exact source once and hands an unverified candidate draft to Findings", async () => {
+    const user = userEvent.setup();
+    const onCreateFindingDraft = vi.fn();
+    const promoteWorkspaceFile = vi.fn().mockResolvedValue({ id: "evidence-source", sha256: "a".repeat(64) });
+    const api = {
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('candidate')\n"])),
+      promoteWorkspaceFile,
+    } as unknown as ApiClient;
+    render(<DialogProvider><WorkbenchEditorProvider><CodeEditorPanel active api={api} engagementId="project-1" onCreateFindingDraft={onCreateFindingDraft} /></WorkbenchEditorProvider></DialogProvider>);
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    await user.click(screen.getByRole("button", { name: "Candidate finding" }));
+    let confirmation = await screen.findByRole("dialog", { name: "Draft an evidence-backed candidate finding?" });
+    expect(confirmation).toHaveTextContent("Nothing is validated or confirmed automatically");
+    await user.click(within(confirmation).getByRole("button", { name: "Continue to Findings" }));
+
+    await waitFor(() => expect(onCreateFindingDraft).toHaveBeenCalledTimes(1));
+    expect(onCreateFindingDraft).toHaveBeenCalledWith(expect.objectContaining({
+      engagementId: "project-1",
+      evidenceId: "evidence-source",
+      title: "tool.py:1 security observation",
+      description: expect.stringContaining("Evidence record: evidence-source"),
+    }));
+    expect(promoteWorkspaceFile).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Candidate finding" }));
+    confirmation = await screen.findByRole("dialog", { name: "Draft an evidence-backed candidate finding?" });
+    expect(confirmation).toHaveTextContent("reuse the immutable evidence already preserved");
+    await user.click(within(confirmation).getByRole("button", { name: "Continue to Findings" }));
+    await waitFor(() => expect(onCreateFindingDraft).toHaveBeenCalledTimes(2));
+    expect(promoteWorkspaceFile).toHaveBeenCalledTimes(1);
+  });
+
   it("progressively discloses mobile files and secondary editor actions", async () => {
     const user = userEvent.setup();
     renderPanel({ listWorkspace: vi.fn().mockResolvedValue(listing([])) });

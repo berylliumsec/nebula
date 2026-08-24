@@ -22,18 +22,28 @@ export interface NebulaDraftRequest {
   truncated?: boolean;
 }
 
+export interface FindingDraftRequest {
+  engagementId: string;
+  title: string;
+  description: string;
+  evidenceId: string;
+}
+
 interface WorkbenchDraftContextValue {
   assistantDrafts: SelectionActionDraft[];
   assistantDraftNotice?: string;
   noteDraft?: SelectionActionDraft;
   executionDraft?: SelectionActionDraft;
+  findingDraft?: FindingDraftRequest;
   requestNebulaDraft(request: NebulaDraftRequest): void;
   requestNoteDraft(request: NebulaDraftRequest): void;
+  requestFindingDraft(request: FindingDraftRequest): void;
   removeAssistantDraft(index: number): void;
   clearAssistantDrafts(): void;
   clearAssistantDraftNotice(): void;
   clearNoteDraft(): void;
   clearExecutionDraft(): void;
+  clearFindingDraft(): void;
 }
 
 const WorkbenchDraftContext = createContext<WorkbenchDraftContextValue | undefined>(undefined);
@@ -123,6 +133,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const { drafts: assistantDrafts, notice: assistantDraftNotice } = assistantContext;
   const [noteDraft, setNoteDraft] = useState<SelectionActionDraft>();
   const [executionDraft, setExecutionDraft] = useState<SelectionActionDraft>();
+  const [findingDraft, setFindingDraft] = useState<FindingDraftRequest>();
 
   const requestNebulaDraft = useCallback((request: NebulaDraftRequest) => {
     const next = toSelectionDraft(request);
@@ -136,6 +147,11 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     if (!next) return;
     setNoteDraft(next);
     navigate("/?view=notes");
+  }, [navigate]);
+
+  const requestFindingDraft = useCallback((request: FindingDraftRequest) => {
+    setFindingDraft(request);
+    navigate("/findings");
   }, [navigate]);
 
   const openAssistantSelection = useCallback((draft: SelectionActionDraft) => {
@@ -163,6 +179,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   }, []);
   const clearNoteDraft = useCallback(() => setNoteDraft(undefined), []);
   const clearExecutionDraft = useCallback(() => setExecutionDraft(undefined), []);
+  const clearFindingDraft = useCallback(() => setFindingDraft(undefined), []);
   const resolveSource = useCallback(
     (element: Element | null) => sourceForRoute(location.pathname, element),
     [location.pathname],
@@ -173,13 +190,16 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     assistantDraftNotice,
     noteDraft,
     executionDraft,
+    findingDraft,
     requestNebulaDraft,
     requestNoteDraft,
+    requestFindingDraft,
     removeAssistantDraft,
     clearAssistantDrafts,
     clearAssistantDraftNotice,
     clearNoteDraft,
     clearExecutionDraft,
+    clearFindingDraft,
   }), [
     assistantDrafts,
     assistantDraftNotice,
@@ -187,11 +207,14 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     clearAssistantDrafts,
     clearNoteDraft,
     clearExecutionDraft,
+    clearFindingDraft,
     executionDraft,
+    findingDraft,
     noteDraft,
     removeAssistantDraft,
     requestNebulaDraft,
     requestNoteDraft,
+    requestFindingDraft,
   ]);
 
   return <WorkbenchDraftContext.Provider value={value}>

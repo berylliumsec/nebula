@@ -24,6 +24,7 @@ import { EditorTasksDialog } from "./EditorTasksDialog";
 import { EditorDebuggerPanel } from "./EditorDebuggerPanel";
 import { useOptionalChrome } from "../state/ChromeContext";
 import { EditorEnvironmentDialog } from "./EditorEnvironmentDialog";
+import type { FindingDraftRequest } from "../state/WorkbenchDraftContext";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
 
@@ -38,6 +39,7 @@ interface CodeEditorPanelProps {
   harnesses?: HarnessProfile[];
   onRun?: (candidate: FencedRunCandidate) => void;
   onOpenTerminal?: () => void;
+  onCreateFindingDraft?: (draft: FindingDraftRequest) => void;
   onUseWithAssistant?: (context: {
     text: string;
     sourceKind: "workspace_file" | "debug_snapshot";
@@ -80,7 +82,7 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[], buffers:
   return directory ? `${directory}/${name}` : name;
 }
 
-export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onUseWithAssistant }: CodeEditorPanelProps) {
+export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant }: CodeEditorPanelProps) {
   const confirm = useConfirmation();
   const chrome = useOptionalChrome();
   const openPalette = chrome?.openPalette;
@@ -121,6 +123,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
   const [restoreRetry, setRestoreRetry] = useState(0);
   const [navigation, setNavigation] = useState<{ line: number; column: number; request: number }>();
   const [preserving, setPreserving] = useState(false);
+  const [preservedEvidence, setPreservedEvidence] = useState<Record<string, { evidenceId: string; sha256: string }>>({});
   const [languageServerState, setLanguageServerState] = useState<LanguageServerState>("connecting");
   const restoringIds = useRef(new Set<string>());
   const failedRestoreIds = useRef(new Set<string>());
@@ -151,9 +154,10 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
       { id: "editor.split", label: secondaryBuffer ? "Editor: Close Split" : "Editor: Split Editor", description: buffers.length < 2 ? "Open another file before splitting" : "View two open files side by side", keywords: "pane layout", shortcut: preferences.keybindings.splitEditor, disabled: buffers.length < 2, run: dispatch("splitEditor") },
       { id: "editor.settings", label: "Editor: Settings and Keybindings", description: "Configure device-local editor behavior and shortcuts", keywords: "preferences keyboard", run: dispatch("settings") },
       { id: "editor.environment", label: "Editor: Workspace Environment", description: "Inspect the shared project folder and existing Kali runtime", keywords: "remote container terminal workspace linked folder", run: dispatch("environment") },
+      { id: "editor.finding", label: "Editor: Draft Candidate Finding", description: !buffer?.existing || dirty ? "Save exact source bytes before creating an evidence-backed candidate" : onCreateFindingDraft ? "Preserve exact source evidence and continue in Findings" : "The Findings handoff is unavailable", keywords: "security vulnerability evidence pentest report", disabled: !buffer?.existing || dirty || !onCreateFindingDraft, run: dispatch("finding") },
     ]);
     return () => setContextualCommands([]);
-  }, [active, buffer, buffers.length, dirty, onRun, preferences.keybindings, secondaryBuffer, setContextualCommands]);
+  }, [active, buffer, buffers.length, dirty, onCreateFindingDraft, onRun, preferences.keybindings, secondaryBuffer, setContextualCommands]);
 
   useEffect(() => {
     skipBreakpointPersist.current = true;
@@ -631,8 +635,16 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
     });
   };
 
+  const preserveBufferEvidence = async (target: WorkbenchEditorBuffer) => {
+    const cached = preservedEvidence[target.id];
+    if (cached && cached.sha256 === target.expectedSha256) return cached.evidenceId;
+    const evidence = await api.promoteWorkspaceFile(engagementId, target.filePath, target.filePath.split("/").at(-1));
+    setPreservedEvidence((current) => ({ ...current, [target.id]: { evidenceId: evidence.id, sha256: target.expectedSha256 ?? evidence.sha256 ?? "" } }));
+    return evidence.id;
+  };
+
   const preserveAsEvidence = async () => {
-    if (!buffer?.existing || dirty || preserving) return;
+    if (!buffer?.existing || dirty || preserving || !buffer.expectedSha256) return;
     const approved = await confirm({
       title: `Preserve ${buffer.filePath.split("/").at(-1)} as Evidence?`,
       message: "Nebula will store the exact saved bytes and SHA-256 as immutable project Evidence. Future edits remain separate.",
@@ -642,11 +654,42 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
     setPreserving(true);
     setError(undefined);
     try {
-      const evidence = await api.promoteWorkspaceFile(engagementId, buffer.filePath, buffer.filePath.split("/").at(-1));
-      setNotice(`Preserved ${buffer.filePath} as Evidence ${evidence.id}.`);
+      const evidenceId = await preserveBufferEvidence(buffer);
+      setNotice(`Preserved ${buffer.filePath} as Evidence ${evidenceId}.`);
     } catch (caughtError) {
       void logCaughtDiagnostic("interface.code_editor.preserve", "The editor file could not be preserved as Evidence.", caughtError, "code_editor");
       setError(caughtError instanceof Error ? caughtError.message : "Could not preserve this file as Evidence.");
+    } finally {
+      setPreserving(false);
+    }
+  };
+
+  const draftCandidateFinding = async () => {
+    if (!buffer?.existing || dirty || preserving || !buffer.expectedSha256 || !onCreateFindingDraft) return;
+    const cached = preservedEvidence[buffer.id]?.sha256 === buffer.expectedSha256;
+    const approved = await confirm({
+      title: "Draft an evidence-backed candidate finding?",
+      message: cached
+        ? "Nebula will reuse the immutable evidence already preserved for these exact source bytes, then open the existing Findings workflow. Nothing is validated or confirmed automatically."
+        : "Nebula will preserve these exact saved bytes as immutable Evidence, then open the existing Findings workflow. Nothing is validated or confirmed automatically.",
+      confirmLabel: "Continue to Findings",
+    });
+    if (!approved) return;
+    setPreserving(true);
+    setError(undefined);
+    try {
+      const target = buffer;
+      const evidenceId = await preserveBufferEvidence(target);
+      const filename = target.filePath.split("/").at(-1) ?? target.filePath;
+      onCreateFindingDraft({
+        engagementId,
+        title: `${filename}:${cursor.line} security observation`,
+        description: `Source: /workspace/${target.filePath}:${cursor.line}\nSource SHA-256: ${target.expectedSha256}\nEvidence record: ${evidenceId}\n\nDescribe the observed behavior, reachability, impact, and validation status.`,
+        evidenceId,
+      });
+    } catch (caughtError) {
+      void logCaughtDiagnostic("interface.code_editor.finding_handoff", "The editor could not prepare an evidence-backed finding draft.", caughtError, "code_editor");
+      setError(caughtError instanceof Error ? caughtError.message : "Could not prepare the candidate finding draft.");
     } finally {
       setPreserving(false);
     }
@@ -674,6 +717,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
         else splitEditor();
       } else if (command === "settings") setPreferencesOpen(true);
       else if (command === "environment") setEnvironmentOpen(true);
+      else if (command === "finding" && buffer?.existing && !dirty) void draftCandidateFinding();
       else return false;
       return true;
     };
@@ -738,7 +782,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
         <div className={`code-editor-surfaces${secondaryBuffer ? " split" : ""}`}>{primaryBuffer && editorPane(primaryBuffer, "primary")}{secondaryBuffer && editorPane(secondaryBuffer, "secondary")}</div>
         {buffer.filePath.endsWith(".py") && <div className="code-editor-debug-entry"><button className="button quiet" type="button" onClick={() => setDebuggerOpen(true)}><Bug size={14} /> Debug saved Python</button><span>Read-only project · network disabled · exact source hash</span></div>}
         <button className="button quiet code-editor-mobile-only" type="button" disabled={!onRun} onClick={() => setTasksOpen(true)}><ListTodo size={14} /> Project tasks and tests</button>
-        <footer><span>{languageLabelForPath(buffer.filePath)}{buffer.filePath.endsWith(".py") ? ` · open-buffer intelligence ${languageServerState}` : ""}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span title="Tab and Shift+Tab indent or outdent code">UTF-8 · spaces: {preferences.tabSize}</span><span>{buffers.length} open · {buffers.filter((candidate) => !candidate.existing || candidate.content !== candidate.savedContent).length} unsaved · {persistenceState === "ready" ? "recovery on" : persistenceState}</span><div className="code-editor-security-actions" aria-label="Security workflow actions"><button className="button quiet" type="button" disabled={!onRun || !executionLanguage(buffer.filePath)} title={!executionLanguage(buffer.filePath) ? "Reviewed execution supports Python and shell files" : "Review and run this draft in Nebula's isolated execution runtime"} onClick={runDraft}><Play size={13} /> Review & run</button><button className="button quiet" type="button" disabled={!onUseWithAssistant} onClick={() => onUseWithAssistant?.({ text: buffer.content, sourceKind: "workspace_file", sourceId: buffer.filePath, sourceLabel: buffer.filePath, truncated: false })}><MessageSquareText size={13} /> Ask Nebula</button><button className="button quiet" type="button" disabled={!buffer.existing || dirty || preserving} title={dirty ? "Save this draft before preserving exact bytes" : undefined} onClick={() => void preserveAsEvidence()}>{preserving ? <LoaderCircle className="spin" size={13} /> : <FileCheck2 size={13} />} Preserve as Evidence</button></div></footer>
+        <footer><span>{languageLabelForPath(buffer.filePath)}{buffer.filePath.endsWith(".py") ? ` · open-buffer intelligence ${languageServerState}` : ""}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span title="Tab and Shift+Tab indent or outdent code">UTF-8 · spaces: {preferences.tabSize}</span><span>{buffers.length} open · {buffers.filter((candidate) => !candidate.existing || candidate.content !== candidate.savedContent).length} unsaved · {persistenceState === "ready" ? "recovery on" : persistenceState}</span><div className="code-editor-security-actions" aria-label="Security workflow actions"><button className="button quiet" type="button" disabled={!onRun || !executionLanguage(buffer.filePath)} title={!executionLanguage(buffer.filePath) ? "Reviewed execution supports Python and shell files" : "Review and run this draft in Nebula's isolated execution runtime"} onClick={runDraft}><Play size={13} /> Review & run</button><button className="button quiet" type="button" disabled={!onUseWithAssistant} onClick={() => onUseWithAssistant?.({ text: buffer.content, sourceKind: "workspace_file", sourceId: buffer.filePath, sourceLabel: buffer.filePath, truncated: false })}><MessageSquareText size={13} /> Ask Nebula</button><button className="button quiet" type="button" disabled={!buffer.existing || dirty || preserving || !onCreateFindingDraft} title={dirty ? "Save exact source bytes before drafting a candidate" : !onCreateFindingDraft ? "The Findings handoff is unavailable" : "Preserve exact source evidence and continue in Findings"} onClick={() => void draftCandidateFinding()}><Bug size={13} /> Candidate finding</button><button className="button quiet" type="button" disabled={!buffer.existing || dirty || preserving} title={dirty ? "Save this draft before preserving exact bytes" : undefined} onClick={() => void preserveAsEvidence()}>{preserving ? <LoaderCircle className="spin" size={13} /> : <FileCheck2 size={13} />} Preserve as Evidence</button></div></footer>
       </> : <><StandardEmptyState icon={<Braces size={25} />} title="Shared workspace editor" explanation="Open or create a text file here, then run it from Terminal in /workspace using its interpreter." primaryAction={<><button className="button primary" type="button" onClick={() => void createFile()}><FilePlus2 size={15} /> New file</button>{onRun && <button className="button secondary" type="button" onClick={() => setTasksOpen(true)}><ListTodo size={15} /> Project tasks</button>}</>} />{error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}</>}
       {persistenceState === "failed" && <div className="code-editor-persistence-error" role="alert"><ShieldAlert size={15} /><span><strong>Hot-exit recovery is unavailable</strong><small>Save workspace files before closing this browser. {persistenceError}</small></span><button className="button quiet" type="button" onClick={retryPersistence}>Retry</button></div>}
     </section>
