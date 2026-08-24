@@ -239,7 +239,7 @@ class SpecialistContext(BaseModel):
     prior_turns: list[SpecialistResult] = Field(default_factory=list)
     retry_errors: list[str] = Field(default_factory=list)
     turn_index: int = Field(default=1, ge=1)
-    remaining_tool_calls: int = Field(default=0, ge=0)
+    remaining_tool_calls: int | None = Field(default=None, ge=0)
     allowed_tools: frozenset[str]
     approval_response: dict[str, Any] | None = None
 
@@ -762,11 +762,17 @@ class MissionRuntime:
                 raise MissionError(f"mission task graph is blocked: {unfinished}")
             return {}
 
-        remaining_batch_tool_calls = max(
-            0, budget.max_tool_calls - state.get("tool_calls", 0)
+        remaining_batch_tool_calls = (
+            None
+            if budget.max_tool_calls is None
+            else max(0, budget.max_tool_calls - state.get("tool_calls", 0))
         )
         tool_slots_by_task = {
-            task.id: max(0, remaining_batch_tool_calls - index)
+            task.id: (
+                None
+                if remaining_batch_tool_calls is None
+                else max(0, remaining_batch_tool_calls - index)
+            )
             for index, task in enumerate(batch)
         }
 
@@ -867,7 +873,11 @@ class MissionRuntime:
                 elapsed = (
                     utc_now() - datetime.fromisoformat(state["started_at"])
                 ).total_seconds()
-                remaining_seconds = max(0.001, budget.max_duration_seconds - elapsed)
+                remaining_seconds = (
+                    None
+                    if budget.max_duration_seconds is None
+                    else max(0.001, budget.max_duration_seconds - elapsed)
+                )
                 result = await asyncio.wait_for(
                     specialist.run(
                         SpecialistContext(
@@ -886,7 +896,10 @@ class MissionRuntime:
                             remaining_tool_calls=remaining_tool_calls,
                             allowed_tools=(
                                 specialist.allowed_tools
-                                if remaining_tool_calls > 0
+                                if (
+                                    remaining_tool_calls is None
+                                    or remaining_tool_calls > 0
+                                )
                                 else frozenset(
                                     name
                                     for name, spec in getattr(
@@ -943,7 +956,10 @@ class MissionRuntime:
                 ).total_seconds()
                 error = (
                     "mission duration budget exceeded while specialist was running"
-                    if elapsed >= budget.max_duration_seconds - 0.001
+                    if (
+                        budget.max_duration_seconds is not None
+                        and elapsed >= budget.max_duration_seconds - 0.001
+                    )
                     else f"specialist runtime timed out: {exc}"
                 )
                 return (
@@ -1038,7 +1054,10 @@ class MissionRuntime:
                 )
                 projected_cost = cost + result.cost_usd
                 projected_tools = tool_calls + result.tool_calls
-                if projected_tools > budget.max_tool_calls:
+                if (
+                    budget.max_tool_calls is not None
+                    and projected_tools > budget.max_tool_calls
+                ):
                     error = "mission tool-call budget exceeded"
                 elif (
                     budget.max_tokens is not None
@@ -1913,7 +1932,10 @@ class MissionRuntime:
 
             current_tool_calls = state.get("tool_calls", 0)
             previous_rejection = verification_tool_calls.get(task_id)
-            can_investigate = current_tool_calls < budget.max_tool_calls and (
+            can_investigate = (
+                budget.max_tool_calls is None
+                or current_tool_calls < budget.max_tool_calls
+            ) and (
                 previous_rejection is None or current_tool_calls > previous_rejection
             )
             errors[task_id] = verdict.rationale
@@ -2039,7 +2061,10 @@ class MissionRuntime:
         budget = RunBudget.model_validate(state["budget"])
         started = datetime.fromisoformat(state["started_at"])
         elapsed = (utc_now() - started).total_seconds()
-        if elapsed >= budget.max_duration_seconds:
+        if (
+            budget.max_duration_seconds is not None
+            and elapsed >= budget.max_duration_seconds
+        ):
             raise BudgetExceeded("mission duration budget exceeded")
         total_tokens = state.get("input_tokens", 0) + state.get("output_tokens", 0)
         if budget.max_tokens is not None and total_tokens >= budget.max_tokens:
@@ -2049,7 +2074,10 @@ class MissionRuntime:
             and state.get("cost_usd", 0) > budget.max_cost_usd
         ):
             raise BudgetExceeded("mission cost budget exceeded")
-        if state.get("tool_calls", 0) > budget.max_tool_calls:
+        if (
+            budget.max_tool_calls is not None
+            and state.get("tool_calls", 0) > budget.max_tool_calls
+        ):
             raise BudgetExceeded("mission tool-call budget exceeded")
 
     @staticmethod

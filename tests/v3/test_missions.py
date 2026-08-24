@@ -6,7 +6,11 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from nebula.v3.api import create_app
+from nebula.v3.api import (
+    HarnessMissionHandoffRequest,
+    MissionStartRequest,
+    create_app,
+)
 from nebula.v3.domain import (
     AgentAttempt,
     AgentRun,
@@ -244,6 +248,35 @@ def _start_payload(engagement, profile, **changes):
     return payload
 
 
+def test_mission_budget_defaults_are_unlimited():
+    budget = RunBudget()
+    assert budget.max_duration_seconds is None
+    assert budget.max_tokens is None
+    assert budget.max_cost_usd is None
+    assert budget.max_tool_calls is None
+    assert budget.max_artifact_queries is None
+
+    request = MissionStartRequest(
+        engagement_id="engagement-1",
+        name="Unlimited defaults",
+        objective="Review the configured scope",
+        provider_id="provider-1",
+        model="security-model",
+    )
+    assert request.max_duration_seconds is None
+    assert request.max_tokens is None
+    assert request.max_cost_usd is None
+    assert request.max_tool_calls is None
+    assert request.max_artifact_queries is None
+
+    handoff = HarnessMissionHandoffRequest()
+    assert handoff.max_duration_seconds is None
+    assert handoff.max_tokens is None
+    assert handoff.max_cost_usd is None
+    assert handoff.max_tool_calls is None
+    assert handoff.max_artifact_queries is None
+
+
 def test_api_rejects_conflicting_mission_service_configuration(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     service = MissionService(store, checkpoint_path=tmp_path / "owned.db")
@@ -424,7 +457,7 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
         assert queued["status"] == "queued"
         assert queued["supervisor_provider_id"] == profile.id
         assert queued["supervisor_model"] == "security-model"
-        assert queued["budget"]["max_tool_calls"] == 0
+        assert queued["budget"]["max_tool_calls"] is None
         assert queued["budget"]["max_delegation_depth"] == 0
 
         completed = _wait_for_status(client, queued["id"], "complete")

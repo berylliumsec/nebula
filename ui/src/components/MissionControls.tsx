@@ -38,13 +38,13 @@ export function NewMissionButton({ className = "button primary", children, showS
   const [stages, setStages] = useState<Array<{ title: string; objective: string }>>([]);
   const [scheduledFor, setScheduledFor] = useState("");
   const [repeatIntervalSeconds, setRepeatIntervalSeconds] = useState(0);
-  const [durationMinutes, setDurationMinutes] = useState(60);
-  const [maxTokens, setMaxTokens] = useState(20_000);
-  const [maxCost, setMaxCost] = useState(10);
+  const [durationMinutes, setDurationMinutes] = useState<number | null>(null);
+  const [maxTokens, setMaxTokens] = useState<number | null>(null);
+  const [maxCost, setMaxCost] = useState<number | null>(null);
   const [maxRetries, setMaxRetries] = useState(1);
   const [runtimeReady, setRuntimeReady] = useState(false);
   const [runtimeConfigured, setRuntimeConfigured] = useState(false);
-  const [maxToolCalls, setMaxToolCalls] = useState(0);
+  const [maxToolCalls, setMaxToolCalls] = useState<number | null>(null);
   const [maxConcurrency, setMaxConcurrency] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -195,14 +195,14 @@ export function NewMissionButton({ className = "button primary", children, showS
   const openMission = () => {
     setError(undefined);
     setValidationError(undefined);
-    setMaxToolCalls(runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length ? 50 : 0);
+    setMaxToolCalls(null);
     setMaxConcurrency(automaticTools.length ? 2 : 1);
     setOpen(true);
   };
 
   useEffect(() => {
     if (!open) return;
-    setMaxToolCalls(runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length ? 50 : 0);
+    setMaxToolCalls(null);
     setMaxConcurrency(runtimeKind === "native" && (automaticTools.length || selectedMcpIds.length) ? 2 : 1);
   }, [automaticTools, open, runtimeKind, selectedMcpIds.length]);
 
@@ -249,15 +249,15 @@ export function NewMissionButton({ className = "button primary", children, showS
       setValidationError("Choose a start time before enabling a repeating schedule.");
       return;
     }
-    if (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 60) {
+    if (durationMinutes !== null && (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 60)) {
       setValidationError("Duration must be a whole number from 1 to 60 minutes.");
       return;
     }
-    if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 200_000) {
+    if (maxTokens !== null && (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 200_000)) {
       setValidationError("Token limit must be a whole number from 1 to 200,000.");
       return;
     }
-    if (!Number.isFinite(maxCost) || maxCost < 0 || maxCost > 100) {
+    if (maxCost !== null && (!Number.isFinite(maxCost) || maxCost < 0 || maxCost > 100)) {
       setValidationError("Cost limit must be from $0 to $100.");
       return;
     }
@@ -265,7 +265,7 @@ export function NewMissionButton({ className = "button primary", children, showS
       setValidationError("Retries must be a whole number from 0 to 2.");
       return;
     }
-    if ((runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length) && (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 100)) {
+    if ((runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length) && maxToolCalls !== null && (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 100)) {
       setValidationError("Maximum tool calls must be a whole number from 1 to 100.");
       return;
     }
@@ -304,6 +304,17 @@ export function NewMissionButton({ className = "button primary", children, showS
     setSaving(true);
     setError(undefined);
     setValidationError(undefined);
+    const optionalBudget = {
+      ...(durationMinutes === null ? {} : { maxDurationSeconds: durationMinutes * 60 }),
+      ...(maxTokens === null ? {} : { maxTokens }),
+      ...(maxCost === null ? {} : { maxCostUsd: maxCost }),
+      ...(
+        maxToolCalls !== null
+        && (runtimeKind === "harness" || automaticTools.length || selectedMcpIds.length)
+          ? { maxToolCalls }
+          : {}
+      ),
+    };
     try {
       await startMission(runtimeKind === "harness" ? {
         engagementId: engagement.id,
@@ -319,22 +330,23 @@ export function NewMissionButton({ className = "button primary", children, showS
         stages: cleanStages,
         scheduledFor: scheduledDate?.toISOString(),
         repeatIntervalSeconds: repeatIntervalSeconds || undefined,
-        maxDurationSeconds: durationMinutes * 60,
-        maxTokens,
-        maxCostUsd: maxCost,
+        ...optionalBudget,
         maxRetries: 0,
-        maxToolCalls,
         maxConcurrency: 1,
         allowCloudToolResults,
-      } : { engagementId: engagement.id, name: cleanName, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, stages: cleanStages, scheduledFor: scheduledDate?.toISOString(), repeatIntervalSeconds: repeatIntervalSeconds || undefined, maxDurationSeconds: durationMinutes * 60, maxTokens, maxCostUsd: maxCost, maxRetries, maxToolCalls: automaticTools.length || selectedMcpIds.length ? maxToolCalls : 0, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
+      } : { engagementId: engagement.id, name: cleanName, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, stages: cleanStages, scheduledFor: scheduledDate?.toISOString(), repeatIntervalSeconds: repeatIntervalSeconds || undefined, ...optionalBudget, maxRetries, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
       setOpen(false);
       setName("");
       setObjective("");
       setStages([]);
       setScheduledFor("");
       setRepeatIntervalSeconds(0);
-      setMaxToolCalls(0);
+      setDurationMinutes(null);
+      setMaxTokens(null);
+      setMaxCost(null);
+      setMaxToolCalls(null);
       setMaxConcurrency(1);
+      setMaxRetries(1);
     } catch (startError) {
       void logCaughtDiagnostic("interface.mission_controls.caught_failure_05", "A handled interface operation failed.", startError, "mission_controls");
       setError(startError instanceof Error ? startError.message : "Could not start the mission.");
@@ -368,9 +380,9 @@ export function NewMissionButton({ className = "button primary", children, showS
             <section className="mission-schedule" aria-labelledby="mission-schedule-title"><header><strong id="mission-schedule-title">Schedule</strong><small>Core owns the start time; scheduled work survives page closure and Core restarts.</small></header><div className="resource-form-grid"><label>Start time<input type="datetime-local" value={scheduledFor} min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)} onChange={(event) => setScheduledFor(event.target.value)} /></label><label>Repeat<select value={repeatIntervalSeconds} disabled={!scheduledFor} onChange={(event) => setRepeatIntervalSeconds(Number(event.target.value))}><option value={0}>Do not repeat</option><option value={86400}>Daily</option><option value={604800}>Weekly</option></select></label></div>{repeatIntervalSeconds > 0 && <small>Each occurrence becomes a new audited Mission. It never reuses an uncertain in-flight run.</small>}</section>
             {(runtimeKind === "native" || !harnessSessionId) && <fieldset className="mission-tools"><legend>MCP servers · all agent runtimes</legend>{mcpServers.length ? mcpServers.map((server) => <label className="provider-consent" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span><strong>{server.name}</strong><small>{server.transport} · {server.tools.length} discovered tools · Core artifact capture</small></span></label>) : <p>No enabled MCP profiles. Add one in Settings if this mission needs external tools.</p>}</fieldset>}
             <div className="resource-form-grid">
-              <label>Duration (minutes)<input type="number" min={1} max={60} value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))} /></label>
-              <label>Token limit<input type="number" min={1} max={200000} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} /></label>
-              <label>Cost limit (USD)<input type="number" min={0} max={100} step="0.01" value={maxCost} onChange={(event) => setMaxCost(Number(event.target.value))} /></label>
+              <label>Duration (minutes)<small id="mission-duration-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Duration (minutes)" aria-describedby="mission-duration-unlimited-help" type="number" min={1} max={60} placeholder="Unlimited" value={durationMinutes ?? ""} onChange={(event) => setDurationMinutes(event.target.value === "" ? null : Number(event.target.value))} /></label>
+              <label>Token limit<small id="mission-token-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Token limit" aria-describedby="mission-token-unlimited-help" type="number" min={1} max={200000} placeholder="Unlimited" value={maxTokens ?? ""} onChange={(event) => setMaxTokens(event.target.value === "" ? null : Number(event.target.value))} /></label>
+              <label>Cost limit (USD)<small id="mission-cost-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Cost limit (USD)" aria-describedby="mission-cost-unlimited-help" type="number" min={0} max={100} step="0.01" placeholder="Unlimited" value={maxCost ?? ""} onChange={(event) => setMaxCost(event.target.value === "" ? null : Number(event.target.value))} /></label>
               <label>Retries<input type="number" min={0} max={2} value={maxRetries} onChange={(event) => setMaxRetries(Number(event.target.value))} /></label>
             </div>
             <section className="mission-tool-selection">
@@ -380,7 +392,7 @@ export function NewMissionButton({ className = "button primary", children, showS
                 : runtimeReady && providerSupportsTools && automaticTools.length
                 ? <fieldset className="resource-checklist automatic-tool-list"><legend>Automatically enabled capabilities</legend>{automaticTools.map((name) => <div key={name}><ShieldCheck size={15} /><span><strong>{name}</strong><small>{name === "run_command" ? "session-scoped Bash · project networking optional" : "poll, stdin, and termination"}</small></span></div>)}</fieldset>
                 : <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>{toolPreparation === "unavailable" ? toolPreparationDetail : toolSelectionMessage}</p></div>}
-              {(automaticTools.length > 0 || selectedMcpIds.length > 0 || runtimeKind === "harness") && <div className="resource-form-grid"><label>Maximum execution calls<input type="number" min={1} max={100} value={maxToolCalls} onChange={(event) => setMaxToolCalls(Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
+              {(automaticTools.length > 0 || selectedMcpIds.length > 0 || runtimeKind === "harness") && <div className="resource-form-grid"><label>Maximum execution calls<small id="mission-tool-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Maximum execution calls" aria-describedby="mission-tool-unlimited-help" type="number" min={1} max={100} placeholder="Unlimited" value={maxToolCalls ?? ""} onChange={(event) => setMaxToolCalls(event.target.value === "" ? null : Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
             </section>
             <p className="provider-dialog-note">{runtimeCanExecute ? "Core applies scope, budgets, capture, and approvals." : "Analysis only · no execution tools"}</p>
           </details>

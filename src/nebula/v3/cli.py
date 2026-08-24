@@ -615,11 +615,12 @@ def run_mission(
     engagement_id: Annotated[str, typer.Argument()],
     objective: Annotated[str, typer.Argument()],
     data_dir: Annotated[Path | None, typer.Option()] = None,
-    max_duration: Annotated[int, typer.Option(min=1)] = 3600,
-    max_tool_calls: Annotated[int, typer.Option(min=0)] = 0,
-    max_artifact_queries: Annotated[int, typer.Option(min=0)] = 200,
+    max_duration: Annotated[int | None, typer.Option(min=1)] = None,
+    max_tool_calls: Annotated[int | None, typer.Option(min=0)] = None,
+    max_artifact_queries: Annotated[int | None, typer.Option(min=0)] = None,
     max_concurrency: Annotated[int, typer.Option(min=1, max=2)] = 1,
-    max_tokens: Annotated[int, typer.Option(min=1)] = 32_000,
+    max_tokens: Annotated[int | None, typer.Option(min=1)] = None,
+    max_cost: Annotated[float | None, typer.Option(min=0)] = None,
     provider_id: Annotated[
         str | None,
         typer.Option(
@@ -632,11 +633,12 @@ def run_mission(
         typer.Option(help="Runtime model ID; defaults to the provider profile."),
     ] = None,
 ) -> None:
-    """Run a durable mission with the fixed command runtime when budgeted."""
+    """Run a durable mission with the fixed command runtime when requested."""
 
-    executable = max_tool_calls > 0
-    if executable and provider_id is None:
+    requests_tools = max_tool_calls is None or max_tool_calls > 0
+    if requests_tools and max_tool_calls is not None and provider_id is None:
         raise typer.BadParameter("executable missions require --provider")
+    executable = provider_id is not None and requests_tools
     root, store, artifacts = _services(data_dir)
     store.get(Engagement, engagement_id)
     selected_provider = None
@@ -663,7 +665,9 @@ def run_mission(
             ModelSpecialist(
                 selected_provider,
                 model=selected_model,
-                max_output_tokens=min(2048, max_tokens),
+                max_output_tokens=(
+                    2048 if max_tokens is None else min(2048, max_tokens)
+                ),
             )
             if selected_provider is not None
             else StaticSpecialist()
@@ -683,6 +687,7 @@ def run_mission(
                     max_tool_calls=max_tool_calls,
                     max_artifact_queries=max_artifact_queries,
                     max_tokens=max_tokens,
+                    max_cost_usd=max_cost,
                 ),
                 provider_id=provider_id,
                 model=selected_model,
@@ -731,6 +736,7 @@ def run_mission(
                     max_tool_calls=max_tool_calls,
                     max_artifact_queries=max_artifact_queries,
                     max_tokens=max_tokens,
+                    max_cost_usd=max_cost,
                     per_target_active_operations=1,
                 ),
                 tool_names=[RUN_COMMAND_NAME, PROCESS_IO_NAME],
