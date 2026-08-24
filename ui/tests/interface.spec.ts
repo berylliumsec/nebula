@@ -2407,6 +2407,20 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(filePath).toHaveValue("example.c");
   await expect(page.locator(".code-mirror-host")).toHaveAttribute("data-language-ready", "example.c");
 
+  const toolbarControls = await page.locator(".code-editor-file-row > label:visible, .code-editor-toolbar button:visible, .code-editor-toolbar .code-editor-dirty:visible").evaluateAll((elements) => elements.map((element) => {
+    const box = element.getBoundingClientRect();
+    const clip = element.closest(".code-editor-secondary-actions")?.getBoundingClientRect();
+    return { label: element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName, left: Math.max(box.left, clip?.left ?? box.left), right: Math.min(box.right, clip?.right ?? box.right), top: box.top, bottom: box.bottom };
+  }).filter((box) => box.right - box.left > 1));
+  for (let left = 0; left < toolbarControls.length; left += 1) {
+    for (let right = left + 1; right < toolbarControls.length; right += 1) {
+      const a = toolbarControls[left];
+      const b = toolbarControls[right];
+      const intersects = a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1;
+      expect(intersects, `${a.label} overlaps ${b.label}`).toBe(false);
+    }
+  }
+
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     await page.keyboard.press("Control+Shift+P");
     const palette = page.getByRole("dialog", { name: "Command palette" });

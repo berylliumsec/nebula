@@ -1035,12 +1035,15 @@ kbd { font-size: 11px; }
 .code-editor-tabs > div > button:first-child i { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--yellow); }
 .code-editor-tabs > div > button:last-child, .code-editor-new-tab { display: grid; width: 32px; min-width: 32px; place-items: center; padding: 0; border: 0; color: var(--muted); background: transparent; }
 .code-editor-tabs button:hover, .code-editor-tabs button:focus-visible { color: var(--text-strong); background: var(--surface-hover); }
-.code-editor-toolbar { display: grid; min-height: 45px; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 7px 9px; border-bottom: 1px solid var(--border-soft); background: var(--surface); }
+.code-editor-toolbar { display: grid; min-height: 45px; grid-template-columns: minmax(180px, 1fr) minmax(0, 4fr); align-items: center; gap: 9px; padding: 7px 9px; border-bottom: 1px solid var(--border-soft); background: var(--surface); }
 .code-editor-file-row { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .code-editor-file-row > label { display: flex; min-width: 0; flex: 1; align-items: center; color: var(--muted); font: 11px var(--font-mono); }
 .code-editor-file-row input { min-width: 0; flex: 1; min-height: 30px; padding: 0 7px 0 1px; border: 0; color: var(--text-strong); background: transparent; font: inherit; outline: 0; }
 .code-editor-file-row input:not([readonly]):focus { border-bottom: 1px solid var(--blue); }
 .code-editor-actions, .code-editor-secondary-actions { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.code-editor-actions { overflow: hidden; justify-content: flex-end; }
+.code-editor-secondary-actions { flex: 1 1 auto; justify-content: flex-start; overflow-x: auto; scrollbar-width: thin; }
+.code-editor-secondary-actions .button, .code-editor-environment-action, .code-editor-save { flex: 0 0 auto; }
 .code-editor-dirty { flex: 0 0 auto; color: var(--green); font-size: 11px; font-weight: var(--weight-bold); }.code-editor-dirty.dirty { color: var(--yellow); }
 .code-editor-mobile-only, .code-editor-mobile-title, .code-editor-mobile-tools-toggle, .code-editor-mobile-files-toggle, .code-editor-mobile-tools { display: none; }
 .code-editor-debug-entry { display: flex; min-height: 38px; align-items: center; justify-content: flex-end; gap: 10px; padding: 4px 10px; border-top: 1px solid var(--border-soft); background: var(--surface-muted); }
