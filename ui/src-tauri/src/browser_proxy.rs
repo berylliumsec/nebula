@@ -20,6 +20,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 use tokio::{net::TcpListener, sync::oneshot};
 
+use crate::diagnostics::{DiagnosticLevel, DiagnosticsState};
+
 const CA_CERTIFICATE: &str = "nebula-browser-ca.pem";
 const CA_PRIVATE_KEY: &str = "nebula-browser-ca-key.pem";
 
@@ -31,7 +33,7 @@ pub(crate) struct BrowserProxyHandle {
 impl BrowserProxyHandle {
     pub(crate) fn stop(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
+            let _ = shutdown.send(()); // diagnostic-expected: the proxy task may already have stopped
         }
     }
 }
@@ -39,7 +41,7 @@ impl BrowserProxyHandle {
 impl Drop for BrowserProxyHandle {
     fn drop(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
+            let _ = shutdown.send(()); // diagnostic-expected: the proxy task may already have stopped
         }
     }
 }
@@ -105,6 +107,18 @@ struct WebSocketFrameEvent {
     truncated: bool,
 }
 
+fn record_proxy_failure(app: &AppHandle, event_code: &str, message: &str, stage: &str) {
+    drop(app.state::<DiagnosticsState>().record_desktop(
+        DiagnosticLevel::Error,
+        event_code,
+        message,
+        Some("failure"),
+        Some(stage),
+        Some(true),
+        serde_json::Map::new(),
+    ));
+}
+
 fn protocol(version: hudsucker::hyper::Version) -> &'static str {
     use hudsucker::hyper::Version;
     match version {
@@ -164,8 +178,14 @@ impl HttpHandler for CaptureHandler {
             request_bytes: request.body().size_hint().exact(),
             started: Instant::now(),
         };
-        if let Ok(slot) = self.pending.get_mut() {
-            *slot = Some(pending);
+        match self.pending.get_mut() {
+            Ok(slot) => *slot = Some(pending),
+            Err(_) => record_proxy_failure(
+                &self.app,
+                "desktop.browser.proxy_request_state_failed",
+                "The browser capture proxy could not retain request state.",
+                "request-capture",
+            ),
         }
         request.into()
     }
@@ -175,7 +195,18 @@ impl HttpHandler for CaptureHandler {
         _context: &HttpContext,
         response: Response<Body>,
     ) -> Response<Body> {
-        let pending = self.pending.get_mut().ok().and_then(Option::take);
+        let pending = match self.pending.get_mut() {
+            Ok(slot) => slot.take(),
+            Err(_) => {
+                record_proxy_failure(
+                    &self.app,
+                    "desktop.browser.proxy_response_state_failed",
+                    "The browser capture proxy could not recover request state for a response.",
+                    "response-capture",
+                );
+                None
+            }
+        };
         if let Some(request) = pending {
             let event = TrafficEvent {
                 session_id: self.session_id.clone(),
@@ -195,7 +226,14 @@ impl HttpHandler for CaptureHandler {
                     .min(u128::from(u64::MAX)) as u64,
                 error: None,
             };
-            let _ = self.app.emit("nebula-browser-traffic", event);
+            if self.app.emit("nebula-browser-traffic", event).is_err() {
+                record_proxy_failure(
+                    &self.app,
+                    "desktop.browser.proxy_traffic_delivery_failed",
+                    "Captured browser traffic could not be delivered to the interface.",
+                    "event-delivery",
+                );
+            }
         }
         response
     }
@@ -235,7 +273,18 @@ impl WebSocketHandler for CaptureHandler {
             payload_bytes: bytes.len(),
             truncated: bytes.len() > preview_bytes.len(),
         };
-        let _ = self.app.emit("nebula-browser-websocket-frame", event);
+        if self
+            .app
+            .emit("nebula-browser-websocket-frame", event)
+            .is_err()
+        {
+            record_proxy_failure(
+                &self.app,
+                "desktop.browser.proxy_websocket_delivery_failed",
+                "A captured browser WebSocket frame could not be delivered to the interface.",
+                "event-delivery",
+            );
+        }
         Some(message)
     }
 }
@@ -325,12 +374,20 @@ pub(crate) fn start(
         .with_http_handler(handler.clone())
         .with_websocket_handler(handler)
         .with_graceful_shutdown(async move {
-            let _ = shutdown_rx.await;
+            let _ = shutdown_rx.await; // diagnostic-expected: dropping the handle also ends the proxy
         })
         .build()
         .map_err(|error| format!("cannot configure the local browser proxy: {error}"))?;
+    let proxy_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let _ = proxy.start().await;
+        if proxy.start().await.is_err() {
+            record_proxy_failure(
+                &proxy_app,
+                "desktop.browser.proxy_runtime_failed",
+                "The browser capture proxy stopped unexpectedly.",
+                "proxy-runtime",
+            );
+        }
     });
     Ok(BrowserProxyHandle {
         url: tauri::Url::parse(&format!("http://{address}"))

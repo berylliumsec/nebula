@@ -836,16 +836,16 @@ pub(crate) fn handle_menu_event(app: &AppHandle, command: &str) -> bool {
         "add-scope" => {
             let current = webview
                 .url()
-                .ok()
-                .and_then(|value| validated_url(value.as_str()).ok());
-            let expected = validated_url(&pending.url).ok();
-            let (state, detail) = if current == expected {
-                ("ready", None)
-            } else {
-                (
+                .map_err(|error| format!("The current page address could not be read: {error}"))
+                .and_then(|value| validated_url(value.as_str()));
+            let expected = validated_url(&pending.url);
+            let (state, detail) = match (current, expected) {
+                (Ok(current), Ok(expected)) if current == expected => ("ready", None),
+                (Ok(_), Ok(_)) => (
                     "failed",
                     Some("The page changed after the context menu opened. Right-click the current page and try again.".to_string()),
-                )
+                ),
+                (Err(error), _) | (_, Err(error)) => ("failed", Some(error)),
             };
             app.emit_to(
                 "main",
@@ -1472,16 +1472,26 @@ pub(crate) fn browser_execute_action(
                     Some("The browser returned an invalid action receipt.".to_string()),
                 ),
             };
-            let _ = callback_app.emit(
-                "nebula-browser-action",
-                BrowserActionEvent {
-                    action_id: action_id.clone(),
-                    tab_id: callback_tab.clone(),
-                    state,
-                    result,
-                    detail,
-                },
-            );
+            if callback_app
+                .emit(
+                    "nebula-browser-action",
+                    BrowserActionEvent {
+                        action_id: action_id.clone(),
+                        tab_id: callback_tab.clone(),
+                        state,
+                        result,
+                        detail,
+                    },
+                )
+                .is_err()
+            {
+                record_browser_failure(
+                    &callback_app,
+                    "desktop.browser.action_event_delivery_failed",
+                    "A browser action receipt could not be delivered to the interface.",
+                    "event-delivery",
+                );
+            }
         })
         .map_err(|error| format!("cannot execute the approved browser action: {error}"))
 }
