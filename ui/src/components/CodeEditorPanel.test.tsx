@@ -182,4 +182,55 @@ describe("CodeEditorPanel", () => {
     expect(await screen.findByText("This file appears to be binary and cannot be edited as text.")).toBeVisible();
     expect(screen.queryByRole("textbox", { name: "Code editor" })).not.toBeInTheDocument();
   });
+
+  it("keeps independent dirty drafts while switching between editor tabs", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('first')\n"])),
+    });
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    const editor = await screen.findByRole("textbox", { name: "Code editor" });
+    await user.clear(editor);
+    await user.type(editor, "print('dirty first')");
+    await user.click(screen.getByRole("button", { name: "New editor file" }));
+    await user.type(editor, "second draft");
+
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    await user.click(screen.getByRole("tab", { name: /tool\.py/ }));
+    expect(editor).toHaveValue("print('dirty first')");
+    await user.click(screen.getByRole("tab", { name: /untitled\.txt/i }));
+    expect(editor).toHaveValue("second draft");
+    expect(screen.getByText("2 open · 2 unsaved")).toBeVisible();
+  });
+
+  it("quick-opens a recursive workspace result without discarding the current tab", async () => {
+    const user = userEvent.setup();
+    const searchWorkspace = vi.fn().mockResolvedValue({
+      engagementId: "project-1",
+      query: "scanner",
+      mode: "files",
+      matches: [{ path: "src/scanner.py", kind: "path", preview: "src/scanner.py" }],
+      scannedFiles: 8,
+      truncated: false,
+    });
+    const downloadWorkspaceFile = vi.fn()
+      .mockResolvedValueOnce(new Blob(["print('first')\n"]))
+      .mockResolvedValueOnce(new Blob(["def scan():\n    pass\n"]));
+    renderPanel({ listWorkspace: vi.fn().mockResolvedValue(listing()), downloadWorkspaceFile, searchWorkspace });
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    const dialog = await screen.findByRole("dialog", { name: "Quick open" });
+    const searchInput = within(dialog).getByRole("textbox", { name: "Find a workspace file" });
+    await user.click(searchInput);
+    await user.type(searchInput, "scanner");
+    await user.click(await within(dialog).findByRole("option", { name: /src\/scanner\.py/ }));
+
+    expect(await screen.findByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("def scan():\n    pass\n");
+    expect(searchWorkspace).toHaveBeenCalledWith("project-1", "scanner", "files", "", expect.any(AbortSignal));
+  });
 });

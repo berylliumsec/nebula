@@ -37,6 +37,8 @@ from .storage import NebulaStore
 from .runtime_platform import RuntimePlatform
 
 MAX_PREVIEW_BYTES = 256 * 1024
+MAX_SEARCH_FILE_BYTES = 1024 * 1024
+MAX_SEARCH_SCANNED_FILES = 5_000
 _BUSY_STATUSES = {
     OperatorExecutionStatus.QUEUED,
     OperatorExecutionStatus.RUNNING,
@@ -59,6 +61,23 @@ class WorkspaceListing(NebulaModel):
     offset: int = Field(ge=0)
     next_offset: int | None = Field(default=None, ge=0)
     total: int = Field(ge=0)
+
+
+class WorkspaceSearchMatch(NebulaModel):
+    path: str
+    kind: Literal["path", "content"]
+    line: int | None = Field(default=None, ge=1)
+    column: int | None = Field(default=None, ge=1)
+    preview: str = Field(default="", max_length=500)
+
+
+class WorkspaceSearchResult(NebulaModel):
+    engagement_id: str
+    query: str
+    mode: Literal["files", "text"]
+    matches: list[WorkspaceSearchMatch]
+    scanned_files: int = Field(ge=0)
+    truncated: bool = False
 
 
 class WorkspacePreview(NebulaModel):
@@ -259,6 +278,137 @@ class WorkspaceService:
             bytes_returned=len(visible),
             truncated=metadata.st_size > len(visible),
             preview_sha256=hashlib.sha256(visible).hexdigest(),
+        )
+
+    def search(
+        self,
+        engagement_id: str,
+        query: str,
+        *,
+        mode: Literal["files", "text"] = "files",
+        path: str = "",
+        limit: int = 100,
+    ) -> WorkspaceSearchResult:
+        """Search one workspace without following links or escaping its root."""
+
+        self.store.get(Engagement, engagement_id)
+        normalized_query = query.strip()
+        if not normalized_query:
+            raise ExecutionServiceError(
+                "workspace_search_invalid",
+                "workspace search requires a non-empty query",
+                status_code=422,
+            )
+        relative = _relative_parts(path)
+        root_descriptor = self._open_directory(engagement_id, relative)
+        needle = normalized_query.casefold()
+        matches: list[WorkspaceSearchMatch] = []
+        scanned_files = 0
+        truncated = False
+        pending: list[tuple[tuple[str, ...], int]] = [(relative, root_descriptor)]
+
+        try:
+            while pending and not truncated:
+                directory_parts, descriptor = pending.pop()
+                try:
+                    with os.scandir(descriptor) as entries:
+                        rows = sorted(entries, key=lambda entry: entry.name.casefold())
+                    for entry in rows:
+                        try:
+                            metadata = os.stat(
+                                entry.name, dir_fd=descriptor, follow_symlinks=False
+                            )
+                        except OSError:
+                            # diagnostic-expected: an entry can disappear while a live
+                            # Terminal is mutating the same workspace.
+                            continue
+                        entry_parts = (*directory_parts, entry.name)
+                        entry_path = PurePosixPath(*entry_parts).as_posix()
+                        if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(
+                            metadata.st_mode
+                        ):
+                            try:
+                                child = os.open(
+                                    entry.name,
+                                    os.O_RDONLY
+                                    | os.O_DIRECTORY
+                                    | getattr(os, "O_NOFOLLOW", 0),
+                                    dir_fd=descriptor,
+                                )
+                            except OSError:
+                                # diagnostic-expected: skip raced or unreadable folders.
+                                continue
+                            pending.append((entry_parts, child))
+                            continue
+                        if not stat.S_ISREG(metadata.st_mode):
+                            continue
+                        scanned_files += 1
+                        if scanned_files > MAX_SEARCH_SCANNED_FILES:
+                            truncated = True
+                            break
+                        if mode == "files":
+                            if needle in entry_path.casefold():
+                                matches.append(
+                                    WorkspaceSearchMatch(
+                                        path=entry_path,
+                                        kind="path",
+                                        preview=entry_path,
+                                    )
+                                )
+                        elif metadata.st_size <= MAX_SEARCH_FILE_BYTES:
+                            file_descriptor: int | None = None
+                            try:
+                                file_descriptor = os.open(
+                                    entry.name,
+                                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                                    dir_fd=descriptor,
+                                )
+                                if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+                                    continue
+                                with os.fdopen(file_descriptor, "rb") as stream:
+                                    file_descriptor = None
+                                    payload = stream.read(MAX_SEARCH_FILE_BYTES + 1)
+                                if len(payload) > MAX_SEARCH_FILE_BYTES or b"\x00" in payload:
+                                    continue
+                                content = payload.decode("utf-8", errors="strict")
+                            except (OSError, UnicodeDecodeError):
+                                # diagnostic-expected: binary, invalid UTF-8, or raced
+                                # files are omitted from bounded text search.
+                                continue
+                            finally:
+                                if file_descriptor is not None:
+                                    os.close(file_descriptor)
+                            for line_number, line in enumerate(content.splitlines(), 1):
+                                column = line.casefold().find(needle)
+                                if column < 0:
+                                    continue
+                                matches.append(
+                                    WorkspaceSearchMatch(
+                                        path=entry_path,
+                                        kind="content",
+                                        line=line_number,
+                                        column=column + 1,
+                                        preview=line.strip()[:500],
+                                    )
+                                )
+                                if len(matches) >= limit:
+                                    break
+                        if len(matches) >= limit:
+                            truncated = True
+                            break
+                finally:
+                    os.close(descriptor)
+        finally:
+            for _parts, descriptor in pending:
+                os.close(descriptor)
+
+        return WorkspaceSearchResult(
+            engagement_id=engagement_id,
+            query=normalized_query,
+            mode=mode,
+            matches=matches[:limit],
+            scanned_files=min(scanned_files, MAX_SEARCH_SCANNED_FILES),
+            truncated=truncated,
         )
 
     def download(self, engagement_id: str, path: str) -> WorkspaceDownload:
@@ -888,6 +1038,8 @@ __all__ = [
     "WorkspaceResetRequest",
     "WorkspaceResetResult",
     "WorkspaceResetStatus",
+    "WorkspaceSearchMatch",
+    "WorkspaceSearchResult",
     "WorkspaceUploadResult",
     "WorkspaceService",
 ]

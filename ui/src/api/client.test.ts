@@ -1581,4 +1581,34 @@ describe("ApiClient", () => {
       "http://127.0.0.1:8765/api/v1/harness-turns/turn%2Fone/events?after=3&limit=10000",
     );
   });
+
+  it("maps bounded workspace search results and encodes the project path", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      engagement_id: "project/one",
+      query: "scan target",
+      mode: "text",
+      matches: [{
+        path: "src/scanner.py",
+        kind: "content",
+        line: 7,
+        column: 3,
+        preview: "scan_target(host)",
+      }],
+      scanned_files: 12,
+      truncated: false,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.searchWorkspace("project/one", "scan target", "text", "src tools")).resolves.toEqual({
+      engagementId: "project/one",
+      query: "scan target",
+      mode: "text",
+      matches: [{ path: "src/scanner.py", kind: "content", line: 7, column: 3, preview: "scan_target(host)" }],
+      scannedFiles: 12,
+      truncated: false,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/engagements/project%2Fone/workspace/search?query=scan+target&mode=text&path=src+tools&limit=100",
+    );
+  });
 });

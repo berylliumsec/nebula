@@ -1970,6 +1970,23 @@ export interface WorkspaceListing {
   total: number;
 }
 
+export interface WorkspaceSearchMatch {
+  path: string;
+  kind: "path" | "content";
+  line?: number;
+  column?: number;
+  preview: string;
+}
+
+export interface WorkspaceSearchResult {
+  engagementId: Identifier;
+  query: string;
+  mode: "files" | "text";
+  matches: WorkspaceSearchMatch[];
+  scannedFiles: number;
+  truncated: boolean;
+}
+
 export interface WorkspacePreview {
   engagementId: Identifier;
   path: string;

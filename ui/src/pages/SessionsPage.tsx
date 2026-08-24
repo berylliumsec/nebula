@@ -2793,7 +2793,7 @@ export function SessionsPage() {
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} /></Suspense>
           </div>}
           {api && engagement && <div className="persistent-code-editor" hidden={view !== "code"}>
-            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} /></Suspense>
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} onUseWithAssistant={(context) => { requestNebulaDraft(context); setView("chat"); }} /></Suspense>
           </div>}
           {api && engagement && <div className="persistent-browser" hidden={view !== "browser"}>
             <WorkbenchBrowser

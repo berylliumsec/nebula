@@ -342,6 +342,7 @@ from .workspace import (
     WorkspaceResetRequest,
     WorkspaceResetResult,
     WorkspaceResetStatus,
+    WorkspaceSearchResult,
     WorkspaceService,
     WorkspaceUploadResult,
 )
@@ -4574,6 +4575,23 @@ def create_app(
     ) -> WorkspaceListing:
         return require_workspace_service().list(
             engagement_id, path, offset=offset, limit=limit
+        )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/search",
+        response_model=WorkspaceSearchResult,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def search_workspace(
+        engagement_id: str,
+        query: str = Query(min_length=1, max_length=200),
+        mode: Literal["files", "text"] = Query(default="files"),
+        path: str = Query(default="", max_length=4096),
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> WorkspaceSearchResult:
+        return require_workspace_service().search(
+            engagement_id, query, mode=mode, path=path, limit=limit
         )
 
     @app.post(

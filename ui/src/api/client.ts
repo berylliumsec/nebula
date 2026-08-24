@@ -105,6 +105,7 @@ import type {
   WorkspacePreview,
   WorkspaceResetResult,
   WorkspaceResetStatus,
+  WorkspaceSearchResult,
   WorkspaceUploadResult,
   WritingTransformRequest,
   WritingTransformResponse,
@@ -1206,6 +1207,21 @@ interface WireWorkspaceListing extends JsonObject {
   offset: number;
   next_offset?: number | null;
   total: number;
+}
+
+interface WireWorkspaceSearchResult extends JsonObject {
+  engagement_id: string;
+  query: string;
+  mode: "files" | "text";
+  matches: Array<{
+    path: string;
+    kind: "path" | "content";
+    line?: number | null;
+    column?: number | null;
+    preview: string;
+  }>;
+  scanned_files: number;
+  truncated: boolean;
 }
 
 interface WireWorkspacePreview extends JsonObject {
@@ -2385,6 +2401,23 @@ function mapWorkspaceListing(value: WireWorkspaceListing): WorkspaceListing {
     offset: value.offset,
     nextOffset: value.next_offset ?? undefined,
     total: value.total,
+  };
+}
+
+function mapWorkspaceSearchResult(value: WireWorkspaceSearchResult): WorkspaceSearchResult {
+  return {
+    engagementId: value.engagement_id,
+    query: value.query,
+    mode: value.mode,
+    matches: value.matches.map((match) => ({
+      path: match.path,
+      kind: match.kind,
+      line: match.line ?? undefined,
+      column: match.column ?? undefined,
+      preview: match.preview,
+    })),
+    scannedFiles: value.scanned_files,
+    truncated: value.truncated,
   };
 }
 
@@ -5683,6 +5716,20 @@ export class ApiClient {
       `engagements/${encodeURIComponent(engagementId)}/workspace?${parameters}`,
       { signal },
     ).then(mapWorkspaceListing);
+  }
+
+  searchWorkspace(
+    engagementId: string,
+    query: string,
+    mode: "files" | "text" = "files",
+    path = "",
+    signal?: AbortSignal,
+  ): Promise<WorkspaceSearchResult> {
+    const parameters = new URLSearchParams({ query, mode, path, limit: "100" });
+    return this.request<WireWorkspaceSearchResult>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/search?${parameters}`,
+      { signal },
+    ).then(mapWorkspaceSearchResult);
   }
 
   listHostWorkspaceFolders(path?: string): Promise<{

@@ -15,6 +15,7 @@ interface CodeMirrorSurfaceProps {
   onSelectionChange?(text: string): void;
   completionSource?(context: CompletionContext): Promise<CompletionResult | null>;
   findRequest?: number;
+  reveal?: { line: number; column: number; request: number };
   value: string;
 }
 
@@ -77,7 +78,7 @@ const nebulaTheme = EditorView.theme({
   ".cm-foldGutter .cm-gutterElement": { cursor: "pointer" },
 });
 
-export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, onSave, onSelectionChange, completionSource, findRequest = 0, value }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, onSave, onSelectionChange, completionSource, findRequest = 0, reveal, value }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
@@ -207,5 +208,17 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
     openSearchPanel(viewRef.current);
   }, [findRequest]);
 
-  return <div className="code-mirror-host" ref={hostRef} />;
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!reveal || !view) return;
+    const line = view.state.doc.line(Math.min(Math.max(reveal.line, 1), view.state.doc.lines));
+    const position = Math.min(line.to, line.from + Math.max(reveal.column - 1, 0));
+    view.dispatch({
+      selection: { anchor: position },
+      effects: EditorView.scrollIntoView(position, { y: "center" }),
+    });
+    view.focus();
+  }, [reveal]);
+
+  return <div className="code-mirror-host" data-selection-actions-disabled ref={hostRef} />;
 }

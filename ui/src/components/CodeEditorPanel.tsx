@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Braces, File, FilePlus2, Folder, LoaderCircle, MoreHorizontal, RefreshCw, RotateCcw, Save, Search, ShieldAlert, Sparkles, X } from "lucide-react";
+import { Braces, File, FileCheck2, FilePlus2, Folder, LoaderCircle, MessageSquareText, MoreHorizontal, Play, RefreshCw, RotateCcw, Save, Search, ShieldAlert, Sparkles, TextSearch, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
-import type { WorkspaceEntry } from "../api/types";
+import type { ExecutionLanguage, WorkspaceEntry, WorkspaceSearchMatch } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
-import { useWorkbenchEditor, type WorkbenchEditorBuffer } from "../state/WorkbenchEditorContext";
+import { newEditorBufferId, useWorkbenchEditor, type WorkbenchEditorBuffer } from "../state/WorkbenchEditorContext";
 import { CodeMirrorSurface, languageLabelForPath } from "./CodeMirrorSurface";
 import { useConfirmation } from "./DialogSystem";
 import { WorkspaceEntryContextMenu, type WorkspaceEntryMenuState } from "./WorkspaceEntryContextMenu";
@@ -14,6 +14,8 @@ import { codeSuggestionRuntimeOptions } from "./aiRuntimes";
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import { sha256Hex } from "../sha256";
 import { StandardEmptyState } from "./SurfacePrimitives";
+import { EditorWorkspaceSearch } from "./EditorWorkspaceSearch";
+import type { FencedRunCandidate } from "./AssistantMarkdown";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
 
@@ -23,6 +25,14 @@ interface CodeEditorPanelProps {
   engagementId: string;
   providers?: ProviderHealth[];
   harnesses?: HarnessProfile[];
+  onRun?: (candidate: FencedRunCandidate) => void;
+  onUseWithAssistant?: (context: {
+    text: string;
+    sourceKind: "workspace_file";
+    sourceId: string;
+    sourceLabel: string;
+    truncated: boolean;
+  }) => void;
 }
 
 function validWorkspacePath(path: string): boolean {
@@ -53,9 +63,9 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[]): string 
   return directory ? `${directory}/${name}` : name;
 }
 
-export function CodeEditorPanel({ active, api, engagementId, providers = [], harnesses = [] }: CodeEditorPanelProps) {
+export function CodeEditorPanel({ active, api, engagementId, providers = [], harnesses = [], onRun, onUseWithAssistant }: CodeEditorPanelProps) {
   const confirm = useConfirmation();
-  const { buffer, setBuffer } = useWorkbenchEditor(engagementId);
+  const { buffer, buffers, activateBuffer, closeBuffer, setBuffer, updateBuffers } = useWorkbenchEditor(engagementId);
   const [directory, setDirectory] = useState("");
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [nextOffset, setNextOffset] = useState<number>();
@@ -74,8 +84,12 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   const [mobileFilesOpen, setMobileFilesOpen] = useState(false);
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   const [findRequest, setFindRequest] = useState(0);
+  const [workspaceSearchMode, setWorkspaceSearchMode] = useState<"files" | "text">();
+  const [navigation, setNavigation] = useState<{ line: number; column: number; request: number }>();
+  const [preserving, setPreserving] = useState(false);
   const suggestionRuntimes = useMemo(() => codeSuggestionRuntimeOptions(providers, harnesses), [providers, harnesses]);
   const dirty = Boolean(buffer && (!buffer.existing || buffer.content !== buffer.savedContent));
+  const anyDirty = buffers.some((candidate) => !candidate.existing || candidate.content !== candidate.savedContent);
   const crumbs = useMemo(() => directory ? directory.split("/") : [], [directory]);
 
   const load = useCallback(async (offset = 0, signal?: AbortSignal) => {
@@ -110,21 +124,19 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   }, [engagementId]);
 
   useEffect(() => {
-    if (!dirty) return;
+    if (!anyDirty) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
-
-  const canReplaceBuffer = async () => !dirty || confirm({
-    title: "Discard unsaved changes?",
-    message: "Your editor changes have not been saved to /workspace.",
-    confirmLabel: "Discard changes",
-    tone: "danger",
-  });
+  }, [anyDirty]);
 
   const openFile = async (entry: WorkspaceEntry, skipDirtyCheck = false) => {
-    if (!skipDirtyCheck && !await canReplaceBuffer()) return;
+    const open = buffers.find((candidate) => candidate.existing && candidate.filePath === entry.path);
+    if (!skipDirtyCheck && open) {
+      activateBuffer(open.id);
+      setMobileFilesOpen(false);
+      return;
+    }
     setLoading(true);
     setError(undefined);
     setNotice(undefined);
@@ -132,6 +144,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
     try {
       const decoded = await decodeWorkspaceFile(await api.downloadWorkspaceFile(engagementId, entry.path));
       setBuffer({
+        id: open?.id ?? newEditorBufferId("file"),
         content: decoded.content,
         expectedSha256: decoded.sha256,
         existing: true,
@@ -155,8 +168,8 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   };
 
   const createFile = async () => {
-    if (!await canReplaceBuffer()) return;
     setBuffer({
+      id: newEditorBufferId(),
       content: "",
       existing: false,
       filePath: nextUntitledPath(directory, entries),
@@ -197,6 +210,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
         force ? undefined : buffer.expectedSha256,
       );
       const saved: WorkbenchEditorBuffer = {
+        id: buffer.id,
         content: buffer.content,
         expectedSha256: result.sha256,
         existing: true,
@@ -298,14 +312,18 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   };
 
   const renameEntry = async (entry: WorkspaceEntry, newName: string) => {
-    if (buffer?.existing && buffer.filePath === entry.path && dirty && !await confirm({
+    const affected = buffers.filter((candidate) => candidate.existing && (candidate.filePath === entry.path || candidate.filePath.startsWith(`${entry.path}/`)));
+    if (affected.some((candidate) => candidate.content !== candidate.savedContent) && !await confirm({
       title: "Rename with unsaved changes?",
-      message: "The open draft will keep its unsaved changes and move to the renamed workspace path.",
+      message: "Open drafts will keep their unsaved changes and move to the renamed workspace path.",
       confirmLabel: "Rename",
     })) return;
     try {
       const result = await api.renameWorkspaceEntry(engagementId, entry.path, newName);
-      if (buffer?.existing && buffer.filePath === entry.path) setBuffer({ ...buffer, filePath: result.path });
+      updateBuffers((current) => current.map((candidate) => {
+        if (!candidate.existing || (candidate.filePath !== entry.path && !candidate.filePath.startsWith(`${entry.path}/`))) return candidate;
+        return { ...candidate, filePath: `${result.path}${candidate.filePath.slice(entry.path.length)}` };
+      }));
       setNotice(`Renamed ${entry.name} to ${newName}.`);
       await load(0);
     } catch (renameError) {
@@ -315,17 +333,17 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   };
 
   const deleteEntry = async (entry: WorkspaceEntry) => {
-    const open = buffer?.existing && buffer.filePath === entry.path;
+    const open = buffers.filter((candidate) => candidate.existing && (candidate.filePath === entry.path || candidate.filePath.startsWith(`${entry.path}/`)));
     const approved = await confirm({
       title: `Delete ${entry.name}?`,
-      message: open && dirty ? "This deletes the file and discards the unsaved editor changes. This cannot be undone." : entry.kind === "directory" ? "Only an empty folder can be deleted. This cannot be undone." : "This deletes the scratch workspace file. This cannot be undone.",
+      message: open.some((candidate) => candidate.content !== candidate.savedContent) ? "This deletes the file and discards unsaved editor changes. This cannot be undone." : entry.kind === "directory" ? "Only an empty folder can be deleted. This cannot be undone." : "This deletes the scratch workspace file. This cannot be undone.",
       confirmLabel: "Delete",
       tone: "danger",
     });
     if (!approved) return;
     try {
       await api.deleteWorkspaceEntry(engagementId, entry.path);
-      if (open) setBuffer(undefined);
+      for (const candidate of open) closeBuffer(candidate.id);
       setNotice(`Deleted ${entry.name}.`);
       await load(0);
     } catch (deleteError) {
@@ -333,6 +351,102 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
       setError(deleteError instanceof Error ? deleteError.message : "Could not delete the workspace entry.");
     }
   };
+
+  const closeEditorTab = async (candidate: WorkbenchEditorBuffer) => {
+    const tabDirty = !candidate.existing || candidate.content !== candidate.savedContent;
+    if (tabDirty && !await confirm({
+      title: `Close ${candidate.filePath.split("/").at(-1) || "untitled file"}?`,
+      message: "This discards the unsaved editor draft. Other open files are unaffected.",
+      confirmLabel: "Discard and close",
+      tone: "danger",
+    })) return;
+    closeBuffer(candidate.id);
+  };
+
+  const openWorkspaceMatch = async (match: WorkspaceSearchMatch) => {
+    setWorkspaceSearchMode(undefined);
+    await openFile({
+      path: match.path,
+      name: match.path.split("/").at(-1) ?? match.path,
+      kind: "file",
+      size: 0,
+      modifiedAt: new Date().toISOString(),
+    });
+    if (match.line) setNavigation({ line: match.line, column: match.column ?? 1, request: Date.now() });
+  };
+
+  const executionLanguage = (path: string): ExecutionLanguage | undefined => {
+    const extension = path.split(".").at(-1)?.toLowerCase();
+    if (extension === "py") return "python";
+    if (["sh", "bash", "zsh"].includes(extension ?? "")) return extension === "sh" ? "sh" : "bash";
+    return undefined;
+  };
+
+  const runDraft = () => {
+    if (!buffer || !onRun) return;
+    const language = executionLanguage(buffer.filePath);
+    if (!language) {
+      setError("Reviewed execution currently supports Python and shell files. Use Terminal for this language.");
+      return;
+    }
+    onRun({
+      source: buffer.content,
+      language,
+      declaredLanguage: language,
+      origin: {
+        kind: "selection",
+        sourceKind: buffer.existing ? "workspace_file" : "editor_draft",
+        sourceId: sha256Hex(buffer.filePath),
+        sourceLabel: buffer.filePath.slice(-500),
+        sourceSha256: sha256Hex(buffer.content),
+      },
+    });
+  };
+
+  const preserveAsEvidence = async () => {
+    if (!buffer?.existing || dirty || preserving) return;
+    const approved = await confirm({
+      title: `Preserve ${buffer.filePath.split("/").at(-1)} as Evidence?`,
+      message: "Nebula will store the exact saved bytes and SHA-256 as immutable project Evidence. Future edits remain separate.",
+      confirmLabel: "Preserve as Evidence",
+    });
+    if (!approved) return;
+    setPreserving(true);
+    setError(undefined);
+    try {
+      const evidence = await api.promoteWorkspaceFile(engagementId, buffer.filePath, buffer.filePath.split("/").at(-1));
+      setNotice(`Preserved ${buffer.filePath} as Evidence ${evidence.id}.`);
+    } catch (caughtError) {
+      void logCaughtDiagnostic("interface.code_editor.preserve", "The editor file could not be preserved as Evidence.", caughtError, "code_editor");
+      setError(caughtError instanceof Error ? caughtError.message : "Could not preserve this file as Evidence.");
+    } finally {
+      setPreserving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!active) return;
+    const shortcut = (event: globalThis.KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "p" && !event.shiftKey) {
+        event.preventDefault();
+        setWorkspaceSearchMode("files");
+      } else if (key === "f" && event.shiftKey) {
+        event.preventDefault();
+        setWorkspaceSearchMode("text");
+      } else if (key === "w" && buffer) {
+        event.preventDefault();
+        void closeEditorTab(buffer);
+      } else if (key === "tab" && buffers.length > 1) {
+        event.preventDefault();
+        const current = buffers.findIndex((candidate) => candidate.id === buffer?.id);
+        activateBuffer(buffers[(current + 1) % buffers.length].id);
+      }
+    };
+    document.addEventListener("keydown", shortcut);
+    return () => document.removeEventListener("keydown", shortcut);
+  }, [active, buffer, buffers]);
 
   return <div className={`code-editor-panel${buffer ? " has-buffer" : ""}${mobileFilesOpen ? " mobile-files-open" : ""}`}>
     <aside className="code-editor-sidebar" aria-label="Editor files">
@@ -342,24 +456,36 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
     </aside>
     <section className={`code-editor-main${buffer ? "" : " is-empty"}`}>
       {buffer ? <>
+        <div className="code-editor-tabs" role="tablist" aria-label="Open editor files">
+          {buffers.map((candidate) => {
+            const tabDirty = !candidate.existing || candidate.content !== candidate.savedContent;
+            const label = candidate.filePath.split("/").at(-1) || "Untitled";
+            return <div className={candidate.id === buffer.id ? "active" : undefined} role="presentation" key={candidate.id}>
+              <button type="button" role="tab" aria-selected={candidate.id === buffer.id} title={candidate.filePath} onClick={() => activateBuffer(candidate.id)}><File size={13} /><span>{label}</span>{tabDirty && <i aria-label="Unsaved changes" />}</button>
+              <button type="button" aria-label={`Close ${label}`} onClick={() => void closeEditorTab(candidate)}><X size={13} /></button>
+            </div>;
+          })}
+          <button className="code-editor-new-tab" type="button" aria-label="New editor file" onClick={() => void createFile()}><FilePlus2 size={14} /></button>
+        </div>
         <header className="code-editor-toolbar">
           <div className="code-editor-file-row"><label><span className="sr-only">File path</span><span aria-hidden="true">/workspace/</span><input aria-label="File path" value={buffer.filePath} readOnly={buffer.existing} spellCheck={false} onChange={(event) => updateBuffer({ filePath: event.target.value })} /></label><span className={`code-editor-dirty${dirty ? " dirty" : ""}`} aria-live="polite">{dirty ? "Unsaved" : "Saved"}</span></div>
           <div className="code-editor-actions">
             <strong className="code-editor-mobile-title"><Braces size={15} /> Code</strong>
-            <div className="code-editor-secondary-actions"><label className="code-editor-completion-toggle"><input type="checkbox" checked={localCompletionEnabled} onChange={(event) => setLocalCompletionEnabled(event.target.checked)} /> Local completions</label><button className="button quiet" type="button" onClick={() => setFindRequest((request) => request + 1)}><Search size={14} /> Find</button><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest code</button></div>
+            <div className="code-editor-secondary-actions"><button className="button quiet" type="button" title="Quick open (Ctrl+P)" onClick={() => setWorkspaceSearchMode("files")}><Search size={14} /> Open</button><button className="button quiet" type="button" title="Search workspace (Ctrl+Shift+F)" onClick={() => setWorkspaceSearchMode("text")}><TextSearch size={14} /> Search</button><button className="button quiet" type="button" onClick={() => setFindRequest((request) => request + 1)}><Search size={14} /> Find</button><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest</button></div>
             <button className="icon-button subtle code-editor-mobile-tools-toggle" type="button" aria-label="More editor actions" aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((open) => !open)}><MoreHorizontal size={18} /></button>
             <button className="icon-button subtle code-editor-mobile-files-toggle" type="button" aria-label="Show editor files" onClick={() => { setMobileFilesOpen(true); setMobileToolsOpen(false); }}><Folder size={18} /></button>
             <button className="button primary code-editor-save" type="button" disabled={saving || (!dirty && buffer.existing) || !validWorkspacePath(buffer.filePath.trim())} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />} {saving ? "Saving…" : "Save"}</button>
           </div>
-          {mobileToolsOpen && <div className="code-editor-mobile-tools" aria-label="Editor options"><label className="code-editor-completion-toggle"><input type="checkbox" checked={localCompletionEnabled} onChange={(event) => setLocalCompletionEnabled(event.target.checked)} /> Local completions</label><button className="button quiet" type="button" onClick={() => { setFindRequest((request) => request + 1); setMobileToolsOpen(false); }}><Search size={14} /> Find</button><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest code</button></div>}
+          {mobileToolsOpen && <div className="code-editor-mobile-tools" aria-label="Editor options"><label className="code-editor-completion-toggle"><input type="checkbox" checked={localCompletionEnabled} onChange={(event) => setLocalCompletionEnabled(event.target.checked)} /> Local completions</label><button className="button quiet" type="button" onClick={() => { setWorkspaceSearchMode("files"); setMobileToolsOpen(false); }}><Search size={14} /> Quick open</button><button className="button quiet" type="button" onClick={() => { setWorkspaceSearchMode("text"); setMobileToolsOpen(false); }}><TextSearch size={14} /> Search files</button><button className="button quiet" type="button" onClick={() => { setFindRequest((request) => request + 1); setMobileToolsOpen(false); }}><Search size={14} /> Find</button><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest code</button></div>}
         </header>
         {error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}{validationError && <InlineValidationNotice message={validationError} />}{notice && <p className="workspace-notice" role="status">{notice}</p>}
         {conflict && <div className="code-editor-conflict" role="alert"><ShieldAlert size={17} /><span><strong>Newer workspace version detected</strong><small>Your draft is still open. Reload the Terminal version or overwrite it explicitly.</small></span><button className="button quiet" type="button" onClick={() => void reloadConflict()}><RotateCcw size={13} /> Reload</button><button className="button danger" type="button" onClick={() => void forceOverwrite()}>Force overwrite</button></div>}
-        <CodeMirrorSurface active={active} filePath={buffer.filePath} value={buffer.content} findRequest={findRequest} onChange={(content) => updateBuffer({ content })} onSelectionChange={setSelection} completionSource={completionSource} onCursorChange={(line, column) => setCursor({ line, column })} onSave={() => void save()} />
-        <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span title="Tab and Shift+Tab indent or outdent code">UTF-8 · spaces: 2 · Tab indents</span><span>/workspace · Terminal execution</span></footer>
+        <CodeMirrorSurface active={active} filePath={buffer.filePath} value={buffer.content} findRequest={findRequest} reveal={navigation} onChange={(content) => updateBuffer({ content })} onSelectionChange={setSelection} completionSource={completionSource} onCursorChange={(line, column) => setCursor({ line, column })} onSave={() => void save()} />
+        <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span title="Tab and Shift+Tab indent or outdent code">UTF-8 · spaces: 2</span><span>{buffers.length} open · {buffers.filter((candidate) => !candidate.existing || candidate.content !== candidate.savedContent).length} unsaved</span><div className="code-editor-security-actions" aria-label="Security workflow actions"><button className="button quiet" type="button" disabled={!onRun || !executionLanguage(buffer.filePath)} title={!executionLanguage(buffer.filePath) ? "Reviewed execution supports Python and shell files" : "Review and run this draft in Nebula's isolated execution runtime"} onClick={runDraft}><Play size={13} /> Review & run</button><button className="button quiet" type="button" disabled={!onUseWithAssistant} onClick={() => onUseWithAssistant?.({ text: buffer.content, sourceKind: "workspace_file", sourceId: buffer.filePath, sourceLabel: buffer.filePath, truncated: false })}><MessageSquareText size={13} /> Ask Nebula</button><button className="button quiet" type="button" disabled={!buffer.existing || dirty || preserving} title={dirty ? "Save this draft before preserving exact bytes" : undefined} onClick={() => void preserveAsEvidence()}>{preserving ? <LoaderCircle className="spin" size={13} /> : <FileCheck2 size={13} />} Preserve as Evidence</button></div></footer>
       </> : <><StandardEmptyState icon={<Braces size={25} />} title="Shared workspace editor" explanation="Open or create a text file here, then run it from Terminal in /workspace using its interpreter." primaryAction={<button className="button primary" type="button" onClick={() => void createFile()}><FilePlus2 size={15} /> New file</button>} />{error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}</>}
     </section>
     {suggestionOpen && <AIWritingDialog api={api} engagementId={engagementId} providers={providers} harnesses={harnesses} purpose="code_suggestion" title="Suggest a code change" description="Generate an operator-reviewed suggestion for the active file. Nothing is saved until you review, apply, and save." sourceLabel={selection ? "Selected code" : buffer?.filePath ?? "Active file"} sourceText={selection || buffer?.content || ""} initialInstruction="Suggest a focused improvement for this code." onClose={() => setSuggestionOpen(false)} onApply={applySuggestion} />}
+    {workspaceSearchMode && <EditorWorkspaceSearch api={api} engagementId={engagementId} initialMode={workspaceSearchMode} onClose={() => setWorkspaceSearchMode(undefined)} onOpen={(match) => void openWorkspaceMatch(match)} />}
     {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
   </div>;
 }

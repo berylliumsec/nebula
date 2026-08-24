@@ -28,8 +28,8 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
       "--host", bindHost,
       "--port", "0",
       "--token", token,
-      ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
       "--allow-insecure-device-pairing",
+      ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
       "--data-dir", dataDir,
       "--static-dir", path.join(repository, "ui/dist"),
     ],
@@ -448,6 +448,74 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     const fileResponse = await api.get(`engagements/${projectId}/workspace/download?path=mobile-proof.txt`);
     expect(fileResponse.ok()).toBe(true);
     expect(await fileResponse.text()).toBe("real Core mobile proof\n");
+
+    await page.getByRole("button", { name: "New editor file" }).click();
+    await page.getByRole("textbox", { name: "File path" }).fill("scanner.py");
+    await page.getByRole("textbox", { name: "Code editor" }).fill("def scan_target():\n    return True\n");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByText("Saved /workspace/scanner.py. Use it from Terminal when you're ready.")).toBeVisible();
+    await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
+
+    await page.keyboard.press("Control+P");
+    const quickOpen = page.getByRole("dialog", { name: "Quick open" });
+    await expect(quickOpen).toBeVisible();
+    await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("mobile-proof");
+    await quickOpen.getByRole("option", { name: /mobile-proof\.txt/ }).click();
+    await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".cm-line").first()).toHaveText("real Core mobile proof");
+
+    await page.keyboard.press("Control+Shift+F");
+    const textSearch = page.getByRole("dialog", { name: "Search workspace text" });
+    await textSearch.getByRole("textbox", { name: "Search workspace text" }).fill("scan_target");
+    await textSearch.getByRole("option", { name: /scanner\.py.*Line 1/ }).click();
+    await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
+
+    await page.getByRole("button", { name: "Preserve as Evidence" }).click();
+    const preserveDialog = page.getByRole("dialog", { name: "Preserve scanner.py as Evidence?" });
+    await preserveDialog.getByRole("button", { name: "Preserve as Evidence" }).click();
+    await expect(page.getByText(/Preserved scanner\.py as Evidence/)).toBeVisible();
+    const evidenceResponse = await api.get(`evidence?engagement_id=${projectId}&offset=0&limit=100`);
+    expect(evidenceResponse.ok()).toBe(true);
+    expect(JSON.stringify(await evidenceResponse.json())).toContain("scanner.py");
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
+test("production Code quick-open works from a non-loopback LAN origin", async ({ page }) => {
+  test.setTimeout(60_000);
+  const lanAddress = Object.values(networkInterfaces())
+    .flat()
+    .find((address) => address?.family === "IPv4" && !address.internal)?.address;
+  test.skip(!lanAddress, "No non-loopback IPv4 interface is available for the LAN-origin gate.");
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagementsResponse = await api.get("engagements");
+    expect(engagementsResponse.ok()).toBe(true);
+    const projectId = (await engagementsResponse.json() as Array<{ id: string }>)[0]?.id;
+    expect(projectId).toBeTruthy();
+    const upload = await api.put(
+      `engagements/${projectId}/workspace/file?path=lan-proof.py&overwrite=false`,
+      { data: Buffer.from("print('lan production proof')\n"), headers: { "Content-Type": "text/plain" } },
+    );
+    expect(upload.ok(), await upload.text()).toBe(true);
+
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 20_000 });
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+    await page.getByRole("button", { name: /lan-proof\.py/ }).click();
+    await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
+    await page.getByRole("button", { name: "Open", exact: true }).click();
+    const quickOpen = page.getByRole("dialog", { name: "Quick open" });
+    await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("lan-proof");
+    await quickOpen.getByRole("option", { name: /lan-proof\.py/ }).click();
+    await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
   } finally {
     await api.dispose();
     await stopRealCore(core);
