@@ -211,6 +211,44 @@ def test_execution_and_artifact_query_budgets_are_independent_and_atomic(store):
         assert counter.artifact_queries == 1
 
 
+def test_unlimited_mission_budget_accepts_execution_and_artifact_calls(store):
+    engagement = store.create(Engagement(name="Unlimited mission budget"))
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="exercise unlimited counters",
+            budget=RunBudget(),
+        )
+    )
+
+    for index in range(3):
+        store.reserve_tool_call(
+            ToolCall(
+                id=f"unlimited-action-{index}",
+                engagement_id=engagement.id,
+                run_id=run.id,
+                tool_name="nmap.scan",
+                risk_class=RiskClass.LOCAL_READ,
+            )
+        )
+        store.reserve_tool_call(
+            ToolCall(
+                id=f"unlimited-query-{index}",
+                engagement_id=engagement.id,
+                run_id=run.id,
+                tool_name="tool_output.search",
+                risk_class=RiskClass.LOCAL_READ,
+                metadata={"budget_class": "artifact_query"},
+            )
+        )
+
+    with store.database.session() as session:
+        counter = session.get(RunBudgetCounterRow, run.id)
+        assert counter is not None
+        assert counter.tool_calls == 3
+        assert counter.artifact_queries == 3
+
+
 def test_create_with_event_is_atomic_when_event_conflicts(store):
     store.append_event(
         "run-1",

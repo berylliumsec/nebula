@@ -1002,10 +1002,11 @@ test("mission workflow freezes harness options, stages, and URL identity", async
         harness_profile_id: "harness-mission",
         harness_session_id: "mission-session",
         budget: {
-          max_duration_seconds: 3600,
-          max_tokens: 20000,
-          max_cost_usd: 10,
-          max_tool_calls: 50,
+          max_duration_seconds: null,
+          max_tokens: null,
+          max_cost_usd: null,
+          max_tool_calls: null,
+          max_artifact_queries: null,
           max_concurrency: 1,
           max_delegation_depth: 0,
           max_retries_per_task: 0,
@@ -1034,6 +1035,10 @@ test("mission workflow freezes harness options, stages, and URL identity", async
   await expect(dialog.getByRole("combobox", { name: "Mission runtime" })).toHaveValue("harness");
   await expect(dialog.getByRole("combobox", { name: "Mission harness effort" })).toHaveValue("high");
   await expect(dialog.getByRole("combobox", { name: "Mission harness speed" })).toHaveValue("priority");
+  await expect(dialog.getByLabel("Duration (minutes)")).toHaveValue("");
+  await expect(dialog.getByLabel("Token limit")).toHaveValue("");
+  await expect(dialog.getByLabel("Cost limit (USD)")).toHaveValue("");
+  await expect(dialog.getByLabel("Maximum execution calls")).toHaveValue("");
   await dialog.getByRole("button", { name: "Add stage" }).click();
   await dialog.getByRole("group", { name: "Stage 1" }).getByLabel("Name").fill("Verify");
   await dialog.getByRole("group", { name: "Stage 1" }).getByLabel("Objective").fill("Verify the strongest observation");
@@ -1047,6 +1052,10 @@ test("mission workflow freezes harness options, stages, and URL identity", async
     harness_service_tier: "priority",
     stages: [{ title: "Verify", objective: "Verify the strongest observation" }],
   });
+  expect(submitted).not.toHaveProperty("max_duration_seconds");
+  expect(submitted).not.toHaveProperty("max_tokens");
+  expect(submitted).not.toHaveProperty("max_cost_usd");
+  expect(submitted).not.toHaveProperty("max_tool_calls");
   await expect.poll(() => new URL(page.url()).searchParams.get("mission")).toBe("mission-url-authority");
   await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Staged security review")).toBeVisible();
   const accessibility = await new AxeBuilder({ page }).include(".agents-page").analyze();

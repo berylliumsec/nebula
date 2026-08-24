@@ -266,7 +266,6 @@ from .knowledge import (
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError, KnowledgeIndexStatus
 from .missions import (
     MAX_API_MISSION_COST_USD,
-    MAX_API_MISSION_DURATION_SECONDS,
     MAX_API_MISSION_RETRIES,
     MAX_API_MISSION_TOKENS,
     MissionCapacityError,
@@ -709,14 +708,12 @@ class MissionStartRequest(NebulaModel):
     stages: list[MissionStageRequest] = Field(default_factory=list, max_length=12)
     scheduled_for: datetime | None = None
     repeat_interval_seconds: int | None = Field(default=None, ge=3_600, le=31_536_000)
-    max_duration_seconds: int = Field(
-        default=900, ge=1, le=MAX_API_MISSION_DURATION_SECONDS
-    )
-    max_tokens: int = Field(default=32_000, ge=1, le=MAX_API_MISSION_TOKENS)
+    max_duration_seconds: int | None = Field(default=None, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1, le=MAX_API_MISSION_TOKENS)
     max_cost_usd: float | None = Field(default=None, ge=0, le=MAX_API_MISSION_COST_USD)
     max_retries: int = Field(default=1, ge=0, le=MAX_API_MISSION_RETRIES)
-    max_tool_calls: int = Field(default=0, ge=0, le=100)
-    max_artifact_queries: int = Field(default=200, ge=0, le=1000)
+    max_tool_calls: int | None = Field(default=None, ge=0, le=100)
+    max_artifact_queries: int | None = Field(default=None, ge=0, le=1000)
     max_concurrency: int = Field(default=1, ge=1, le=2)
     allow_cloud_tool_results: bool = False
 
@@ -762,13 +759,11 @@ class McpProbeRequest(NebulaModel):
 
 class HarnessMissionHandoffRequest(NebulaModel):
     objective: str | None = Field(default=None, min_length=1, max_length=10_000)
-    max_duration_seconds: int = Field(
-        default=900, ge=1, le=MAX_API_MISSION_DURATION_SECONDS
-    )
-    max_tokens: int = Field(default=32_000, ge=1, le=MAX_API_MISSION_TOKENS)
+    max_duration_seconds: int | None = Field(default=None, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1, le=MAX_API_MISSION_TOKENS)
     max_cost_usd: float | None = Field(default=None, ge=0, le=MAX_API_MISSION_COST_USD)
-    max_tool_calls: int = Field(default=100, ge=0, le=100)
-    max_artifact_queries: int = Field(default=200, ge=0, le=1000)
+    max_tool_calls: int | None = Field(default=None, ge=0, le=100)
+    max_artifact_queries: int | None = Field(default=None, ge=0, le=1000)
     allow_cloud_tool_results: bool = False
 
 
@@ -6023,15 +6018,19 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def start_mission(request: MissionStartRequest) -> AgentRun:
+        wants_command_tools = (
+            request.max_tool_calls is None or request.max_tool_calls > 0
+        )
         command_tools = (
             [RUN_COMMAND_NAME, PROCESS_IO_NAME]
             if request.backend == RunBackend.NATIVE
-            and request.max_tool_calls > 0
+            and wants_command_tools
             and automation_tool_platform is not None
             else []
         )
         if (
             request.backend == RunBackend.NATIVE
+            and request.max_tool_calls is not None
             and request.max_tool_calls > 0
             and automation_tool_platform is None
             and not request.mcp_server_ids

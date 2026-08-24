@@ -1331,7 +1331,7 @@ describe("ApiClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/missions"))?.[1]?.body))).toMatchObject({ provider_id: "provider-1", model: "model-1", max_duration_seconds: 600 });
   });
 
-  it("sends analysis-only defaults and bounded command-runtime mission budgets", async () => {
+  it("omits mission resource limits by default and preserves explicit budgets", async () => {
     const response = { id: "run-1", engagement_id: "engagement-1", objective: "Review", status: "queued", created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T10:00:00Z", revision: 1, metadata: {} };
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(response), { status: 202 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
@@ -1339,7 +1339,13 @@ describe("ApiClient", () => {
     await client.createMission({ engagementId: "engagement-1", name: "Review", objective: "Review", providerId: "provider-1", model: "model-1" });
     await client.createMission({ engagementId: "engagement-1", name: "Scan", objective: "Scan", providerId: "provider-1", model: "model-1", maxToolCalls: 20, maxConcurrency: 2 });
 
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ max_tool_calls: 0, max_concurrency: 1 });
+    const defaultBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(defaultBody).toMatchObject({ max_concurrency: 1 });
+    expect(defaultBody).not.toHaveProperty("max_duration_seconds");
+    expect(defaultBody).not.toHaveProperty("max_tokens");
+    expect(defaultBody).not.toHaveProperty("max_cost_usd");
+    expect(defaultBody).not.toHaveProperty("max_tool_calls");
+    expect(defaultBody).not.toHaveProperty("max_artifact_queries");
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({ max_tool_calls: 20, max_concurrency: 2 });
   });
 

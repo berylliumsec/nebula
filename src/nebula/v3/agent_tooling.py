@@ -244,10 +244,16 @@ class BrokeredToolSpecialist:
         )
         if context.task.allowed_tools is not None:
             allowed &= context.task.allowed_tools | retrieval_tools
-        if context.remaining_tool_calls <= 0:
+        if (
+            context.remaining_tool_calls is not None
+            and context.remaining_tool_calls <= 0
+        ):
             allowed &= retrieval_tools
         if context.approval_response:
-            if context.remaining_tool_calls <= 0:
+            if (
+                context.remaining_tool_calls is not None
+                and context.remaining_tool_calls <= 0
+            ):
                 return SpecialistResult(
                     summary="The approved operation cannot run because the mission "
                     "tool-call budget is exhausted.",
@@ -586,12 +592,17 @@ class BrokeredToolSpecialist:
 
     def _routing_instructions(self, context: SpecialistContext) -> str:
         budget_note = (
-            "No action tool-call slots remain. Artifact retrieval remains available; "
-            "finish as complete only if the objective is satisfied after inspecting "
-            "the necessary evidence, otherwise finish as blocked."
-            if context.remaining_tool_calls <= 0
+            "No action tool-call limit is configured. Use only real capabilities "
+            "that advance the objective."
+            if context.remaining_tool_calls is None
             else (
-                f"At most {context.remaining_tool_calls} real tool-call slots remain."
+                "No action tool-call slots remain. Artifact retrieval remains available; "
+                "finish as complete only if the objective is satisfied after inspecting "
+                "the necessary evidence, otherwise finish as blocked."
+                if context.remaining_tool_calls <= 0
+                else (
+                    f"At most {context.remaining_tool_calls} real tool-call slots remain."
+                )
             )
         )
         return (

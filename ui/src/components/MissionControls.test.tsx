@@ -59,6 +59,10 @@ describe("NewMissionButton", () => {
     await waitFor(() => expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol"));
     expect(screen.getByLabelText("Mission harness effort")).toHaveValue("high");
     expect(screen.getByLabelText("Mission harness speed")).toHaveValue("priority");
+    expect(screen.getByLabelText("Duration (minutes)")).toHaveValue(null);
+    expect(screen.getByLabelText("Token limit")).toHaveValue(null);
+    expect(screen.getByLabelText("Cost limit (USD)")).toHaveValue(null);
+    expect(screen.getByLabelText("Maximum execution calls")).toHaveValue(null);
     await user.click(screen.getByRole("button", { name: "Add stage" }));
     const stageObjectives = screen.getAllByLabelText("Objective");
     await user.type(stageObjectives[1], "Verify the strongest observation");
@@ -68,6 +72,11 @@ describe("NewMissionButton", () => {
     await waitFor(() => expect(dialog.getByRole("button", { name: "Automate task" })).toBeEnabled());
     await user.click(dialog.getByRole("button", { name: "Automate task" }));
     await waitFor(() => expect(startMission).toHaveBeenCalled());
+    const submitted = startMission.mock.calls[0][0] as Record<string, unknown>;
+    expect(submitted).not.toHaveProperty("maxDurationSeconds");
+    expect(submitted).not.toHaveProperty("maxTokens");
+    expect(submitted).not.toHaveProperty("maxCostUsd");
+    expect(submitted).not.toHaveProperty("maxToolCalls");
     expect(startMission).toHaveBeenCalledWith(expect.objectContaining({
       backend: "harness",
       harnessProfileId: "harness-1",

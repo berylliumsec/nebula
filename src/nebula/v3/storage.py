@@ -436,15 +436,12 @@ class NebulaStore:
             budget_field = (
                 "max_artifact_queries" if artifact_query else "max_tool_calls"
             )
-            maximum = (
-                int(run["payload"].get(budget_field, 20 if artifact_query else 0))
+            maximum_value = (
+                run["payload"].get(budget_field, 20 if artifact_query else 0)
                 if call.origin == ToolCallOrigin.CHAT
-                else int(
-                    run["payload"]
-                    .get("budget", {})
-                    .get(budget_field, 200 if artifact_query else 0)
-                )
+                else run["payload"].get("budget", {}).get(budget_field)
             )
+            maximum = int(maximum_value) if maximum_value is not None else None
             counter = (
                 connection.execute(
                     select(RunBudgetCounterRow)
@@ -456,7 +453,7 @@ class NebulaStore:
             )
             counter_field = "artifact_queries" if artifact_query else "tool_calls"
             current = int(counter[counter_field]) if counter else 0
-            if current >= maximum:
+            if maximum is not None and current >= maximum:
                 raise RunBudgetExceededError(
                     f"run {call.run_id} exhausted its "
                     f"{'artifact-query' if artifact_query else 'tool-call'} budget ({maximum})"

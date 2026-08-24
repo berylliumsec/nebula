@@ -78,12 +78,12 @@ export interface MissionCreateRequest {
   stages?: Array<{ title: string; objective: string }>;
   scheduledFor?: string;
   repeatIntervalSeconds?: number;
-  maxDurationSeconds?: number;
-  maxTokens?: number;
-  maxCostUsd?: number;
+  maxDurationSeconds?: number | null;
+  maxTokens?: number | null;
+  maxCostUsd?: number | null;
   maxRetries?: number;
-  maxToolCalls?: number;
-  maxArtifactQueries?: number;
+  maxToolCalls?: number | null;
+  maxArtifactQueries?: number | null;
   maxConcurrency?: number;
   allowCloudToolResults?: boolean;
 }

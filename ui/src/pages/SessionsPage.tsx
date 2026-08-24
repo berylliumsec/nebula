@@ -2731,9 +2731,6 @@ export function SessionsPage() {
         harnessProfileId: chat.harnessProfileId,
         harnessSessionId: chat.harnessSessionId,
         model: chat.model,
-        maxDurationSeconds: 900,
-        maxTokens: 32_000,
-        maxToolCalls: 100,
         allowCloudToolResults,
       });
       setView("missions");
