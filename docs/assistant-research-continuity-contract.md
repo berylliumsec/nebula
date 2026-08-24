@@ -20,8 +20,9 @@ The real entry point is Workbench > Assistant. The operator can:
 2. Collect several exact text selections from project surfaces into one context
    pack, inspect each source, and remove individual items before sending.
 3. Paste, drop, or choose supported images without leaving the composer.
-4. Send a normal turn, or type guidance into the same composer while a steerable
-   harness turn is active.
+4. Send a normal turn, type guidance into the same composer while a steerable
+   harness turn is active, or queue plain-text follow-ups while any other active
+   turn finishes.
 5. Inspect Core's authoritative context-window and compaction state without
    exposing private reasoning.
 6. Copy or quote a durable message, fork at a message, and export the authoritative
@@ -37,9 +38,11 @@ The real entry point is Workbench > Assistant. The operator can:
 - Harness/provider: live turn execution and advertised capabilities.
 - Workspace context: transient exact selected-text context pack shared between
   Workbench surfaces; it is hashed only at explicit submission.
-- `sessionStorage`: unsent prompt text keyed by project and conversation. Drafts
-  survive refresh in the current browser tab but do not become a durable transcript
-  or cross-device record.
+- `sessionStorage`: unsent prompt text and ordered plain-text follow-ups keyed by
+  project and conversation. Drafts and queued follow-ups survive refresh in the
+  current browser tab but do not become a durable transcript or cross-device record.
+  A follow-up that was marked sending when the tab reloads requires explicit
+  operator review before retry, preventing an unverified duplicate provider turn.
 - Component state: expanded previews, search query, upload progress, and ephemeral
   copy/export feedback.
 
@@ -51,14 +54,14 @@ The real entry point is Workbench > Assistant. The operator can:
 | Draft recovery | An unsent prompt survives refresh and stays isolated by project/session | sessionStorage + URL | unit + Playwright |
 | Context collection | New selections append with exact bytes, source identity, bounded length, and stable deduplication | workspace context until submit; Core after submit | unit + Playwright + real Core |
 | Image attachment | Choose, paste, and drop share the same validation, capability, count, and upload path | Core artifact store | component + Playwright |
-| Create/mutate | Send persists one user/assistant turn; steer mutates only the active advertised harness turn | Core database + harness | real Core |
-| Select/use | URL and visible selection identify the same conversation; filters never mutate selection | URL + Core | Playwright |
-| Stream/interrupt | Output remains ordered; stop remains available; steer uses visible composer text | Core/harness activity | component + real Core |
+| Create/mutate | Send persists one user/assistant turn; steer mutates only the active advertised harness turn; non-steerable follow-ups are accepted in visible order and handed to Core one at a time | Core database + harness + sessionStorage queue | component + Playwright |
+| Select/use | URL and visible selection identify the same conversation; filters never mutate selection; queue keys do not cross conversations | URL + Core + sessionStorage | Playwright |
+| Stream/interrupt | Output remains ordered; stop remains available; steer uses visible composer text; queued follow-ups do not start until the active request finishes | Core/harness activity + queue state | component + Playwright |
 | Context health | The meter and inspector reflect Core status, estimated usage, compaction, and memory summary | Core context endpoint | component + real Core |
 | Message reuse | Copy is exact; quote creates an editable draft; fork retains durable lineage | Core + transient composer | unit + Playwright + real Core |
 | Export | Export is built from a fresh authoritative transcript and records session identity, citations, and attachment hashes | Core database | unit + Playwright |
-| Refresh/reconnect | Durable transcript and URL identity return without duplicates; unsent text recovers from the current tab | Core + URL + sessionStorage | real Core |
-| Failure/retry | Context, export, upload, and steering failures retain usable chat state and show a local recovery action | Core error contract | component + Playwright |
+| Refresh/reconnect | Durable transcript and URL identity return without duplicates; unsent text and queued follow-ups recover from the current tab; an interrupted send is paused for review | Core + URL + sessionStorage | Playwright + real Core |
+| Failure/retry | Context, export, upload, steering, and queued-send failures retain usable chat state and show a local recovery action | Core error contract + queue state | component + Playwright |
 | Delete/revoke | Existing guarded deletion clears stale selection and its draft key | Core database + URL + sessionStorage | component + real Core |
 
 ## Content, responsive, and accessibility invariants
@@ -72,7 +75,8 @@ The real entry point is Workbench > Assistant. The operator can:
 - Reduced motion does not hide state changes. Approval, user-input, failure, and
   retry controls are never collapsed.
 - Sensitive selections remain excluded by the existing selection boundary.
-  Context text and unsent attachments are not written to browser storage.
+  Context text and unsent attachments are not written to browser storage. Queued
+  follow-ups are deliberately text-only and visibly labeled as tab-local.
 
 ## Competitive gap basis
 
@@ -86,6 +90,9 @@ without weakening those controls.
 ## Explicit non-goals
 
 - No hidden auto-approval, unrestricted shell, or background cloud execution.
+- No server-side or cross-device provider queue in this pass; queued text is a
+  bounded tab-local handoff to the existing durable chat API and requires review
+  after a reload if its send status is ambiguous.
 - No browser-owned transcript, lineage, context memory, or evidence authority.
 - No capture or display of private chain-of-thought.
 - No opaque folder identifiers or vendor-specific assistant fork.
