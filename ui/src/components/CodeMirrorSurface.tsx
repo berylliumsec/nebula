@@ -8,15 +8,21 @@ import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from
 
 interface CodeMirrorSurfaceProps {
   active: boolean;
+  ariaLabel?: string;
   filePath: string;
+  fontSize?: 12 | 13 | 14 | 16;
   onChange(value: string): void;
   onCursorChange(line: number, column: number): void;
+  onFocus?(): void;
   onSave(): void;
   onSelectionChange?(text: string): void;
   completionSource?(context: CompletionContext): Promise<CompletionResult | null>;
   findRequest?: number;
   reveal?: { line: number; column: number; request: number };
+  saveKey?: string;
+  tabSize?: 2 | 4;
   value: string;
+  wordWrap?: boolean;
 }
 
 export function languageLabelForPath(path: string): string {
@@ -60,7 +66,7 @@ async function languageForPath(path: string): Promise<Extension> {
 }
 
 const nebulaTheme = EditorView.theme({
-  "&": { width: "100%", height: "100%", color: "var(--text)", backgroundColor: "var(--canvas)", fontSize: "13px" },
+  "&": { width: "100%", height: "100%", color: "var(--text)", backgroundColor: "var(--canvas)", fontSize: "var(--editor-font-size, 13px)" },
   ".cm-scroller": { overflow: "auto", fontFamily: "var(--font-mono)", lineHeight: "1.5" },
   ".cm-content": { minHeight: "100%", caretColor: "var(--text-strong)", fontFamily: "inherit", padding: "10px 0", outline: "none" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text-strong)" },
@@ -78,10 +84,13 @@ const nebulaTheme = EditorView.theme({
   ".cm-foldGutter .cm-gutterElement": { cursor: "pointer" },
 });
 
-export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, onSave, onSelectionChange, completionSource, findRequest = 0, reveal, value }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, findRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
+  const attributesRef = useRef(new Compartment());
+  const keymapRef = useRef(new Compartment());
+  const settingsRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCursorChangeRef = useRef(onCursorChange);
   const onSaveRef = useRef(onSave);
@@ -132,25 +141,16 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
           highlightActiveLine(),
           EditorState.allowMultipleSelections.of(true),
           nebulaTheme,
-          indentUnit.of("  "),
+          settingsRef.current.of(editorSettings(tabSize, wordWrap)),
           languageRef.current.of([]),
-          EditorView.contentAttributes.of({ "aria-label": "Code editor", spellcheck: "false" }),
+          attributesRef.current.of(EditorView.contentAttributes.of({ "aria-label": ariaLabel, spellcheck: "false" })),
           search({ top: true }),
           autocompletion({
             activateOnTyping: true,
             maxRenderedOptions: 30,
             override: completionSource ? [(context) => completionSourceRef.current?.(context) ?? null] : undefined,
           }),
-          keymap.of([
-            { key: "Mod-s", run: () => { onSaveRef.current(); return true; } },
-            indentWithTab,
-            ...closeBracketsKeymap,
-            ...completionKeymap,
-            ...searchKeymap,
-            ...foldKeymap,
-            ...defaultKeymap,
-            ...historyKeymap,
-          ]),
+          keymapRef.current.of(editorKeymap(saveKey, () => onSaveRef.current())),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
             if (update.selectionSet || update.docChanged) {
@@ -189,6 +189,10 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
   }, [value]);
 
   useEffect(() => {
+    viewRef.current?.dispatch({ effects: attributesRef.current.reconfigure(EditorView.contentAttributes.of({ "aria-label": ariaLabel, spellcheck: "false" })) });
+  }, [ariaLabel]);
+
+  useEffect(() => {
     let cancelled = false;
     const host = hostRef.current;
     host?.removeAttribute("data-language-ready");
@@ -200,6 +204,15 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
     });
     return () => { cancelled = true; };
   }, [filePath]);
+
+  useEffect(() => {
+    hostRef.current?.style.setProperty("--editor-font-size", `${fontSize}px`);
+    viewRef.current?.dispatch({ effects: settingsRef.current.reconfigure(editorSettings(tabSize, wordWrap)) });
+  }, [fontSize, tabSize, wordWrap]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: keymapRef.current.reconfigure(editorKeymap(saveKey, () => onSaveRef.current())) });
+  }, [saveKey]);
 
   useEffect(() => { if (active) viewRef.current?.requestMeasure(); }, [active]);
 
@@ -220,5 +233,26 @@ export function CodeMirrorSurface({ active, filePath, onChange, onCursorChange, 
     view.focus();
   }, [reveal]);
 
-  return <div className="code-mirror-host" data-selection-actions-disabled ref={hostRef} />;
+  return <div className="code-mirror-host" data-selection-actions-disabled onFocusCapture={onFocus} ref={hostRef} />;
+}
+
+function editorSettings(tabSize: 2 | 4, wordWrap: boolean): Extension {
+  return [
+    EditorState.tabSize.of(tabSize),
+    indentUnit.of(" ".repeat(tabSize)),
+    wordWrap ? EditorView.lineWrapping : [],
+  ];
+}
+
+function editorKeymap(saveKey: string, onSave: () => void): Extension {
+  return keymap.of([
+    { key: saveKey, run: () => { onSave(); return true; } },
+    indentWithTab,
+    ...closeBracketsKeymap,
+    ...completionKeymap,
+    ...searchKeymap,
+    ...foldKeymap,
+    ...defaultKeymap,
+    ...historyKeymap,
+  ]);
 }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -16,13 +17,20 @@ interface RealCore {
 
 async function startRealCore(options: { bindHost?: string; browserHost?: string } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
+  const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+  const coreCandidates = [
+    process.env.NEBULA_CORE_BINARY,
+    path.join(repository, ".venv/bin/nebula-core"),
+    commonGitDir ? path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core") : undefined,
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  const coreBinary = coreCandidates.find(existsSync);
+  if (!coreBinary) throw new Error(`No nebula-core test binary was found in: ${coreCandidates.join(", ")}`);
   const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
   const token = "playwright-real-core-token-2026";
   const bindHost = options.bindHost ?? "127.0.0.1";
   const browserHost = options.browserHost ?? bindHost;
-  const coreExecutable = process.env.NEBULA_TEST_CORE_BIN ?? path.join(repository, ".venv/bin/nebula-core");
   const child = spawn(
-    coreExecutable,
+    coreBinary,
     [
       "serve",
       "--host", bindHost,
@@ -406,7 +414,7 @@ test("a paired browser can revoke itself without a stale authentication error", 
 });
 
 test("mobile Code keeps its controls readable and saves to authoritative real-Core state", async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const core = await startRealCore();
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
@@ -440,7 +448,7 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
       }
     }
 
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("textbox", { name: "Code editor" }).press("Control+S");
     await expect(page.getByText("Saved /workspace/mobile-proof.txt. Use it from Terminal when you're ready.")).toBeVisible();
     const listingResponse = await api.get(`engagements/${projectId}/workspace?path=&offset=0&limit=100`);
     expect(listingResponse.ok()).toBe(true);
@@ -452,7 +460,7 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     await page.getByRole("button", { name: "New editor file" }).click();
     await page.getByRole("textbox", { name: "File path" }).fill("scanner.py");
     await page.getByRole("textbox", { name: "Code editor" }).fill("def scan_target():\n    return True\n");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("textbox", { name: "Code editor" }).press("Control+S");
     await expect(page.getByText("Saved /workspace/scanner.py. Use it from Terminal when you're ready.")).toBeVisible();
     await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toBeVisible();
     await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
@@ -478,6 +486,22 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     const evidenceResponse = await api.get(`evidence?engagement_id=${projectId}&offset=0&limit=100`);
     expect(evidenceResponse.ok()).toBe(true);
     expect(JSON.stringify(await evidenceResponse.json())).toContain("scanner.py");
+
+    await page.waitForTimeout(350);
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("scan_target");
+
+    await page.getByRole("button", { name: "New editor file" }).click();
+    await page.getByRole("textbox", { name: "File path" }).fill("hot-exit-notes.txt");
+    await page.getByRole("textbox", { name: "Code editor" }).fill("exact unsaved λ research draft\n");
+    await expect(page.getByText(/^3 open · 1 unsaved · recovery on$/)).toHaveText("3 open · 1 unsaved · recovery on");
+    await page.waitForTimeout(350);
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("hot-exit-notes.txt");
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("exact unsaved λ research draft");
+    await expect(page.getByText(/^3 open · 1 unsaved · recovery on$/)).toHaveText("3 open · 1 unsaved · recovery on");
   } finally {
     await api.dispose();
     await stopRealCore(core);

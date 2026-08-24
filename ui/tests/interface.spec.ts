@@ -2502,7 +2502,8 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
     };
   });
   expect(geometry.hasShadowBoundary).toBe(true);
-  expect(geometry.hostHeight).toBeGreaterThan(testInfo.project.name === "compact" ? 250 : 400);
+  const compactEditor = testInfo.project.name === "compact" || (page.viewportSize()?.width ?? 1_000) <= 760;
+  expect(geometry.hostHeight).toBeGreaterThan(compactEditor ? 240 : 400);
   expect(geometry.lineTops).toHaveLength(5);
   expect(geometry.numberTops).toHaveLength(5);
   geometry.lineTops.forEach((lineTop, index) => expect(Math.abs(lineTop - geometry.numberTops[index])).toBeLessThan(2));
@@ -2514,6 +2515,33 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(inputSurface).not.toHaveCSS("caret-color", "rgba(0, 0, 0, 0)");
   await expect(page.getByText(/Ln 4, Col 12/, { exact: true })).toBeVisible();
   await expect(editor.locator(".cm-cursor-primary")).toHaveCount(0);
+
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.getByRole("button", { name: "More editor actions" }).click();
+    await page.getByRole("button", { name: "Editor settings" }).click();
+  } else {
+    await page.getByRole("button", { name: "Editor settings" }).click();
+  }
+  const editorSettings = page.getByRole("dialog", { name: "Editor settings and keybindings" });
+  await editorSettings.getByLabel("Font size").selectOption("16");
+  await editorSettings.getByLabel("Tab size").selectOption("4");
+  await editorSettings.getByRole("checkbox", { name: /Word wrap/ }).check();
+  await editorSettings.getByRole("button", { name: "Apply settings" }).click();
+  await expect.poll(() => page.locator(".code-mirror-host").evaluate((host) => getComputedStyle(host.shadowRoot!.querySelector(".cm-editor")!).fontSize)).toBe("16px");
+
+  await page.getByRole("button", { name: "New editor file" }).click();
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.getByRole("button", { name: "More editor actions" }).click();
+    await page.getByRole("button", { name: "Split editor" }).click();
+  } else {
+    await page.getByRole("button", { name: "Split" }).click();
+  }
+  await expect(page.getByRole("textbox", { name: "Primary code editor: untitled.txt" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Secondary code editor: example.c" })).toBeVisible();
+  await page.getByRole("button", { name: "Focus example.c editor" }).click();
+  await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("example.c");
+  await page.getByRole("button", { name: "Close split editor" }).click();
+  await expect(page.getByRole("textbox", { name: "Code editor" })).toBeVisible();
 });
 
 test("settings shows the live Kali preparation stage instead of a passive runtime check", async ({ page }) => {

@@ -1,17 +1,28 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import "fake-indexeddb/auto";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type KeyboardEvent } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../api/client";
 import { WorkbenchEditorProvider } from "../state/WorkbenchEditorContext";
 import { CodeEditorPanel } from "./CodeEditorPanel";
 import { DialogProvider } from "./DialogSystem";
+import { clearEditorSessions, loadEditorSessions } from "../state/editorSessionPersistence";
+
+beforeEach(() => {
+  localStorage.clear();
+  return clearEditorSessions();
+});
 
 vi.mock("./CodeMirrorSurface", () => ({
-  CodeMirrorSurface: ({ value, findRequest, onChange, onSave }: { value: string; findRequest?: number; onChange(value: string): void; onSave(): void }) => <textarea
-    aria-label="Code editor"
+  CodeMirrorSurface: ({ ariaLabel = "Code editor", value, findRequest, fontSize, tabSize, wordWrap, onChange, onFocus, onSave }: { ariaLabel?: string; value: string; findRequest?: number; fontSize?: number; tabSize?: number; wordWrap?: boolean; onChange(value: string): void; onFocus?(): void; onSave(): void }) => <textarea
+    aria-label={ariaLabel}
     data-find-request={findRequest}
+    data-font-size={fontSize}
+    data-tab-size={tabSize}
+    data-word-wrap={wordWrap}
     value={value}
+    onFocus={onFocus}
     onChange={(event) => onChange(event.target.value)}
     onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -124,6 +135,64 @@ describe("CodeEditorPanel", () => {
     expect(await screen.findByRole("textbox", { name: "Code editor" })).toHaveValue("print('persisted draft')");
   });
 
+  it("restores an exact dirty draft after the complete editor provider remounts", async () => {
+    const api = { listWorkspace: vi.fn().mockResolvedValue(listing([])) } as unknown as ApiClient;
+    const first = render(panel(api));
+    const user = userEvent.setup();
+
+    await user.click((await screen.findAllByRole("button", { name: "New file" }))[0]);
+    fireEvent.change(screen.getByRole("textbox", { name: "File path" }), { target: { value: "research/notes.txt" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Code editor" }), { target: { value: "exact λ draft\nsecond line" } });
+    await waitFor(async () => expect((await loadEditorSessions())["project-1"]?.buffers[0]?.content).toBe("exact λ draft\nsecond line"), { timeout: 2_000 });
+    first.unmount();
+
+    render(panel(api));
+    expect(await screen.findByRole("textbox", { name: "File path" })).toHaveValue("research/notes.txt");
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("exact λ draft\nsecond line");
+    expect(screen.getByText(/^1 open · 1 unsaved · recovery on$/)).toBeVisible();
+  });
+
+  it("keeps two pane drafts independent and follows the focused pane", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('first')\n"])),
+    });
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    await user.click(screen.getByRole("button", { name: "New editor file" }));
+    await user.click(screen.getByRole("button", { name: "Split" }));
+    const primary = screen.getByRole("textbox", { name: "Primary code editor: untitled.txt" });
+    const secondary = screen.getByRole("textbox", { name: "Secondary code editor: tool.py" });
+    fireEvent.change(primary, { target: { value: "primary draft" } });
+    fireEvent.change(secondary, { target: { value: "secondary draft" } });
+    fireEvent.focus(secondary);
+    expect(screen.getByRole("textbox", { name: "File path" })).toHaveValue("tool.py");
+    fireEvent.focus(primary);
+    expect(screen.getByRole("textbox", { name: "File path" })).toHaveValue("untitled.txt");
+    await user.click(screen.getByRole("button", { name: "Close split editor" }));
+    expect(screen.getAllByRole("textbox", { name: "Code editor" })).toHaveLength(1);
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("primary draft");
+    expect(within(screen.getByRole("tablist", { name: "Open editor files" })).getAllByRole("tab")).toHaveLength(2);
+  });
+
+  it("applies and retains device-local editor settings", async () => {
+    const user = userEvent.setup();
+    renderPanel({ listWorkspace: vi.fn().mockResolvedValue(listing([])) });
+    await user.click((await screen.findAllByRole("button", { name: "New file" }))[0]);
+    await user.click(screen.getByRole("button", { name: "Editor settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Editor settings and keybindings" });
+    await user.selectOptions(within(dialog).getByLabelText("Font size"), "16");
+    await user.selectOptions(within(dialog).getByLabelText("Tab size"), "4");
+    await user.click(within(dialog).getByRole("checkbox", { name: /Word wrap/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Apply settings" }));
+    const editor = screen.getByRole("textbox", { name: "Code editor" });
+    expect(editor).toHaveAttribute("data-font-size", "16");
+    expect(editor).toHaveAttribute("data-tab-size", "4");
+    expect(editor).toHaveAttribute("data-word-wrap", "true");
+    expect(localStorage.getItem("nebula.editor.preferences.v1")).toContain('"fontSize":16');
+  });
+
   it("refreshes workspace files when the persistent editor becomes active again", async () => {
     const terminalEntry = {
       path: "from-terminal.py",
@@ -194,15 +263,18 @@ describe("CodeEditorPanel", () => {
     const editor = await screen.findByRole("textbox", { name: "Code editor" });
     await user.clear(editor);
     await user.type(editor, "print('dirty first')");
+    expect(within(screen.getByRole("tablist", { name: "Open editor files" })).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["tool.py"]);
     await user.click(screen.getByRole("button", { name: "New editor file" }));
-    await user.type(editor, "second draft");
+    expect(within(screen.getByRole("tablist", { name: "Open editor files" })).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["tool.py", "untitled.txt"]);
+    const secondEditor = screen.getByRole("textbox", { name: "Code editor" });
+    fireEvent.change(secondEditor, { target: { value: "second draft" } });
 
-    expect(within(screen.getByRole("tablist", { name: "Open editor files" })).getAllByRole("tab")).toHaveLength(2);
+    expect(within(screen.getByRole("tablist", { name: "Open editor files" })).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["tool.py", "untitled.txt"]);
     await user.click(screen.getByRole("tab", { name: /tool\.py/ }));
-    expect(editor).toHaveValue("print('dirty first')");
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("print('dirty first')");
     await user.click(screen.getByRole("tab", { name: /untitled\.txt/i }));
-    expect(editor).toHaveValue("second draft");
-    expect(screen.getByText("2 open · 2 unsaved")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("second draft");
+    expect(screen.getByText(/^2 open · 2 unsaved ·/)).toBeVisible();
   });
 
   it("quick-opens a recursive workspace result without discarding the current tab", async () => {

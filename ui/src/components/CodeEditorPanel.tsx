@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Braces, File, FileCheck2, FilePlus2, Folder, GitBranch, LoaderCircle, MessageSquareText, MoreHorizontal, Play, RefreshCw, RotateCcw, Save, Search, ShieldAlert, Sparkles, TextSearch, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Braces, Columns2, File, FileCheck2, FilePlus2, Folder, GitBranch, LoaderCircle, MessageSquareText, MoreHorizontal, Play, RefreshCw, RotateCcw, Save, Search, Settings2, ShieldAlert, Sparkles, TextSearch, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ExecutionLanguage, WorkspaceEntry, WorkspaceSearchMatch } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -17,6 +17,8 @@ import { StandardEmptyState } from "./SurfacePrimitives";
 import { EditorWorkspaceSearch } from "./EditorWorkspaceSearch";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { EditorSourceControl } from "./EditorSourceControl";
+import { EditorPreferencesDialog } from "./EditorPreferencesDialog";
+import { codeMirrorKey, eventMatchesShortcut, useEditorPreferences } from "../state/editorPreferences";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
 
@@ -57,8 +59,13 @@ async function decodeWorkspaceFile(blob: Blob): Promise<{ content: string; sha25
   };
 }
 
-function nextUntitledPath(directory: string, entries: WorkspaceEntry[]): string {
+function nextUntitledPath(directory: string, entries: WorkspaceEntry[], buffers: WorkbenchEditorBuffer[]): string {
   const names = new Set(entries.map((entry) => entry.name));
+  for (const candidate of buffers) {
+    const parts = candidate.filePath.split("/");
+    const parent = parts.slice(0, -1).join("/");
+    if (parent === directory) names.add(parts.at(-1) ?? "");
+  }
   let name = "untitled.txt";
   let suffix = 2;
   while (names.has(name)) name = `untitled-${suffix++}.txt`;
@@ -67,7 +74,8 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[]): string 
 
 export function CodeEditorPanel({ active, api, engagementId, providers = [], harnesses = [], onRun, onOpenTerminal, onUseWithAssistant }: CodeEditorPanelProps) {
   const confirm = useConfirmation();
-  const { buffer, buffers, activateBuffer, closeBuffer, setBuffer, updateBuffers } = useWorkbenchEditor(engagementId);
+  const { buffer, buffers, activateBuffer, closeBuffer, closeSplit, focusPane, persistenceError, persistenceState, primaryBuffer, retryPersistence, secondaryBuffer, setBuffer, splitEditor, updateBuffer: updateBufferById, updateBuffers } = useWorkbenchEditor(engagementId);
+  const { preferences, savePreferences } = useEditorPreferences();
   const [directory, setDirectory] = useState("");
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [nextOffset, setNextOffset] = useState<number>();
@@ -89,8 +97,12 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   const [workspaceSearchMode, setWorkspaceSearchMode] = useState<"files" | "text">();
   const [sidebarMode, setSidebarMode] = useState<"files" | "source-control">("files");
   const [sourceControlRevision, setSourceControlRevision] = useState(0);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [restoreRetry, setRestoreRetry] = useState(0);
   const [navigation, setNavigation] = useState<{ line: number; column: number; request: number }>();
   const [preserving, setPreserving] = useState(false);
+  const restoringIds = useRef(new Set<string>());
+  const failedRestoreIds = useRef(new Set<string>());
   const suggestionRuntimes = useMemo(() => codeSuggestionRuntimeOptions(providers, harnesses), [providers, harnesses]);
   const dirty = Boolean(buffer && (!buffer.existing || buffer.content !== buffer.savedContent));
   const anyDirty = buffers.some((candidate) => !candidate.existing || candidate.content !== candidate.savedContent);
@@ -126,7 +138,31 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
     setNotice(undefined);
     setConflict(false);
     setSidebarMode("files");
+    failedRestoreIds.current.clear();
+    restoringIds.current.clear();
   }, [engagementId]);
+
+  useEffect(() => {
+    if (!active) return;
+    for (const candidate of [primaryBuffer, secondaryBuffer]) {
+      if (!candidate?.restoreFromCore || restoringIds.current.has(candidate.id) || failedRestoreIds.current.has(candidate.id)) continue;
+      restoringIds.current.add(candidate.id);
+      void api.downloadWorkspaceFile(engagementId, candidate.filePath)
+        .then(decodeWorkspaceFile)
+        .then((decoded) => updateBufferById(candidate.id, {
+          content: decoded.content,
+          expectedSha256: decoded.sha256,
+          restoreFromCore: false,
+          savedContent: decoded.content,
+        }))
+        .catch((restoreError) => {
+          failedRestoreIds.current.add(candidate.id);
+          void logCaughtDiagnostic("interface.code_editor.restore", "A restored editor tab could not reload its workspace file.", restoreError, "code_editor");
+          setError(restoreError instanceof Error ? `Could not restore ${candidate.filePath}: ${restoreError.message}` : `Could not restore ${candidate.filePath}.`);
+        })
+        .finally(() => restoringIds.current.delete(candidate.id));
+    }
+  }, [active, api, engagementId, primaryBuffer, restoreRetry, secondaryBuffer, updateBufferById]);
 
   useEffect(() => {
     if (!anyDirty) return;
@@ -172,12 +208,12 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
     else if (entry.kind === "file") void openFile(entry);
   };
 
-  const createFile = async () => {
+  const createFile = () => {
     setBuffer({
       id: newEditorBufferId(),
       content: "",
       existing: false,
-      filePath: nextUntitledPath(directory, entries),
+      filePath: nextUntitledPath(directory, entries, buffers),
       savedContent: "",
     });
     setConflict(false);
@@ -188,14 +224,14 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
     setMobileToolsOpen(false);
   };
 
-  const save = useCallback(async (force = false) => {
-    if (!buffer || saving) return;
-    const path = buffer.filePath.trim();
+  const save = useCallback(async (force = false, target = buffer) => {
+    if (!target || saving) return;
+    const path = target.filePath.trim();
     if (!validWorkspacePath(path)) {
       setValidationError("Enter a workspace-relative file path without empty, . or .. segments.");
       return;
     }
-    const payload = new Blob([buffer.content], { type: "text/plain;charset=utf-8" });
+    const payload = new Blob([target.content], { type: "text/plain;charset=utf-8" });
     if (payload.size > MAX_EDITOR_BYTES) {
       setValidationError("Editor files may not exceed 1 MiB when encoded as UTF-8.");
       return;
@@ -210,19 +246,19 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
         engagementId,
         path,
         payload,
-        buffer.existing,
+        target.existing,
         undefined,
-        force ? undefined : buffer.expectedSha256,
+        force ? undefined : target.expectedSha256,
       );
       const saved: WorkbenchEditorBuffer = {
-        id: buffer.id,
-        content: buffer.content,
+        id: target.id,
+        content: target.content,
         expectedSha256: result.sha256,
         existing: true,
         filePath: result.path,
-        savedContent: buffer.content,
+        savedContent: target.content,
       };
-      setBuffer(saved);
+      updateBufferById(target.id, saved);
       setSourceControlRevision((revision) => revision + 1);
       setNotice(`Saved /workspace/${result.path}. Use it from Terminal when you're ready.`);
       const parent = result.path.includes("/") ? result.path.slice(0, result.path.lastIndexOf("/")) : "";
@@ -232,7 +268,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
       if (caughtError instanceof ApiError && caughtError.status === 412) {
         setConflict(true);
         setError("This file changed in Terminal or another workspace client after you opened it.");
-      } else if (caughtError instanceof ApiError && caughtError.status === 409 && !buffer.existing) {
+      } else if (caughtError instanceof ApiError && caughtError.status === 409 && !target.existing) {
         setError("A workspace file already exists at this path. Choose another filename.");
       } else {
         setError(caughtError instanceof Error ? caughtError.message : "Could not save this file.");
@@ -240,7 +276,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
     } finally {
       setSaving(false);
     }
-  }, [api, buffer, directory, engagementId, load, saving, setBuffer]);
+  }, [api, buffer, directory, engagementId, load, saving, updateBufferById]);
 
   const reloadConflict = async () => {
     if (!buffer) return;
@@ -264,7 +300,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   };
 
   const updateBuffer = (changes: Partial<WorkbenchEditorBuffer>) => {
-    if (buffer) setBuffer({ ...buffer, ...changes });
+    if (buffer) updateBufferById(buffer.id, changes);
   };
 
   const openSuggestion = () => {
@@ -435,26 +471,37 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   useEffect(() => {
     if (!active) return;
     const shortcut = (event: globalThis.KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      const key = event.key.toLowerCase();
-      if (key === "p" && !event.shiftKey) {
+      if (event.defaultPrevented) return;
+      if (buffer && eventMatchesShortcut(event, preferences.keybindings.save)) {
+        event.preventDefault();
+        void save(false, buffer);
+      } else if (eventMatchesShortcut(event, preferences.keybindings.quickOpen)) {
         event.preventDefault();
         setWorkspaceSearchMode("files");
-      } else if (key === "f" && event.shiftKey) {
+      } else if (eventMatchesShortcut(event, preferences.keybindings.workspaceSearch)) {
         event.preventDefault();
         setWorkspaceSearchMode("text");
-      } else if (key === "w" && buffer) {
+      } else if (buffer && eventMatchesShortcut(event, preferences.keybindings.closeEditor)) {
         event.preventDefault();
         void closeEditorTab(buffer);
-      } else if (key === "tab" && buffers.length > 1) {
+      } else if (buffers.length > 1 && eventMatchesShortcut(event, preferences.keybindings.nextEditor)) {
         event.preventDefault();
         const current = buffers.findIndex((candidate) => candidate.id === buffer?.id);
         activateBuffer(buffers[(current + 1) % buffers.length].id);
+      } else if (buffers.length > 1 && eventMatchesShortcut(event, preferences.keybindings.splitEditor)) {
+        event.preventDefault();
+        if (secondaryBuffer) closeSplit();
+        else splitEditor();
       }
     };
     document.addEventListener("keydown", shortcut);
     return () => document.removeEventListener("keydown", shortcut);
-  }, [active, buffer, buffers]);
+  }, [active, buffer, buffers, closeSplit, preferences.keybindings, save, secondaryBuffer, splitEditor]);
+
+  const editorPane = (candidate: WorkbenchEditorBuffer, pane: "primary" | "secondary") => <div className={`code-editor-pane${candidate.id === buffer?.id ? " active" : ""}`} key={`${pane}:${candidate.id}`}>
+    {secondaryBuffer && <header><button className="code-editor-pane-focus" type="button" aria-label={`Focus ${candidate.filePath} editor`} aria-pressed={candidate.id === buffer?.id} onClick={() => focusPane(candidate.id)}><span>{candidate.filePath}</span></button>{pane === "secondary" && <button className="icon-button subtle" type="button" aria-label="Close split editor" onClick={closeSplit}><X size={14} /></button>}</header>}
+    <CodeMirrorSurface active={active} ariaLabel={secondaryBuffer ? `${pane === "primary" ? "Primary" : "Secondary"} code editor: ${candidate.filePath}` : "Code editor"} filePath={candidate.filePath} fontSize={preferences.fontSize} tabSize={preferences.tabSize} wordWrap={preferences.wordWrap} saveKey={codeMirrorKey(preferences.keybindings.save)} value={candidate.content} findRequest={candidate.id === buffer?.id ? findRequest : 0} reveal={candidate.id === buffer?.id ? navigation : undefined} onFocus={() => focusPane(candidate.id)} onChange={(content) => updateBufferById(candidate.id, { content })} onSelectionChange={(text) => { if (candidate.id === buffer?.id) setSelection(text); }} completionSource={completionSource} onCursorChange={(line, column) => { if (candidate.id === buffer?.id) setCursor({ line, column }); }} onSave={() => void save(false, candidate)} />
+  </div>;
 
   return <div className={`code-editor-panel${buffer ? " has-buffer" : ""}${mobileFilesOpen ? " mobile-files-open" : ""}`}>
     <aside className="code-editor-sidebar" aria-label="Editor files">
@@ -482,21 +529,23 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
           <div className="code-editor-file-row"><label><span className="sr-only">File path</span><span aria-hidden="true">/workspace/</span><input aria-label="File path" value={buffer.filePath} readOnly={buffer.existing} spellCheck={false} onChange={(event) => updateBuffer({ filePath: event.target.value })} /></label><span className={`code-editor-dirty${dirty ? " dirty" : ""}`} aria-live="polite">{dirty ? "Unsaved" : "Saved"}</span></div>
           <div className="code-editor-actions">
             <strong className="code-editor-mobile-title"><Braces size={15} /> Code</strong>
-            <div className="code-editor-secondary-actions"><button className="button quiet" type="button" title="Quick open (Ctrl+P)" onClick={() => setWorkspaceSearchMode("files")}><Search size={14} /> Open</button><button className="button quiet" type="button" title="Search workspace (Ctrl+Shift+F)" onClick={() => setWorkspaceSearchMode("text")}><TextSearch size={14} /> Search</button><button className="button quiet" type="button" onClick={() => setFindRequest((request) => request + 1)}><Search size={14} /> Find</button><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest</button></div>
+            <div className="code-editor-secondary-actions"><button className="button quiet" type="button" title={`Quick open (${preferences.keybindings.quickOpen})`} onClick={() => setWorkspaceSearchMode("files")}><Search size={14} /> Open</button><button className="button quiet" type="button" title={`Search workspace (${preferences.keybindings.workspaceSearch})`} onClick={() => setWorkspaceSearchMode("text")}><TextSearch size={14} /> Search</button><button className="button quiet" type="button" onClick={() => setFindRequest((request) => request + 1)}><Search size={14} /> Find</button><button className="button quiet" type="button" disabled={buffers.length < 2} title={buffers.length < 2 ? "Open another file before splitting" : preferences.keybindings.splitEditor} onClick={secondaryBuffer ? closeSplit : splitEditor}><Columns2 size={14} /> {secondaryBuffer ? "Unsplit" : "Split"}</button><button className="button quiet" type="button" aria-label="Editor settings" onClick={() => setPreferencesOpen(true)}><Settings2 size={14} /></button><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest</button></div>
             <button className="icon-button subtle code-editor-mobile-tools-toggle" type="button" aria-label="More editor actions" aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((open) => !open)}><MoreHorizontal size={18} /></button>
             <button className="icon-button subtle code-editor-mobile-files-toggle" type="button" aria-label="Show editor files" onClick={() => { setMobileFilesOpen(true); setMobileToolsOpen(false); }}><Folder size={18} /></button>
             <button className="button primary code-editor-save" type="button" disabled={saving || (!dirty && buffer.existing) || !validWorkspacePath(buffer.filePath.trim())} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />} {saving ? "Saving…" : "Save"}</button>
           </div>
-          {mobileToolsOpen && <div className="code-editor-mobile-tools" aria-label="Editor options"><label className="code-editor-completion-toggle"><input type="checkbox" checked={localCompletionEnabled} onChange={(event) => setLocalCompletionEnabled(event.target.checked)} /> Local completions</label><button className="button quiet" type="button" onClick={() => { setWorkspaceSearchMode("files"); setMobileToolsOpen(false); }}><Search size={14} /> Quick open</button><button className="button quiet" type="button" onClick={() => { setWorkspaceSearchMode("text"); setMobileToolsOpen(false); }}><TextSearch size={14} /> Search files</button><button className="button quiet" type="button" onClick={() => { setFindRequest((request) => request + 1); setMobileToolsOpen(false); }}><Search size={14} /> Find</button><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest code</button></div>}
+          {mobileToolsOpen && <div className="code-editor-mobile-tools" aria-label="Editor options"><label className="code-editor-completion-toggle"><input type="checkbox" checked={localCompletionEnabled} onChange={(event) => setLocalCompletionEnabled(event.target.checked)} /> Local completions</label><button className="button quiet" type="button" onClick={() => { setWorkspaceSearchMode("files"); setMobileToolsOpen(false); }}><Search size={14} /> Quick open</button><button className="button quiet" type="button" onClick={() => { setWorkspaceSearchMode("text"); setMobileToolsOpen(false); }}><TextSearch size={14} /> Search files</button><button className="button quiet" type="button" onClick={() => { setFindRequest((request) => request + 1); setMobileToolsOpen(false); }}><Search size={14} /> Find</button><button className="button quiet" type="button" disabled={buffers.length < 2} onClick={() => { if (secondaryBuffer) closeSplit(); else splitEditor(); setMobileToolsOpen(false); }}><Columns2 size={14} /> {secondaryBuffer ? "Close split" : "Split editor"}</button><button className="button quiet" type="button" onClick={() => { setPreferencesOpen(true); setMobileToolsOpen(false); }}><Settings2 size={14} /> Editor settings</button><button className="button quiet" type="button" disabled={!suggestionRuntimes.length} title={!suggestionRuntimes.length ? "Enable a runtime with explicit code-suggestion capability" : undefined} onClick={openSuggestion}><Sparkles size={14} /> Suggest code</button></div>}
         </header>
-        {error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}{validationError && <InlineValidationNotice message={validationError} />}{notice && <p className="workspace-notice" role="status">{notice}</p>}
+        {error && <><DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />{failedRestoreIds.current.size > 0 && <button className="button quiet code-editor-restore-retry" type="button" onClick={() => { failedRestoreIds.current.clear(); setError(undefined); setRestoreRetry((revision) => revision + 1); }}><RefreshCw size={13} /> Retry restored files</button>}</>}{validationError && <InlineValidationNotice message={validationError} />}{notice && <p className="workspace-notice" role="status">{notice}</p>}
         {conflict && <div className="code-editor-conflict" role="alert"><ShieldAlert size={17} /><span><strong>Newer workspace version detected</strong><small>Your draft is still open. Reload the Terminal version or overwrite it explicitly.</small></span><button className="button quiet" type="button" onClick={() => void reloadConflict()}><RotateCcw size={13} /> Reload</button><button className="button danger" type="button" onClick={() => void forceOverwrite()}>Force overwrite</button></div>}
-        <CodeMirrorSurface active={active} filePath={buffer.filePath} value={buffer.content} findRequest={findRequest} reveal={navigation} onChange={(content) => updateBuffer({ content })} onSelectionChange={setSelection} completionSource={completionSource} onCursorChange={(line, column) => setCursor({ line, column })} onSave={() => void save()} />
-        <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span title="Tab and Shift+Tab indent or outdent code">UTF-8 · spaces: 2</span><span>{buffers.length} open · {buffers.filter((candidate) => !candidate.existing || candidate.content !== candidate.savedContent).length} unsaved</span><div className="code-editor-security-actions" aria-label="Security workflow actions"><button className="button quiet" type="button" disabled={!onRun || !executionLanguage(buffer.filePath)} title={!executionLanguage(buffer.filePath) ? "Reviewed execution supports Python and shell files" : "Review and run this draft in Nebula's isolated execution runtime"} onClick={runDraft}><Play size={13} /> Review & run</button><button className="button quiet" type="button" disabled={!onUseWithAssistant} onClick={() => onUseWithAssistant?.({ text: buffer.content, sourceKind: "workspace_file", sourceId: buffer.filePath, sourceLabel: buffer.filePath, truncated: false })}><MessageSquareText size={13} /> Ask Nebula</button><button className="button quiet" type="button" disabled={!buffer.existing || dirty || preserving} title={dirty ? "Save this draft before preserving exact bytes" : undefined} onClick={() => void preserveAsEvidence()}>{preserving ? <LoaderCircle className="spin" size={13} /> : <FileCheck2 size={13} />} Preserve as Evidence</button></div></footer>
+        <div className={`code-editor-surfaces${secondaryBuffer ? " split" : ""}`}>{primaryBuffer && editorPane(primaryBuffer, "primary")}{secondaryBuffer && editorPane(secondaryBuffer, "secondary")}</div>
+        <footer><span>{languageLabelForPath(buffer.filePath)}</span><span>Ln {cursor.line}, Col {cursor.column}</span><span title="Tab and Shift+Tab indent or outdent code">UTF-8 · spaces: {preferences.tabSize}</span><span>{buffers.length} open · {buffers.filter((candidate) => !candidate.existing || candidate.content !== candidate.savedContent).length} unsaved · {persistenceState === "ready" ? "recovery on" : persistenceState}</span><div className="code-editor-security-actions" aria-label="Security workflow actions"><button className="button quiet" type="button" disabled={!onRun || !executionLanguage(buffer.filePath)} title={!executionLanguage(buffer.filePath) ? "Reviewed execution supports Python and shell files" : "Review and run this draft in Nebula's isolated execution runtime"} onClick={runDraft}><Play size={13} /> Review & run</button><button className="button quiet" type="button" disabled={!onUseWithAssistant} onClick={() => onUseWithAssistant?.({ text: buffer.content, sourceKind: "workspace_file", sourceId: buffer.filePath, sourceLabel: buffer.filePath, truncated: false })}><MessageSquareText size={13} /> Ask Nebula</button><button className="button quiet" type="button" disabled={!buffer.existing || dirty || preserving} title={dirty ? "Save this draft before preserving exact bytes" : undefined} onClick={() => void preserveAsEvidence()}>{preserving ? <LoaderCircle className="spin" size={13} /> : <FileCheck2 size={13} />} Preserve as Evidence</button></div></footer>
       </> : <><StandardEmptyState icon={<Braces size={25} />} title="Shared workspace editor" explanation="Open or create a text file here, then run it from Terminal in /workspace using its interpreter." primaryAction={<button className="button primary" type="button" onClick={() => void createFile()}><FilePlus2 size={15} /> New file</button>} />{error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}</>}
+      {persistenceState === "failed" && <div className="code-editor-persistence-error" role="alert"><ShieldAlert size={15} /><span><strong>Hot-exit recovery is unavailable</strong><small>Save workspace files before closing this browser. {persistenceError}</small></span><button className="button quiet" type="button" onClick={retryPersistence}>Retry</button></div>}
     </section>
     {suggestionOpen && <AIWritingDialog api={api} engagementId={engagementId} providers={providers} harnesses={harnesses} purpose="code_suggestion" title="Suggest a code change" description="Generate an operator-reviewed suggestion for the active file. Nothing is saved until you review, apply, and save." sourceLabel={selection ? "Selected code" : buffer?.filePath ?? "Active file"} sourceText={selection || buffer?.content || ""} initialInstruction="Suggest a focused improvement for this code." onClose={() => setSuggestionOpen(false)} onApply={applySuggestion} />}
     {workspaceSearchMode && <EditorWorkspaceSearch api={api} engagementId={engagementId} initialMode={workspaceSearchMode} onClose={() => setWorkspaceSearchMode(undefined)} onOpen={(match) => void openWorkspaceMatch(match)} />}
+    {preferencesOpen && <EditorPreferencesDialog preferences={preferences} onApply={savePreferences} onClose={() => setPreferencesOpen(false)} />}
     {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
   </div>;
 }
