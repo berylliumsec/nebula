@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import shutil
+import subprocess
 
+import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
@@ -150,6 +153,91 @@ def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_pa
         )
         assert escaped.status_code == 422
         assert escaped.json()["code"] == "workspace_path_invalid"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="Git is not installed")
+def test_workspace_source_control_reports_status_and_hardened_diffs(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+
+    def git(*arguments: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(root), *arguments],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    git("init", "-b", "main")
+    git("config", "user.name", "Nebula Test")
+    git("config", "user.email", "nebula@example.invalid")
+    tracked = root / "scanner.txt"
+    tracked.write_text("baseline\n", encoding="utf-8")
+    git("add", "scanner.txt")
+    git("commit", "-m", "baseline")
+    tracked.write_text("baseline\nchanged target\n", encoding="utf-8")
+    (root / "new-rule.yaml").write_text("id: test\n", encoding="utf-8")
+
+    textconv_marker = tmp_path / "textconv-ran"
+    textconv = tmp_path / "malicious-textconv.sh"
+    textconv.write_text(f"#!/bin/sh\ntouch '{textconv_marker}'\ncat \"$1\"\n", encoding="utf-8")
+    textconv.chmod(0o700)
+    (root / ".gitattributes").write_text("*.txt diff=unsafe\n", encoding="utf-8")
+    git("config", "diff.unsafe.textconv", str(textconv))
+
+    with client:
+        status = client.get(
+            f"/api/v1/engagements/{engagement.id}/workspace/source-control",
+            headers=AUTH,
+        )
+        assert status.status_code == 200
+        payload = status.json()
+        assert payload["state"] == "ready"
+        assert payload["branch"] == "main"
+        assert len(payload["head"]) == 12
+        changed = {item["path"]: item for item in payload["files"]}
+        assert changed["scanner.txt"]["worktree_status"] == "modified"
+        assert changed["new-rule.yaml"]["worktree_status"] == "untracked"
+
+        diff = client.get(
+            f"/api/v1/engagements/{engagement.id}/workspace/source-control/diff",
+            headers=AUTH,
+            params={"path": "scanner.txt"},
+        )
+        assert diff.status_code == 200
+        assert "+changed target" in diff.json()["text"]
+        assert diff.json()["head"] == payload["head"]
+        assert not textconv_marker.exists()
+
+        escaped = client.get(
+            f"/api/v1/engagements/{engagement.id}/workspace/source-control/diff",
+            headers=AUTH,
+            params={"path": "../outside"},
+        )
+        assert escaped.status_code == 422
+        assert escaped.json()["code"] == "workspace_path_invalid"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="Git is not installed")
+def test_workspace_source_control_refuses_parent_repository_scope(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    parent = root.parent
+    subprocess.run(
+        ["git", "-C", str(parent), "init"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    with client:
+        response = client.get(
+            f"/api/v1/engagements/{engagement.id}/workspace/source-control",
+            headers=AUTH,
+        )
+        assert response.status_code == 200
+        assert response.json()["state"] == "not_repository"
+        assert "outside the selected project boundary" in response.json()["detail"]
 
 
 def test_host_workspace_folder_browser_lists_only_directories(tmp_path):

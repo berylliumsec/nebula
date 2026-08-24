@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Braces, File, FileCheck2, FilePlus2, Folder, LoaderCircle, MessageSquareText, MoreHorizontal, Play, RefreshCw, RotateCcw, Save, Search, ShieldAlert, Sparkles, TextSearch, X } from "lucide-react";
+import { Braces, File, FileCheck2, FilePlus2, Folder, GitBranch, LoaderCircle, MessageSquareText, MoreHorizontal, Play, RefreshCw, RotateCcw, Save, Search, ShieldAlert, Sparkles, TextSearch, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ExecutionLanguage, WorkspaceEntry, WorkspaceSearchMatch } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -16,6 +16,7 @@ import { sha256Hex } from "../sha256";
 import { StandardEmptyState } from "./SurfacePrimitives";
 import { EditorWorkspaceSearch } from "./EditorWorkspaceSearch";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
+import { EditorSourceControl } from "./EditorSourceControl";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
 
@@ -26,6 +27,7 @@ interface CodeEditorPanelProps {
   providers?: ProviderHealth[];
   harnesses?: HarnessProfile[];
   onRun?: (candidate: FencedRunCandidate) => void;
+  onOpenTerminal?: () => void;
   onUseWithAssistant?: (context: {
     text: string;
     sourceKind: "workspace_file";
@@ -63,7 +65,7 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[]): string 
   return directory ? `${directory}/${name}` : name;
 }
 
-export function CodeEditorPanel({ active, api, engagementId, providers = [], harnesses = [], onRun, onUseWithAssistant }: CodeEditorPanelProps) {
+export function CodeEditorPanel({ active, api, engagementId, providers = [], harnesses = [], onRun, onOpenTerminal, onUseWithAssistant }: CodeEditorPanelProps) {
   const confirm = useConfirmation();
   const { buffer, buffers, activateBuffer, closeBuffer, setBuffer, updateBuffers } = useWorkbenchEditor(engagementId);
   const [directory, setDirectory] = useState("");
@@ -85,6 +87,8 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   const [findRequest, setFindRequest] = useState(0);
   const [workspaceSearchMode, setWorkspaceSearchMode] = useState<"files" | "text">();
+  const [sidebarMode, setSidebarMode] = useState<"files" | "source-control">("files");
+  const [sourceControlRevision, setSourceControlRevision] = useState(0);
   const [navigation, setNavigation] = useState<{ line: number; column: number; request: number }>();
   const [preserving, setPreserving] = useState(false);
   const suggestionRuntimes = useMemo(() => codeSuggestionRuntimeOptions(providers, harnesses), [providers, harnesses]);
@@ -121,6 +125,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
     setError(undefined);
     setNotice(undefined);
     setConflict(false);
+    setSidebarMode("files");
   }, [engagementId]);
 
   useEffect(() => {
@@ -218,6 +223,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
         savedContent: buffer.content,
       };
       setBuffer(saved);
+      setSourceControlRevision((revision) => revision + 1);
       setNotice(`Saved /workspace/${result.path}. Use it from Terminal when you're ready.`);
       const parent = result.path.includes("/") ? result.path.slice(0, result.path.lastIndexOf("/")) : "";
       if (parent === directory) await load(0);
@@ -325,6 +331,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
         return { ...candidate, filePath: `${result.path}${candidate.filePath.slice(entry.path.length)}` };
       }));
       setNotice(`Renamed ${entry.name} to ${newName}.`);
+      setSourceControlRevision((revision) => revision + 1);
       await load(0);
     } catch (renameError) {
       void logCaughtDiagnostic("interface.code_editor.rename_failed", "A workspace entry could not be renamed.", renameError, "code_editor");
@@ -345,6 +352,7 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
       await api.deleteWorkspaceEntry(engagementId, entry.path);
       for (const candidate of open) closeBuffer(candidate.id);
       setNotice(`Deleted ${entry.name}.`);
+      setSourceControlRevision((revision) => revision + 1);
       await load(0);
     } catch (deleteError) {
       void logCaughtDiagnostic("interface.code_editor.delete_failed", "A workspace entry could not be deleted.", deleteError, "code_editor");
@@ -451,8 +459,11 @@ export function CodeEditorPanel({ active, api, engagementId, providers = [], har
   return <div className={`code-editor-panel${buffer ? " has-buffer" : ""}${mobileFilesOpen ? " mobile-files-open" : ""}`}>
     <aside className="code-editor-sidebar" aria-label="Editor files">
       <header><div><Braces size={16} /><strong>Code workspace</strong></div><div><button className="icon-button subtle" type="button" aria-label="New file" onClick={() => void createFile()}><FilePlus2 size={15} /></button><button className="icon-button subtle" type="button" aria-label="Refresh editor files" disabled={loading} onClick={() => void load(0)}><RefreshCw className={loading ? "spin" : undefined} size={14} /></button>{buffer && <button className="icon-button subtle code-editor-mobile-only" type="button" aria-label="Hide editor files" onClick={() => setMobileFilesOpen(false)}><X size={15} /></button>}</div></header>
-      <nav className="code-editor-crumbs" aria-label="Editor workspace path"><button type="button" onClick={() => setDirectory("")}>/workspace</button>{crumbs.map((crumb, index) => <span key={`${crumb}-${index}`}>/<button type="button" onClick={() => setDirectory(crumbs.slice(0, index + 1).join("/"))}>{crumb}</button></span>)}</nav>
-      <div className="code-editor-files">{entries.map((entry) => <button type="button" title={`${entry.path} · Right-click for actions`} className={buffer?.existing && buffer.filePath === entry.path ? "active" : undefined} disabled={entry.kind === "symlink" || entry.kind === "other"} onContextMenu={(event) => { event.preventDefault(); setEntryMenu({ entry, x: event.clientX, y: event.clientY }); }} onClick={() => chooseEntry(entry)} key={entry.path}>{entry.kind === "directory" ? <Folder size={15} /> : <File size={15} />}<span><strong>{entry.name}</strong><small>{entry.kind === "file" ? `${entry.size.toLocaleString()} bytes` : entry.kind}</small></span></button>)}{!entries.length && !loading && <div className="empty-state compact"><Folder size={20} /><strong>No files here</strong><p>Create a text file or use Terminal to populate /workspace.</p></div>}{nextOffset !== undefined && <button className="button quiet" type="button" onClick={() => void load(nextOffset)}>Load more</button>}</div>
+      <div className="code-editor-sidebar-tabs" role="tablist" aria-label="Editor sidebar"><button type="button" role="tab" aria-selected={sidebarMode === "files"} onClick={() => setSidebarMode("files")}><Folder size={13} /> Files</button><button type="button" role="tab" aria-selected={sidebarMode === "source-control"} onClick={() => setSidebarMode("source-control")}><GitBranch size={13} /> Changes</button></div>
+      {sidebarMode === "files" ? <>
+        <nav className="code-editor-crumbs" aria-label="Editor workspace path"><button type="button" onClick={() => setDirectory("")}>/workspace</button>{crumbs.map((crumb, index) => <span key={`${crumb}-${index}`}>/<button type="button" onClick={() => setDirectory(crumbs.slice(0, index + 1).join("/"))}>{crumb}</button></span>)}</nav>
+        <div className="code-editor-files">{entries.map((entry) => <button type="button" title={`${entry.path} · Right-click for actions`} className={buffer?.existing && buffer.filePath === entry.path ? "active" : undefined} disabled={entry.kind === "symlink" || entry.kind === "other"} onContextMenu={(event) => { event.preventDefault(); setEntryMenu({ entry, x: event.clientX, y: event.clientY }); }} onClick={() => chooseEntry(entry)} key={entry.path}>{entry.kind === "directory" ? <Folder size={15} /> : <File size={15} />}<span><strong>{entry.name}</strong><small>{entry.kind === "file" ? `${entry.size.toLocaleString()} bytes` : entry.kind}</small></span></button>)}{!entries.length && !loading && <div className="empty-state compact"><Folder size={20} /><strong>No files here</strong><p>Create a text file or use Terminal to populate /workspace.</p></div>}{nextOffset !== undefined && <button className="button quiet" type="button" onClick={() => void load(nextOffset)}>Load more</button>}</div>
+      </> : <EditorSourceControl active={active} api={api} engagementId={engagementId} refreshKey={sourceControlRevision} onOpenTerminal={onOpenTerminal} onOpenFile={(path) => void openFile({ path, name: path.split("/").at(-1) ?? path, kind: "file", size: 0, modifiedAt: new Date().toISOString() })} />}
     </aside>
     <section className={`code-editor-main${buffer ? "" : " is-empty"}`}>
       {buffer ? <>

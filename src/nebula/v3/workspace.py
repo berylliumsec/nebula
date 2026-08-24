@@ -10,8 +10,10 @@ import hashlib
 import hmac
 import mimetypes
 import os
+import shutil
 import stat
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Literal
@@ -39,6 +41,10 @@ from .runtime_platform import RuntimePlatform
 MAX_PREVIEW_BYTES = 256 * 1024
 MAX_SEARCH_FILE_BYTES = 1024 * 1024
 MAX_SEARCH_SCANNED_FILES = 5_000
+MAX_SOURCE_CONTROL_FILES = 500
+MAX_SOURCE_CONTROL_OUTPUT_BYTES = 4 * 1024 * 1024
+MAX_SOURCE_CONTROL_DIFF_BYTES = 512 * 1024
+SOURCE_CONTROL_TIMEOUT_SECONDS = 8.0
 _BUSY_STATUSES = {
     OperatorExecutionStatus.QUEUED,
     OperatorExecutionStatus.RUNNING,
@@ -78,6 +84,38 @@ class WorkspaceSearchResult(NebulaModel):
     matches: list[WorkspaceSearchMatch]
     scanned_files: int = Field(ge=0)
     truncated: bool = False
+
+
+class SourceControlFile(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    index_status: Literal[
+        "unmodified", "modified", "added", "deleted", "renamed", "copied",
+        "unmerged", "untracked", "ignored", "unknown",
+    ]
+    worktree_status: Literal[
+        "unmodified", "modified", "added", "deleted", "renamed", "copied",
+        "unmerged", "untracked", "ignored", "unknown",
+    ]
+    original_path: str | None = Field(default=None, max_length=4096)
+
+
+class SourceControlStatus(NebulaModel):
+    engagement_id: str
+    state: Literal["ready", "not_repository", "unavailable"]
+    branch: str | None = Field(default=None, max_length=500)
+    head: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")
+    files: list[SourceControlFile] = Field(default_factory=list)
+    truncated: bool = False
+    detail: str = Field(max_length=2_000)
+
+
+class SourceControlDiff(NebulaModel):
+    engagement_id: str
+    path: str = Field(min_length=1, max_length=4096)
+    staged: bool = False
+    text: str
+    truncated: bool = False
+    head: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")
 
 
 class WorkspacePreview(NebulaModel):
@@ -409,6 +447,135 @@ class WorkspaceService:
             matches=matches[:limit],
             scanned_files=min(scanned_files, MAX_SEARCH_SCANNED_FILES),
             truncated=truncated,
+        )
+
+    async def source_control_status(self, engagement_id: str) -> SourceControlStatus:
+        """Return bounded Git status without executing repository-configured helpers."""
+
+        self.store.get(Engagement, engagement_id)
+        root = self._workspace_root(engagement_id).resolve(strict=True)
+        executable = shutil.which("git")
+        if executable is None:
+            return SourceControlStatus(
+                engagement_id=engagement_id,
+                state="unavailable",
+                detail="Git is not installed on the Nebula Core host. The workspace remains editable.",
+            )
+
+        repository = await _run_git(
+            executable,
+            root,
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+        )
+        if repository.returncode != 0:
+            return SourceControlStatus(
+                engagement_id=engagement_id,
+                state="not_repository",
+                detail="This project folder is not a Git repository. Initialize it from Nebula Terminal if source control is needed.",
+            )
+        try:
+            repository_root = Path(
+                repository.output.decode("utf-8", errors="strict").strip()
+            ).resolve()
+        except (OSError, UnicodeDecodeError):
+            repository_root = Path("/")
+        if repository_root != root:
+            return SourceControlStatus(
+                engagement_id=engagement_id,
+                state="not_repository",
+                detail="This project folder is nested inside a parent Git repository. Nebula will not expose source-control paths outside the selected project boundary.",
+            )
+
+        status_result = await _run_git(
+            executable,
+            root,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            ".",
+        )
+        if status_result.returncode != 0:
+            return SourceControlStatus(
+                engagement_id=engagement_id,
+                state="unavailable",
+                detail=_safe_git_detail(status_result.output, "Git status is unavailable for this project."),
+            )
+
+        branch_result, head_result = await asyncio.gather(
+            _run_git(executable, root, "symbolic-ref", "--quiet", "--short", "HEAD"),
+            _run_git(executable, root, "rev-parse", "--verify", "--short=12", "HEAD"),
+        )
+        branch = _decode_git_scalar(branch_result.output) if branch_result.returncode == 0 else None
+        head = _decode_git_scalar(head_result.output) if head_result.returncode == 0 else None
+        files, truncated = _parse_porcelain_status(status_result.output)
+        return SourceControlStatus(
+            engagement_id=engagement_id,
+            state="ready",
+            branch=branch,
+            head=head,
+            files=files,
+            truncated=truncated,
+            detail=(
+                "Working tree clean."
+                if not files
+                else f"{len(files)} changed path{'s' if len(files) != 1 else ''}."
+            ),
+        )
+
+    async def source_control_diff(
+        self, engagement_id: str, path: str, *, staged: bool = False
+    ) -> SourceControlDiff:
+        """Render a bounded patch while disabling external diff and textconv drivers."""
+
+        relative = _relative_parts(path, require_value=True)
+        normalized = PurePosixPath(*relative).as_posix()
+        status = await self.source_control_status(engagement_id)
+        if status.state != "ready":
+            raise ExecutionServiceError(
+                "source_control_unavailable", status.detail, status_code=409
+            )
+        root = self._workspace_root(engagement_id).resolve(strict=True)
+        executable = shutil.which("git")
+        if executable is None:  # guarded by source_control_status; retain fail-closed behavior
+            raise ExecutionServiceError(
+                "source_control_unavailable",
+                "Git is not installed on the Nebula Core host.",
+                status_code=409,
+            )
+        arguments = [
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--unified=3",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ]
+        if staged:
+            arguments.append("--cached")
+        arguments.extend(("--", normalized))
+        result = await _run_git(
+            executable,
+            root,
+            *arguments,
+            output_limit=MAX_SOURCE_CONTROL_DIFF_BYTES,
+        )
+        if result.returncode != 0:
+            raise ExecutionServiceError(
+                "source_control_diff_failed",
+                _safe_git_detail(result.output, "Git could not render this diff."),
+                status_code=409,
+            )
+        return SourceControlDiff(
+            engagement_id=engagement_id,
+            path=normalized,
+            staged=staged,
+            text=result.output.decode("utf-8", errors="replace"),
+            truncated=result.truncated,
+            head=status.head,
         )
 
     def download(self, engagement_id: str, path: str) -> WorkspaceDownload:
@@ -962,6 +1129,155 @@ class WorkspaceService:
         return os.fdopen(descriptor, "rb"), metadata
 
 
+@dataclass(frozen=True)
+class _GitResult:
+    returncode: int
+    output: bytes
+    truncated: bool = False
+
+
+async def _run_git(
+    executable: str,
+    root: Path,
+    *arguments: str,
+    output_limit: int = MAX_SOURCE_CONTROL_OUTPUT_BYTES,
+) -> _GitResult:
+    """Run a bounded, non-interactive Git query without a shell or global config."""
+
+    environment = {
+        **os.environ,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "LC_ALL": "C.UTF-8",
+    }
+    command = (
+        executable,
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        "-c",
+        "commit.gpgSign=false",
+        "-C",
+        str(root),
+        *arguments,
+    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=environment,
+        )
+    except OSError as exc:
+        return _GitResult(127, str(exc).encode("utf-8", errors="replace"))
+
+    output = bytearray()
+
+    async def consume() -> bool:
+        assert process.stdout is not None
+        while chunk := await process.stdout.read(64 * 1024):
+            remaining = output_limit + 1 - len(output)
+            output.extend(chunk[:remaining])
+            if len(output) > output_limit:
+                return True
+        return False
+
+    try:
+        truncated = await asyncio.wait_for(consume(), SOURCE_CONTROL_TIMEOUT_SECONDS)
+        if truncated and process.returncode is None:
+            process.kill()
+        await asyncio.wait_for(process.wait(), 1.0)
+    except TimeoutError:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        return _GitResult(124, b"Git query timed out before it completed.")
+    return _GitResult(
+        0 if truncated else process.returncode or 0,
+        bytes(output[:output_limit]),
+        truncated,
+    )
+
+
+def _decode_git_scalar(payload: bytes) -> str | None:
+    try:
+        value = payload.decode("utf-8", errors="strict").strip()
+    except UnicodeDecodeError:
+        return None
+    return value[:500] or None
+
+
+def _safe_git_detail(payload: bytes, fallback: str) -> str:
+    detail = payload.decode("utf-8", errors="replace").strip()
+    return detail[:2_000] or fallback
+
+
+_GIT_STATUS_NAMES = {
+    " ": "unmodified",
+    "M": "modified",
+    "A": "added",
+    "D": "deleted",
+    "R": "renamed",
+    "C": "copied",
+    "U": "unmerged",
+    "?": "untracked",
+    "!": "ignored",
+}
+
+
+def _parse_porcelain_status(payload: bytes) -> tuple[list[SourceControlFile], bool]:
+    records = payload.split(b"\0")
+    files: list[SourceControlFile] = []
+    truncated = False
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record:
+            continue
+        if len(record) < 4 or record[2:3] != b" ":
+            truncated = True
+            continue
+        try:
+            x = record[0:1].decode("ascii")
+            y = record[1:2].decode("ascii")
+            path = record[3:].decode("utf-8", errors="strict")
+            _relative_parts(path, require_value=True)
+        except (UnicodeDecodeError, ExecutionServiceError):
+            truncated = True
+            continue
+        original_path: str | None = None
+        if x in {"R", "C"} or y in {"R", "C"}:
+            if index >= len(records):
+                truncated = True
+                break
+            try:
+                original_path = records[index].decode("utf-8", errors="strict")
+                _relative_parts(original_path, require_value=True)
+            except (UnicodeDecodeError, ExecutionServiceError):
+                truncated = True
+                original_path = None
+            index += 1
+        files.append(
+            SourceControlFile(
+                path=path,
+                index_status=_GIT_STATUS_NAMES.get(x, "unknown"),
+                worktree_status=_GIT_STATUS_NAMES.get(y, "unknown"),
+                original_path=original_path,
+            )
+        )
+        if len(files) >= MAX_SOURCE_CONTROL_FILES:
+            truncated = index < len(records) - 1
+            break
+    return files, truncated
+
+
 def _relative_parts(path: str, *, require_value: bool = False) -> tuple[str, ...]:
     if "\x00" in path or "\\" in path:
         raise ExecutionServiceError(
@@ -1028,6 +1344,9 @@ def _workspace_usage(root: Path, *, exclude: set[str]) -> tuple[int, int]:
 
 __all__ = [
     "MAX_PREVIEW_BYTES",
+    "SourceControlDiff",
+    "SourceControlFile",
+    "SourceControlStatus",
     "WorkspaceDownload",
     "WorkspaceEntry",
     "WorkspaceListing",

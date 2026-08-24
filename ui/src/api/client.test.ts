@@ -1611,4 +1611,45 @@ describe("ApiClient", () => {
       "http://127.0.0.1:8765/api/v1/engagements/project%2Fone/workspace/search?query=scan+target&mode=text&path=src+tools&limit=100",
     );
   });
+
+  it("maps source-control status and requests hardened diffs", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        engagement_id: "project/one",
+        state: "ready",
+        branch: "research/fix",
+        head: "abcdef123456",
+        files: [{
+          path: "src/scanner.py",
+          index_status: "unmodified",
+          worktree_status: "modified",
+          original_path: null,
+        }],
+        truncated: false,
+        detail: "1 changed path.",
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        engagement_id: "project/one",
+        path: "src/scanner.py",
+        staged: false,
+        text: "@@ -1 +1 @@",
+        truncated: false,
+        head: "abcdef123456",
+      }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.sourceControlStatus("project/one")).resolves.toMatchObject({
+      engagementId: "project/one",
+      state: "ready",
+      branch: "research/fix",
+      files: [{ path: "src/scanner.py", worktreeStatus: "modified" }],
+    });
+    await expect(client.sourceControlDiff("project/one", "src/scanner.py")).resolves.toMatchObject({
+      path: "src/scanner.py",
+      text: "@@ -1 +1 @@",
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/engagements/project%2Fone/workspace/source-control/diff?path=src%2Fscanner.py&staged=false",
+    );
+  });
 });

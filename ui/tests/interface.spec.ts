@@ -388,6 +388,30 @@ async function installTruthfulCore(page: Page) {
         reason_code: null,
         detail: "No active terminal or reviewed execution is using the workspace.",
       };
+    } else if (path.endsWith("/workspace/source-control/diff")) {
+      body = {
+        engagement_id: "scratch-project",
+        path: "scanner.py",
+        staged: false,
+        text: "@@ -1 +1 @@\n-return 'old'\n+return 'changed'",
+        truncated: false,
+        head: "abcdef123456",
+      };
+    } else if (path.endsWith("/workspace/source-control")) {
+      body = {
+        engagement_id: "scratch-project",
+        state: "ready",
+        branch: "research/mock",
+        head: "abcdef123456",
+        files: [{
+          path: "scanner.py",
+          index_status: "unmodified",
+          worktree_status: "modified",
+          original_path: null,
+        }],
+        truncated: false,
+        detail: "1 changed path.",
+      };
     } else if (path.endsWith("/workspace")) {
       body = {
         engagement_id: "scratch-project",
@@ -2349,6 +2373,13 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   } else {
     await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 15_000 });
   }
+  await page.getByRole("tab", { name: "Changes" }).click();
+  await expect(page.getByText("research/mock", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Working diff" }).click();
+  const sourceDiff = page.getByRole("dialog", { name: "scanner.py" });
+  await expect(sourceDiff.getByLabel("Diff for scanner.py")).toContainText("+return 'changed'");
+  await sourceDiff.getByRole("button", { name: "Close source-control diff" }).click();
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.evaluate(() => document.fonts.ready);
   await page.getByRole("button", { name: "New file", exact: true }).first().click();
   const filePath = page.getByRole("textbox", { name: "File path" });

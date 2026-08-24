@@ -22,6 +22,7 @@ operator-reviewed AI without weakening the linked-workspace boundary.
 | Multi-file editing | Switching tabs never discards another tab's draft; dirty state is visible per tab | React editor session; Core after save | component plus Playwright |
 | Save and conflict | Saves are atomic and conditional; a Terminal or other-client change cannot be silently overwritten | Core workspace SHA-256 | Core plus component |
 | Search and navigate | File and text search are bounded, symlink-safe, keyboard operable, and open the chosen match | Core search result plus editor selection | Core plus component plus Playwright |
+| Source-control awareness | Code shows the selected project repository, branch, bounded changes, and hardened staged or working diffs without crossing the project root or executing repository helpers | Core Git query plus shared project workspace | Core plus component plus real Core |
 | Security workflow | A saved file can be handed to Terminal, assistant, or immutable Evidence from the editor with the exact project path | Core project/workspace/evidence plus Workbench view | real Core plus Playwright |
 | Refresh and reconnect | Saved files reload from Core; dirty drafts trigger unload protection and remain available while persistent Workbench state is mounted | Core plus React editor session | component plus real Core |
 | Failure and retry | Listing, open, search, save, conflict, and evidence failures preserve usable tabs and name the next valid action | Core error contract | component plus real Core |
@@ -41,12 +42,18 @@ operator-reviewed AI without weakening the linked-workspace boundary.
 
 - Core workspace: file bytes, paths, metadata, conditional-save hashes, search,
   rename, delete, and linked-folder boundaries.
+- Core source-control query: read-only Git status and diff for a repository whose
+  top level is exactly the selected project folder. Repository-configured hooks,
+  textconv, external diffs, prompts, and global configuration are disabled.
 - Core evidence store: immutable promoted bytes and lineage.
 - Workbench URL: selected project and Code view.
 - React editor session: open tabs, active tab, selections, and unsaved drafts.
 - Browser storage: device-local editor preferences only; never authoritative file
   content or project mutations.
 - Terminal/harness: execution state and output; it reads the same project folder.
+- Terminal/reviewed execution: Git mutations, builds, tasks, debuggers, and other
+  command lifecycles. Code hands off to these existing authorities instead of
+  embedding a second terminal or approval system.
 
 ## Parity boundary
 

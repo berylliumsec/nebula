@@ -334,6 +334,8 @@ from .tool_results import (
 )
 from .version import __version__, build_metadata
 from .workspace import (
+    SourceControlDiff,
+    SourceControlStatus,
     WorkspaceListing,
     WorkspaceMutationResult,
     WorkspacePreview,
@@ -4592,6 +4594,32 @@ def create_app(
     ) -> WorkspaceSearchResult:
         return require_workspace_service().search(
             engagement_id, query, mode=mode, path=path, limit=limit
+        )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/source-control",
+        response_model=SourceControlStatus,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def workspace_source_control_status(
+        engagement_id: str,
+    ) -> SourceControlStatus:
+        return await require_workspace_service().source_control_status(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/source-control/diff",
+        response_model=SourceControlDiff,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def workspace_source_control_diff(
+        engagement_id: str,
+        path: str = Query(min_length=1, max_length=4096),
+        staged: bool = Query(default=False),
+    ) -> SourceControlDiff:
+        return await require_workspace_service().source_control_diff(
+            engagement_id, path, staged=staged
         )
 
     @app.post(

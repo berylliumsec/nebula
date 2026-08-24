@@ -96,6 +96,8 @@ import type {
   RunStopRequest,
   RunnerProfile,
   RunnerProfileUpdateRequest,
+  SourceControlDiff,
+  SourceControlStatus,
   SetupControlResponse,
   SetupStatus,
   ToolArtifactReference,
@@ -1222,6 +1224,30 @@ interface WireWorkspaceSearchResult extends JsonObject {
   }>;
   scanned_files: number;
   truncated: boolean;
+}
+
+interface WireSourceControlStatus extends JsonObject {
+  engagement_id: string;
+  state: SourceControlStatus["state"];
+  branch?: string | null;
+  head?: string | null;
+  files: Array<{
+    path: string;
+    index_status: SourceControlStatus["files"][number]["indexStatus"];
+    worktree_status: SourceControlStatus["files"][number]["worktreeStatus"];
+    original_path?: string | null;
+  }>;
+  truncated: boolean;
+  detail: string;
+}
+
+interface WireSourceControlDiff extends JsonObject {
+  engagement_id: string;
+  path: string;
+  staged: boolean;
+  text: string;
+  truncated: boolean;
+  head?: string | null;
 }
 
 interface WireWorkspacePreview extends JsonObject {
@@ -2418,6 +2444,34 @@ function mapWorkspaceSearchResult(value: WireWorkspaceSearchResult): WorkspaceSe
     })),
     scannedFiles: value.scanned_files,
     truncated: value.truncated,
+  };
+}
+
+function mapSourceControlStatus(value: WireSourceControlStatus): SourceControlStatus {
+  return {
+    engagementId: value.engagement_id,
+    state: value.state,
+    branch: value.branch ?? undefined,
+    head: value.head ?? undefined,
+    files: value.files.map((file) => ({
+      path: file.path,
+      indexStatus: file.index_status,
+      worktreeStatus: file.worktree_status,
+      originalPath: file.original_path ?? undefined,
+    })),
+    truncated: value.truncated,
+    detail: value.detail,
+  };
+}
+
+function mapSourceControlDiff(value: WireSourceControlDiff): SourceControlDiff {
+  return {
+    engagementId: value.engagement_id,
+    path: value.path,
+    staged: value.staged,
+    text: value.text,
+    truncated: value.truncated,
+    head: value.head ?? undefined,
   };
 }
 
@@ -5730,6 +5784,29 @@ export class ApiClient {
       `engagements/${encodeURIComponent(engagementId)}/workspace/search?${parameters}`,
       { signal },
     ).then(mapWorkspaceSearchResult);
+  }
+
+  sourceControlStatus(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<SourceControlStatus> {
+    return this.request<WireSourceControlStatus>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/source-control`,
+      { signal },
+    ).then(mapSourceControlStatus);
+  }
+
+  sourceControlDiff(
+    engagementId: string,
+    path: string,
+    staged = false,
+    signal?: AbortSignal,
+  ): Promise<SourceControlDiff> {
+    const parameters = new URLSearchParams({ path, staged: String(staged) });
+    return this.request<WireSourceControlDiff>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/source-control/diff?${parameters}`,
+      { signal },
+    ).then(mapSourceControlDiff);
   }
 
   listHostWorkspaceFolders(path?: string): Promise<{

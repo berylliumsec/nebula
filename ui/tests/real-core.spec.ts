@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
@@ -481,6 +481,64 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
   } finally {
     await api.dispose();
     await stopRealCore(core);
+  }
+});
+
+test("production Code reads real Git changes and hands mutations to Nebula Terminal", async ({ page }) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore();
+  const projectFolder = await mkdtemp(path.join(tmpdir(), "nebula-source-control-project-"));
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  const git = (...gitArguments: string[]) => {
+    const result = spawnSync("git", ["-C", projectFolder, ...gitArguments], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+  };
+  try {
+    git("init", "-b", "research");
+    git("config", "user.name", "Nebula Acceptance");
+    git("config", "user.email", "nebula@example.invalid");
+    await writeFile(path.join(projectFolder, "scanner.py"), "def scan():\n    return 'baseline'\n", "utf8");
+    git("add", "scanner.py");
+    git("commit", "-m", "baseline");
+    await writeFile(path.join(projectFolder, "scanner.py"), "def scan():\n    return 'changed'\n", "utf8");
+
+    const create = await api.post("engagements", { data: {
+      name: "Source Control Acceptance",
+      description: "",
+      client_name: null,
+      status: "draft",
+      tags: [],
+      workspace_path: projectFolder,
+      metadata: {},
+    } });
+    expect(create.ok(), await create.text()).toBe(true);
+    const project = await create.json() as { id: string };
+    await page.addInitScript((projectId) => localStorage.setItem("nebula.engagement", projectId), project.id);
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 20_000 });
+
+    await page.getByRole("tab", { name: "Changes" }).click();
+    await expect(page.getByText("research", { exact: true })).toBeVisible();
+    await expect(page.getByText("1 changed path.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Working diff" }).click();
+    const diff = page.getByRole("dialog", { name: "scanner.py" });
+    await expect(diff.getByLabel("Diff for scanner.py")).toContainText("+    return 'changed'");
+    await diff.getByRole("button", { name: "Close source-control diff" }).click();
+
+    await page.getByRole("button", { name: /scanner\.py/ }).click();
+    await expect(page.locator(".cm-line").nth(1)).toHaveText("    return 'changed'");
+    await page.getByRole("tab", { name: "Changes" }).click();
+    await expect(page.getByText(/Stage, commit, branch, pull, and push remain in Nebula Terminal/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open Terminal" })).toBeVisible();
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+    if (path.basename(projectFolder).startsWith("nebula-source-control-project-")) {
+      await rm(projectFolder, { recursive: true, force: true });
+    }
   }
 });
 

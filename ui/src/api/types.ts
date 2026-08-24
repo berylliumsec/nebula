@@ -1987,6 +1987,44 @@ export interface WorkspaceSearchResult {
   truncated: boolean;
 }
 
+export type SourceControlFileStatus =
+  | "unmodified"
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "unmerged"
+  | "untracked"
+  | "ignored"
+  | "unknown";
+
+export interface SourceControlFile {
+  path: string;
+  indexStatus: SourceControlFileStatus;
+  worktreeStatus: SourceControlFileStatus;
+  originalPath?: string;
+}
+
+export interface SourceControlStatus {
+  engagementId: Identifier;
+  state: "ready" | "not_repository" | "unavailable";
+  branch?: string;
+  head?: string;
+  files: SourceControlFile[];
+  truncated: boolean;
+  detail: string;
+}
+
+export interface SourceControlDiff {
+  engagementId: Identifier;
+  path: string;
+  staged: boolean;
+  text: string;
+  truncated: boolean;
+  head?: string;
+}
+
 export interface WorkspacePreview {
   engagementId: Identifier;
   path: string;

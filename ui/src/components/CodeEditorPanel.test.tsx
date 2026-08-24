@@ -197,7 +197,7 @@ describe("CodeEditorPanel", () => {
     await user.click(screen.getByRole("button", { name: "New editor file" }));
     await user.type(editor, "second draft");
 
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(within(screen.getByRole("tablist", { name: "Open editor files" })).getAllByRole("tab")).toHaveLength(2);
     await user.click(screen.getByRole("tab", { name: /tool\.py/ }));
     expect(editor).toHaveValue("print('dirty first')");
     await user.click(screen.getByRole("tab", { name: /untitled\.txt/i }));
@@ -229,8 +229,49 @@ describe("CodeEditorPanel", () => {
     await user.click(await within(dialog).findByRole("option", { name: /src\/scanner\.py/ }));
 
     expect(await screen.findByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(within(screen.getByRole("tablist", { name: "Open editor files" })).getAllByRole("tab")).toHaveLength(2);
     expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("def scan():\n    pass\n");
     expect(searchWorkspace).toHaveBeenCalledWith("project-1", "scanner", "files", "", expect.any(AbortSignal));
+  });
+
+  it("shows repository changes and a hardened diff without duplicating Git mutations", async () => {
+    const user = userEvent.setup();
+    const sourceControlStatus = vi.fn().mockResolvedValue({
+      engagementId: "project-1",
+      state: "ready",
+      branch: "research/fix",
+      head: "abcdef123456",
+      files: [{
+        path: "tool.py",
+        indexStatus: "unmodified",
+        worktreeStatus: "modified",
+      }],
+      truncated: false,
+      detail: "1 changed path.",
+    });
+    const sourceControlDiff = vi.fn().mockResolvedValue({
+      engagementId: "project-1",
+      path: "tool.py",
+      staged: false,
+      text: "@@ -1 +1 @@\n-print('old')\n+print('new')",
+      truncated: false,
+      head: "abcdef123456",
+    });
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      sourceControlStatus,
+      sourceControlDiff,
+    });
+
+    await user.click(screen.getByRole("tab", { name: "Changes" }));
+    expect(await screen.findByText("research/fix")).toBeVisible();
+    expect(screen.getByText("modified")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Working diff" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "tool.py" });
+    expect(within(dialog).getByLabelText("Diff for tool.py")).toHaveTextContent("+print('new')");
+    expect(within(dialog).queryByRole("button", { name: /stage|commit|push/i })).not.toBeInTheDocument();
+    expect(sourceControlStatus).toHaveBeenCalledWith("project-1", expect.any(AbortSignal));
+    expect(sourceControlDiff).toHaveBeenCalledWith("project-1", "tool.py", false);
   });
 });
