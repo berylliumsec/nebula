@@ -1894,8 +1894,9 @@ kbd { font-size: 11px; }
   .workspace-reset > div { grid-column: auto; }
   .workspace-browser-toolbar { align-items: stretch; flex-direction: column; gap: 7px; }.workspace-browser-toolbar > div { justify-content: flex-end; }
   .code-editor-panel { display: block; }
-  .code-editor-debug-entry { justify-content: stretch; }
-  .code-editor-debug-entry .button { width: 100%; min-height: 44px; justify-content: center; }
+  .code-editor-debug-entry { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-content: stretch; }
+  .code-editor-debug-entry .button { width: auto; min-height: 44px; justify-content: center; }
+  .code-editor-debug-entry .button:nth-of-type(3) { grid-column: 1 / -1; }
   .code-editor-debug-entry span { display: none; }
   .editor-debugger { position: fixed; inset: 8px; width: auto; max-height: none; }
   .editor-debugger-preflight dl, .editor-debugger-columns { grid-template-columns: 1fr; }

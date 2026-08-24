@@ -28,7 +28,11 @@ operator-reviewed AI without weakening the linked-workspace boundary.
 | Source-control awareness | Code shows the selected project repository, branch, bounded changes, and hardened staged or working diffs without crossing the project root or executing repository helpers | Core Git query plus shared project workspace | Core plus component plus real Core |
 | Language intelligence | Python buffers provide completion, hover, signatures, same-buffer definition/references/rename, formatting, and live Problems without reading host project configuration or following imports outside editor-supplied bytes | Authenticated ephemeral LSP session; open editor bytes only | language unit plus authenticated WebSocket plus CodeMirror integration |
 | Tasks and tests | Code discovers bounded declarative npm scripts, Make targets, Python test files, and Go/Rust test suites; selecting one opens the existing exact-source execution review rather than running implicitly | Core workspace discovery plus reviewed-execution preflight/runtime/Activity | Core discovery plus component plus real Core |
+| VS Code project compatibility | Supported `tasks.json` process/shell tasks and `launch.json` Python launch profiles are parsed without executing extensions or project code; unsupported profiles remain visible with an explanation | Core JSONC parser plus bounded compatibility allowlist | Core parser plus component plus real Core |
+| Debugging | A saved Python buffer can enter an isolated debug session pinned to its path and SHA-256; stepping, pause, continue, stack, scopes, and evaluate remain in Nebula's reviewed, read-only, network-disabled runtime | Existing reviewed-execution and container runtime plus debug adapter session | Core plus component plus real Core launch review |
+| Shared environment | Code identifies whether the project is a linked host folder or managed workspace and points to the same `/workspace` used by Terminal, tasks, debuggers, harnesses, and agents | Core project workspace plus existing runtime authorities | component plus real Core |
 | Security workflow | A saved file can be handed to Terminal, assistant, or immutable Evidence from the editor with the exact project path | Core project/workspace/evidence plus Workbench view | real Core plus Playwright |
+| Finding workflow | A saved exact source buffer is reused or preserved as immutable Evidence before a prefilled informational candidate is handed to Findings; Code never claims validation, exploitability, or impact | Core evidence plus Findings authority and explicit operator review | component plus real Core |
 | Refresh and reconnect | Saved files reload from Core; dirty drafts trigger unload protection and survive complete Workbench/provider remounts | Core plus React editor session plus bounded IndexedDB cache | component plus real Core |
 | Failure and retry | Listing, open, restore, persistence, search, save, conflict, and evidence failures preserve usable tabs and name the next valid action | Core error contract plus local persistence status | component plus real Core |
 | Rename and delete | Renames update every open identity; delete clears only the deleted tab after explicit confirmation | Core workspace plus React editor session | component plus real Core |
@@ -69,15 +73,37 @@ operator-reviewed AI without weakening the linked-workspace boundary.
   to these existing authorities instead of embedding a second terminal or
   approval system.
 
-## Parity boundary
+## Practical parity and deliberate boundaries
 
-The current native editor owns the Nebula-specific shell, split documents,
-hot-exit recovery, settings/keybindings, source-control awareness, bounded
-open-buffer Python intelligence, and safe workspace lifecycle. Project-wide
-language indexes, debugger, task, remote-development, and extension-host parity
-require a sandboxed IDE service or equivalent protocol hosts; they must not be
-simulated with isolated UI buttons. Those hosts are admitted only with
-project-scoped filesystem access, explicit network/capability policy,
-authenticated transport, lifecycle cleanup, and production/LAN tests. Terminal,
-agents, approvals, and findings remain their existing Nebula authorities and are
-integrated by handoff rather than cloned inside Code.
+The workbench covers the everyday VS Code capability families that belong in an
+editor: multi-document and split editing, syntax and search, palette and
+conflict-free keybindings, durable hot exit, language intelligence and Problems,
+source status and safe diffs, declarative task discovery, launch configuration,
+debug controls, workspace awareness, and settings.  It uses CodeMirror 6,
+`@codemirror/lsp-client`, JSONC parsing, Jedi, Ruff, and the Debug Adapter
+Protocol instead of implementing editor, protocol, or parser machinery locally.
+
+Parity does not mean cloning every VS Code surface.  These exclusions are product
+decisions, not hidden gaps:
+
+- Terminal, agents, execution review, containers, approvals, Evidence, and
+  Findings retain their existing Nebula authorities. Code makes exact-context
+  handoffs to them instead of embedding weaker copies.
+- Git mutation stays in the existing reviewed Terminal workflow. Code provides
+  repository identity, branch, changes, staged and working diffs without running
+  repository helpers, hooks, text conversion, or prompts.
+- Python language navigation is explicitly open-buffer bounded. Project-wide
+  indexes, imports, plugins, and configuration would execute or trust project
+  material and therefore require a separately admitted sandboxed language host.
+- Supported VS Code task and launch files are a compatibility boundary, not an
+  extension marketplace. Extension-owned task types and attach profiles are
+  visible but disabled with an explanation.
+- A Nebula project is one coherent workspace. Arbitrary multi-root and duplicate
+  Remote-SSH UIs are excluded; linked host folders and managed isolated
+  workspaces already provide the remote/runtime boundary shared by Code and the
+  rest of Nebula.
+
+Any future extension or project-wide language host must have project-scoped
+filesystem access, explicit network and capability policy, authenticated
+transport, lifecycle cleanup, and production/LAN evidence before Code advertises
+the capability.

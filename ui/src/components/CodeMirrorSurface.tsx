@@ -7,7 +7,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, t
 import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { openLintPanel } from "@codemirror/lint";
 import { createLanguageServer, type LanguageServerState } from "../api/languageServer";
-import { formatDocument, renameSymbol } from "@codemirror/lsp-client";
+import { findReferences, formatDocument, jumpToDefinition, renameSymbol } from "@codemirror/lsp-client";
 
 interface CodeMirrorSurfaceProps {
   active: boolean;
@@ -23,6 +23,8 @@ interface CodeMirrorSurfaceProps {
   findRequest?: number;
   problemsRequest?: number;
   formatRequest?: number;
+  definitionRequest?: number;
+  referencesRequest?: number;
   renameRequest?: number;
   reveal?: { line: number; column: number; request: number };
   saveKey?: string;
@@ -122,7 +124,7 @@ const nebulaTheme = EditorView.theme({
   ".cm-debug-breakpoint": { display: "block", width: "9px", height: "9px", margin: "0 3px", borderRadius: "50%", background: "var(--red)", boxShadow: "0 0 0 1px color-mix(in srgb, var(--red) 70%, black)" },
 });
 
-export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, findRequest = 0, problemsRequest = 0, formatRequest = 0, renameRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer, breakpointLines = [], onToggleBreakpoint }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, definitionRequest = 0, findRequest = 0, problemsRequest = 0, formatRequest = 0, referencesRequest = 0, renameRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer, breakpointLines = [], onToggleBreakpoint }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
@@ -280,6 +282,14 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
   useEffect(() => {
     if (formatRequest && viewRef.current) void formatDocument(viewRef.current);
   }, [formatRequest]);
+
+  useEffect(() => {
+    if (definitionRequest && viewRef.current) jumpToDefinition(viewRef.current);
+  }, [definitionRequest]);
+
+  useEffect(() => {
+    if (referencesRequest && viewRef.current) findReferences(viewRef.current);
+  }, [referencesRequest]);
 
   useEffect(() => {
     if (renameRequest && viewRef.current) renameSymbol(viewRef.current);

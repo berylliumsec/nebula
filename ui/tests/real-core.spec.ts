@@ -538,7 +538,7 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     await expect(page.getByText("Workspace synchronized: 1 reloaded.")).toBeVisible();
 
     await page.getByRole("textbox", { name: "Code editor" }).fill("def scan_target():\n    return 'unsaved operator draft'\n");
-    await writeFile(path.join(workspaceRoot, "scanner.py"), "def scan_target():\n    return 'newer agent edit'\n", "utf8");
+    await writeFile(path.join(workspaceRoot, "scanner.py"), "def scan_target():\n    return 'newer agent edit'\n\nscan_target()\n", "utf8");
     await page.getByRole("button", { name: "Chat", exact: true }).click();
     await page.getByRole("button", { name: "More workbench views" }).click();
     await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Code/ }).click();
@@ -548,6 +548,21 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     const reload = page.getByRole("dialog", { name: "Reload the workspace file?" });
     await reload.getByRole("button", { name: "Reload file" }).click();
     await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("newer agent edit");
+
+    await expect(page.getByText(/Python · open-buffer intelligence ready/)).toBeVisible({ timeout: 20_000 });
+    const editor = page.getByRole("textbox", { name: "Code editor" });
+    await page.locator(".cm-line").nth(3).click();
+    await editor.press("Home");
+    await editor.press("ArrowRight");
+    await page.getByRole("button", { name: "Go to definition" }).click();
+    await expect(page.getByText(/^Ln 1, Col /)).toBeVisible();
+    await page.locator(".cm-line").nth(3).click();
+    await editor.press("Home");
+    await editor.press("ArrowRight");
+    await page.getByRole("button", { name: "Find references" }).click();
+    const references = page.getByRole("listbox", { name: "Reference list" });
+    await expect(references).toBeVisible();
+    await expect(references.getByRole("option")).toHaveCount(2);
 
     await page.getByRole("button", { name: "Candidate finding" }).click();
     const findingHandoff = page.getByRole("dialog", { name: "Draft an evidence-backed candidate finding?" });

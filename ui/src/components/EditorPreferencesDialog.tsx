@@ -21,6 +21,8 @@ const actions: Array<[EditorAction, string]> = [
   ["rename", "Rename symbol"],
   ["tasks", "Show project tasks"],
   ["debug", "Review and start debugging"],
+  ["definition", "Go to definition"],
+  ["references", "Find references"],
   ["closeEditor", "Close active editor"],
   ["nextEditor", "Next editor"],
   ["splitEditor", "Split editor"],

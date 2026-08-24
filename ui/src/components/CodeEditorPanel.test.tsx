@@ -16,9 +16,11 @@ beforeEach(() => {
 });
 
 vi.mock("./CodeMirrorSurface", () => ({
-  CodeMirrorSurface: ({ ariaLabel = "Code editor", value, findRequest, fontSize, tabSize, wordWrap, onChange, onFocus, onSave }: { ariaLabel?: string; value: string; findRequest?: number; fontSize?: number; tabSize?: number; wordWrap?: boolean; onChange(value: string): void; onFocus?(): void; onSave(): void }) => <textarea
+  CodeMirrorSurface: ({ ariaLabel = "Code editor", value, definitionRequest, findRequest, referencesRequest, fontSize, tabSize, wordWrap, onChange, onFocus, onSave }: { ariaLabel?: string; value: string; definitionRequest?: number; findRequest?: number; referencesRequest?: number; fontSize?: number; tabSize?: number; wordWrap?: boolean; onChange(value: string): void; onFocus?(): void; onSave(): void }) => <textarea
     aria-label={ariaLabel}
     data-find-request={findRequest}
+    data-definition-request={definitionRequest}
+    data-references-request={referencesRequest}
     data-font-size={fontSize}
     data-tab-size={tabSize}
     data-word-wrap={wordWrap}
@@ -192,6 +194,26 @@ describe("CodeEditorPanel", () => {
     expect(editor).toHaveAttribute("data-tab-size", "4");
     expect(editor).toHaveAttribute("data-word-wrap", "true");
     expect(localStorage.getItem("nebula.editor.preferences.v1")).toContain('"fontSize":16');
+  });
+
+  it("exposes bounded definition and reference navigation through controls and shortcuts", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["def scan():\n    return scan()\n"])),
+    });
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    const editor = screen.getByRole("textbox", { name: "Code editor" });
+    await user.click(screen.getByRole("button", { name: "Go to definition" }));
+    await user.click(screen.getByRole("button", { name: "Find references" }));
+    expect(editor).toHaveAttribute("data-definition-request", "1");
+    expect(editor).toHaveAttribute("data-references-request", "1");
+
+    await user.keyboard("{F12}");
+    await user.keyboard("{Shift>}{F12}{/Shift}");
+    expect(editor).toHaveAttribute("data-definition-request", "2");
+    expect(editor).toHaveAttribute("data-references-request", "2");
   });
 
   it("refreshes workspace files when the persistent editor becomes active again", async () => {

@@ -7,6 +7,8 @@ export type EditorAction =
   | "debug"
   | "find"
   | "format"
+  | "definition"
+  | "references"
   | "nextEditor"
   | "problems"
   | "quickOpen"
@@ -31,6 +33,8 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
     debug: "F5",
     find: "Mod+F",
     format: "Alt+Shift+F",
+    definition: "F12",
+    references: "Shift+F12",
     nextEditor: "Mod+Tab",
     problems: "Mod+Shift+M",
     quickOpen: "Mod+P",
@@ -46,7 +50,7 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
 
 const STORAGE_KEY = "nebula.editor.preferences.v1";
 const CHANGE_EVENT = "nebula-editor-preferences";
-const ACTIONS: EditorAction[] = ["closeEditor", "commandPalette", "debug", "find", "format", "nextEditor", "problems", "quickOpen", "rename", "save", "splitEditor", "tasks", "workspaceSearch"];
+const ACTIONS: EditorAction[] = ["closeEditor", "commandPalette", "debug", "definition", "find", "format", "nextEditor", "problems", "quickOpen", "references", "rename", "save", "splitEditor", "tasks", "workspaceSearch"];
 const SHORTCUT = /^(?:(?:Mod|Alt|Shift)\+)*(?:[A-Z0-9]|Tab|\\|F(?:[1-9]|1[0-2]))$/;
 
 function validShortcut(shortcut: string): boolean {
