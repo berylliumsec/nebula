@@ -11,8 +11,6 @@ import { CommandPalette } from "./CommandPalette";
 import { SideNav } from "./SideNav";
 import { TopBar } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
-import { ZeroLayerDeck } from "./ZeroLayerDeck";
-import { deriveZeroModules } from "./zeroLayerModules";
 import { DiagnosticErrorNotice, DiagnosticsAvailabilityBanner, logDiagnostic } from "../diagnostics";
 import { browserAuthorizationRecovery } from "../api/runtime";
 
@@ -29,15 +27,9 @@ export function AppShell() {
   const { resolvedTheme } = useTheme();
   const {
     approvals,
-    assets,
     coreError,
-    engagement,
-    findings,
-    health,
     reconnect,
-    reports,
     resourceStatus,
-    run,
     runtime,
     retryResource,
     setupStatus,
@@ -61,10 +53,6 @@ export function AppShell() {
     return !value;
   }), []);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
-  const openActivityView = useCallback((view: ActivityCenterView) => {
-    setActivityView(view);
-    setActivityOpen(true);
-  }, []);
   const closeMobileSidebar = useCallback(() => {
     if (!sidebarCollapsed && window.matchMedia("(max-width: 760px)").matches) toggleSidebar();
   }, [sidebarCollapsed, toggleSidebar]);
@@ -151,17 +139,6 @@ export function AppShell() {
     toggleActivity,
     toggleSidebar,
   }), [activityOpen, openPalette, paletteOpen, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
-  const zeroModules = useMemo(() => deriveZeroModules({
-    approvals,
-    assets,
-    engagementName: engagement?.name,
-    findings,
-    health,
-    reports,
-    run,
-    setupStatus,
-    workspaceState,
-  }), [approvals, assets, engagement?.name, findings, health, reports, run, setupStatus, workspaceState]);
   return (
     <ReleaseUpdateProvider>
       <WorkbenchEditorProvider>
@@ -181,7 +158,6 @@ export function AppShell() {
                 sidebarCollapsed={sidebarCollapsed}
                 variant={zero ? "zero" : "standard"}
               />
-              {zero && <ZeroLayerDeck modules={zeroModules} onOpenActivity={openActivityView} />}
               <main id="main-content" className="main-content" tabIndex={-1}>
                 {workspaceState !== "failed" && <DiagnosticsAvailabilityBanner />}
                 {zero && <span className="zero-route-flare" aria-hidden="true" key={`${location.pathname}${location.search}`} />}

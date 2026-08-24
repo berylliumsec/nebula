@@ -660,7 +660,7 @@ test("hidden terminal views stop emitting resize frames", async ({ page }, testI
 test(firstRunThemeTest, async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
-  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
@@ -2430,21 +2430,21 @@ for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
   });
 }
 
-test("Zero restores its contextual shell without blocking route or overlay motion", async ({ page }, testInfo) => {
+test("Zero keeps its themed shell without the removed context deck", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The full shell contract only needs one desktop browser project.");
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
   await openWorkspace(page, "/", "Workbench");
 
   await expect(page.locator(".app-shell.zero-layer-shell")).toHaveCount(1);
   await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(3);
-  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Search commands" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeHidden();
   await setTheme(page, "dark");
-  await expect(page.locator(".app-shell.zero-layer-shell, .zero-layer-deck, .zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(0);
+  await expect(page.locator(".app-shell.zero-layer-shell, .zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(0);
 });
 
 test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ page }, testInfo) => {
@@ -2452,7 +2452,7 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   await openWorkspace(page, "/", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
 
-  await expect(page.getByRole("region", { name: "Zero Layer context" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   await expect(page.locator("main#main-content")).toHaveCount(1);
   if (mobile) {
     await expect(page.getByRole("complementary", { name: "Primary navigation" })).toBeHidden();
@@ -2477,11 +2477,13 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
     return {
       viewport,
       shellOverflow: document.documentElement.scrollWidth > viewport.width || document.documentElement.scrollHeight > viewport.height,
+      status: bounds(".top-bar"),
       main: bounds(".main-content"),
       navigation: bounds(mobileView ? ".mobile-companion-nav" : ".side-nav"),
     };
   }, mobile);
   expect(geometry.shellOverflow).toBe(false);
+  expect(geometry.main.top - geometry.status.bottom).toBeLessThanOrEqual(10);
   for (const surface of [geometry.main, geometry.navigation]) {
     expect(surface.left).toBeGreaterThanOrEqual(0);
     expect(surface.right).toBeLessThanOrEqual(geometry.viewport.width + 1);

@@ -105,7 +105,7 @@ describe("Nebula workspace", () => {
     expect(document.documentElement).toHaveAttribute("data-theme", "zero");
     expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
     expect(screen.getByRole("complementary", { name: "Primary navigation" })).toHaveAttribute("data-shell", "shared");
-    expect(await screen.findByRole("region", { name: "Zero Layer context" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
     expect(localStorage.getItem("nebula.theme")).toBeNull();
 
     firstRender.unmount();
@@ -163,12 +163,11 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: /Zero/ })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("renders the contextual Zero shell only for the restored Zero preference", async () => {
+  it("renders the Zero shell without the removed context deck", () => {
     localStorage.setItem("nebula.theme", "zero");
     const firstRender = renderApp();
     expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
-    expect(await screen.findByRole("region", { name: "Zero Layer context" })).toBeVisible();
-    expect(screen.getByRole("link", { name: /Open overview/ })).toHaveAttribute("href", "/project");
+    expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
 
     firstRender.unmount();
     localStorage.setItem("nebula.theme", "dark");
