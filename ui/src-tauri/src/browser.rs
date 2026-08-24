@@ -970,6 +970,9 @@ fn close_tab_internal(app: &AppHandle, state: &BrowserState, tab_id: &str) -> Re
 }
 
 #[tauri::command]
+// Tauri derives this flat named-argument IPC contract; grouping the fields
+// would break the invoke payload shared with the browser interface.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn browser_create_tab(
     app: AppHandle,
     state: State<'_, BrowserState>,
