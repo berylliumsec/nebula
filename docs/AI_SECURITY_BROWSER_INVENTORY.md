@@ -1,8 +1,9 @@
 # Nebula AI Security Browser implementation contract
 
-Status: active implementation contract for `codex/ai-security-browser`, based on
-Zero Layer `origin/main` (`5b8013a1`). This contract is a required whole-product
-upgrade, not a claim that every gate below has passed.
+Status: active implementation contract for `codex/ai-security-browser`, rebased
+on `origin/main` (`1e708f2`) with the Zero Layer foundation from `5b8013a1`.
+This contract is a required whole-product upgrade, not a claim that every gate
+below has passed.
 
 ## Delivered and bounded in this branch
 
@@ -11,6 +12,9 @@ redacted HTTP/1.1 and HTTP/2 history, WebSocket frame metadata, two-exchange
 authorization diffing, reviewed edit/replay through the active identity, Project
 CA lifecycle, DevTools, immutable semantic page Evidence, scope-bound AI action
 proposals with one-shot operator approval, and expiring mobile/desktop handoffs.
+Project scope also normalizes equivalent hostname and root-URL entries, exposes
+an explicit warning-confirmed all-target mode, and accepts the current page from
+the native browser's **Add to scope** context-menu action.
 
 It does **not** claim pixel screenshots, raw body-artifact capture, live
 pause-and-modify interception, upstream-proxy chaining, or browser-extension

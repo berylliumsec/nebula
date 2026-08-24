@@ -580,10 +580,33 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
     (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string }> })
       .__NEBULA_BROWSER_CALLS__?.some((call) => call.command === "browser_create_tab")
   ))).toBe(true);
+  const addressField = page.getByRole("textbox", { name: "Address or search" });
+  await addressField.focus();
+  await expect(addressField).toBeFocused();
+  await expect.poll(() => addressField.evaluate((address) => {
+    const addressShell = address.closest("form")!;
+    const addressStyle = getComputedStyle(address);
+    const addressShellStyle = getComputedStyle(addressShell);
+    return {
+      borderWidth: addressStyle.borderTopWidth,
+      boxShadow: addressStyle.boxShadow,
+      outlineStyle: addressStyle.outlineStyle,
+      shellBorderWidth: addressShellStyle.borderTopWidth,
+      shellBorderColor: addressShellStyle.borderTopColor,
+      shellHasFocusWithin: addressShell.matches(":focus-within"),
+    };
+  })).toEqual({
+    borderWidth: "0px",
+    boxShadow: "none",
+    outlineStyle: "none",
+    shellBorderWidth: "1px",
+    shellBorderColor: "rgb(104, 168, 255)",
+    shellHasFocusWithin: true,
+  });
 
   const geometry = await page.evaluate(() => {
     const toolbar = document.querySelector<HTMLElement>(".browser-toolbar")!;
-    const address = document.querySelector<HTMLElement>("#browser-address")!;
+    const address = document.querySelector<HTMLInputElement>("#browser-address")!;
     const surface = document.querySelector<HTMLElement>(".browser-surface")!;
     const browserPanel = document.querySelector<HTMLElement>(".workbench-browser")!;
     const toolbarRect = toolbar.getBoundingClientRect();
@@ -616,7 +639,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
 
   await page.getByRole("button", { name: "Ask Nebula about the live page" }).click();
   await expect(page).toHaveURL(/view=chat/);
-  const attachment = page.getByRole("group", { name: "Selected context attachment" });
+  const attachment = page.getByRole("region", { name: "Selected context pack" });
   await expect(attachment).toContainText("Browser · Mock target account");
   await expect(attachment).toContainText("characters");
   const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
