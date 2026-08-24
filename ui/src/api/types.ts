@@ -2004,6 +2004,19 @@ export interface WorkspaceTaskList {
   truncated: boolean;
 }
 
+export interface DebugSessionStart {
+  sessionId: string;
+  websocketPath: string;
+  websocketTicket: string;
+  protocol: "nebula.debug.v1";
+  path: string;
+  sourceSha256: string;
+  imageDigest: string;
+  workspaceAccess: "read-only";
+  network: "none";
+  expiresAt: string;
+}
+
 export type SourceControlFileStatus =
   | "unmodified"
   | "modified"

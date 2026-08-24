@@ -1002,7 +1002,7 @@ kbd { font-size: 11px; }
 .workspace-file-preview { min-width: 0; padding: 14px; overflow: auto; }.workspace-file-preview > pre { max-height: 390px; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-control); color: var(--muted-strong); background: var(--canvas); white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.55 var(--font-mono); }.workspace-file-preview > p { color: var(--yellow); font-size: 11px; }
 .workspace-reset { display: grid; grid-template-columns: minmax(250px, 1fr) 260px auto; align-items: end; gap: 12px; margin: 12px; padding: 12px; }.workspace-reset > div { display: flex; align-items: center; gap: 9px; }.workspace-reset > div > svg { color: var(--red); }.workspace-reset > div span { display: grid; }.workspace-reset > div small { color: var(--muted); font-size: 11px; }.workspace-reset label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }.workspace-reset input { min-height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--surface-raised); }
 
-.code-editor-panel { display: grid; min-height: 590px; grid-template-columns: 250px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
+.code-editor-panel { position: relative; display: grid; min-height: 590px; grid-template-columns: 250px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
 .code-editor-sidebar { min-width: 0; overflow: hidden; border-right: 1px solid var(--border-soft); background: var(--surface-muted); }
 .code-editor-sidebar > header { display: flex; min-height: 45px; align-items: center; justify-content: space-between; padding: 7px 9px 7px 12px; border-bottom: 1px solid var(--border-soft); }
 .code-editor-sidebar > header > div { display: flex; align-items: center; gap: 7px; }.code-editor-sidebar > header > div:last-child { gap: 3px; }.code-editor-sidebar > header svg { color: var(--blue); }.code-editor-sidebar > header strong { font-size: 12px; }
@@ -1043,6 +1043,38 @@ kbd { font-size: 11px; }
 .code-editor-actions, .code-editor-secondary-actions { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .code-editor-dirty { flex: 0 0 auto; color: var(--green); font-size: 11px; font-weight: var(--weight-bold); }.code-editor-dirty.dirty { color: var(--yellow); }
 .code-editor-mobile-only, .code-editor-mobile-title, .code-editor-mobile-tools-toggle, .code-editor-mobile-files-toggle, .code-editor-mobile-tools { display: none; }
+.code-editor-debug-entry { display: flex; min-height: 38px; align-items: center; justify-content: flex-end; gap: 10px; padding: 4px 10px; border-top: 1px solid var(--border-soft); background: var(--surface-muted); }
+.code-editor-debug-entry span { color: var(--muted); font-size: 11px; }
+.code-mirror-host::part(cm-debug-breakpoint), .cm-debug-breakpoint { display: block; width: 9px; height: 9px; margin: 0 3px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 1px color-mix(in srgb, var(--red) 70%, black); }
+.editor-debugger { position: absolute; z-index: 20; right: 12px; bottom: 30px; display: flex; width: min(760px, calc(100% - 286px)); max-height: calc(100% - 50px); flex-direction: column; overflow: auto; border: 1px solid var(--border-strong); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow-lg); }
+.editor-debugger > header { position: sticky; z-index: 1; top: 0; display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
+.editor-debugger > header > span { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.editor-debugger > header small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.editor-debugger-preflight { display: grid; gap: 12px; padding: 16px; }
+.editor-debugger-preflight p, .editor-debugger-columns p { margin: 4px 0 0; color: var(--muted); }
+.editor-debugger-preflight dl { display: grid; margin: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.editor-debugger-preflight dl div { min-width: 0; padding: 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-muted); }
+.editor-debugger-preflight dt { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.editor-debugger-preflight dd { overflow: hidden; margin: 4px 0 0; font-family: var(--font-mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.editor-debugger-preflight label { display: grid; gap: 5px; color: var(--muted-strong); font-size: 12px; }
+.editor-debugger-controls { display: flex; min-height: 42px; align-items: center; gap: 5px; padding: 6px 10px; border-bottom: 1px solid var(--border-soft); }
+.editor-debugger-controls button { display: inline-flex; width: 32px; height: 32px; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--surface); }
+.editor-debugger-controls span { margin-left: auto; color: var(--muted); font: 11px var(--font-mono); }
+.editor-debugger-columns { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); border-bottom: 1px solid var(--border); }
+.editor-debugger-columns > section { min-height: 150px; max-height: 260px; overflow: auto; padding: 10px; }
+.editor-debugger-columns > section + section { border-left: 1px solid var(--border); }
+.editor-debugger h3 { margin: 0 0 7px; color: var(--muted-strong); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.editor-debugger-columns button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 6px; border: 0; color: var(--text); background: transparent; text-align: left; }
+.editor-debugger-columns button:hover { background: var(--surface-hover); }
+.editor-debugger-columns button small { color: var(--muted); font-family: var(--font-mono); }
+.editor-debugger-columns section > div > strong { display: block; margin: 8px 0 4px; }
+.editor-debugger-columns section > div p { display: grid; grid-template-columns: minmax(80px, .7fr) minmax(0, 1.3fr); gap: 8px; padding: 3px 5px; }
+.editor-debugger-columns section > div p span { overflow-wrap: anywhere; font-family: var(--font-mono); }
+.editor-debugger-console { display: grid; gap: 6px; padding: 10px; }
+.editor-debugger-console pre { min-height: 80px; max-height: 180px; margin: 0; overflow: auto; padding: 8px; border: 1px solid var(--border-soft); background: var(--canvas); color: var(--text); white-space: pre-wrap; }
+.editor-debugger-console > div { display: flex; gap: 7px; }
+.editor-debugger-console > div input { min-width: 0; flex: 1; font-family: var(--font-mono); }
+.editor-debugger-console output { padding: 7px; background: var(--surface-muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
 .code-editor-main > .form-error, .code-editor-main > .workspace-notice { margin: 8px 9px 0; }
 .code-editor-conflict { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 9px; margin: 8px 9px 0; padding: 8px 9px; color: var(--yellow); border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); border-radius: var(--radius-control); background: var(--yellow-muted); }.code-editor-conflict > span { display: grid; gap: 2px; }.code-editor-conflict strong { color: var(--text); font-size: 11px; }.code-editor-conflict small { color: var(--muted-strong); font-size: 11px; }
 .code-editor-surfaces { display: grid; min-width: 0; min-height: 0; flex: 1 1 0; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
@@ -1842,6 +1874,12 @@ kbd { font-size: 11px; }
   .workspace-reset > div { grid-column: auto; }
   .workspace-browser-toolbar { align-items: stretch; flex-direction: column; gap: 7px; }.workspace-browser-toolbar > div { justify-content: flex-end; }
   .code-editor-panel { display: block; }
+  .code-editor-debug-entry { justify-content: stretch; }
+  .code-editor-debug-entry .button { width: 100%; min-height: 44px; justify-content: center; }
+  .code-editor-debug-entry span { display: none; }
+  .editor-debugger { position: fixed; inset: 8px; width: auto; max-height: none; }
+  .editor-debugger-preflight dl, .editor-debugger-columns { grid-template-columns: 1fr; }
+  .editor-debugger-columns > section + section { border-top: 1px solid var(--border); border-left: 0; }
   .code-editor-panel.has-buffer:not(.mobile-files-open) .code-editor-sidebar { display: none; }
   .code-editor-sidebar { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--border-soft); }
   .code-editor-files { max-height: 160px; }

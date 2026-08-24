@@ -125,6 +125,14 @@ from .diagnostic_guidance import (
     reason_code_for,
 )
 from .diagnostic_sensitive import SensitiveDetailUnavailable
+from .debugger import (
+    DEBUG_PROTOCOL,
+    DebugService,
+    DebugStartRequest,
+    DebugStartResponse,
+    DebuggerError,
+    MAX_DAP_MESSAGE_BYTES,
+)
 from .language_server import (
     MAX_MESSAGE_BYTES,
     LanguageDiagnosticsRequest,
@@ -952,6 +960,7 @@ def create_app(
     execution_data_root: str | Path | None = None,
     container_terminal_service: ContainerTerminalService | None = None,
     workspace_service: WorkspaceService | None = None,
+    debug_service: DebugService | None = None,
     report_render_service: ReportRenderService | None = None,
     execution_ai_service: ExecutionAIService | None = None,
     writing_ai_service: WritingAIService | None = None,
@@ -1278,6 +1287,12 @@ def create_app(
         )
     if workspaces is not None and workspaces.store is not store:
         raise ValueError("workspace_service must use the API store")
+    debugger = debug_service
+    if debugger is None and workspaces is not None and tool_platform is not None:
+        debugger = DebugService(
+            workspace_service=workspaces,
+            runtime_resolver=tool_platform.resolve_human_terminal_runtime,
+        )
     report_renders = report_render_service
     if report_renders is None and artifact_store is not None:
         report_renders = ReportRenderService(
@@ -1428,6 +1443,10 @@ def create_app(
                 await start_component(
                     "executions", "service", executions.startup, executions.shutdown
                 )
+            if debugger is not None:
+                await start_component(
+                    "debugger", "service", debugger.startup, debugger.shutdown
+                )
             if report_renders is not None:
                 await start_component(
                     "reports",
@@ -1487,6 +1506,7 @@ def create_app(
     app.state.execution_service = executions
     app.state.container_terminal_service = container_terminals
     app.state.workspace_service = workspaces
+    app.state.debug_service = debugger
     app.state.report_render_service = report_renders
     app.state.execution_ai_service = execution_ai
     app.state.writing_ai_service = writing_ai
@@ -1602,6 +1622,8 @@ def create_app(
             return "runtime"
         if isinstance(exc, ContainerTerminalError):
             return "terminal"
+        if isinstance(exc, DebuggerError):
+            return "debugger"
         if isinstance(exc, (ExecutionServiceError, ExecutionAIError)):
             return "executions"
         if isinstance(exc, ReportRenderError):
@@ -2320,6 +2342,20 @@ def create_app(
     @app.exception_handler(ContainerTerminalError)
     async def container_terminal_error_handler(
         request: Request, exc: ContainerTerminalError
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            retryable=exc.status_code >= 500,
+            headers={"Cache-Control": "private, no-store"},
+        )
+
+    @app.exception_handler(DebuggerError)
+    async def debugger_error_handler(
+        request: Request, exc: DebuggerError
     ) -> JSONResponse:
         return diagnostic_error_response(
             request,
@@ -3199,6 +3235,15 @@ def create_app(
                 status_code=503,
             )
         return workspaces
+
+    def require_debug_service() -> DebugService:
+        if debugger is None:
+            raise DebuggerError(
+                "runner_unavailable",
+                "The isolated debugger runtime is not configured.",
+                status_code=503,
+            )
+        return debugger
 
     def require_report_render_service() -> ReportRenderService:
         if report_renders is None:
@@ -4612,6 +4657,143 @@ def create_app(
     async def workspace_tasks(engagement_id: str) -> WorkspaceTaskList:
         return await asyncio.to_thread(require_workspace_service().tasks, engagement_id)
 
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/debug-sessions",
+        response_model=DebugStartResponse,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_debug_session(
+        engagement_id: str, request: DebugStartRequest
+    ) -> DebugStartResponse:
+        return await require_debug_service().start(engagement_id, request)
+
+    @app.websocket(f"{API_PREFIX}/debug-sessions/{{session_id}}/ws")
+    async def debug_session_socket(websocket: WebSocket, session_id: str) -> None:
+        service = debugger
+        if service is None:
+            await websocket.close(code=4503, reason="debugger unavailable")
+            return
+        offered_protocols = [
+            value.strip()
+            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if value.strip()
+        ]
+        if DEBUG_PROTOCOL not in offered_protocols:
+            await websocket.close(code=4406, reason="debug protocol required")
+            return
+        supplied: str | None = None
+        authorization = websocket.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:]
+        protocol_token = _websocket_protocol_secret(
+            offered_protocols, "nebula.auth.", decode_base64=True
+        )
+        if (
+            supplied
+            and protocol_token
+            and not hmac.compare_digest(supplied, protocol_token)
+        ):
+            await websocket.close(code=4401, reason="conflicting authentication tokens")
+            return
+        supplied = protocol_token or supplied
+        if not allow_unauthenticated and (
+            (not supplied or not hmac.compare_digest(supplied, token))
+            and not _cookie_websocket_authenticated(websocket)
+        ):
+            await websocket.close(code=4401, reason="valid bearer token required")
+            return
+        ticket = _websocket_protocol_secret(
+            offered_protocols, "nebula.ticket.", decode_base64=False
+        )
+        if not ticket:
+            await websocket.close(code=4401, reason="debug ticket required")
+            return
+        try:
+            session = await service.attach(session_id, ticket)
+        except DebuggerError as exc:
+            await websocket.close(
+                code=4404 if exc.status_code == 404 else 4401,
+                reason=exc.detail[:120],
+            )
+            return
+        await websocket.accept(subprotocol=DEBUG_PROTOCOL)
+        send_lock = asyncio.Lock()
+
+        async def send_json(payload: dict[str, Any]) -> None:
+            async with send_lock:
+                await websocket.send_json(payload)
+
+        async def browser_to_adapter() -> None:
+            while True:
+                raw = await websocket.receive_text()
+                if len(raw.encode("utf-8")) > MAX_DAP_MESSAGE_BYTES:
+                    raise DebuggerError(
+                        "message_too_large",
+                        "Debug protocol message is too large.",
+                        status_code=413,
+                    )
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise DebuggerError(
+                        "message_invalid",
+                        "Debug protocol message is invalid JSON.",
+                        status_code=422,
+                    ) from exc
+                if not isinstance(payload, dict):
+                    raise DebuggerError(
+                        "message_invalid",
+                        "Debug protocol message must be an object.",
+                        status_code=422,
+                    )
+                await service.send(session, payload)
+
+        async def adapter_to_browser() -> None:
+            while True:
+                payload = await service.receive(session)
+                if payload is None:
+                    return
+                await send_json({"kind": "dap", "message": payload})
+
+        async def adapter_stderr() -> None:
+            while chunk := await session.process.stderr.read(4096):
+                await send_json(
+                    {
+                        "kind": "adapterOutput",
+                        "output": chunk.decode("utf-8", errors="replace")[:4096],
+                    }
+                )
+
+        tasks = {
+            asyncio.create_task(browser_to_adapter()),
+            asyncio.create_task(adapter_to_browser()),
+            asyncio.create_task(adapter_stderr()),
+        }
+        caught: BaseException | None = None
+        try:
+            done, _pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                caught = task.exception()
+                if caught is not None:
+                    break
+        except WebSocketDisconnect:
+            pass
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if isinstance(caught, DebuggerError):
+                try:
+                    await send_json(
+                        {"kind": "error", "code": caught.code, "detail": caught.detail}
+                    )
+                except (RuntimeError, WebSocketDisconnect):
+                    pass
+            await service.close(session_id)
+
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/source-control",
         response_model=SourceControlStatus,
@@ -4664,9 +4846,7 @@ def create_app(
             items=complete_code(request.source, request.path, request.offset)
         )
 
-    @app.websocket(
-        f"{API_PREFIX}/engagements/{{engagement_id}}/language-server/ws"
-    )
+    @app.websocket(f"{API_PREFIX}/engagements/{{engagement_id}}/language-server/ws")
     async def language_server_socket(
         websocket: WebSocket,
         engagement_id: str,
@@ -4686,8 +4866,10 @@ def create_app(
         protocol_token = _websocket_protocol_secret(
             offered_protocols, "nebula.auth.", decode_base64=True
         )
-        if supplied and protocol_token and not hmac.compare_digest(
-            supplied, protocol_token
+        if (
+            supplied
+            and protocol_token
+            and not hmac.compare_digest(supplied, protocol_token)
         ):
             await websocket.close(code=4401, reason="conflicting authentication tokens")
             return
@@ -4709,7 +4891,9 @@ def create_app(
             while not session.shutdown_requested:
                 raw = await websocket.receive_text()
                 if len(raw.encode("utf-8")) > MAX_MESSAGE_BYTES:
-                    await websocket.close(code=4409, reason="language message too large")
+                    await websocket.close(
+                        code=4409, reason="language message too large"
+                    )
                     return
                 try:
                     payload = json.loads(raw)

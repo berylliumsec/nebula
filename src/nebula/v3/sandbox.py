@@ -2006,11 +2006,12 @@ class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
     _derived_repository = "localhost/nebula-kali-headless"
-    _recipe_version = "v4"
+    _recipe_version = "v5"
     _installed_packages = (
         "kali-linux-headless",
         "iputils-ping",
         "python3",
+        "python3-debugpy",
         "ripgrep",
         "git",
         "curl",

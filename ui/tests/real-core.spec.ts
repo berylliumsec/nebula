@@ -467,6 +467,12 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toBeVisible();
     await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("button", { name: "Project tasks and tests" })).toBeVisible();
+    await page.getByRole("button", { name: "Debug saved Python" }).click();
+    const debuggerReview = page.getByRole("dialog", { name: "Python debugger" });
+    await expect(debuggerReview).toContainText("Isolated launch review");
+    await expect(debuggerReview).toContainText("project is read-only, networking is disabled");
+    await expect(debuggerReview.getByRole("button", { name: "Start isolated debugger" })).toBeEnabled();
+    await debuggerReview.getByRole("button", { name: "Close debugger" }).click();
 
     await page.keyboard.press("Control+P");
     const quickOpen = page.getByRole("dialog", { name: "Quick open" });
@@ -751,6 +757,26 @@ test("clean real Core completes reviewed work and exposes every recovery state",
       local_only: false,
       max_concurrency: 1,
     });
+
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await page.getByRole("button", { name: "New file", exact: true }).first().click();
+    await page.getByRole("textbox", { name: "File path" }).fill("debug-proof.py");
+    const debugEditor = page.getByRole("textbox", { name: "Code editor" });
+    await debugEditor.fill("value = 41\nprint(f'debug-finished:{value + 1}')\n");
+    await debugEditor.press("Control+S");
+    await expect(page.getByText("Saved /workspace/debug-proof.py. Use it from Terminal when you're ready.")).toBeVisible();
+    await debugEditor.press("Control+Home");
+    await page.getByRole("button", { name: "Debug saved Python" }).click();
+    const debuggerPanel = page.getByRole("dialog", { name: "Python debugger" });
+    await debuggerPanel.getByRole("button", { name: "Toggle breakpoint at line 1" }).click();
+    await debuggerPanel.getByRole("button", { name: "Start isolated debugger" }).click();
+    await expect(debuggerPanel.getByText(/^stopped/)).toBeVisible({ timeout: 30_000 });
+    await expect(debuggerPanel.getByText(/debug-proof\.py:1/)).toBeVisible();
+    await debuggerPanel.getByRole("button", { name: "Continue" }).click();
+    await expect(debuggerPanel.getByText(/^ended/)).toBeVisible({ timeout: 30_000 });
+    await expect(debuggerPanel.getByText(/debug-finished:42/)).toBeVisible();
+    await debuggerPanel.getByRole("button", { name: "Close debugger" }).click();
+    await page.goto(`${core.origin}/#token=${encodeURIComponent(core.token)}`);
 
     const source = "sleep 5\nprintf 'real-core-ready\\n'\nprintf 'workspace-result\\n' > /workspace/result.txt\n";
     const sourceSha256 = createHash("sha256").update(source).digest("hex");

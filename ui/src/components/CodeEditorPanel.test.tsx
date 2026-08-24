@@ -371,4 +371,20 @@ describe("CodeEditorPanel", () => {
       origin: expect.objectContaining({ sourceKind: "workspace_task", sourceLabel: "pytest: all discovered tests" }),
     }));
   });
+
+  it("reviews a saved Python file before opening the isolated debugger", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('debug')\n"])),
+    });
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    await user.click(screen.getByRole("button", { name: "Debug saved Python" }));
+
+    const debuggerPanel = await screen.findByRole("dialog", { name: "Python debugger" });
+    expect(within(debuggerPanel).getByText("Isolated launch review")).toBeVisible();
+    expect(within(debuggerPanel).getByText(/project is read-only, networking is disabled/)).toBeVisible();
+    expect(within(debuggerPanel).getByRole("button", { name: "Start isolated debugger" })).toBeEnabled();
+  });
 });

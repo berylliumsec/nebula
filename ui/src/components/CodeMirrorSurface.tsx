@@ -1,7 +1,7 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, StreamLanguage, indentUnit, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
-import { crosshairCursor, dropCursor, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection } from "@codemirror/view";
+import { crosshairCursor, dropCursor, EditorView, GutterMarker, gutter, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
@@ -30,6 +30,35 @@ interface CodeMirrorSurfaceProps {
   value: string;
   wordWrap?: boolean;
   languageServer?: { apiBaseUrl: string; engagementId: string; token?: string; onState(state: LanguageServerState): void };
+  breakpointLines?: number[];
+  onToggleBreakpoint?(line: number): void;
+}
+
+class BreakpointMarker extends GutterMarker {
+  toDOM(): HTMLElement {
+    const marker = document.createElement("span");
+    marker.className = "cm-debug-breakpoint";
+    marker.setAttribute("aria-hidden", "true");
+    return marker;
+  }
+}
+
+const breakpointMarker = new BreakpointMarker();
+
+function breakpointGutter(lines: number[], onToggle?: (line: number) => void): Extension {
+  const selected = new Set(lines);
+  return gutter({
+    class: "cm-debug-gutter",
+    lineMarker: (view, line) => selected.has(view.state.doc.lineAt(line.from).number) ? breakpointMarker : null,
+    domEventHandlers: {
+      mousedown: (view, line, event) => {
+        if ((event as MouseEvent).button !== 0 || !onToggle) return false;
+        event.preventDefault();
+        onToggle(view.state.doc.lineAt(line.from).number);
+        return true;
+      },
+    },
+  });
 }
 
 export function languageLabelForPath(path: string): string {
@@ -89,15 +118,18 @@ const nebulaTheme = EditorView.theme({
   ".cm-search button:hover, .cm-search button:focus-visible": { borderColor: "var(--blue)", backgroundColor: "var(--surface-hover)" },
   ".cm-searchMatch": { backgroundColor: "var(--yellow-muted)", outline: "1px solid var(--yellow)" },
   ".cm-foldGutter .cm-gutterElement": { cursor: "pointer" },
+  ".cm-debug-gutter .cm-gutterElement": { cursor: "pointer", minWidth: "15px" },
+  ".cm-debug-breakpoint": { display: "block", width: "9px", height: "9px", margin: "0 3px", borderRadius: "50%", background: "var(--red)", boxShadow: "0 0 0 1px color-mix(in srgb, var(--red) 70%, black)" },
 });
 
-export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, findRequest = 0, problemsRequest = 0, formatRequest = 0, renameRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, findRequest = 0, problemsRequest = 0, formatRequest = 0, renameRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer, breakpointLines = [], onToggleBreakpoint }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
   const attributesRef = useRef(new Compartment());
   const keymapRef = useRef(new Compartment());
   const settingsRef = useRef(new Compartment());
+  const breakpointRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCursorChangeRef = useRef(onCursorChange);
   const onSaveRef = useRef(onSave);
@@ -138,6 +170,7 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
           // positioned on the wrong line by macOS WKWebView after Enter key updates.
           // The native contenteditable caret stays coupled to the browser selection.
           lineNumbers(),
+          breakpointRef.current.of(breakpointGutter(breakpointLines, onToggleBreakpoint)),
           foldGutter(),
           highlightActiveLineGutter(),
           highlightSpecialChars(),
@@ -227,6 +260,10 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
   useEffect(() => {
     viewRef.current?.dispatch({ effects: keymapRef.current.reconfigure(editorKeymap(saveKey, () => onSaveRef.current())) });
   }, [saveKey]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: breakpointRef.current.reconfigure(breakpointGutter(breakpointLines, onToggleBreakpoint)) });
+  }, [breakpointLines, onToggleBreakpoint]);
 
   useEffect(() => { if (active) viewRef.current?.requestMeasure(); }, [active]);
 

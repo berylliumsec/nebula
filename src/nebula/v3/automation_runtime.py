@@ -218,6 +218,7 @@ class SessionLaunch:
     egress_ports: tuple[int, ...] = ()
     resolv_conf: Path | None = None
     network_granted: bool = False
+    workspace_access: SandboxWorkspaceAccess = SandboxWorkspaceAccess.WRITE
 
 
 class _ContainerProcess(RuntimeBackendProcess):
@@ -310,7 +311,7 @@ class ContainerRuntimeSession(RuntimeBackendSession):
                 "while :; do sleep 3600 & wait $!; done",
             ],
             workspace=launch.workspace,
-            workspace_access=SandboxWorkspaceAccess.WRITE,
+            workspace_access=launch.workspace_access,
             network=network,
             execution_kind=(
                 SandboxExecutionKind.NETWORK_TOOL

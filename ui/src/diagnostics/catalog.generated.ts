@@ -300,6 +300,12 @@ export const diagnosticRemediationCatalog = {
       "destination": "/settings#advanced-settings",
       "help_article": "automation-runtime"
     },
+    "debugger": {
+      "label": "Code debugger",
+      "operation": "Debugger operation",
+      "destination": "/?view=code",
+      "help_article": "automation-runtime"
+    },
     "sandbox": {
       "label": "Execution sandbox",
       "operation": "Sandbox boundary",

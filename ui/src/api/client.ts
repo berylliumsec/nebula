@@ -26,6 +26,7 @@ import type {
   ContextSnapshot,
   ContextSourceReference,
   ContextStatus,
+  DebugSessionStart,
   CredentialStatus,
   EngagementSummary,
   EngagementCreateRequest,
@@ -5801,6 +5802,38 @@ export class ApiClient {
       tasks: value.tasks.map((task) => ({ ...task, path: task.path ?? undefined })),
       scannedEntries: value.scanned_entries,
       truncated: value.truncated,
+    }));
+  }
+
+  startDebugSession(
+    engagementId: string,
+    body: { path: string; expectedSha256: string; arguments?: string[] },
+  ): Promise<DebugSessionStart> {
+    return this.request<{
+      session_id: string;
+      websocket_path: string;
+      websocket_ticket: string;
+      protocol: "nebula.debug.v1";
+      path: string;
+      source_sha256: string;
+      image_digest: string;
+      workspace_access: "read-only";
+      network: "none";
+      expires_at: string;
+    }>(`engagements/${encodeURIComponent(engagementId)}/debug-sessions`, {
+      method: "POST",
+      body: JSON.stringify({ path: body.path, expected_sha256: body.expectedSha256, arguments: body.arguments ?? [] }),
+    }).then((value) => ({
+      sessionId: value.session_id,
+      websocketPath: value.websocket_path,
+      websocketTicket: value.websocket_ticket,
+      protocol: value.protocol,
+      path: value.path,
+      sourceSha256: value.source_sha256,
+      imageDigest: value.image_digest,
+      workspaceAccess: value.workspace_access,
+      network: value.network,
+      expiresAt: value.expires_at,
     }));
   }
 
