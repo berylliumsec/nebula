@@ -53,7 +53,6 @@ from .privacy import ProviderPrivacyViolation, validate_engagement_provider_priv
 from .mcp import McpProbeError, mcp_tool_runtime_name, resolve_mcp_profiles
 from .storage import ConflictError, NebulaStore
 
-MAX_API_MISSION_DURATION_SECONDS = 3_600
 MAX_API_MISSION_TOKENS = 200_000
 MAX_API_MISSION_COST_USD = 100.0
 MAX_API_MISSION_RETRIES = 2
@@ -1242,11 +1241,6 @@ class MissionService:
                 "analysis-only missions require zero tools and one non-delegating task"
             )
         if (
-            budget.max_duration_seconds is not None
-            and budget.max_duration_seconds > MAX_API_MISSION_DURATION_SECONDS
-        ):
-            raise MissionConfigurationError("mission duration exceeds the API limit")
-        if (
             budget.max_tokens is not None
             and budget.max_tokens > MAX_API_MISSION_TOKENS
         ):
@@ -1271,7 +1265,6 @@ class MissionService:
 
 __all__ = [
     "MAX_API_MISSION_COST_USD",
-    "MAX_API_MISSION_DURATION_SECONDS",
     "MAX_API_MISSION_RETRIES",
     "MAX_API_MISSION_TOKENS",
     "MissionCapacityError",

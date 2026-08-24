@@ -276,6 +276,29 @@ def test_mission_budget_defaults_are_unlimited():
     assert handoff.max_tool_calls is None
     assert handoff.max_artifact_queries is None
 
+    long_duration = MissionStartRequest(
+        engagement_id="engagement-1",
+        name="Long mission",
+        objective="Review the configured scope",
+        provider_id="provider-1",
+        model="security-model",
+        max_duration_seconds=86_400,
+    )
+    assert long_duration.max_duration_seconds == 86_400
+
+
+def test_mission_budget_accepts_explicit_long_duration(tmp_path):
+    store = NebulaStore(tmp_path / "long-duration.db")
+    service = MissionService(
+        store,
+        checkpoint_path=tmp_path / "long-duration-checkpoints.db",
+    )
+
+    service._validate_budget(
+        RunBudget(max_duration_seconds=86_400, max_delegation_depth=0),
+        tool_names=[],
+    )
+
 
 def test_api_rejects_conflicting_mission_service_configuration(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")

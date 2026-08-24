@@ -266,7 +266,6 @@ from .knowledge import (
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError, KnowledgeIndexStatus
 from .missions import (
     MAX_API_MISSION_COST_USD,
-    MAX_API_MISSION_DURATION_SECONDS,
     MAX_API_MISSION_RETRIES,
     MAX_API_MISSION_TOKENS,
     MissionCapacityError,
@@ -710,7 +709,7 @@ class MissionStartRequest(NebulaModel):
     scheduled_for: datetime | None = None
     repeat_interval_seconds: int | None = Field(default=None, ge=3_600, le=31_536_000)
     max_duration_seconds: int | None = Field(
-        default=None, ge=1, le=MAX_API_MISSION_DURATION_SECONDS
+        default=None, ge=1
     )
     max_tokens: int | None = Field(
         default=None, ge=1, le=MAX_API_MISSION_TOKENS
@@ -765,7 +764,7 @@ class McpProbeRequest(NebulaModel):
 class HarnessMissionHandoffRequest(NebulaModel):
     objective: str | None = Field(default=None, min_length=1, max_length=10_000)
     max_duration_seconds: int | None = Field(
-        default=None, ge=1, le=MAX_API_MISSION_DURATION_SECONDS
+        default=None, ge=1
     )
     max_tokens: int | None = Field(
         default=None, ge=1, le=MAX_API_MISSION_TOKENS
