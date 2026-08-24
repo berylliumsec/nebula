@@ -624,6 +624,48 @@ test("terminal pointer selection has a visible high-contrast highlight", async (
     && background !== "rgb(0, 0, 0)")).toBe(true);
 });
 
+test("assistant context pack stays exact, compact, and accessible", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop" && !testInfo.project.name.startsWith("mobile-"), "Covered by one desktop and the permanent mobile browser projects.");
+  await openWorkspace(page, "/project", "Scratch Project");
+  const heading = page.getByRole("heading", { name: "Scratch Project", exact: true });
+  await heading.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const bounds = element.getBoundingClientRect();
+    element.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true,
+      clientX: bounds.left + Math.min(24, bounds.width / 2),
+      clientY: bounds.top + bounds.height / 2,
+    }));
+  });
+  await page.getByRole("button", { name: "Ask Nebula" }).click();
+
+  const pack = page.getByRole("region", { name: "Selected context pack" });
+  await expect(pack).toBeVisible();
+  await expect(pack).toContainText("Project selection");
+  await expect(pack).not.toContainText("Scratch Project", { useInnerText: true });
+  await pack.getByRole("button", { name: "Expand Project selection" }).click();
+  await expect(pack.getByText("Scratch Project", { exact: true })).toBeVisible();
+  const geometry = await pack.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      viewportWidth: innerWidth,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    };
+  });
+  expect(geometry.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  const accessibility = await new AxeBuilder({ page }).include(".chat-context-pack").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test("hidden terminal views stop emitting resize frames", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "narrow", "The persistent terminal is intentionally unavailable in the mobile companion.");
   await openWorkspace(page, "/", "Workbench");
@@ -1113,9 +1155,13 @@ test("conversation More actions remain usable on mobile Workbench navigation", a
   await trigger.click();
   const menu = page.getByRole("menu", { name: "Actions for Conversation action review" });
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeFocused();
+  await expect(menu.getByRole("menuitem", { name: "Copy link" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "Export transcript" })).toBeFocused();
+  await page.keyboard.press("End");
   await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
   await expect(trigger).toBeFocused();
@@ -1872,8 +1918,14 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile harness projects.");
   const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";
   const harnessTurnId = "c9745e80-4444-4555-8666-777788889999";
+  let steeringBody: unknown;
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith(`/harness-turns/${harnessTurnId}/steer`)) {
+      steeringBody = route.request().postDataJSON();
+      await route.fulfill({ status: 204, body: "" });
+      return;
+    }
     if (path.endsWith("/harnesses/harness-completion/skills")) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
         name: "review",
@@ -1898,7 +1950,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
         enabled: true,
         privacy: { local_only: true, permits_sensitive_data: true },
         native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
-        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0", live_command_output: true, planning_mode: true, goal_monitoring: true, skill_invocation: true, modes: ["default", "plan"] },
+        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0", live_command_output: true, planning_mode: true, goal_monitoring: true, skill_invocation: true, steering: true, interruption: true, modes: ["default", "plan"] },
       }]) });
       return;
     }
@@ -1951,7 +2003,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
               controller.close();
               return;
             }
-            globalThis.setTimeout(enqueue, index === 3 ? 800 : 80);
+            globalThis.setTimeout(enqueue, index === 3 ? 2_000 : 80);
           };
           enqueue();
         },
@@ -1980,6 +2032,12 @@ test("completed harness output keeps one continuous transcript scroll", async ({
     name: "review",
     path: "/workspace/.agents/skills/review/SKILL.md",
   });
+  const guidanceComposer = page.getByPlaceholder("Add guidance while the harness works…");
+  await guidanceComposer.fill("Prioritize the TLS boundary and preserve exact output.");
+  await page.getByRole("button", { name: "Send guidance now" }).click();
+  await expect.poll(() => steeringBody).toEqual({ text: "Prioritize the TLS boundary and preserve exact output." });
+  await expect(guidanceComposer).toHaveValue("");
+  await expect(page.getByText("Guidance sent to the active harness turn.")).toBeVisible();
   const activity = page.locator("details.harness-activity-card", { hasText: "Run verification" });
   await expect(activity).not.toHaveAttribute("open", "");
   await expect(activity.getByText("completed", { exact: true })).toBeVisible({ timeout: 5_000 });

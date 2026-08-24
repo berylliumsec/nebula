@@ -386,7 +386,9 @@ def test_selected_context_is_bounded_hashed_sent_as_data_and_persisted(
     assert "BEGIN UNTRUSTED SELECTED CONTEXT" in content
     assert selected in content
     completion = asyncio.run(service.complete(prepared))
+    assert store.get(ChatSession, completion.session_id).title == "What does this mean?"
     persisted = service.session_messages(completion.session_id)
+    assert persisted[0].content == "What does this mean?"
     attachment = persisted[0].metadata["context_attachments"][0]
     assert attachment["text"] == selected
     assert attachment["source_id"] == "terminal-1"
