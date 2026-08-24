@@ -573,7 +573,7 @@
   100% { opacity: 0; filter: none; transform: none; clip-path: none; }
 }
 @keyframes zero-dialog-materialize {
-  0% { opacity: 0; filter: blur(12px); transform: translateY(10px) scale(.975); clip-path: inset(47% 3% 47% 3% round 24px); }
+  0% { opacity: 0; filter: blur(12px); clip-path: inset(47% 3% 47% 3% round 24px); }
   100% { opacity: 1; filter: none; transform: none; clip-path: none; }
 }
 @keyframes zero-drawer-materialize {
