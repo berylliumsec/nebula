@@ -9,6 +9,7 @@ import errno
 import hashlib
 import hmac
 import json
+
 # The locked parser does not publish a py.typed marker.
 import json5  # type: ignore[import-untyped]
 import mimetypes
@@ -143,8 +144,16 @@ class WorkspaceDebugConfigurationList(NebulaModel):
 
 
 SourceControlFileStatus = Literal[
-    "unmodified", "modified", "added", "deleted", "renamed", "copied",
-    "unmerged", "untracked", "ignored", "unknown",
+    "unmodified",
+    "modified",
+    "added",
+    "deleted",
+    "renamed",
+    "copied",
+    "unmerged",
+    "untracked",
+    "ignored",
+    "unknown",
 ]
 
 
@@ -548,7 +557,19 @@ class WorkspaceService:
     @staticmethod
     def _normalize_vscode_task(
         task: object, index: int
-    ) -> tuple[str, str, WorkspaceTaskKind, WorkspaceTaskSource, str, str | None, bool, str | None] | None:
+    ) -> (
+        tuple[
+            str,
+            str,
+            WorkspaceTaskKind,
+            WorkspaceTaskSource,
+            str,
+            str | None,
+            bool,
+            str | None,
+        ]
+        | None
+    ):
         if not isinstance(task, dict):
             return None
         label = task.get("label")
@@ -561,7 +582,16 @@ class WorkspaceService:
 
         def unsupported(
             reason: str,
-        ) -> tuple[str, str, WorkspaceTaskKind, WorkspaceTaskSource, str, str | None, bool, str | None]:
+        ) -> tuple[
+            str,
+            str,
+            WorkspaceTaskKind,
+            WorkspaceTaskSource,
+            str,
+            str | None,
+            bool,
+            str | None,
+        ]:
             return (label, ":", "custom", source, detail, None, False, reason)
 
         task_type = task.get("type", "shell")
@@ -1042,7 +1072,10 @@ class WorkspaceService:
                                 with os.fdopen(file_descriptor, "rb") as stream:
                                     file_descriptor = None
                                     payload = stream.read(MAX_SEARCH_FILE_BYTES + 1)
-                                if len(payload) > MAX_SEARCH_FILE_BYTES or b"\x00" in payload:
+                                if (
+                                    len(payload) > MAX_SEARCH_FILE_BYTES
+                                    or b"\x00" in payload
+                                ):
                                     continue
                                 content = payload.decode("utf-8", errors="strict")
                             except (OSError, UnicodeDecodeError):
@@ -1138,15 +1171,25 @@ class WorkspaceService:
             return SourceControlStatus(
                 engagement_id=engagement_id,
                 state="unavailable",
-                detail=_safe_git_detail(status_result.output, "Git status is unavailable for this project."),
+                detail=_safe_git_detail(
+                    status_result.output, "Git status is unavailable for this project."
+                ),
             )
 
         branch_result, head_result = await asyncio.gather(
             _run_git(executable, root, "symbolic-ref", "--quiet", "--short", "HEAD"),
             _run_git(executable, root, "rev-parse", "--verify", "--short=12", "HEAD"),
         )
-        branch = _decode_git_scalar(branch_result.output) if branch_result.returncode == 0 else None
-        head = _decode_git_scalar(head_result.output) if head_result.returncode == 0 else None
+        branch = (
+            _decode_git_scalar(branch_result.output)
+            if branch_result.returncode == 0
+            else None
+        )
+        head = (
+            _decode_git_scalar(head_result.output)
+            if head_result.returncode == 0
+            else None
+        )
         files, truncated = _parse_porcelain_status(status_result.output)
         return SourceControlStatus(
             engagement_id=engagement_id,
@@ -1176,7 +1219,9 @@ class WorkspaceService:
             )
         root = self._workspace_root(engagement_id).resolve(strict=True)
         executable = shutil.which("git")
-        if executable is None:  # guarded by source_control_status; retain fail-closed behavior
+        if (
+            executable is None
+        ):  # guarded by source_control_status; retain fail-closed behavior
             raise ExecutionServiceError(
                 "source_control_unavailable",
                 "Git is not installed on the Nebula Core host.",

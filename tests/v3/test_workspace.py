@@ -195,7 +195,9 @@ def test_workspace_normalizes_vscode_tasks_into_reviewed_commands(tmp_path):
 
     (root / ".vscode" / "tasks.json").write_bytes(b" " * (129 * 1024))
     oversized = workspace.tasks(engagement.id)
-    notice = next(task for task in oversized.tasks if task.label == "VS Code tasks need attention")
+    notice = next(
+        task for task in oversized.tasks if task.label == "VS Code tasks need attention"
+    )
     assert notice.supported is False
     assert "128 KiB configuration limit" in (notice.unsupported_reason or "")
 
