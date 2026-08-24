@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Check, Download, ExternalLink, Globe2, LoaderCircle, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Check, Download, ExternalLink, Globe2, LoaderCircle, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Link } from "react-router-dom";
 import { isTauriRuntime } from "../api/runtime";
 import {
+  evaluateBrowserScope,
+  formatBrowserContextForAssistant,
   normalizeBrowserInput,
   workbenchBrowser,
   type BrowserBounds,
   type BrowserCapabilities,
+  type BrowserContextEvent,
   type BrowserDownloadEvent,
   type BrowserPageEvent,
 } from "../api/workbenchBrowser";
+import type { EngagementScopePolicy } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useChrome } from "../state/ChromeContext";
+import type { NebulaDraftRequest } from "../state/WorkbenchDraftContext";
 import { useConfirmation, useDialogOpen } from "./DialogSystem";
 
 interface BrowserTab {
@@ -28,7 +33,10 @@ interface BrowserTab {
 interface WorkbenchBrowserProps {
   active: boolean;
   projectId: string;
+  scope?: EngagementScopePolicy;
+  scopeLoading?: boolean;
   onAddKnowledgeUrl: (url: string) => Promise<{ id: string; name: string }>;
+  onAskNebula: (request: NebulaDraftRequest) => void;
   onOpenFiles: () => void;
 }
 
@@ -83,7 +91,7 @@ function visibleSurfaceRect(element: HTMLElement): DOMRect {
   return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
-export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenFiles }: WorkbenchBrowserProps) {
+export function WorkbenchBrowser({ active, projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onOpenFiles }: WorkbenchBrowserProps) {
   const confirm = useConfirmation();
   const dialogOpen = useDialogOpen();
   const { activityOpen, paletteOpen, sidebarCollapsed } = useChrome();
@@ -94,14 +102,19 @@ export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenF
   const [notice, setNotice] = useState<BrowserNotice>();
   const [error, setError] = useState<string>();
   const [addingKnowledge, setAddingKnowledge] = useState(false);
+  const [capturingContext, setCapturingContext] = useState(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(tabs);
   const activeRef = useRef(activeId);
+  const captureRef = useRef<{ requestId: string; tabId: string } | undefined>(undefined);
   tabsRef.current = tabs;
   activeRef.current = activeId;
 
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
+  const scopeDecision = scopeLoading
+    ? { state: "unknown" as const, label: "Checking scope", detail: "Loading the durable Project scope." }
+    : evaluateBrowserScope(activeTab?.url, scope);
   const browserVisible = desktop && active && !activityOpen && !paletteOpen && !dialogOpen
     && (sidebarCollapsed || !window.matchMedia("(max-width: 760px)").matches);
 
@@ -167,6 +180,10 @@ export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenF
       try { await workbenchBrowser.close(id, projectId); }
       catch (caught) { void logCaughtDiagnostic("interface.workbench_browser.close_failed", "An embedded browser tab could not close.", caught, "workbench_browser"); }
     }
+    if (captureRef.current?.tabId === id) {
+      captureRef.current = undefined;
+      setCapturingContext(false);
+    }
     setTabs((current) => {
       const index = current.findIndex((item) => item.id === id);
       const remaining = current.filter((item) => item.id !== id);
@@ -190,6 +207,8 @@ export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenF
     setActiveId(next.id);
     setNotice(undefined);
     setError(undefined);
+    captureRef.current = undefined;
+    setCapturingContext(false);
   }, [projectId]);
 
   useEffect(() => {
@@ -224,9 +243,36 @@ export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenF
           }
         })();
       }),
+      listen<BrowserContextEvent>("nebula-browser-context", ({ payload }) => {
+        const pending = captureRef.current;
+        if (!pending || pending.requestId !== payload.requestId || pending.tabId !== payload.tabId) return;
+        captureRef.current = undefined;
+        setCapturingContext(false);
+        if (payload.state !== "ready" || !payload.context) {
+          setError(payload.detail ?? "The live page context could not be captured. Reload the page and try again.");
+          return;
+        }
+        const decision = evaluateBrowserScope(payload.context.url, scope);
+        if (decision.state !== "in_scope") {
+          setError(`Nebula did not prepare this capture because the final page is not confirmed in scope. ${decision.detail}`);
+          return;
+        }
+        const captured = formatBrowserContextForAssistant(payload.context, decision);
+        let hostname = "page";
+        try { hostname = new URL(payload.context.url).hostname; }
+        catch {
+          // diagnostic-expected: the desktop boundary already validates capture provenance; retain the safe fallback label.
+        }
+        onAskNebula({
+          text: captured.text,
+          sourceKind: "browser_page",
+          sourceLabel: `Browser · ${payload.context.title || hostname}`.slice(0, 500),
+          truncated: captured.truncated,
+        });
+      }),
     ]).then((unlisteners) => { if (disposed) unlisteners.forEach((stop) => stop()); else stops.push(...unlisteners); });
     return () => { disposed = true; stops.forEach((stop) => stop()); };
-  }, [addTab, confirm, desktop, projectId, updateTab]);
+  }, [addTab, confirm, desktop, onAskNebula, projectId, scope, updateTab]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -316,6 +362,27 @@ export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenF
     }
   };
 
+  const askNebulaAboutCurrentPage = async () => {
+    if (!activeTab?.created || activeTab.loading || !activeTab.url || capturingContext) return;
+    if (scopeDecision.state !== "in_scope") {
+      setError(`Nebula can capture live context only for a page confirmed in scope. ${scopeDecision.detail}`);
+      return;
+    }
+    const requestId = `capture-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`.replace(/[^a-zA-Z0-9_-]/g, "-");
+    captureRef.current = { requestId, tabId: activeTab.id };
+    setCapturingContext(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await workbenchBrowser.captureContext(activeTab.id, projectId, requestId);
+    } catch (caught) {
+      captureRef.current = undefined;
+      setCapturingContext(false);
+      void logCaughtDiagnostic("interface.workbench_browser.context_capture_failed", "The live browser page could not be prepared for Nebula.", caught, "workbench_browser");
+      setError(`${errorMessage(caught)} Reload the page and try again.`);
+    }
+  };
+
   const normalizedWebAddress = () => {
     try { return normalizeBrowserInput(activeTab?.address ?? ""); }
     catch (caught) {
@@ -372,6 +439,7 @@ export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenF
         <Globe2 size={34} />
         <strong>Browse from this device</strong>
         <p>The isolated embedded webview is a desktop-app capability. From the web interface, open a page in a separate tab or add its URL directly to Project Sources.</p>
+        <span className={`browser-start-scope ${scopeDecision.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeDecision.label} · {scopeDecision.detail}</span>
         <form onSubmit={openWebAddress}>
           <Search size={16} />
           <input aria-label="Web address" autoFocus={active} value={activeTab?.address ?? ""} placeholder="Search or enter an address" onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} />
@@ -392,7 +460,8 @@ export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenF
         <button type="button" aria-label="Back" disabled={!activeTab?.created} onClick={() => void runControl("back")}><ArrowLeft size={16} /></button>
         <button type="button" aria-label="Forward" disabled={!activeTab?.created} onClick={() => void runControl("forward")}><ArrowRight size={16} /></button>
         <button type="button" aria-label={activeTab?.loading ? "Stop loading" : "Reload"} disabled={!activeTab?.created} onClick={() => void runControl(activeTab?.loading ? "stop" : "reload")}>{activeTab?.loading ? <X size={15} /> : <RefreshCw size={15} />}</button>
-        <form onSubmit={submit}><Search size={15} aria-hidden="true" /><label className="sr-only" htmlFor="browser-address">Address or search</label><input id="browser-address" value={activeTab?.address ?? ""} placeholder="Search or enter an address" autoComplete="off" spellCheck={false} onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} /></form>
+        <form onSubmit={submit}><Search size={15} aria-hidden="true" /><label className="sr-only" htmlFor="browser-address">Address or search</label><input id="browser-address" value={activeTab?.address ?? ""} placeholder="Search or enter an address" autoComplete="off" spellCheck={false} onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} /><span className={`browser-scope-badge ${scopeDecision.state}`} title={scopeDecision.detail}><ShieldCheck size={13} aria-hidden="true" /><span>{scopeDecision.label}</span></span></form>
+        <button type="button" aria-label="Ask Nebula about the live page" title={scopeDecision.state === "in_scope" ? "Capture rendered text, form metadata, and links for a reviewed chat attachment. Input values and cookies are excluded." : `Live-page AI capture is unavailable until this address is confirmed in scope. ${scopeDecision.detail}`} disabled={!activeTab?.created || activeTab.loading || !activeTab.url || capturingContext || scopeDecision.state !== "in_scope"} onClick={() => void askNebulaAboutCurrentPage()}>{capturingContext ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}</button>
         <button type="button" aria-label="Add current page to Project Sources" title="Add this public page to Project Sources" disabled={!activeTab?.created || activeTab.loading || !activeTab.url || addingKnowledge} onClick={() => void addCurrentPageToKnowledge()}>{addingKnowledge ? <LoaderCircle className="spin" size={15} /> : <BookPlus size={15} />}</button>
         <button type="button" aria-label="Clear Project browser data" title="Clear Project browser data" onClick={() => void clearData()}><Trash2 size={15} /></button>
       </div>
@@ -406,7 +475,7 @@ export function WorkbenchBrowser({ active, projectId, onAddKnowledgeUrl, onOpenF
         <button type="button" aria-label="Dismiss browser notice" onClick={() => setNotice(undefined)}><X size={14} /></button>
       </div>}
       <div className={`browser-surface${activeTab?.created ? " is-live" : ""}`} ref={surfaceRef}>
-        {!activeTab?.created && <div className="browser-start"><Globe2 size={34} /><strong>Browse from the Workbench</strong><p>Pages run in an isolated {capabilities?.engine ?? "system webview"} profile for this Project.</p><form onSubmit={submit}><Search size={16} /><input aria-label="Start browsing" autoFocus={active} value={activeTab?.address ?? ""} placeholder="Search or enter an address" onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} /><button className="button primary" type="submit">Go</button></form>{activeTab?.error && <small role="alert">{activeTab.error}</small>}</div>}
+        {!activeTab?.created && <div className="browser-start"><Globe2 size={34} /><strong>Browse from the Workbench</strong><p>Pages run in an isolated {capabilities?.engine ?? "system webview"} profile for this Project. Nebula captures live page context only when you ask.</p><span className={`browser-start-scope ${scopeDecision.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeDecision.label} · {scopeDecision.detail}</span><form onSubmit={submit}><Search size={16} /><input aria-label="Start browsing" autoFocus={active} value={activeTab?.address ?? ""} placeholder="Search or enter an address" onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} /><button className="button primary" type="submit">Go</button></form>{activeTab?.error && <small role="alert">{activeTab.error}</small>}</div>}
       </div>
     </div>
   );

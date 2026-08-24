@@ -228,6 +228,23 @@ async function installTruthfulCore(page: Page) {
         }] : [],
         truncated: false,
       };
+    } else if (path.endsWith("/engagements/scratch-project/scope")) {
+      body = {
+        ...entity,
+        id: "scope-scratch",
+        engagement_id: "scratch-project",
+        allowed_cidrs: [],
+        allowed_domains: ["example.com"],
+        allowed_urls: [],
+        allowed_ports: [443],
+        not_before: null,
+        not_after: null,
+        prohibited_actions: [],
+        local_only: true,
+        max_concurrency: 1,
+        grants: [],
+        revision: 3,
+      };
     } else if (path.endsWith("/engagements")) {
       body = [{
         ...entity,
@@ -467,7 +484,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   }
 });
 
-test("browser address bar stays above logical native bounds at 2x scale", async ({ browser }, testInfo) => {
+test("browser keeps native bounds and opens scoped live context as a reviewed AI draft", async ({ browser }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Native browser geometry needs one explicit desktop run.");
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
@@ -480,6 +497,13 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
   await page.addInitScript(() => {
     localStorage.setItem("nebula.theme", "zero-dark");
     const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const callbacks = new Map<number, (value: unknown) => void>();
+    const eventHandlers = new Map<string, number>();
+    let callbackId = 0;
+    const emit = (event: string, payload: unknown) => {
+      const handler = eventHandlers.get(event);
+      if (handler !== undefined) callbacks.get(handler)?.({ event, id: 1, payload });
+    };
     Object.assign(window, { __NEBULA_BROWSER_CALLS__: calls });
     Object.assign(window, {
       __TAURI_INTERNALS__: {
@@ -491,10 +515,46 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
           if (command === "browser_capabilities") {
             return { engine: "Playwright native-bounds mock", projectStorage: "persistent" };
           }
+          if (command === "plugin:event|listen") {
+            eventHandlers.set(String(args.event), Number(args.handler));
+            return args.handler;
+          }
+          if (command === "plugin:event|unlisten") return undefined;
+          if (command === "browser_create_tab") {
+            queueMicrotask(() => emit("nebula-browser-page", {
+              tabId: args.tabId,
+              url: args.url,
+              state: "loaded",
+            }));
+          }
+          if (command === "browser_capture_context") {
+            queueMicrotask(() => emit("nebula-browser-context", {
+              requestId: args.requestId,
+              tabId: args.tabId,
+              state: "ready",
+              context: {
+                url: "https://example.com/account",
+                title: "Mock target account",
+                selectedText: "role=analyst",
+                text: "Authenticated account portal",
+                truncated: false,
+                forms: [{
+                  method: "POST",
+                  action: "https://example.com/profile",
+                  fields: [{ name: "display_name", id: "name", type: "text", autocomplete: "name", required: true }],
+                }],
+                links: [{ text: "Billing", href: "https://example.com/billing" }],
+              },
+            }));
+          }
           return undefined;
         },
-        transformCallback: () => 1,
-        unregisterCallback: () => undefined,
+        transformCallback: (callback: (value: unknown) => void) => {
+          callbackId += 1;
+          callbacks.set(callbackId, callback);
+          return callbackId;
+        },
+        unregisterCallback: (id: number) => callbacks.delete(id),
         convertFileSrc: (path: string) => path,
       },
     });
@@ -538,7 +598,18 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
   );
   expect(geometry.bounds.y + geometry.bounds.height).toBeLessThanOrEqual(geometry.panelBottom + 1);
   expect(geometry.devicePixelRatio).toBe(2);
+  await expect(page.getByText("In scope")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("browser-address-bar-2x.png") });
+
+  await page.getByRole("button", { name: "Ask Nebula about the live page" }).click();
+  await expect(page).toHaveURL(/view=chat/);
+  const attachment = page.getByRole("group", { name: "Selected context attachment" });
+  await expect(attachment).toContainText("Browser · Mock target account");
+  await expect(attachment).toContainText("characters");
+  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+  await expect(composer).toBeDisabled();
+  await expect(composer).toHaveAttribute("placeholder", "Add a model or harness in Settings…");
+  await expect(page.locator(".chat-message")).toHaveCount(0);
   await context.close();
 });
 
@@ -3032,8 +3103,10 @@ test("mobile Workbench navigation has one authority and no duplicate tab strip",
   await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Browser/ }).click();
   await expect(page).toHaveURL(/view=browser/);
   await expect(page.getByText("Browse from this device", { exact: true })).toBeVisible();
+  await expect(page.getByText(/No target · Open a page to compare it with Project scope/)).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Web address" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add to Sources" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ask Nebula about the live page" })).toHaveCount(0);
 });
 
 test("Assistant session details are optional and persist as a shell preference", async ({ page }) => {

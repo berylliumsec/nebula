@@ -155,6 +155,7 @@ fn build_app() -> tauri::App<Wry> {
             browser::browser_capabilities,
             browser::browser_create_tab,
             browser::browser_navigate,
+            browser::browser_capture_context,
             browser::browser_control,
             browser::browser_set_bounds,
             browser::browser_set_visible,

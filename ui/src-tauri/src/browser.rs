@@ -34,6 +34,40 @@ use crate::{
 const MAX_TABS_PER_PROJECT: usize = 16;
 const MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+const MAX_CAPTURE_TEXT_CHARS: usize = 16_000;
+const MAX_CAPTURE_SELECTION_CHARS: usize = 4_000;
+const MAX_CAPTURE_FORMS: usize = 40;
+const MAX_CAPTURE_LINKS: usize = 80;
+const MAX_CAPTURE_RAW_BYTES: usize = 2 * 1024 * 1024;
+
+const BROWSER_CONTEXT_SCRIPT: &str = r#"(() => {
+  const text = String(document.body?.innerText ?? "");
+  const selectedText = String(window.getSelection?.()?.toString() ?? "");
+  const forms = Array.from(document.forms ?? []).slice(0, 40).map((form) => ({
+    method: String(form.method || "GET").toUpperCase().slice(0, 16),
+    action: String(form.action || location.href).slice(0, 2048),
+    fields: Array.from(form.elements ?? []).slice(0, 40).map((element) => ({
+      name: String(element.getAttribute?.("name") ?? "").slice(0, 200),
+      id: String(element.id ?? "").slice(0, 200),
+      type: String(element.getAttribute?.("type") ?? element.tagName ?? "").toLowerCase().slice(0, 40),
+      autocomplete: String(element.getAttribute?.("autocomplete") ?? "").slice(0, 100),
+      required: Boolean(element.required),
+    })),
+  }));
+  const links = Array.from(document.links ?? []).slice(0, 80).map((link) => ({
+    text: String(link.innerText ?? link.textContent ?? "").trim().slice(0, 300),
+    href: String(link.href ?? "").slice(0, 2048),
+  }));
+  return {
+    url: String(location.href).slice(0, 4096),
+    title: String(document.title ?? "").slice(0, 500),
+    selectedText: selectedText.slice(0, 6000),
+    text: text.slice(0, 24000),
+    truncated: text.length > 24000 || selectedText.length > 6000,
+    forms,
+    links,
+  };
+})()"#;
 
 #[derive(Default)]
 pub(crate) struct BrowserState {
@@ -82,6 +116,104 @@ struct BrowserDownloadEvent {
     filename: Option<String>,
     size: Option<u64>,
     state: &'static str,
+    detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBrowserPageContext {
+    url: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    selected_text: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    truncated: bool,
+    #[serde(default)]
+    forms: Vec<RawBrowserPageForm>,
+    #[serde(default)]
+    links: Vec<RawBrowserPageLink>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBrowserPageForm {
+    #[serde(default)]
+    method: String,
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    fields: Vec<RawBrowserPageFormField>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBrowserPageFormField {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    r#type: String,
+    #[serde(default)]
+    autocomplete: String,
+    #[serde(default)]
+    required: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBrowserPageLink {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    href: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPageContext {
+    url: String,
+    title: String,
+    selected_text: String,
+    text: String,
+    truncated: bool,
+    forms: Vec<BrowserPageForm>,
+    links: Vec<BrowserPageLink>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPageForm {
+    method: String,
+    action: String,
+    fields: Vec<BrowserPageFormField>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPageFormField {
+    name: String,
+    id: String,
+    r#type: String,
+    autocomplete: String,
+    required: bool,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+struct BrowserPageLink {
+    text: String,
+    href: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserContextEvent {
+    request_id: String,
+    tab_id: String,
+    state: &'static str,
+    context: Option<BrowserPageContext>,
     detail: Option<String>,
 }
 
@@ -138,6 +270,64 @@ fn validated_url(value: &str) -> Result<Url, String> {
         return Err("Addresses containing embedded credentials are not accepted.".to_string());
     }
     Ok(url)
+}
+
+fn bounded_chars(value: String, limit: usize) -> (String, bool) {
+    let mut characters = value.chars();
+    let bounded: String = characters.by_ref().take(limit).collect();
+    (bounded, characters.next().is_some())
+}
+
+fn decode_browser_context(raw: &str) -> Result<BrowserPageContext, String> {
+    if raw.len() > MAX_CAPTURE_RAW_BYTES {
+        return Err("The live page context snapshot exceeded the safe size limit.".to_string());
+    }
+    let raw: RawBrowserPageContext = serde_json::from_str(raw)
+        .map_err(|_| "The live page returned an invalid context snapshot.".to_string())?;
+    let url = validated_url(&raw.url)?.to_string();
+    let (title, title_truncated) = bounded_chars(raw.title, 500);
+    let (selected_text, selection_truncated) =
+        bounded_chars(raw.selected_text, MAX_CAPTURE_SELECTION_CHARS);
+    let (text, text_truncated) = bounded_chars(raw.text, MAX_CAPTURE_TEXT_CHARS);
+    let forms = raw
+        .forms
+        .into_iter()
+        .take(MAX_CAPTURE_FORMS)
+        .map(|form| BrowserPageForm {
+            method: bounded_chars(form.method.to_uppercase(), 16).0,
+            action: bounded_chars(form.action, 2_048).0,
+            fields: form
+                .fields
+                .into_iter()
+                .take(40)
+                .map(|field| BrowserPageFormField {
+                    name: bounded_chars(field.name, 200).0,
+                    id: bounded_chars(field.id, 200).0,
+                    r#type: bounded_chars(field.r#type.to_lowercase(), 40).0,
+                    autocomplete: bounded_chars(field.autocomplete, 100).0,
+                    required: field.required,
+                })
+                .collect(),
+        })
+        .collect();
+    let links = raw
+        .links
+        .into_iter()
+        .take(MAX_CAPTURE_LINKS)
+        .map(|link| BrowserPageLink {
+            text: bounded_chars(link.text, 300).0,
+            href: bounded_chars(link.href, 2_048).0,
+        })
+        .collect();
+    Ok(BrowserPageContext {
+        url,
+        title,
+        selected_text,
+        text,
+        truncated: raw.truncated || title_truncated || selection_truncated || text_truncated,
+        forms,
+        links,
+    })
 }
 
 fn checked_bounds(bounds: BrowserBounds) -> Result<BrowserBounds, String> {
@@ -457,6 +647,20 @@ fn emit_download(app: &AppHandle, event: BrowserDownloadEvent) {
     }
 }
 
+fn emit_context(app: &AppHandle, event: BrowserContextEvent) {
+    if app
+        .emit_to("main", "nebula-browser-context", event)
+        .is_err()
+    {
+        record_browser_failure(
+            app,
+            "desktop.browser.context_event_delivery_failed",
+            "A live-page context update could not be delivered to the interface.",
+            "event-delivery",
+        );
+    }
+}
+
 fn record_browser_failure(app: &AppHandle, event_code: &str, message: &str, stage: &str) {
     drop(app.state::<DiagnosticsState>().record_desktop(
         DiagnosticLevel::Error,
@@ -754,6 +958,46 @@ pub(crate) fn browser_navigate(
         .ok_or_else(|| "This browser tab is unavailable.".to_string())?
         .navigate(validated_url(&url)?)
         .map_err(|error| format!("cannot navigate browser tab: {error}"))
+}
+
+#[tauri::command]
+pub(crate) fn browser_capture_context(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    tab_id: String,
+    project_id: String,
+    request_id: String,
+) -> Result<(), String> {
+    if !valid_identifier(&request_id) {
+        return Err("The browser capture identifier is invalid.".to_string());
+    }
+    let label = find_tab(&state, &tab_id, &project_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+    let callback_app = app.clone();
+    let callback_tab = tab_id.clone();
+    webview
+        .eval_with_callback(BROWSER_CONTEXT_SCRIPT, move |raw| {
+            let event = match decode_browser_context(&raw) {
+                Ok(context) => BrowserContextEvent {
+                    request_id: request_id.clone(),
+                    tab_id: callback_tab.clone(),
+                    state: "ready",
+                    context: Some(context),
+                    detail: None,
+                },
+                Err(detail) => BrowserContextEvent {
+                    request_id: request_id.clone(),
+                    tab_id: callback_tab.clone(),
+                    state: "failed",
+                    context: None,
+                    detail: Some(detail),
+                },
+            };
+            emit_context(&callback_app, event);
+        })
+        .map_err(|error| format!("cannot capture live page context: {error}"))
 }
 
 #[tauri::command]
@@ -1115,6 +1359,59 @@ mod tests {
         assert!(validated_url("file:///etc/passwd").is_err());
         assert!(validated_url("javascript:alert(1)").is_err());
         assert!(validated_url("https://user:secret@example.test/").is_err());
+    }
+
+    #[test]
+    fn live_page_context_is_bounded_and_contains_no_form_values() {
+        let raw = serde_json::json!({
+            "url": "https://app.example.test/login",
+            "title": "Sign in",
+            "selectedText": "csrf token rotates",
+            "text": "x".repeat(MAX_CAPTURE_TEXT_CHARS + 50),
+            "truncated": false,
+            "forms": [{
+                "method": "post",
+                "action": "https://app.example.test/session",
+                "fields": [{
+                    "name": "password",
+                    "id": "password",
+                    "type": "PASSWORD",
+                    "autocomplete": "current-password",
+                    "required": true,
+                    "value": "never-capture-this"
+                }]
+            }],
+            "links": [{"text": "Reset", "href": "https://app.example.test/reset"}]
+        })
+        .to_string();
+
+        let context = decode_browser_context(&raw).unwrap();
+
+        assert_eq!(context.url, "https://app.example.test/login");
+        assert_eq!(context.text.chars().count(), MAX_CAPTURE_TEXT_CHARS);
+        assert!(context.truncated);
+        assert_eq!(context.forms[0].method, "POST");
+        assert_eq!(context.forms[0].fields[0].r#type, "password");
+        let serialized = serde_json::to_string(&context).unwrap();
+        assert!(!serialized.contains("never-capture-this"));
+        assert!(!serialized.contains("\"value\""));
+    }
+
+    #[test]
+    fn live_page_context_rejects_non_network_or_credentialed_provenance() {
+        for url in ["file:///etc/passwd", "https://user:secret@example.test/"] {
+            let raw = serde_json::json!({"url": url, "text": "page"}).to_string();
+            assert!(decode_browser_context(&raw).is_err());
+        }
+    }
+
+    #[test]
+    fn live_page_context_rejects_an_oversized_raw_snapshot_before_decoding() {
+        let raw = "x".repeat(MAX_CAPTURE_RAW_BYTES + 1);
+        assert_eq!(
+            decode_browser_context(&raw).unwrap_err(),
+            "The live page context snapshot exceeded the safe size limit."
+        );
     }
 
     #[test]

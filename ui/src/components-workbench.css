@@ -614,7 +614,7 @@ kbd { font-size: 11px; }
 .browser-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-new-tab { display: inline-flex; width: 32px; height: 32px; flex: 0 0 32px; align-items: center; justify-content: center; border: 0; border-radius: var(--radius-control); color: var(--muted); background: transparent; cursor: pointer; }
 .browser-tab button:hover, .browser-new-tab:hover { color: var(--text); background: var(--surface-hover); }
-.browser-toolbar { display: grid; height: 48px; min-height: 48px; flex: 0 0 48px; grid-template-columns: 34px 34px 34px minmax(180px, 1fr) 34px 34px; gap: 4px; align-items: center; padding: 6px 8px; overflow: visible; border-bottom: 1px solid var(--border-soft); }
+.browser-toolbar { display: grid; height: 48px; min-height: 48px; flex: 0 0 48px; grid-template-columns: 34px 34px 34px minmax(180px, 1fr) 34px 34px 34px; gap: 4px; align-items: center; padding: 6px 8px; overflow: visible; border-bottom: 1px solid var(--border-soft); }
 .browser-toolbar > button { display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; border: 0; border-radius: var(--radius-control); color: var(--muted); background: transparent; cursor: pointer; }
 .browser-toolbar > button:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
 .browser-toolbar > button:disabled { opacity: .4; cursor: default; }
@@ -622,10 +622,16 @@ kbd { font-size: 11px; }
 .browser-toolbar form:focus-within { border-color: var(--blue); box-shadow: none; }
 .browser-toolbar form svg { flex: 0 0 auto; color: var(--muted); }
 .browser-toolbar input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--text); background: transparent; font: 12px var(--font-mono); }
+.browser-scope-badge { display: inline-flex; min-width: 0; flex: 0 0 auto; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 999px; color: var(--muted); background: var(--surface-muted); font: 10px var(--font-sans); white-space: nowrap; }
+.browser-scope-badge.in_scope, .browser-start-scope.in_scope { color: var(--green); background: var(--green-muted); }
+.browser-scope-badge.out_of_scope, .browser-scope-badge.inactive, .browser-start-scope.out_of_scope, .browser-start-scope.inactive { color: var(--red); background: var(--red-muted); }
+.browser-scope-badge.unconfigured, .browser-start-scope.unconfigured { color: var(--yellow); background: var(--yellow-muted); }
+.browser-scope-badge svg { color: currentColor !important; }
 .browser-surface { position: relative; min-height: 520px; height: calc(100dvh - var(--top-height) - 238px); overflow: hidden; }
 .browser-start { position: absolute; z-index: 1; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; color: var(--text); background: var(--surface); text-align: center; }
 .browser-start > svg { color: var(--blue); }
 .browser-start p { margin: 0; color: var(--muted); }
+.browser-start-scope { display: inline-flex; max-width: min(680px, 100%); align-items: center; gap: 5px; padding: 5px 8px; border-radius: 999px; color: var(--muted); background: var(--surface-muted); font-size: 11px; line-height: 1.35; }
 .browser-start form { display: grid; width: min(580px, 100%); grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-top: 8px; padding: 6px 6px 6px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--canvas); }
 .browser-start input { min-width: 0; height: 34px; border: 0; outline: 0; color: var(--text); background: transparent; }
 .browser-start small { color: var(--red); }
