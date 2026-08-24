@@ -105,6 +105,43 @@ def test_workspace_lists_previews_downloads_and_rejects_symlinks(tmp_path):
         assert escaped.json()["code"] == "workspace_path_invalid"
 
 
+def test_workspace_discovers_manifest_and_test_tasks_without_following_links(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    (root / "package.json").write_text(
+        '{"scripts":{"test":"vitest run","build":"vite build","odd name":"echo ok"}}',
+        encoding="utf-8",
+    )
+    (root / "Makefile").write_text("lint:\n\tcheck\nrelease: build\n", encoding="utf-8")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_probe.py").write_text(
+        "def test_probe(): pass\n", encoding="utf-8"
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "test_secret.py").write_text("secret\n", encoding="utf-8")
+    os.symlink(outside, root / "linked-tests")
+
+    result = workspace.tasks(engagement.id)
+    commands = {task.command for task in result.tasks}
+    assert {
+        "npm run test",
+        "npm run build",
+        "npm run 'odd name'",
+        "make lint",
+        "make release",
+        "python -m pytest",
+        "python -m pytest tests/test_probe.py",
+    } <= commands
+    assert all("secret" not in (task.path or "") for task in result.tasks)
+
+    response = client.get(
+        f"/api/v1/engagements/{engagement.id}/workspace/tasks", headers=AUTH
+    )
+    assert response.status_code == 200
+    assert response.json()["engagement_id"] == engagement.id
+
+
 def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_path):
     _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
     root = platform.workspace_for(engagement.id)
@@ -180,7 +217,9 @@ def test_workspace_source_control_reports_status_and_hardened_diffs(tmp_path):
 
     textconv_marker = tmp_path / "textconv-ran"
     textconv = tmp_path / "malicious-textconv.sh"
-    textconv.write_text(f"#!/bin/sh\ntouch '{textconv_marker}'\ncat \"$1\"\n", encoding="utf-8")
+    textconv.write_text(
+        f"#!/bin/sh\ntouch '{textconv_marker}'\ncat \"$1\"\n", encoding="utf-8"
+    )
     textconv.chmod(0o700)
     (root / ".gitattributes").write_text("*.txt diff=unsafe\n", encoding="utf-8")
     git("config", "diff.unsafe.textconv", str(textconv))

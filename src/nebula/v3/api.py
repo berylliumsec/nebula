@@ -352,6 +352,7 @@ from .workspace import (
     WorkspaceResetStatus,
     WorkspaceSearchResult,
     WorkspaceService,
+    WorkspaceTaskList,
     WorkspaceUploadResult,
 )
 
@@ -4601,6 +4602,15 @@ def create_app(
         return require_workspace_service().search(
             engagement_id, query, mode=mode, path=path, limit=limit
         )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/tasks",
+        response_model=WorkspaceTaskList,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def workspace_tasks(engagement_id: str) -> WorkspaceTaskList:
+        return await asyncio.to_thread(require_workspace_service().tasks, engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/source-control",

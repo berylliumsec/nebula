@@ -1987,6 +1987,23 @@ export interface WorkspaceSearchResult {
   truncated: boolean;
 }
 
+export interface WorkspaceTask {
+  id: string;
+  label: string;
+  command: string;
+  kind: "test" | "build" | "run" | "lint" | "custom";
+  source: "package.json" | "Makefile" | "pytest" | "go.mod" | "Cargo.toml";
+  detail: string;
+  path?: string;
+}
+
+export interface WorkspaceTaskList {
+  engagementId: Identifier;
+  tasks: WorkspaceTask[];
+  scannedEntries: number;
+  truncated: boolean;
+}
+
 export type SourceControlFileStatus =
   | "unmodified"
   | "modified"

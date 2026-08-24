@@ -8,8 +8,11 @@ import asyncio
 import errno
 import hashlib
 import hmac
+import json
 import mimetypes
 import os
+import re
+import shlex
 import shutil
 import stat
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -83,6 +86,23 @@ class WorkspaceSearchResult(NebulaModel):
     mode: Literal["files", "text"]
     matches: list[WorkspaceSearchMatch]
     scanned_files: int = Field(ge=0)
+    truncated: bool = False
+
+
+class WorkspaceTask(NebulaModel):
+    id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    label: str = Field(min_length=1, max_length=300)
+    command: str = Field(min_length=1, max_length=20_000)
+    kind: Literal["test", "build", "run", "lint", "custom"]
+    source: Literal["package.json", "Makefile", "pytest", "go.mod", "Cargo.toml"]
+    detail: str = Field(max_length=1_000)
+    path: str | None = Field(default=None, max_length=4096)
+
+
+class WorkspaceTaskList(NebulaModel):
+    engagement_id: str
+    tasks: list[WorkspaceTask] = Field(default_factory=list, max_length=300)
+    scanned_entries: int = Field(ge=0)
     truncated: bool = False
 
 
@@ -279,6 +299,188 @@ class WorkspaceService:
             next_offset=next_offset,
             total=len(rows),
         )
+
+    def tasks(self, engagement_id: str) -> WorkspaceTaskList:
+        """Discover declarative project tasks without evaluating project code."""
+        self.store.get(Engagement, engagement_id)
+        tasks: list[WorkspaceTask] = []
+
+        def add(
+            label: str,
+            command: str,
+            kind: str,
+            source: str,
+            detail: str,
+            path: str | None = None,
+        ) -> None:
+            identity = hashlib.sha256(
+                f"{source}\0{path or ''}\0{command}".encode()
+            ).hexdigest()
+            tasks.append(
+                WorkspaceTask(
+                    id=identity,
+                    label=label,
+                    command=command,
+                    kind=kind,
+                    source=source,
+                    detail=detail,
+                    path=path,
+                )
+            )
+
+        package = self._read_task_manifest(engagement_id, "package.json")
+        if package is not None:
+            try:
+                parsed = json.loads(package)
+            except json.JSONDecodeError:
+                parsed = None
+            scripts = parsed.get("scripts") if isinstance(parsed, dict) else None
+            if isinstance(scripts, dict):
+                for name, value in list(scripts.items())[:200]:
+                    if (
+                        not isinstance(name, str)
+                        or not isinstance(value, str)
+                        or not name
+                        or len(name) > 200
+                    ):
+                        continue
+                    kind = (
+                        "test"
+                        if name == "test" or name.startswith("test:")
+                        else "build"
+                        if name == "build" or name.startswith("build:")
+                        else "lint"
+                        if name == "lint" or name.startswith("lint:")
+                        else "run"
+                        if name in {"start", "dev"}
+                        else "custom"
+                    )
+                    add(
+                        f"npm: {name}",
+                        f"npm run {shlex.quote(name)}",
+                        kind,
+                        "package.json",
+                        value[:1_000],
+                    )
+
+        makefile = self._read_task_manifest(engagement_id, "Makefile")
+        if makefile is not None:
+            for target in re.findall(
+                r"(?m)^([A-Za-z0-9][A-Za-z0-9_.-]*):(?:\s|$)", makefile
+            ):
+                if target.startswith(".") or any(
+                    task.command == f"make {target}" for task in tasks
+                ):
+                    continue
+                kind = (
+                    "test"
+                    if "test" in target
+                    else "build"
+                    if target in {"all", "build", "dist", "release"}
+                    else "lint"
+                    if target in {"lint", "check"}
+                    else "custom"
+                )
+                add(
+                    f"make: {target}",
+                    f"make {target}",
+                    kind,
+                    "Makefile",
+                    "Declared Make target",
+                )
+
+        root = self._workspace_root(engagement_id)
+        scanned = 0
+        truncated = False
+        pytest_files: list[str] = []
+        for directory, names, files in os.walk(root, followlinks=False):
+            names[:] = [
+                name
+                for name in names
+                if name
+                not in {
+                    ".git",
+                    "node_modules",
+                    ".venv",
+                    "venv",
+                    "dist",
+                    "build",
+                    "__pycache__",
+                }
+                and not (Path(directory) / name).is_symlink()
+            ]
+            for filename in files:
+                scanned += 1
+                if scanned > 5_000:
+                    truncated = True
+                    break
+                candidate = Path(directory) / filename
+                if candidate.is_symlink():
+                    continue
+                relative = candidate.relative_to(root).as_posix()
+                if (
+                    filename.startswith("test_") or filename.endswith("_test.py")
+                ) and filename.endswith(".py"):
+                    pytest_files.append(relative)
+            if truncated:
+                break
+        if pytest_files:
+            add(
+                "pytest: all discovered tests",
+                "python -m pytest",
+                "test",
+                "pytest",
+                f"{len(pytest_files)} test files discovered",
+            )
+            for path in sorted(pytest_files)[:100]:
+                add(
+                    f"pytest: {path}",
+                    f"python -m pytest {shlex.quote(path)}",
+                    "test",
+                    "pytest",
+                    "Run this discovered test file",
+                    path,
+                )
+        if self._read_task_manifest(engagement_id, "go.mod") is not None:
+            add(
+                "Go: test workspace",
+                "go test ./...",
+                "test",
+                "go.mod",
+                "Go module test suite",
+            )
+        if self._read_task_manifest(engagement_id, "Cargo.toml") is not None:
+            add(
+                "Cargo: test workspace",
+                "cargo test",
+                "test",
+                "Cargo.toml",
+                "Cargo workspace test suite",
+            )
+        return WorkspaceTaskList(
+            engagement_id=engagement_id,
+            tasks=tasks[:300],
+            scanned_entries=scanned,
+            truncated=truncated or len(tasks) > 300,
+        )
+
+    def _read_task_manifest(self, engagement_id: str, path: str) -> str | None:
+        try:
+            stream, metadata = self._open_regular(engagement_id, (path,))
+        except ExecutionServiceError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        with stream:
+            if metadata.st_size > 512 * 1024:
+                return None
+            payload = stream.read(512 * 1024 + 1)
+        if len(payload) > 512 * 1024 or b"\0" in payload:
+            return None
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
 
     def preview(self, engagement_id: str, path: str) -> WorkspacePreview:
         relative = _relative_parts(path, require_value=True)

@@ -27,6 +27,7 @@ operator-reviewed AI without weakening the linked-workspace boundary.
 | Search and navigate | File and text search are bounded, symlink-safe, keyboard operable, and open the chosen match | Core search result plus editor selection | Core plus component plus Playwright |
 | Source-control awareness | Code shows the selected project repository, branch, bounded changes, and hardened staged or working diffs without crossing the project root or executing repository helpers | Core Git query plus shared project workspace | Core plus component plus real Core |
 | Language intelligence | Python buffers provide completion, hover, signatures, same-buffer definition/references/rename, formatting, and live Problems without reading host project configuration or following imports outside editor-supplied bytes | Authenticated ephemeral LSP session; open editor bytes only | language unit plus authenticated WebSocket plus CodeMirror integration |
+| Tasks and tests | Code discovers bounded declarative npm scripts, Make targets, Python test files, and Go/Rust test suites; selecting one opens the existing exact-source execution review rather than running implicitly | Core workspace discovery plus reviewed-execution preflight/runtime/Activity | Core discovery plus component plus real Core |
 | Security workflow | A saved file can be handed to Terminal, assistant, or immutable Evidence from the editor with the exact project path | Core project/workspace/evidence plus Workbench view | real Core plus Playwright |
 | Refresh and reconnect | Saved files reload from Core; dirty drafts trigger unload protection and survive complete Workbench/provider remounts | Core plus React editor session plus bounded IndexedDB cache | component plus real Core |
 | Failure and retry | Listing, open, restore, persistence, search, save, conflict, and evidence failures preserve usable tabs and name the next valid action | Core error contract plus local persistence status | component plus real Core |
@@ -64,8 +65,9 @@ operator-reviewed AI without weakening the linked-workspace boundary.
   isolated configuration and no cache.
 - Terminal/harness: execution state and output; it reads the same project folder.
 - Terminal/reviewed execution: Git mutations, builds, tasks, debuggers, and other
-  command lifecycles. Code hands off to these existing authorities instead of
-  embedding a second terminal or approval system.
+  command lifecycles. Code discovers task entry points and hands exact commands
+  to these existing authorities instead of embedding a second terminal or
+  approval system.
 
 ## Parity boundary
 

@@ -346,4 +346,29 @@ describe("CodeEditorPanel", () => {
     expect(sourceControlStatus).toHaveBeenCalledWith("project-1", expect.any(AbortSignal));
     expect(sourceControlDiff).toHaveBeenCalledWith("project-1", "tool.py", false);
   });
+
+  it("discovers project tasks and hands exact commands to reviewed execution", async () => {
+    const user = userEvent.setup();
+    const onRun = vi.fn();
+    const api = {
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      workspaceTasks: vi.fn().mockResolvedValue({
+        engagementId: "project-1",
+        scannedEntries: 12,
+        truncated: false,
+        tasks: [{ id: "a".repeat(64), label: "pytest: all discovered tests", command: "python -m pytest", kind: "test", source: "pytest", detail: "3 test files discovered" }],
+      }),
+    } as unknown as ApiClient;
+    render(<DialogProvider><WorkbenchEditorProvider><CodeEditorPanel active api={api} engagementId="project-1" onRun={onRun} /></WorkbenchEditorProvider></DialogProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "Project tasks" }));
+    const dialog = await screen.findByRole("dialog", { name: "Project tasks and tests" });
+    await user.click(within(dialog).getByRole("option", { name: /pytest: all discovered tests/ }));
+
+    expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
+      source: "set -eu\npython -m pytest\n",
+      language: "bash",
+      origin: expect.objectContaining({ sourceKind: "workspace_task", sourceLabel: "pytest: all discovered tests" }),
+    }));
+  });
 });

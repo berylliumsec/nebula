@@ -108,6 +108,7 @@ import type {
   WorkspaceResetResult,
   WorkspaceResetStatus,
   WorkspaceSearchResult,
+  WorkspaceTaskList,
   WorkspaceUploadResult,
   WritingTransformRequest,
   WritingTransformResponse,
@@ -5784,6 +5785,23 @@ export class ApiClient {
       `engagements/${encodeURIComponent(engagementId)}/workspace/search?${parameters}`,
       { signal },
     ).then(mapWorkspaceSearchResult);
+  }
+
+  workspaceTasks(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceTaskList> {
+    return this.request<{
+      engagement_id: string;
+      tasks: Array<{ id: string; label: string; command: string; kind: "test" | "build" | "run" | "lint" | "custom"; source: "package.json" | "Makefile" | "pytest" | "go.mod" | "Cargo.toml"; detail: string; path?: string | null }>;
+      scanned_entries: number;
+      truncated: boolean;
+    }>(`engagements/${encodeURIComponent(engagementId)}/workspace/tasks`, { signal }).then((value) => ({
+      engagementId: value.engagement_id,
+      tasks: value.tasks.map((task) => ({ ...task, path: task.path ?? undefined })),
+      scannedEntries: value.scanned_entries,
+      truncated: value.truncated,
+    }));
   }
 
   sourceControlStatus(

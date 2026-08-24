@@ -18,7 +18,9 @@ interface RealCore {
 async function startRealCore(options: { bindHost?: string; browserHost?: string } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
   const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+  // Match the production-test override used by the shared real-Core harness.
   const coreCandidates = [
+    process.env.NEBULA_TEST_CORE_BIN,
     process.env.NEBULA_CORE_BINARY,
     path.join(repository, ".venv/bin/nebula-core"),
     commonGitDir ? path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core") : undefined,
@@ -464,6 +466,7 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     await expect(page.getByText("Saved /workspace/scanner.py. Use it from Terminal when you're ready.")).toBeVisible();
     await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toBeVisible();
     await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("button", { name: "Project tasks and tests" })).toBeVisible();
 
     await page.keyboard.press("Control+P");
     const quickOpen = page.getByRole("dialog", { name: "Quick open" });
@@ -525,7 +528,8 @@ test("production Code reads real Git changes and hands mutations to Nebula Termi
     git("config", "user.name", "Nebula Acceptance");
     git("config", "user.email", "nebula@example.invalid");
     await writeFile(path.join(projectFolder, "scanner.py"), "def scan():\n    return 'baseline'\n", "utf8");
-    git("add", "scanner.py");
+    await writeFile(path.join(projectFolder, "Makefile"), "lint:\n\tpython -m compileall scanner.py\n", "utf8");
+    git("add", "scanner.py", "Makefile");
     git("commit", "-m", "baseline");
     await writeFile(path.join(projectFolder, "scanner.py"), "def scan():\n    return 'changed'\n", "utf8");
 
@@ -557,6 +561,12 @@ test("production Code reads real Git changes and hands mutations to Nebula Termi
     await expect(page.getByText(/open-buffer intelligence ready/)).toBeVisible({ timeout: 10_000 });
     await page.getByRole("button", { name: "Problems" }).click();
     await expect(page.locator(".cm-panel-lint")).toBeVisible();
+    await page.getByRole("button", { name: "Tasks" }).click();
+    const tasks = page.getByRole("dialog", { name: "Project tasks and tests" });
+    await tasks.getByRole("option", { name: /make: lint/ }).click();
+    const executionReview = page.getByRole("dialog", { name: "Review exact code execution" });
+    await expect(executionReview.locator(".execution-source-review")).toContainText("make lint");
+    await executionReview.getByRole("button", { name: "Close execution review" }).click();
     await page.getByRole("tab", { name: "Changes" }).click();
     await expect(page.getByText(/Stage, commit, branch, pull, and push remain in Nebula Terminal/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Open Terminal" })).toBeVisible();
