@@ -120,6 +120,19 @@ def test_lsp_session_supports_intelligence_and_versioned_diagnostics() -> None:
             "line": 0,
             "character": 4,
         }
+        renamed = await session.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "textDocument/rename",
+                "params": {
+                    "textDocument": {"uri": "file:///workspace/demo.py"},
+                    "position": {"line": 3, "character": 10},
+                    "newName": "welcome",
+                },
+            }
+        )
+        assert len(renamed[0]["result"]["changes"]["file:///workspace/demo.py"]) == 2
         changed = await session.handle(
             {
                 "jsonrpc": "2.0",
@@ -160,6 +173,47 @@ def test_lsp_session_supports_intelligence_and_versioned_diagnostics() -> None:
             }
         )
         assert invalid_version[0]["error"]["code"] == -32602
+
+    asyncio.run(exercise())
+
+
+def test_lsp_formats_python_without_project_configuration() -> None:
+    async def exercise() -> None:
+        session = LanguageServerSession("engagement-1")
+        await session.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"rootUri": "file:///workspace"},
+            }
+        )
+        await session.handle(
+            {
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {
+                    "textDocument": {
+                        "uri": "file:///workspace/format.py",
+                        "languageId": "python",
+                        "version": 1,
+                        "text": "items=[1,2]\n",
+                    }
+                },
+            }
+        )
+        formatted = await session.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "textDocument/formatting",
+                "params": {
+                    "textDocument": {"uri": "file:///workspace/format.py"},
+                    "options": {"tabSize": 4, "insertSpaces": True},
+                },
+            }
+        )
+        assert formatted[0]["result"][0]["newText"] == "items = [1, 2]\n"
 
     asyncio.run(exercise())
 

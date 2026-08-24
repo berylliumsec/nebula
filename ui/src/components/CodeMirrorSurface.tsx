@@ -7,6 +7,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, t
 import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { openLintPanel } from "@codemirror/lint";
 import { createLanguageServer, type LanguageServerState } from "../api/languageServer";
+import { formatDocument, renameSymbol } from "@codemirror/lsp-client";
 
 interface CodeMirrorSurfaceProps {
   active: boolean;
@@ -21,6 +22,8 @@ interface CodeMirrorSurfaceProps {
   completionSource?(context: CompletionContext): Promise<CompletionResult | null>;
   findRequest?: number;
   problemsRequest?: number;
+  formatRequest?: number;
+  renameRequest?: number;
   reveal?: { line: number; column: number; request: number };
   saveKey?: string;
   tabSize?: 2 | 4;
@@ -88,7 +91,7 @@ const nebulaTheme = EditorView.theme({
   ".cm-foldGutter .cm-gutterElement": { cursor: "pointer" },
 });
 
-export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, findRequest = 0, problemsRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, findRequest = 0, problemsRequest = 0, formatRequest = 0, renameRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
@@ -236,6 +239,14 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
     if (!problemsRequest || !viewRef.current) return;
     openLintPanel(viewRef.current);
   }, [problemsRequest]);
+
+  useEffect(() => {
+    if (formatRequest && viewRef.current) void formatDocument(viewRef.current);
+  }, [formatRequest]);
+
+  useEffect(() => {
+    if (renameRequest && viewRef.current) renameSymbol(viewRef.current);
+  }, [renameRequest]);
 
   useEffect(() => {
     const view = viewRef.current;

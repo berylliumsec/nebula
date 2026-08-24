@@ -340,6 +340,79 @@ def references_document(
     return _locations(document, _script(document).get_references(line, column))
 
 
+def rename_document(
+    document: _OpenDocument, position: dict[str, Any], new_name: Any
+) -> dict[str, Any]:
+    if (
+        not isinstance(new_name, str)
+        or len(new_name) > 200
+        or not new_name.isidentifier()
+    ):
+        raise ValueError("newName must be a valid Python identifier")
+    line, column = _jedi_position(document.source, position)
+    locations = _locations(document, _script(document).get_references(line, column))
+    if not locations:
+        raise ValueError("the selected symbol cannot be renamed in this buffer")
+    return {
+        "changes": {
+            document.uri: [
+                {"range": location["range"], "newText": new_name}
+                for location in locations
+            ]
+        }
+    }
+
+
+def format_document(document: _OpenDocument) -> list[dict[str, Any]]:
+    if not document.path.endswith(".py"):
+        return []
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ruff",
+                "format",
+                "--isolated",
+                "--no-cache",
+                "--stdin-filename",
+                f"/workspace/{document.path}",
+                "-",
+            ],
+            input=document.source.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=2,
+            check=False,
+            env={"HOME": "/nonexistent", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if completed.returncode != 0 or len(completed.stdout) > MAX_DOCUMENT_BYTES:
+        return []
+    try:
+        formatted = completed.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return []
+    if formatted == document.source:
+        return []
+    lines = document.source.split("\n")
+    return [
+        {
+            "range": {
+                "start": {"line": 0, "character": 0},
+                "end": {
+                    "line": len(lines) - 1,
+                    "character": _utf16_column(
+                        lines[-1].removesuffix("\r"), len(lines[-1])
+                    ),
+                },
+            },
+            "newText": formatted,
+        }
+    ]
+
+
 def _jedi_diagnostics(document: _OpenDocument) -> list[dict[str, Any]]:
     if not document.path.endswith(".py"):
         return []
@@ -540,6 +613,8 @@ class LanguageServerSession:
                                 },
                                 "definitionProvider": True,
                                 "referencesProvider": True,
+                                "renameProvider": True,
+                                "documentFormattingProvider": True,
                             },
                             "serverInfo": {
                                 "name": "Nebula bounded Python intelligence",
@@ -655,6 +730,12 @@ class LanguageServerSession:
                 value = await self._analyze(definitions_document, document, position)
             elif method == "textDocument/references":
                 value = await self._analyze(references_document, document, position)
+            elif method == "textDocument/rename":
+                value = await self._analyze(
+                    rename_document, document, position, params.get("newName")
+                )
+            elif method == "textDocument/formatting":
+                value = await self._analyze(format_document, document)
             else:
                 return [
                     self._error(
