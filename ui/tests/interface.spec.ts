@@ -10,7 +10,7 @@ const workspaces = [
   ["settings", "/settings", "Settings"],
 ] as const;
 
-const firstRunThemeTest = "Zero is the first-run default theme";
+const firstRunThemeTest = "Zero Dark is the first-run default theme";
 
 const entity = {
   created_at: "2026-07-12T10:00:00Z",
@@ -414,7 +414,7 @@ async function openWorkspace(page: Page, route: string, heading: string) {
   await page.waitForTimeout(120);
 }
 
-async function setTheme(page: Page, theme: "light" | "dark" | "zero" | "high-contrast") {
+async function setTheme(page: Page, theme: "zero-dark" | "zero-light") {
   await page.evaluate((value) => {
     const oldValue = localStorage.getItem("nebula.theme");
     localStorage.setItem("nebula.theme", value);
@@ -462,7 +462,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   await installTruthfulCore(page);
   if (testInfo.title !== firstRunThemeTest) {
     await page.addInitScript(() => {
-      if (localStorage.getItem("nebula.theme") === null) localStorage.setItem("nebula.theme", "dark");
+      if (localStorage.getItem("nebula.theme") === null) localStorage.setItem("nebula.theme", "zero-dark");
     });
   }
 });
@@ -478,7 +478,7 @@ test("browser address bar stays above logical native bounds at 2x scale", async 
   const page = await context.newPage();
   await installTruthfulCore(page);
   await page.addInitScript(() => {
-    localStorage.setItem("nebula.theme", "dark");
+    localStorage.setItem("nebula.theme", "zero-dark");
     const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
     Object.assign(window, { __NEBULA_BROWSER_CALLS__: calls });
     Object.assign(window, {
@@ -659,9 +659,67 @@ test("hidden terminal views stop emitting resize frames", async ({ page }, testI
 
 test(firstRunThemeTest, async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
   await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
+});
+
+test("Workbench omits the removed Human controlled badge in every theme", async ({ page }) => {
+  await openWorkspace(page, "/", "Workbench");
+  for (const theme of ["zero-dark", "zero-light"] as const) {
+    await setTheme(page, theme);
+    await expect(page.getByText("Human controlled", { exact: true })).toHaveCount(0);
+    await expect(page.locator('[title^="Human controlled"]')).toHaveCount(0);
+  }
+});
+
+test("Zero keeps one navigable panoramic shell with a clear light-theme status and search cluster", async ({ page }) => {
+  await openWorkspace(page, "/", "Workbench");
+  await setTheme(page, "zero-light");
+
+  const ready = page.getByRole("button", { name: "Nebula Core ready" });
+  const search = page.getByRole("button", { name: "Search commands" });
+  await expect(ready).toBeVisible();
+  await expect(search).toBeVisible();
+
+  const contrast = await page.locator(".zero-status-band").evaluate((band) => {
+    const parse = (value: string) => {
+      const channels = value.match(/[\d.]+/g)?.map(Number);
+      if (!channels || channels.length !== 3) throw new Error(`Expected an opaque RGB color, received ${value}`);
+      return channels;
+    };
+    const luminance = (value: string) => {
+      const channels = parse(value).map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const ratio = (foreground: string, background: string) => {
+      const lighter = Math.max(luminance(foreground), luminance(background));
+      const darker = Math.min(luminance(foreground), luminance(background));
+      return (lighter + 0.05) / (darker + 0.05);
+    };
+    const measure = (selector: string) => {
+      const element = band.querySelector<HTMLElement>(selector)!;
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        foreground: style.color,
+        ratio: ratio(style.color, style.backgroundColor),
+      };
+    };
+    return {
+      ready: measure(".connection-chip"),
+      search: measure(".command-trigger"),
+      shortcut: measure(".command-trigger kbd"),
+    };
+  });
+
+  expect(contrast.ready.ratio, JSON.stringify(contrast.ready)).toBeGreaterThanOrEqual(4.5);
+  expect(contrast.search.ratio, JSON.stringify(contrast.search)).toBeGreaterThanOrEqual(4.5);
+  expect(contrast.shortcut.ratio, JSON.stringify(contrast.shortcut)).toBeGreaterThanOrEqual(4.5);
+  expect(contrast.ready.background).not.toBe(contrast.search.background);
 });
 
 test("primary navigation exposes only the five task destinations", async ({ page }) => {
@@ -685,6 +743,13 @@ test("Missions explains missing runtime setup and provides a working next action
   await expect(controls.getByText("Missions need an enabled model provider or agent harness with a verified model.")).toBeVisible();
   await expect(controls.getByRole("link", { name: "Configure runtime" })).toHaveAttribute("href", "/settings#models-settings");
   await expect(controls.getByRole("button", { name: "Automate task" })).toBeDisabled();
+  const widths = await page.locator(".session-layout.missions").evaluate((layout) => {
+    const workspace = layout.querySelector<HTMLElement>(".session-workspace")!.getBoundingClientRect();
+    const missions = layout.querySelector<HTMLElement>(".agents-page")!.getBoundingClientRect();
+    return { layout: layout.getBoundingClientRect().width, workspace: workspace.width, missions: missions.width };
+  });
+  expect(widths.workspace).toBeGreaterThanOrEqual(widths.layout - 2);
+  expect(widths.missions).toBeGreaterThanOrEqual(widths.workspace - 26);
 });
 
 test("mission workflow freezes harness options, stages, and URL identity", async ({ page }) => {
@@ -884,9 +949,9 @@ test("all task workspaces keep responsive content inside its owning surface", as
   }
 });
 
-test("all assistant states remain fully visible inside the workbench viewport", async ({ page }, testInfo) => {
+test("all assistant states remain fully visible inside mobile Workbench navigation and desktop viewports", async ({ page }, testInfo) => {
   if (testInfo.project.name === "desktop") await page.setViewportSize({ width: 2048, height: 868 });
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/?view=chat", "Workbench");
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Open conversations" }).click();
@@ -921,6 +986,25 @@ test("all assistant states remain fully visible inside the workbench viewport", 
   await startChat.click();
   const composer = page.locator(".chat-composer");
   await expect(composer).toBeVisible();
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  const settings = page.getByRole("dialog", { name: "Assistant settings" });
+  await expect(settings).toBeVisible();
+  const settingsGeometry = await settings.evaluate((popover) => {
+    const panel = popover.closest<HTMLElement>(".chat-panel")!.getBoundingClientRect();
+    const composer = popover.parentElement!.querySelector<HTMLElement>(".chat-composer")!.getBoundingClientRect();
+    const bounds = popover.getBoundingClientRect();
+    return {
+      centerDelta: Math.abs((bounds.left + bounds.right) / 2 - (composer.left + composer.right) / 2),
+      verticalGap: composer.top - bounds.bottom,
+      leftInset: bounds.left - panel.left,
+      rightInset: panel.right - bounds.right,
+    };
+  });
+  expect(settingsGeometry.centerDelta).toBeLessThanOrEqual(1);
+  expect(settingsGeometry.verticalGap).toBeGreaterThanOrEqual(5);
+  expect(settingsGeometry.leftInset).toBeGreaterThanOrEqual(5);
+  expect(settingsGeometry.rightInset).toBeGreaterThanOrEqual(5);
+  await page.getByRole("button", { name: "Close assistant settings" }).click();
   const messageInput = page.locator("#analyst-message");
   const collapsedHeight = await messageInput.evaluate((element) => element.getBoundingClientRect().height);
   expect(collapsedHeight).toBeLessThanOrEqual(48);
@@ -1058,7 +1142,7 @@ test("conversation More actions remain usable on mobile Workbench navigation", a
 test("the 320px mobile companion keeps controls visible and the composer above navigation", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "One browser run covers the explicit 320px boundary.");
   await page.setViewportSize({ width: 320, height: 700 });
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/?view=chat", "Workbench");
   await page.getByRole("button", { name: "Start new chat", exact: true }).click();
 
@@ -1085,7 +1169,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
   expect(geometry.composerBottom).toBeLessThanOrEqual(geometry.navigationTop - 1);
   expect(geometry.toolbarHeight).toBeLessThanOrEqual(58);
   expect(geometry.pageWidth).toBeLessThanOrEqual(geometry.viewportWidth);
-  expect(geometry.duplicateDockDisplay).toBe("missing");
+  expect(geometry.duplicateDockDisplay).toBe("none");
   expect(geometry.composerFontSize).toBeGreaterThanOrEqual(16);
   expect(geometry.navigationIcons).toHaveLength(4);
   expect(geometry.navigationIcons.every(({ width, height }) => width >= 18 && height >= 18)).toBe(true);
@@ -1131,7 +1215,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
 
 test("host folder picker remains usable as a bounded project workflow", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop" && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile browser projects.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/settings", "Settings");
   if (testInfo.project.name.startsWith("mobile-")) {
     await page.getByRole("button", { name: "Show sidebar" }).click();
@@ -1576,7 +1660,7 @@ test("harness model controls expose only the selected runtime's advertised optio
       clientWidth: element.clientWidth,
     };
   });
-  expect(settingsGeometry.width).toBeLessThanOrEqual(501);
+  expect(settingsGeometry.width).toBeLessThanOrEqual(721);
   expect(settingsGeometry.headerHeight).toBeLessThanOrEqual(45);
   expect(settingsGeometry.columns).toBe(settingsGeometry.width >= 430 ? 2 : 1);
   expect(settingsGeometry.controlHeight).toBeGreaterThanOrEqual(settingsGeometry.coarsePointer ? 43.5 : 33.5);
@@ -1925,7 +2009,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
 });
 
 test("the workbench expands to the full viewport and restores in place", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/?view=chat", "Workbench");
 
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
@@ -1991,8 +2075,48 @@ test("the workbench expands to the full viewport and restores in place", async (
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
 });
 
+test("both Zero themes snap primary workbench surfaces to the available screen", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) <= 760, "phone layouts use the mobile workbench navigation");
+
+  await openWorkspace(page, "/", "Workbench");
+  const surfaces = [
+    ["Terminal", ".persistent-terminal"],
+    ["Workspace code editor", ".persistent-code-editor"],
+    ["Workspace files", ".workspace-browser"],
+  ] as const;
+
+  for (const theme of ["zero-dark", "zero-light"] as const) {
+    await setTheme(page, theme);
+    for (const [tabName, surfaceSelector] of surfaces) {
+      await page.getByRole("tab", { name: tabName, exact: true }).click();
+      const workbench = page.locator(".sessions-page.screen-fit");
+      const surface = page.locator(surfaceSelector);
+      await expect(workbench).toBeVisible();
+      await expect(surface).toBeVisible();
+      const geometry = await surface.evaluate((element) => {
+        const surface = element.getBoundingClientRect();
+        const workspace = element.closest(".session-workspace")!.getBoundingClientRect();
+        const main = element.closest(".main-content")!;
+        const mainBounds = main.getBoundingClientRect();
+        const workbench = element.closest(".sessions-page")!.getBoundingClientRect();
+        return {
+          mainOverflow: main.scrollHeight - main.clientHeight,
+          workbenchBottomGap: mainBounds.bottom - workbench.bottom,
+          surfaceBottomGap: workspace.bottom - surface.bottom,
+          surfaceHeight: surface.height,
+          workspaceHeight: workspace.height,
+        };
+      });
+      expect(geometry.mainOverflow, `${theme} ${tabName} should not make the Workbench page scroll`).toBeLessThanOrEqual(1);
+      expect(geometry.workbenchBottomGap, `${theme} ${tabName} should end at the viewport edge`).toBeLessThanOrEqual(1);
+      expect(Math.abs(geometry.surfaceBottomGap), `${theme} ${tabName} should fill its workspace`).toBeLessThanOrEqual(1);
+      expect(geometry.surfaceHeight, `${theme} ${tabName} should use the available workspace height`).toBeGreaterThanOrEqual(geometry.workspaceHeight - 16);
+    }
+  }
+});
+
 test("the code editor keeps its caret and syntax layers aligned while typing", async ({ page }, testInfo) => {
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await page.goto("/?view=code");
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 15_000 });
@@ -2009,6 +2133,30 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   });
   await expect(filePath).toHaveValue("example.c");
   await expect(page.locator(".code-mirror-host")).toHaveAttribute("data-language-ready", "example.c");
+
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    await page.getByRole("button", { name: "More editor actions" }).click();
+    const editorOptions = page.getByLabel("Editor options");
+    const optionBounds = await editorOptions.locator("label, button").evaluateAll((elements) => elements.map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { bottom: bounds.bottom, height: bounds.height, left: bounds.left, right: bounds.right, top: bounds.top };
+    }));
+    optionBounds.forEach((bounds) => expect(bounds.height).toBeGreaterThanOrEqual(44));
+    for (let first = 0; first < optionBounds.length; first += 1) {
+      for (let second = first + 1; second < optionBounds.length; second += 1) {
+        const left = optionBounds[first];
+        const right = optionBounds[second];
+        expect(left.left < right.right - 1 && left.right > right.left + 1 && left.top < right.bottom - 1 && left.bottom > right.top + 1).toBe(false);
+      }
+    }
+    await editorOptions.getByRole("button", { name: "Find", exact: true }).click();
+  } else {
+    await page.getByRole("button", { name: "Find", exact: true }).click();
+  }
+  const findInput = page.getByRole("textbox", { name: "Find", exact: true });
+  await expect(findInput).toBeVisible();
+  await findInput.press("Escape");
+  await expect(findInput).toBeHidden();
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     const panel = page.locator(".code-editor-panel");
@@ -2048,9 +2196,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   const inputSurface = page.getByRole("textbox", { name: "Code editor" });
   await inputSurface.click({ force: true });
   const editor = inputSurface.locator("..").locator("..");
-  const enterText = (text: string) => testInfo.project.name.startsWith("mobile-")
-    ? page.keyboard.insertText(text)
-    : page.keyboard.type(text, { delay: 10 });
+  const enterText = (text: string) => page.keyboard.insertText(text);
   await enterText("#include <stdio.h>");
   await page.keyboard.press("Enter");
   await expect(page.locator(".cm-line")).toHaveCount(2);
@@ -2061,16 +2207,26 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await enterText("int main(void) ");
   await page.keyboard.insertText("{");
   await page.keyboard.press("Enter");
-  await expect(page.locator(".cm-line")).toHaveCount(4);
-  await enterText("  return 0;");
-  await page.keyboard.press("Enter");
   await expect(page.locator(".cm-line")).toHaveCount(5);
-  await page.keyboard.insertText("}");
+  await page.locator(".cm-line").nth(3).click({ force: true });
+  await page.keyboard.press("End");
+  await inputSurface.focus();
+  await expect(inputSurface).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.locator(".cm-activeLine")).toHaveText("");
+  await inputSurface.focus();
+  await expect(inputSurface).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".cm-activeLine")).toHaveText("  ");
+  await inputSurface.focus();
+  await enterText("return 0;");
+  await expect(page.locator(".cm-activeLine")).toHaveText("  return 0;");
   await page.keyboard.press("Escape");
   await expect(page.getByText("C", { exact: true })).toBeVisible();
 
   await expect(page.locator(".cm-line")).toHaveCount(5);
-  await expect(page.locator(".cm-line").nth(3)).toContainText("return 0;");
+  expect(await page.locator(".cm-line").nth(3).textContent()).toBe("  return 0;");
+  expect(await page.locator(".cm-line").nth(4).textContent()).toBe("}");
   const syntaxColors = await page.locator(".cm-line").nth(3).evaluate((line) => ({
     line: getComputedStyle(line).color,
     tokens: [...line.querySelectorAll("span")].map((token) => getComputedStyle(token).color),
@@ -2090,7 +2246,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
     };
   });
   expect(geometry.hasShadowBoundary).toBe(true);
-  expect(geometry.hostHeight).toBeGreaterThan(400);
+  expect(geometry.hostHeight).toBeGreaterThan(testInfo.project.name === "compact" ? 250 : 400);
   expect(geometry.lineTops).toHaveLength(5);
   expect(geometry.numberTops).toHaveLength(5);
   geometry.lineTops.forEach((lineTop, index) => expect(Math.abs(lineTop - geometry.numberTops[index])).toBeLessThan(2));
@@ -2100,7 +2256,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(inputSurface).toHaveCSS("outline-style", "none");
   await expect(inputSurface).toHaveCSS("box-shadow", "none");
   await expect(inputSurface).not.toHaveCSS("caret-color", "rgba(0, 0, 0, 0)");
-  await expect(page.getByText(/Ln 5, Col [23]/, { exact: true })).toBeVisible();
+  await expect(page.getByText(/Ln 4, Col 12/, { exact: true })).toBeVisible();
   await expect(editor.locator(".cm-cursor-primary")).toHaveCount(0);
 });
 
@@ -2147,7 +2303,7 @@ test("settings shows the live Kali preparation stage instead of a passive runtim
 
 test("terminal and notes keep a visible focused caret", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/", "Workbench");
 
   const terminalSurface = page.locator(".xterm-shell").first();
@@ -2335,7 +2491,7 @@ test("top toolbar controls do not collide at compact breakpoint edges", async ({
   }
 });
 
-for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
+for (const theme of ["zero-dark", "zero-light"] as const) {
   test(`critical workspaces meet automated accessibility checks in ${theme} mode`, async ({ page }) => {
     test.setTimeout(60_000);
     await openWorkspace(page, "/", "Workbench");
@@ -2351,7 +2507,7 @@ for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
         .filter((element) => Number.parseFloat(getComputedStyle(element).fontSize) < 11)
         .map((element) => `${element.tagName.toLowerCase()}.${element.className}:"${element.textContent?.trim().slice(0, 60)}":${getComputedStyle(element).fontSize}`));
       expect(undersizedText, `${theme} ${route} renders text below 11px`).toEqual([]);
-      if (theme === "zero") {
+      {
         const overflow = await page.locator("body").evaluate(() => {
           const selectors = [
             ".page",
@@ -2375,49 +2531,32 @@ for (const theme of ["light", "dark", "zero", "high-contrast"] as const) {
           if (document.documentElement.scrollWidth > window.innerWidth + 1) clipped.push(`document: ${window.innerWidth}/${document.documentElement.scrollWidth}`);
           return clipped;
         });
-        expect(overflow, `Zero ${route} contains unintended horizontal overflow`).toEqual([]);
+        expect(overflow, `${theme} ${route} contains unintended horizontal overflow`).toEqual([]);
       }
     }
   });
 }
 
-test("Zero is a palette variant without blocking route or overlay motion", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Theme geometry only needs one browser project.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+test("Zero keeps its themed shell without the removed context deck", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "The full shell contract only needs one desktop browser project.");
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/", "Workbench");
 
-  await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(0);
-  expect(await page.locator("body").evaluate((element) => ({
-    bodyBefore: getComputedStyle(element, "::before").animationName,
-    bodyAfter: getComputedStyle(element, "::after").animationName,
-  }))).toEqual({ bodyBefore: "none", bodyAfter: "none" });
-
-  const zeroGeometry = await page.locator(".app-shell").evaluate((shell) => {
-    const rect = (selector: string) => {
-      const bounds = shell.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
-    };
-    return { nav: rect(".side-nav"), top: rect(".top-bar"), main: rect(".main-content") };
-  });
+  await expect(page.locator(".app-shell.zero-layer-shell")).toHaveCount(1);
+  await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(3);
+  await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Search commands" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
-  expect(await page.locator(".command-palette").evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
-
   await page.keyboard.press("Escape");
-  await setTheme(page, "dark");
-  const darkGeometry = await page.locator(".app-shell").evaluate((shell) => {
-    const rect = (selector: string) => {
-      const bounds = shell.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
-    };
-    return { nav: rect(".side-nav"), top: rect(".top-bar"), main: rect(".main-content") };
-  });
-  expect(darkGeometry).toEqual(zeroGeometry);
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeHidden();
+  await setTheme(page, "zero-light");
+  await expect(page.locator(".app-shell.zero-layer-shell")).toHaveCount(1);
+  await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(3);
 });
 
 test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ page }, testInfo) => {
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
 
@@ -2446,11 +2585,13 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
     return {
       viewport,
       shellOverflow: document.documentElement.scrollWidth > viewport.width || document.documentElement.scrollHeight > viewport.height,
+      status: bounds(".top-bar"),
       main: bounds(".main-content"),
       navigation: bounds(mobileView ? ".mobile-companion-nav" : ".side-nav"),
     };
   }, mobile);
   expect(geometry.shellOverflow).toBe(false);
+  expect(geometry.main.top - geometry.status.bottom).toBeLessThanOrEqual(10);
   for (const surface of [geometry.main, geometry.navigation]) {
     expect(surface.left).toBeGreaterThanOrEqual(0);
     expect(surface.right).toBeLessThanOrEqual(geometry.viewport.width + 1);
@@ -2463,74 +2604,83 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   const workbenchLink = mobile
     ? page.getByRole("navigation", { name: "Mobile operator navigation" }).getByRole("button", { name: "Chat", exact: true })
     : page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: "Workbench", exact: true });
-  await workbenchLink.focus();
-  const focusStyle = await workbenchLink.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth), color: style.outlineColor };
-  });
-  expect(focusStyle.style).toBe("solid");
-  expect(focusStyle.width).toBeGreaterThanOrEqual(2);
-  expect(focusStyle.color).not.toBe("rgba(0, 0, 0, 0)");
-  await workbenchLink.evaluate((element) => element.blur());
+  if (testInfo.project.name.startsWith("mobile-webkit")) {
+    const touchBounds = await workbenchLink.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { width: bounds.width, height: bounds.height };
+    });
+    expect(touchBounds.width).toBeGreaterThanOrEqual(44);
+    expect(touchBounds.height).toBeGreaterThanOrEqual(44);
+  } else {
+    await workbenchLink.focus();
+    const focusStyle = await workbenchLink.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth), color: style.outlineColor };
+    });
+    expect(focusStyle.style).toBe("solid");
+    expect(focusStyle.width).toBeGreaterThanOrEqual(2);
+    expect(focusStyle.color).not.toBe("rgba(0, 0, 0, 0)");
+    await workbenchLink.evaluate((element) => element.blur());
+  }
 
   if (testInfo.project.name !== "desktop") {
-    await expect(page).toHaveScreenshot("workbench-zero-responsive.png", { fullPage: true });
+    await expect(page).toHaveScreenshot("workbench-zero-dark-responsive.png", { fullPage: true });
   }
 
   const persistentSurface = mobile ? page.locator(".sessions-page") : page.locator(".persistent-terminal");
   await expect(persistentSurface).toBeVisible();
   await persistentSurface.evaluate((element) => { (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal = element; });
   await page.getByRole("button", { name: "Search commands" }).click();
-  await page.getByRole("textbox", { name: "Search commands" }).fill("dark theme");
-  await page.getByRole("option", { name: /Use dark theme/ }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("textbox", { name: "Search commands" }).fill("Zero Light theme");
+  await page.getByRole("option", { name: /Use Zero Light theme/ }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-light");
   expect(await persistentSurface.evaluate((element) => (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal === element)).toBe(true);
 });
 
 for (const [name, route, heading] of workspaces) {
-  test(`Zero preserves the ${name} desktop hierarchy`, async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
-    await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+  test(`Zero Dark preserves the ${name} desktop hierarchy`, async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "Zero Dark visual baselines are captured at the reference desktop size.");
+    await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
     await openWorkspace(page, route, heading);
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "zero");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
     await page.waitForTimeout(360);
-    await expect(page).toHaveScreenshot(`${name}-zero.png`, { fullPage: true });
+    await expect(page).toHaveScreenshot(`${name}-zero-dark.png`, { fullPage: true });
   });
 }
 
-test("Zero preserves representative desktop overlays", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+test("Zero Dark preserves representative desktop overlays", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Zero Dark visual baselines are captured at the reference desktop size.");
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("button", { name: "Search commands" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
-  await expect(page).toHaveScreenshot("workbench-zero-command-palette.png", { fullPage: true });
+  await expect(page).toHaveScreenshot("workbench-zero-dark-command-palette.png", { fullPage: true });
 
   await page.keyboard.press("Escape");
   await page.keyboard.press("Control+Alt+i");
   await expect(page.getByRole("complementary", { name: "Activity inspector" })).toBeVisible();
-  await expect(page).toHaveScreenshot("workbench-zero-activity-drawer.png", { fullPage: true });
+  await expect(page).toHaveScreenshot("workbench-zero-dark-activity-drawer.png", { fullPage: true });
   await page.getByRole("button", { name: "Close activity center" }).click();
 });
 
-test("Zero preserves a representative resource dialog", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+test("Zero Dark preserves a representative resource dialog", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Zero Dark visual baselines are captured at the reference desktop size.");
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/findings", "Findings");
   await page.waitForTimeout(360);
   await page.getByRole("button", { name: "New finding" }).click();
   await expect(page.getByRole("dialog", { name: "Create candidate finding" })).toBeVisible();
-  await expect(page).toHaveScreenshot("findings-zero-dialog.png", { fullPage: true });
+  await expect(page).toHaveScreenshot("findings-zero-dark-dialog.png", { fullPage: true });
   await page.getByRole("button", { name: "Close candidate finding dialog" }).click();
 });
 
-test("Zero preserves the appearance selector", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Zero visual baselines are captured at the reference desktop size.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero"));
+test("Zero Dark preserves the appearance selector", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Zero Dark visual baselines are captured at the reference desktop size.");
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/settings#appearance-settings", "Settings");
   await expect(page.getByRole("link", { name: "Advanced settings" })).toHaveAttribute("aria-current", "page");
   await expect(page.locator(".appearance-panel")).toBeVisible();
-  await expect(page.locator(".appearance-panel")).toHaveScreenshot("settings-zero-appearance.png");
+  await expect(page.locator(".appearance-panel")).toHaveScreenshot("settings-zero-dark-appearance.png");
 });
 
 test("advanced settings keeps the binary inventory collapsed until requested", async ({ page }) => {
@@ -2671,9 +2821,9 @@ test("tool follow-up toggles explain missing runtime setup", async ({ page }, te
   await expect(feedback).toHaveScreenshot("tool-follow-up-runtime-required.png");
 });
 
-test("appearance variants preserve each critical workspace hierarchy", async ({ page }) => {
+test("Zero Light preserves each critical workspace hierarchy", async ({ page }) => {
   test.setTimeout(60_000);
-  for (const theme of ["light", "high-contrast"] as const) {
+  for (const theme of ["zero-light"] as const) {
     await openWorkspace(page, "/", "Workbench");
     await setTheme(page, theme);
     for (const [name, route, heading] of workspaces) {

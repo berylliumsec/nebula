@@ -62,6 +62,17 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("tab", { name: "Workspace code editor" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Autonomous missions" })).toBeVisible();
     expect(screen.queryByText(/Acme|Jordan/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Human controlled")).not.toBeInTheDocument();
+  });
+
+  it("never renders the removed Human controlled badge in any theme", () => {
+    for (const theme of ["zero-dark", "zero-light"] as const) {
+      localStorage.setItem("nebula.theme", theme);
+      const rendered = renderApp();
+      expect(screen.queryByText("Human controlled")).not.toBeInTheDocument();
+      expect(document.querySelector('[title^="Human controlled"]')).not.toBeInTheDocument();
+      rendered.unmount();
+    }
   });
 
   it("opens and restores the dedicated Workbench Code view", async () => {
@@ -89,25 +100,25 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "More Workbench actions" })).toBeVisible();
   });
 
-  it("uses Zero as the first-run theme while preserving explicit preferences", async () => {
+  it("defaults to Zero Dark and migrates removed preferences", () => {
     const firstRender = renderApp();
-    expect(document.documentElement).toHaveAttribute("data-theme", "zero");
-    expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
+    expect(document.documentElement).toHaveAttribute("data-theme", "zero-dark");
+    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
     expect(screen.getByRole("complementary", { name: "Primary navigation" })).toHaveAttribute("data-shell", "shared");
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
     expect(localStorage.getItem("nebula.theme")).toBeNull();
 
     firstRender.unmount();
     localStorage.setItem("nebula.theme", "light");
-    renderApp();
-    expect(document.documentElement).toHaveAttribute("data-theme", "light");
-    expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
+    const lightRender = renderApp();
+    expect(document.documentElement).toHaveAttribute("data-theme", "zero-light");
+    expect(localStorage.getItem("nebula.theme")).toBe("zero-light");
+    lightRender.unmount();
 
-    act(() => {
-      localStorage.setItem("nebula.theme", "high-contrast");
-      window.dispatchEvent(new StorageEvent("storage", { key: "nebula.theme", oldValue: "light", newValue: "high-contrast" }));
-    });
-    expect(document.documentElement).toHaveAttribute("data-theme", "high-contrast");
+    localStorage.setItem("nebula.theme", "high-contrast");
+    renderApp();
+    expect(document.documentElement).toHaveAttribute("data-theme", "zero-dark");
+    expect(localStorage.getItem("nebula.theme")).toBe("zero-dark");
   });
 
   it("restores legacy mission links to the Workbench mission view", async () => {
@@ -126,44 +137,45 @@ describe("Nebula workspace", () => {
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
   });
 
-  it("applies the accessible high-contrast preference", async () => {
+  it("offers only Zero Dark and Zero Light", async () => {
     const user = userEvent.setup();
     renderApp("/settings");
     await screen.findByRole("heading", { name: "Settings" });
     await user.click(screen.getByRole("link", { name: "Advanced settings" }));
-    await user.click(screen.getByRole("button", { name: /High contrast/ }));
-    expect(document.documentElement).toHaveAttribute("data-theme", "high-contrast");
-    expect(localStorage.getItem("nebula.theme")).toBe("high-contrast");
+    const options = screen.getByRole("heading", { name: "Appearance" }).closest("section")!;
+    expect(within(options).getAllByRole("button")).toHaveLength(2);
+    await user.click(within(options).getByRole("button", { name: /Zero Light/ }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "zero-light");
+    expect(localStorage.getItem("nebula.theme")).toBe("zero-light");
   });
 
-  it("selects Zero from command search and restores the saved preference", async () => {
+  it("selects Zero Light from command search and restores the saved preference", async () => {
     const user = userEvent.setup();
     const firstRender = renderApp();
     await user.keyboard("{Control>}k{/Control}");
-    await user.type(screen.getByRole("textbox", { name: "Search commands" }), "zero theme");
-    await user.click(screen.getByRole("option", { name: /Use Zero theme/ }));
-    expect(document.documentElement).toHaveAttribute("data-theme", "zero");
-    expect(localStorage.getItem("nebula.theme")).toBe("zero");
+    await user.type(screen.getByRole("textbox", { name: "Search commands" }), "zero light");
+    await user.click(screen.getByRole("option", { name: /Use Zero Light theme/ }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "zero-light");
+    expect(localStorage.getItem("nebula.theme")).toBe("zero-light");
 
     firstRender.unmount();
     renderApp("/settings");
     await screen.findByRole("heading", { name: "Settings" });
     await user.click(screen.getByRole("link", { name: "Advanced settings" }));
-    expect(screen.getByRole("button", { name: /Zero/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Zero Light/ })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("keeps the shared shell when restoring Zero or conventional preferences", async () => {
-    localStorage.setItem("nebula.theme", "zero");
+  it("renders the Zero shell without the removed context deck", () => {
+    localStorage.setItem("nebula.theme", "zero-dark");
     const firstRender = renderApp();
-    expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
+    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Primary navigation" }).querySelector('a[href="/project"]')).toBeInTheDocument();
 
     firstRender.unmount();
-    localStorage.setItem("nebula.theme", "dark");
+    localStorage.setItem("nebula.theme", "zero-light");
     renderApp();
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
-    expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
+    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
   });
 
   it("persists the collapsible sidebar and exposes legacy labels through command search", async () => {

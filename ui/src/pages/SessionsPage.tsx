@@ -99,6 +99,7 @@ import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { readConversationPanelOpen, writeConversationPanelOpen } from "./workbenchPreferences";
 
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
+const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace"]);
 interface ToolLifecycleCard {
   assistantId: string;
   toolCallId: string;
@@ -700,6 +701,11 @@ export function SessionsPage() {
     if (view !== "chat") return;
     const composer = composerRef.current;
     if (!composer) return;
+    if (!draft) {
+      composer.style.height = "";
+      composer.style.overflowY = "hidden";
+      return;
+    }
     composer.style.height = "auto";
     const nextHeight = Math.min(composer.scrollHeight, CHAT_COMPOSER_MAX_HEIGHT);
     composer.style.height = `${nextHeight}px`;
@@ -2440,7 +2446,7 @@ export function SessionsPage() {
   ].filter(Boolean).join(" · ");
 
   return (
-    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${fullScreen ? " full-screen" : ""}`}>
+    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}`}>
       <PageHeader
         title="Workbench"
         description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
@@ -2470,7 +2476,6 @@ export function SessionsPage() {
           >
             <MessageSquare size={15} aria-hidden="true" /> Conversations{sessions.length ? <span>{sessions.length}</span> : null}
           </button>}
-          <div className="session-scope" title={`Human controlled · ${engagement?.name ?? "no project"}`}><ShieldCheck size={15} /><span>Human controlled</span><strong>{engagement?.name ?? "No project"}</strong></div>
           {fullScreen && <button className="icon-button subtle workbench-full-screen-toggle" type="button" aria-label="Exit full screen workbench" title="Exit focus mode" onClick={() => setFullScreen(false)}><Minimize2 size={17} aria-hidden="true" /></button>}
           <div className="workbench-actions">
             <button ref={workbenchActionsButtonRef} className="icon-button subtle" type="button" aria-label="More Workbench actions" aria-haspopup="menu" aria-expanded={workbenchActionsOpen} aria-controls={workbenchActionsOpen ? "workbench-actions-menu" : undefined} onClick={() => setWorkbenchActionsOpen((open) => !open)}><MoreHorizontal size={18} aria-hidden="true" /></button>

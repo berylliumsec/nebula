@@ -8,8 +8,9 @@ import { CodeEditorPanel } from "./CodeEditorPanel";
 import { DialogProvider } from "./DialogSystem";
 
 vi.mock("./CodeMirrorSurface", () => ({
-  CodeMirrorSurface: ({ value, onChange, onSave }: { value: string; onChange(value: string): void; onSave(): void }) => <textarea
+  CodeMirrorSurface: ({ value, findRequest, onChange, onSave }: { value: string; findRequest?: number; onChange(value: string): void; onSave(): void }) => <textarea
     aria-label="Code editor"
+    data-find-request={findRequest}
     value={value}
     onChange={(event) => onChange(event.target.value)}
     onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -159,7 +160,11 @@ describe("CodeEditorPanel", () => {
     await user.click(more);
     expect(more).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByLabelText("Editor options")).toBeInTheDocument();
+    await user.click(within(screen.getByLabelText("Editor options")).getByRole("button", { name: "Find" }));
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveAttribute("data-find-request", "1");
+    expect(screen.queryByLabelText("Editor options")).not.toBeInTheDocument();
 
+    await user.click(more);
     await user.click(screen.getByRole("button", { name: "Show editor files" }));
     expect(panelElement).toHaveClass("mobile-files-open");
     expect(screen.queryByLabelText("Editor options")).not.toBeInTheDocument();

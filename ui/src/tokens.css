@@ -91,29 +91,29 @@
   --radius: var(--radius-panel);
 }
 
-:root[data-theme="light"] {
+:root[data-theme="zero-light"] {
   color-scheme: light;
-  --canvas: #f5f7f9;
-  --surface: #ffffff;
-  --surface-muted: #f1f4f6;
+  --canvas: #eef3f8;
+  --surface: #f9fbfd;
+  --surface-muted: #e9eff5;
   --surface-raised: #ffffff;
-  --surface-hover: #edf2f6;
-  --text: #28313b;
-  --text-strong: #111820;
-  --muted: #596674;
-  --muted-strong: #4c5967;
-  --border: #ced6de;
-  --border-soft: #e0e5ea;
-  --blue: #246db6;
-  --blue-bright: #075cae;
-  --blue-muted: rgb(36 109 182 / 10%);
-  --green: #247a51;
-  --green-muted: #dcf6eb;
-  --violet: #7651c6;
-  --yellow: #8a6100;
-  --orange: #9a641f;
-  --red: #b43d42;
-  --red-muted: #fee7ec;
+  --surface-hover: #e1eaf3;
+  --text: #273544;
+  --text-strong: #101923;
+  --muted: #5a6978;
+  --muted-strong: #465666;
+  --border: #becbd8;
+  --border-soft: #d5dee7;
+  --blue: #2869ad;
+  --blue-bright: #155b9f;
+  --blue-muted: rgb(40 105 173 / 11%);
+  --green: #267651;
+  --green-muted: #d9efe5;
+  --violet: #7054af;
+  --yellow: #81601b;
+  --orange: #95602e;
+  --red: #ac4149;
+  --red-muted: #f8e1e5;
   --focus: #246db6;
   --on-accent: #ffffff;
   --on-danger: #ffffff;
@@ -121,41 +121,10 @@
   --action-primary-hover: color-mix(in srgb, var(--blue) 88%, #000);
   --action-primary-pressed: color-mix(in srgb, var(--blue) 78%, #000);
   --action-primary-text: #ffffff;
-  --shadow: 0 18px 48px rgb(28 40 53 / 18%);
+  --shadow: 0 18px 48px rgb(41 63 84 / 16%);
 }
 
-:root[data-theme="high-contrast"] {
-  --canvas: #000;
-  --surface: #050505;
-  --surface-muted: #0d0d0d;
-  --surface-raised: #111;
-  --surface-hover: #191919;
-  --text: #fff;
-  --text-strong: #fff;
-  --muted: #d7d7d7;
-  --muted-strong: #eee;
-  --border: #fff;
-  --border-soft: #8b8b8b;
-  --blue: #75c2ff;
-  --blue-bright: #a8edff;
-  --blue-muted: rgb(117 194 255 / 18%);
-  --green: #6cffac;
-  --green-muted: #003421;
-  --violet: #d3b7ff;
-  --yellow: #ffe06e;
-  --orange: #ffd36a;
-  --red: #ff8585;
-  --red-muted: #4a0012;
-  --focus: #fff;
-  --on-accent: #000;
-  --on-danger: #000;
-  --action-primary: var(--blue);
-  --action-primary-hover: var(--blue-bright);
-  --action-primary-pressed: var(--blue);
-  --action-primary-text: var(--on-accent);
-}
-
-:root[data-theme="zero"] {
+:root[data-theme="zero-dark"] {
   color-scheme: dark;
   --canvas: #080a0d;
   --surface: #0e1115;

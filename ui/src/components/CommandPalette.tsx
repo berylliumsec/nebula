@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Command, Contrast, Moon, Orbit, PanelLeft, PanelRight, Search, Sun } from "lucide-react";
+import { Command, Moon, PanelLeft, PanelRight, Search, Sun } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { navigationItems } from "../navigation";
 import { useTheme } from "../state/ThemeContext";
@@ -47,36 +47,20 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
         run: () => navigate(item.path),
       })),
       {
-        id: "theme-light",
-        label: "Use light theme",
-        description: "Set a persistent light appearance",
+        id: "theme-zero-light",
+        label: "Use Zero Light theme",
+        description: "Use the light Zero workspace on this device",
         icon: Sun,
-        keywords: "appearance theme light",
-        run: () => setPreference("light"),
+        keywords: "appearance theme zero light",
+        run: () => setPreference("zero-light"),
       },
       {
-        id: "theme-dark",
-        label: "Use dark theme",
-        description: "Set a persistent dark appearance",
+        id: "theme-zero-dark",
+        label: "Use Zero Dark theme",
+        description: "Use the dark Zero workspace on this device",
         icon: Moon,
-        keywords: "appearance theme dark",
-        run: () => setPreference("dark"),
-      },
-      {
-        id: "theme-zero",
-        label: "Use Zero theme",
-        description: "Materialize the futuristic security workspace",
-        icon: Orbit,
-        keywords: "appearance theme zero futuristic hud neon cyber",
-        run: () => setPreference("zero"),
-      },
-      {
-        id: "theme-contrast",
-        label: "Use high-contrast theme",
-        description: "Increase borders, text contrast, and focus visibility",
-        icon: Contrast,
-        keywords: "appearance accessibility contrast",
-        run: () => setPreference("high-contrast"),
+        keywords: "appearance theme zero dark",
+        run: () => setPreference("zero-dark"),
       },
       {
         id: "sidebar",
