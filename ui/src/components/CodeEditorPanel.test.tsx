@@ -357,13 +357,19 @@ describe("CodeEditorPanel", () => {
         engagementId: "project-1",
         scannedEntries: 12,
         truncated: false,
-        tasks: [{ id: "a".repeat(64), label: "pytest: all discovered tests", command: "python -m pytest", kind: "test", source: "pytest", detail: "3 test files discovered" }],
+        tasks: [
+          { id: "a".repeat(64), label: "pytest: all discovered tests", command: "python -m pytest", kind: "test", source: "pytest", detail: "3 test files discovered", supported: true },
+          { id: "b".repeat(64), label: "VS Code extension task", command: ":", kind: "custom", source: ".vscode/tasks.json", detail: "VS Code task", supported: false, unsupportedReason: "Task type requires a VS Code extension and is not executed by Nebula." },
+        ],
       }),
     } as unknown as ApiClient;
     render(<DialogProvider><WorkbenchEditorProvider><CodeEditorPanel active api={api} engagementId="project-1" onRun={onRun} /></WorkbenchEditorProvider></DialogProvider>);
 
     await user.click(await screen.findByRole("button", { name: "Project tasks" }));
     const dialog = await screen.findByRole("dialog", { name: "Project tasks and tests" });
+    const unsupported = within(dialog).getByRole("option", { name: /VS Code extension task/ });
+    expect(unsupported).toBeDisabled();
+    expect(unsupported).toHaveTextContent("not executed by Nebula");
     await user.click(within(dialog).getByRole("option", { name: /pytest: all discovered tests/ }));
 
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
@@ -378,6 +384,15 @@ describe("CodeEditorPanel", () => {
     renderPanel({
       listWorkspace: vi.fn().mockResolvedValue(listing()),
       downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('debug')\n"])),
+      workspaceDebugConfigurations: vi.fn().mockResolvedValue({
+        engagementId: "project-1",
+        activePath: "tool.py",
+        truncated: false,
+        configurations: [
+          { id: "profile-1", name: "Debug fixture", path: "tool.py", arguments: ["--fixture", "/workspace/sample.bin"], source: ".vscode/launch.json", detail: "VS Code Python launch profile", supported: true },
+          { id: "profile-2", name: "Attach live process", arguments: [], source: ".vscode/launch.json", detail: "VS Code launch profile", supported: false, unsupportedReason: "Attach profiles cannot cross Nebula's isolated debug boundary." },
+        ],
+      }),
     });
 
     await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
@@ -387,6 +402,9 @@ describe("CodeEditorPanel", () => {
     expect(within(debuggerPanel).getByText("Isolated launch review")).toBeVisible();
     expect(within(debuggerPanel).getByText(/project is read-only, networking is disabled/)).toBeVisible();
     expect(within(debuggerPanel).getByRole("button", { name: "Start isolated debugger" })).toBeEnabled();
+    expect(await within(debuggerPanel).findByLabelText("Launch profile")).toHaveValue("profile-1");
+    expect(within(debuggerPanel).getByLabelText("Python arguments (JSON array)")).toHaveValue('["--fixture","/workspace/sample.bin"]');
+    expect(within(debuggerPanel).getByLabelText("Unsupported launch profiles")).toHaveTextContent("Attach profiles cannot cross Nebula's isolated debug boundary.");
   });
 
   it("registers contextual palette commands that preserve the existing debugger review", async () => {

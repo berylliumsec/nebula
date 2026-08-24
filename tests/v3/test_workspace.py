@@ -142,6 +142,121 @@ def test_workspace_discovers_manifest_and_test_tasks_without_following_links(tmp
     assert response.json()["engagement_id"] == engagement.id
 
 
+def test_workspace_normalizes_vscode_tasks_into_reviewed_commands(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    (root / ".vscode").mkdir()
+    (root / ".vscode" / "tasks.json").write_text(
+        """
+        {
+          // JSON-with-comments and trailing commas are standard VS Code configuration.
+          tasks: [
+            {
+              label: 'Scan fixture',
+              type: 'shell',
+              command: 'python',
+              args: ['tools/scan.py', '--target', '${workspaceFolder}/fixture.bin'],
+              options: { cwd: '${workspaceFolder}/research', env: { MODE: 'safe' } },
+              group: 'test',
+            },
+            { label: 'Extension task', type: 'npm', command: 'test' },
+            { label: 'Background watcher', type: 'shell', command: 'watch', isBackground: true },
+          ],
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    result = workspace.tasks(engagement.id)
+    configured = {task.label: task for task in result.tasks}
+    assert configured["Scan fixture"].command == (
+        "cd -- /workspace/research && env MODE=safe "
+        "python tools/scan.py --target /workspace/fixture.bin"
+    )
+    assert configured["Scan fixture"].kind == "test"
+    assert configured["Scan fixture"].source == ".vscode/tasks.json"
+    assert configured["Scan fixture"].supported is True
+    assert configured["Extension task"].supported is False
+    assert "requires a VS Code extension" in (
+        configured["Extension task"].unsupported_reason or ""
+    )
+    assert configured["Background watcher"].supported is False
+    assert "terminal result" in (
+        configured["Background watcher"].unsupported_reason or ""
+    )
+
+    response = client.get(
+        f"/api/v1/engagements/{engagement.id}/workspace/tasks", headers=AUTH
+    )
+    assert response.status_code == 200
+    rows = {task["label"]: task for task in response.json()["tasks"]}
+    assert rows["Scan fixture"]["supported"] is True
+    assert rows["Extension task"]["supported"] is False
+
+    (root / ".vscode" / "tasks.json").write_bytes(b" " * (129 * 1024))
+    oversized = workspace.tasks(engagement.id)
+    notice = next(task for task in oversized.tasks if task.label == "VS Code tasks need attention")
+    assert notice.supported is False
+    assert "128 KiB configuration limit" in (notice.unsupported_reason or "")
+
+
+def test_workspace_imports_only_launch_profiles_inside_debug_boundary(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    (root / ".vscode").mkdir()
+    (root / ".vscode" / "launch.json").write_text(
+        """
+        {
+          configurations: [
+            {
+              name: 'Active parser', type: 'debugpy', request: 'launch',
+              program: '${file}', args: ['--fixture', '${workspaceFolder}/sample.bin'],
+            },
+            {
+              name: 'Other tool', type: 'python', request: 'launch',
+              program: '${workspaceFolder}/tools/other.py',
+            },
+            {
+              name: 'Environment override', type: 'debugpy', request: 'launch',
+              program: '${file}', env: { TOKEN: 'secret' },
+            },
+            { name: 'Attach process', type: 'debugpy', request: 'attach' },
+          ],
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    result = workspace.debug_configurations(engagement.id, "research/parser.py")
+    profiles = {profile.name: profile for profile in result.configurations}
+    assert profiles["Active parser"].supported is True
+    assert profiles["Active parser"].path == "research/parser.py"
+    assert profiles["Active parser"].arguments == [
+        "--fixture",
+        "/workspace/sample.bin",
+    ]
+    assert profiles["Other tool"].supported is False
+    assert profiles["Other tool"].path == "tools/other.py"
+    assert profiles["Other tool"].unsupported_reason == (
+        "Open tools/other.py to use this profile."
+    )
+    assert profiles["Environment override"].supported is False
+    assert "reviewed launch boundary" in (
+        profiles["Environment override"].unsupported_reason or ""
+    )
+    assert profiles["Attach process"].supported is False
+
+    response = client.get(
+        f"/api/v1/engagements/{engagement.id}/workspace/debug-configurations",
+        headers=AUTH,
+        params={"path": "research/parser.py"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active_path"] == "research/parser.py"
+    assert len(payload["configurations"]) == 4
+
+
 def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_path):
     _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
     root = platform.workspace_for(engagement.id)

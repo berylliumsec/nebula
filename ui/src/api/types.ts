@@ -1992,15 +1992,35 @@ export interface WorkspaceTask {
   label: string;
   command: string;
   kind: "test" | "build" | "run" | "lint" | "custom";
-  source: "package.json" | "Makefile" | "pytest" | "go.mod" | "Cargo.toml";
+  source: "package.json" | "Makefile" | "pytest" | "go.mod" | "Cargo.toml" | ".vscode/tasks.json";
   detail: string;
   path?: string;
+  supported: boolean;
+  unsupportedReason?: string;
 }
 
 export interface WorkspaceTaskList {
   engagementId: Identifier;
   tasks: WorkspaceTask[];
   scannedEntries: number;
+  truncated: boolean;
+}
+
+export interface WorkspaceDebugConfiguration {
+  id: string;
+  name: string;
+  path?: string;
+  arguments: string[];
+  source: ".vscode/launch.json";
+  detail: string;
+  supported: boolean;
+  unsupportedReason?: string;
+}
+
+export interface WorkspaceDebugConfigurationList {
+  engagementId: Identifier;
+  activePath: string;
+  configurations: WorkspaceDebugConfiguration[];
   truncated: boolean;
 }
 

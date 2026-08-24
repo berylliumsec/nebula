@@ -1612,6 +1612,44 @@ describe("ApiClient", () => {
     );
   });
 
+  it("maps bounded VS Code launch profiles and preserves disabled reasons", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      engagement_id: "project/one",
+      active_path: "research/parser.py",
+      configurations: [{
+        id: "profile-1",
+        name: "Debug parser",
+        path: "research/parser.py",
+        arguments: ["--fixture", "/workspace/sample.bin"],
+        source: ".vscode/launch.json",
+        detail: "VS Code Python launch profile",
+        supported: false,
+        unsupported_reason: "Save the profile before use.",
+      }],
+      truncated: false,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.workspaceDebugConfigurations("project/one", "research/parser.py")).resolves.toEqual({
+      engagementId: "project/one",
+      activePath: "research/parser.py",
+      configurations: [{
+        id: "profile-1",
+        name: "Debug parser",
+        path: "research/parser.py",
+        arguments: ["--fixture", "/workspace/sample.bin"],
+        source: ".vscode/launch.json",
+        detail: "VS Code Python launch profile",
+        supported: false,
+        unsupportedReason: "Save the profile before use.",
+      }],
+      truncated: false,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/engagements/project%2Fone/workspace/debug-configurations?path=research%2Fparser.py",
+    );
+  });
+
   it("maps source-control status and requests hardened diffs", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({

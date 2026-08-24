@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import type { ApiClient } from "../api/client";
+import type { WorkspaceDebugConfiguration } from "../api/types";
 import { DebugTransport, type DebugTransportState } from "../api/debugger";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "./InlineValidationNotice";
@@ -152,8 +153,38 @@ export function EditorDebuggerPanel({
     digest: string;
     expiresAt: string;
   }>();
+  const [profiles, setProfiles] = useState<WorkspaceDebugConfiguration[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState("");
+  const [profilesLoading, setProfilesLoading] = useState(false);
+  const [profilesError, setProfilesError] = useState<string>();
+  const [profilesRevision, setProfilesRevision] = useState(0);
 
   useEffect(() => () => transportRef.current?.close(), []);
+
+  useEffect(() => {
+    if (typeof api.workspaceDebugConfigurations !== "function") return;
+    const controller = new AbortController();
+    setProfilesLoading(true);
+    setProfilesError(undefined);
+    void api.workspaceDebugConfigurations(engagementId, path, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setProfiles(result.configurations);
+        const preferred = result.configurations.find((profile) => profile.supported);
+        if (preferred) {
+          setSelectedProfile(preferred.id);
+          setArgumentText(JSON.stringify(preferred.arguments));
+        } else {
+          setSelectedProfile("");
+        }
+      })
+      .catch((caughtError: unknown) => {
+        void logCaughtDiagnostic("interface.code_debugger.profiles", "VS Code launch profiles could not be loaded.", caughtError, "code_debugger");
+        if (!controller.signal.aborted) setProfilesError(caughtError instanceof Error ? caughtError.message : "Launch profiles are unavailable.");
+      })
+      .finally(() => { if (!controller.signal.aborted) setProfilesLoading(false); });
+    return () => controller.abort();
+  }, [api, engagementId, path, profilesRevision]);
 
   const request = async (command: string, args?: object) => {
     try {
@@ -437,11 +468,31 @@ export function EditorDebuggerPanel({
             </div>
           </dl>
           <label>
+            Launch profile
+            <select
+              value={selectedProfile}
+              disabled={profilesLoading}
+              onChange={(event) => {
+                const profile = profiles.find((candidate) => candidate.id === event.target.value);
+                setSelectedProfile(event.target.value);
+                if (profile?.supported) setArgumentText(JSON.stringify(profile.arguments));
+              }}
+            >
+              <option value="">{profilesLoading ? "Loading .vscode/launch.json…" : "Manual arguments"}</option>
+              {profiles.map((profile) => <option key={profile.id} value={profile.id} disabled={!profile.supported}>{profile.name}{profile.supported ? "" : ` — ${profile.unsupportedReason}`}</option>)}
+            </select>
+          </label>
+          {profiles.filter((profile) => !profile.supported).length > 0 && <div className="editor-debugger-profile-notes" aria-label="Unsupported launch profiles">{profiles.filter((profile) => !profile.supported).map((profile) => <p key={profile.id}><strong>{profile.name}</strong> {profile.unsupportedReason}</p>)}</div>}
+          {profilesError && <div className="editor-debugger-profile-error"><DiagnosticErrorNotice error={profilesError} fallback="Launch profiles are unavailable; manual arguments still work." compact /><button className="button quiet" type="button" onClick={() => setProfilesRevision((revision) => revision + 1)}>Retry launch profiles</button></div>}
+          <label>
             Python arguments (JSON array)
             <input
               value={argumentText}
               spellCheck={false}
-              onChange={(event) => setArgumentText(event.target.value)}
+              onChange={(event) => {
+                setArgumentText(event.target.value);
+                setSelectedProfile("");
+              }}
             />
           </label>
           {argumentsError && (

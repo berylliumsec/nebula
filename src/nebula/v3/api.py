@@ -360,6 +360,7 @@ from .workspace import (
     WorkspaceResetStatus,
     WorkspaceSearchResult,
     WorkspaceService,
+    WorkspaceDebugConfigurationList,
     WorkspaceTaskList,
     WorkspaceUploadResult,
 )
@@ -4656,6 +4657,22 @@ def create_app(
     )
     async def workspace_tasks(engagement_id: str) -> WorkspaceTaskList:
         return await asyncio.to_thread(require_workspace_service().tasks, engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/debug-configurations",
+        response_model=WorkspaceDebugConfigurationList,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def workspace_debug_configurations(
+        engagement_id: str,
+        path: str = Query(min_length=1, max_length=4096),
+    ) -> WorkspaceDebugConfigurationList:
+        return await asyncio.to_thread(
+            require_workspace_service().debug_configurations,
+            engagement_id,
+            path,
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/debug-sessions",

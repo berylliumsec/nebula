@@ -1724,6 +1724,18 @@ files = [
 ]
 
 [[package]]
+name = "json5"
+version = "0.15.0"
+description = "A Python implementation of the JSON5 data format."
+optional = false
+python-versions = ">=3.8.0"
+groups = ["main"]
+files = [
+    {file = "json5-0.15.0-py3-none-any.whl", hash = "sha256:56636a30c0e8a4665fe2179c0212f32eae3796dea89ea6f649b9436ecdb39618"},
+    {file = "json5-0.15.0.tar.gz", hash = "sha256:7424d1f1eb1d56da6e3d70643f53619862b4ce81440bdb8ecfd6f875e5ba4a71"},
+]
+
+[[package]]
 name = "jsonpatch"
 version = "1.33"
 description = "Apply JSON-Patches (RFC 6902)"
@@ -5933,4 +5945,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "541def6cb9560ea66ecd88ef7509ecdbd0707dac8dafe6b0c78cb98d7d911524"
+content-hash = "6e486ec093239bbd8e871af6af434c8976ac9ef0cd96f8078e24e7884945cb27"

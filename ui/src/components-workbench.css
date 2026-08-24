@@ -1057,6 +1057,10 @@ kbd { font-size: 11px; }
 .editor-debugger-preflight dt { color: var(--muted); font-size: 11px; text-transform: uppercase; }
 .editor-debugger-preflight dd { overflow: hidden; margin: 4px 0 0; font-family: var(--font-mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .editor-debugger-preflight label { display: grid; gap: 5px; color: var(--muted-strong); font-size: 12px; }
+.editor-debugger-preflight select { min-height: 36px; }
+.editor-debugger-profile-notes { display: grid; gap: 5px; padding: 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-muted); }
+.editor-debugger-profile-notes p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.4; }.editor-debugger-profile-notes strong { color: var(--muted-strong); }
+.editor-debugger-profile-error { display: grid; gap: 7px; }.editor-debugger-profile-error .button { justify-self: start; }
 .editor-debugger-controls { display: flex; min-height: 42px; align-items: center; gap: 5px; padding: 6px 10px; border-bottom: 1px solid var(--border-soft); }
 .editor-debugger-controls button { display: inline-flex; width: 32px; height: 32px; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--surface); }
 .editor-debugger-controls span { margin-left: auto; color: var(--muted); font: 11px var(--font-mono); }

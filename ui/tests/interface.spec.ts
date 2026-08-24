@@ -412,6 +412,23 @@ async function installTruthfulCore(page: Page) {
         truncated: false,
         detail: "1 changed path.",
       };
+    } else if (path.endsWith("/workspace/tasks")) {
+      body = {
+        engagement_id: "scratch-project",
+        tasks: [
+          { id: "a".repeat(64), label: "Inspect Python", command: "python --version", kind: "test", source: ".vscode/tasks.json", detail: "VS Code process task", supported: true, unsupported_reason: null },
+          { id: "b".repeat(64), label: "Extension-owned task", command: ":", kind: "custom", source: ".vscode/tasks.json", detail: "VS Code task", supported: false, unsupported_reason: "Task type 'npm' requires a VS Code extension and is not executed by Nebula." },
+        ],
+        scanned_entries: 4,
+        truncated: false,
+      };
+    } else if (path.endsWith("/workspace/debug-configurations")) {
+      body = {
+        engagement_id: "scratch-project",
+        active_path: "scanner.py",
+        configurations: [],
+        truncated: false,
+      };
     } else if (path.endsWith("/workspace")) {
       body = {
         engagement_id: "scratch-project",
@@ -2413,6 +2430,13 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(findInput).toBeVisible();
   await findInput.press("Escape");
   await expect(findInput).toBeHidden();
+
+  await page.keyboard.press("Control+Shift+B");
+  const compatibleTasks = page.getByRole("dialog", { name: "Project tasks and tests" });
+  await expect(compatibleTasks.getByRole("option", { name: /Inspect Python/ })).toBeEnabled();
+  await expect(compatibleTasks.getByRole("option", { name: /Extension-owned task/ })).toBeDisabled();
+  await expect(compatibleTasks).toContainText("requires a VS Code extension");
+  await compatibleTasks.getByRole("button", { name: "Close project tasks" }).click();
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     const panel = page.locator(".code-editor-panel");

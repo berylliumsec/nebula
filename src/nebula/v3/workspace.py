@@ -9,6 +9,8 @@ import errno
 import hashlib
 import hmac
 import json
+# The locked parser does not publish a py.typed marker.
+import json5  # type: ignore[import-untyped]
 import mimetypes
 import os
 import re
@@ -47,6 +49,7 @@ MAX_SEARCH_SCANNED_FILES = 5_000
 MAX_SOURCE_CONTROL_FILES = 500
 MAX_SOURCE_CONTROL_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_CONTROL_DIFF_BYTES = 512 * 1024
+MAX_VSCODE_CONFIGURATION_BYTES = 128 * 1024
 SOURCE_CONTROL_TIMEOUT_SECONDS = 8.0
 _BUSY_STATUSES = {
     OperatorExecutionStatus.QUEUED,
@@ -89,14 +92,27 @@ class WorkspaceSearchResult(NebulaModel):
     truncated: bool = False
 
 
+WorkspaceTaskKind = Literal["test", "build", "run", "lint", "custom"]
+WorkspaceTaskSource = Literal[
+    "package.json",
+    "Makefile",
+    "pytest",
+    "go.mod",
+    "Cargo.toml",
+    ".vscode/tasks.json",
+]
+
+
 class WorkspaceTask(NebulaModel):
     id: str = Field(pattern=r"^[0-9a-f]{64}$")
     label: str = Field(min_length=1, max_length=300)
     command: str = Field(min_length=1, max_length=20_000)
-    kind: Literal["test", "build", "run", "lint", "custom"]
-    source: Literal["package.json", "Makefile", "pytest", "go.mod", "Cargo.toml"]
+    kind: WorkspaceTaskKind
+    source: WorkspaceTaskSource
     detail: str = Field(max_length=1_000)
     path: str | None = Field(default=None, max_length=4096)
+    supported: bool = True
+    unsupported_reason: str | None = Field(default=None, max_length=1_000)
 
 
 class WorkspaceTaskList(NebulaModel):
@@ -106,16 +122,36 @@ class WorkspaceTaskList(NebulaModel):
     truncated: bool = False
 
 
+class WorkspaceDebugConfiguration(NebulaModel):
+    id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    name: str = Field(min_length=1, max_length=300)
+    path: str | None = Field(default=None, max_length=4096)
+    arguments: list[str] = Field(default_factory=list, max_length=50)
+    source: Literal[".vscode/launch.json"] = ".vscode/launch.json"
+    detail: str = Field(max_length=1_000)
+    supported: bool = True
+    unsupported_reason: str | None = Field(default=None, max_length=1_000)
+
+
+class WorkspaceDebugConfigurationList(NebulaModel):
+    engagement_id: str
+    active_path: str
+    configurations: list[WorkspaceDebugConfiguration] = Field(
+        default_factory=list, max_length=100
+    )
+    truncated: bool = False
+
+
+SourceControlFileStatus = Literal[
+    "unmodified", "modified", "added", "deleted", "renamed", "copied",
+    "unmerged", "untracked", "ignored", "unknown",
+]
+
+
 class SourceControlFile(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
-    index_status: Literal[
-        "unmodified", "modified", "added", "deleted", "renamed", "copied",
-        "unmerged", "untracked", "ignored", "unknown",
-    ]
-    worktree_status: Literal[
-        "unmodified", "modified", "added", "deleted", "renamed", "copied",
-        "unmerged", "untracked", "ignored", "unknown",
-    ]
+    index_status: SourceControlFileStatus
+    worktree_status: SourceControlFileStatus
     original_path: str | None = Field(default=None, max_length=4096)
 
 
@@ -308,13 +344,15 @@ class WorkspaceService:
         def add(
             label: str,
             command: str,
-            kind: str,
-            source: str,
+            kind: WorkspaceTaskKind,
+            source: WorkspaceTaskSource,
             detail: str,
             path: str | None = None,
+            supported: bool = True,
+            unsupported_reason: str | None = None,
         ) -> None:
             identity = hashlib.sha256(
-                f"{source}\0{path or ''}\0{command}".encode()
+                f"{source}\0{path or ''}\0{label}\0{command}".encode()
             ).hexdigest()
             tasks.append(
                 WorkspaceTask(
@@ -325,8 +363,51 @@ class WorkspaceService:
                     source=source,
                     detail=detail,
                     path=path,
+                    supported=supported,
+                    unsupported_reason=unsupported_reason,
                 )
             )
+
+        vscode_tasks, vscode_tasks_error = self._read_vscode_manifest(
+            engagement_id, ".vscode/tasks.json"
+        )
+        if vscode_tasks_error:
+            add(
+                "VS Code tasks need attention",
+                ":",
+                "custom",
+                ".vscode/tasks.json",
+                "Nebula could not read .vscode/tasks.json.",
+                supported=False,
+                unsupported_reason=vscode_tasks_error,
+            )
+        elif vscode_tasks is not None:
+            try:
+                parsed_tasks = json5.loads(vscode_tasks, allow_duplicate_keys=False)
+            except (RecursionError, ValueError):
+                add(
+                    "VS Code tasks need attention",
+                    ":",
+                    "custom",
+                    ".vscode/tasks.json",
+                    "Nebula could not parse .vscode/tasks.json.",
+                    supported=False,
+                    unsupported_reason=(
+                        "Fix the JSON-with-comments syntax or duplicate keys, then refresh."
+                    ),
+                )
+            else:
+                declared = (
+                    parsed_tasks.get("tasks")
+                    if isinstance(parsed_tasks, dict)
+                    else None
+                )
+                if isinstance(declared, list):
+                    for index, task in enumerate(declared[:200]):
+                        normalized = self._normalize_vscode_task(task, index)
+                        if normalized is None:
+                            continue
+                        add(*normalized)
 
         package = self._read_task_manifest(engagement_id, "package.json")
         if package is not None:
@@ -344,7 +425,7 @@ class WorkspaceService:
                         or len(name) > 200
                     ):
                         continue
-                    kind = (
+                    kind: WorkspaceTaskKind = (
                         "test"
                         if name == "test" or name.startswith("test:")
                         else "build"
@@ -464,7 +545,135 @@ class WorkspaceService:
             truncated=truncated or len(tasks) > 300,
         )
 
-    def _read_task_manifest(self, engagement_id: str, path: str) -> str | None:
+    @staticmethod
+    def _normalize_vscode_task(
+        task: object, index: int
+    ) -> tuple[str, str, WorkspaceTaskKind, WorkspaceTaskSource, str, str | None, bool, str | None] | None:
+        if not isinstance(task, dict):
+            return None
+        label = task.get("label")
+        command = task.get("command")
+        if not isinstance(label, str) or not label.strip() or len(label) > 300:
+            return None
+        label = label.strip()
+        source: WorkspaceTaskSource = ".vscode/tasks.json"
+        detail = f"VS Code task #{index + 1}"
+
+        def unsupported(
+            reason: str,
+        ) -> tuple[str, str, WorkspaceTaskKind, WorkspaceTaskSource, str, str | None, bool, str | None]:
+            return (label, ":", "custom", source, detail, None, False, reason)
+
+        task_type = task.get("type", "shell")
+        if task_type not in {"shell", "process"}:
+            return unsupported(
+                f"Task type {str(task_type)[:200]!r} requires a VS Code extension and is not executed by Nebula."
+            )
+        if not isinstance(command, str) or not command or len(command) > 10_000:
+            return unsupported("The task command must be a non-empty bounded string.")
+        args = task.get("args", [])
+        if (
+            not isinstance(args, list)
+            or len(args) > 50
+            or any(
+                not isinstance(value, str) or "\x00" in value or len(value) > 4096
+                for value in args
+            )
+        ):
+            return unsupported("Task arguments must be at most 50 bounded strings.")
+        if task.get("dependsOn") is not None:
+            return unsupported(
+                "Compound dependsOn tasks require orchestration; run their reviewed tasks individually."
+            )
+        if task.get("isBackground") is True:
+            return unsupported(
+                "Background tasks are disabled because reviewed executions must reach a terminal result."
+            )
+        options = task.get("options", {})
+        if not isinstance(options, dict):
+            return unsupported("Task options must be an object.")
+        if options.get("shell") is not None:
+            return unsupported(
+                "Custom task shells cannot replace Nebula's isolated reviewed runtime."
+            )
+
+        def substitute(value: str) -> str | None:
+            resolved = value.replace("${workspaceFolder}", "/workspace")
+            return None if re.search(r"\$\{[^}]+\}", resolved) else resolved
+
+        resolved_command = substitute(command)
+        resolved_args = [substitute(value) for value in args]
+        if resolved_command is None or any(value is None for value in resolved_args):
+            return unsupported(
+                "Only the ${workspaceFolder} VS Code variable is supported in reviewed tasks."
+            )
+        command_line = (
+            shlex.quote(resolved_command)
+            if task_type == "process"
+            else resolved_command
+        )
+        command_line += "".join(
+            f" {shlex.quote(value)}" for value in resolved_args if value is not None
+        )
+        env = options.get("env", {})
+        if not isinstance(env, dict) or len(env) > 100:
+            return unsupported("Task environment must be a bounded object.")
+        environment: list[str] = []
+        for key, value in env.items():
+            if (
+                not isinstance(key, str)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
+                or not isinstance(value, str)
+                or "\x00" in value
+                or len(value) > 4096
+            ):
+                return unsupported(
+                    "Task environment keys and values must be bounded shell-safe strings."
+                )
+            resolved = substitute(value)
+            if resolved is None:
+                return unsupported(
+                    "Only the ${workspaceFolder} VS Code variable is supported in task environment values."
+                )
+            environment.append(f"{key}={shlex.quote(resolved)}")
+        if environment:
+            command_line = f"env {' '.join(environment)} {command_line}"
+        cwd = options.get("cwd")
+        if cwd is not None:
+            if not isinstance(cwd, str):
+                return unsupported("Task working directory must be a string.")
+            resolved_cwd = substitute(cwd)
+            if resolved_cwd is None or not (
+                resolved_cwd == "/workspace" or resolved_cwd.startswith("/workspace/")
+            ):
+                return unsupported(
+                    "Task working directory must remain inside ${workspaceFolder}."
+                )
+            relative = PurePosixPath(resolved_cwd).relative_to("/workspace")
+            if any(part in {"", ".", ".."} for part in relative.parts):
+                return unsupported(
+                    "Task working directory must remain inside ${workspaceFolder}."
+                )
+            command_line = f"cd -- {shlex.quote(resolved_cwd)} && {command_line}"
+        if len(command_line) > 20_000 or "\x00" in command_line:
+            return unsupported("The normalized task command exceeds Nebula's limit.")
+        group = task.get("group")
+        group_kind = group.get("kind") if isinstance(group, dict) else group
+        kind: WorkspaceTaskKind = (
+            "test"
+            if group_kind == "test"
+            else "build"
+            if group_kind == "build"
+            else "lint"
+            if "lint" in label.casefold()
+            else "run"
+        )
+        detail = f"VS Code {task_type} task"
+        return (label, command_line, kind, source, detail, None, True, None)
+
+    def _read_task_manifest(
+        self, engagement_id: str, path: str, *, max_bytes: int = 512 * 1024
+    ) -> str | None:
         try:
             stream, metadata = self._open_regular(engagement_id, (path,))
         except ExecutionServiceError as exc:
@@ -472,15 +681,240 @@ class WorkspaceService:
                 return None
             raise
         with stream:
-            if metadata.st_size > 512 * 1024:
+            if metadata.st_size > max_bytes:
                 return None
-            payload = stream.read(512 * 1024 + 1)
-        if len(payload) > 512 * 1024 or b"\0" in payload:
+            payload = stream.read(max_bytes + 1)
+        if len(payload) > max_bytes or b"\0" in payload:
             return None
         try:
             return payload.decode("utf-8")
         except UnicodeDecodeError:
             return None
+
+    def _read_vscode_manifest(
+        self, engagement_id: str, path: str
+    ) -> tuple[str | None, str | None]:
+        try:
+            stream, metadata = self._open_regular(engagement_id, (path,))
+        except ExecutionServiceError as exc:
+            if exc.status_code == 404:
+                return None, None
+            raise
+        with stream:
+            if metadata.st_size > MAX_VSCODE_CONFIGURATION_BYTES:
+                return None, (
+                    f"{path} exceeds Nebula's {MAX_VSCODE_CONFIGURATION_BYTES // 1024} KiB configuration limit."
+                )
+            payload = stream.read(MAX_VSCODE_CONFIGURATION_BYTES + 1)
+        if len(payload) > MAX_VSCODE_CONFIGURATION_BYTES:
+            return None, (
+                f"{path} exceeds Nebula's {MAX_VSCODE_CONFIGURATION_BYTES // 1024} KiB configuration limit."
+            )
+        if b"\0" in payload:
+            return None, f"{path} must be a plain-text configuration file."
+        try:
+            return payload.decode("utf-8"), None
+        except UnicodeDecodeError:
+            return None, f"{path} must use UTF-8 text."
+
+    def debug_configurations(
+        self, engagement_id: str, active_path: str
+    ) -> WorkspaceDebugConfigurationList:
+        """Read bounded Python launch profiles without allowing runtime overrides."""
+        self.store.get(Engagement, engagement_id)
+        active = PurePosixPath(
+            *_relative_parts(active_path, require_value=True)
+        ).as_posix()
+        configurations: list[WorkspaceDebugConfiguration] = []
+
+        def add(
+            name: str,
+            path: str | None,
+            arguments: list[str],
+            detail: str,
+            *,
+            supported: bool = True,
+            unsupported_reason: str | None = None,
+        ) -> None:
+            identity = hashlib.sha256(
+                json.dumps(
+                    [len(configurations), name, path, arguments],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            configurations.append(
+                WorkspaceDebugConfiguration(
+                    id=identity,
+                    name=name,
+                    path=path,
+                    arguments=arguments,
+                    detail=detail,
+                    supported=supported,
+                    unsupported_reason=unsupported_reason,
+                )
+            )
+
+        manifest, manifest_error = self._read_vscode_manifest(
+            engagement_id, ".vscode/launch.json"
+        )
+        if manifest_error:
+            add(
+                "VS Code launch profiles need attention",
+                None,
+                [],
+                "Nebula could not read .vscode/launch.json.",
+                supported=False,
+                unsupported_reason=manifest_error,
+            )
+            return WorkspaceDebugConfigurationList(
+                engagement_id=engagement_id,
+                active_path=active,
+                configurations=configurations,
+            )
+        if manifest is None:
+            return WorkspaceDebugConfigurationList(
+                engagement_id=engagement_id,
+                active_path=active,
+            )
+        try:
+            parsed = json5.loads(manifest, allow_duplicate_keys=False)
+        except (RecursionError, ValueError):
+            add(
+                "VS Code launch profiles need attention",
+                None,
+                [],
+                "Nebula could not parse .vscode/launch.json.",
+                supported=False,
+                unsupported_reason=(
+                    "Fix the JSON-with-comments syntax or duplicate keys, then retry."
+                ),
+            )
+            return WorkspaceDebugConfigurationList(
+                engagement_id=engagement_id,
+                active_path=active,
+                configurations=configurations,
+            )
+        declared = parsed.get("configurations") if isinstance(parsed, dict) else None
+        if not isinstance(declared, list):
+            return WorkspaceDebugConfigurationList(
+                engagement_id=engagement_id,
+                active_path=active,
+            )
+        for index, configuration in enumerate(declared[:100]):
+            if not isinstance(configuration, dict):
+                continue
+            name = configuration.get("name")
+            if not isinstance(name, str) or not name.strip() or len(name) > 300:
+                continue
+            name = name.strip()
+
+            def reject(reason: str) -> None:
+                add(
+                    name,
+                    None,
+                    [],
+                    f"VS Code launch profile #{index + 1}",
+                    supported=False,
+                    unsupported_reason=reason,
+                )
+
+            if configuration.get("type") not in {"debugpy", "python"}:
+                reject("Only Python debugpy launch profiles are supported.")
+                continue
+            if configuration.get("request") != "launch":
+                reject("Attach profiles cannot cross Nebula's isolated debug boundary.")
+                continue
+            restricted = next(
+                (
+                    key
+                    for key in (
+                        "code",
+                        "module",
+                        "python",
+                        "pythonArgs",
+                        "env",
+                        "envFile",
+                        "preLaunchTask",
+                        "postDebugTask",
+                    )
+                    if configuration.get(key) is not None
+                ),
+                None,
+            )
+            if restricted:
+                reject(
+                    f"{restricted} would change the reviewed launch boundary and is not imported."
+                )
+                continue
+            cwd = configuration.get("cwd", "${workspaceFolder}")
+            if cwd not in {"${workspaceFolder}", "/workspace"}:
+                reject("Debug working directory must be ${workspaceFolder}.")
+                continue
+            program = configuration.get("program", "${file}")
+            if not isinstance(program, str):
+                reject("Debug program must be a workspace Python path.")
+                continue
+            if program == "${file}":
+                resolved_path = active
+            elif program.startswith("${workspaceFolder}/"):
+                resolved_path = program.removeprefix("${workspaceFolder}/")
+            elif not program.startswith("${"):
+                resolved_path = program
+            else:
+                reject(
+                    "Only ${file} and ${workspaceFolder} program variables are supported."
+                )
+                continue
+            try:
+                resolved_path = PurePosixPath(
+                    *_relative_parts(resolved_path, require_value=True)
+                ).as_posix()
+            except ExecutionServiceError:
+                reject("Debug program must remain inside the project workspace.")
+                continue
+            if not resolved_path.endswith(".py"):
+                reject("Debug program must be a Python file.")
+                continue
+            args = configuration.get("args", [])
+            if (
+                not isinstance(args, list)
+                or len(args) > 50
+                or any(
+                    not isinstance(value, str) or "\x00" in value or len(value) > 4096
+                    for value in args
+                )
+            ):
+                reject("Debug arguments must be at most 50 bounded strings.")
+                continue
+            resolved_args = [
+                value.replace("${workspaceFolder}", "/workspace") for value in args
+            ]
+            if any(re.search(r"\$\{[^}]+\}", value) for value in resolved_args):
+                reject("Debug arguments contain an unsupported VS Code variable.")
+                continue
+            if resolved_path != active:
+                add(
+                    name,
+                    resolved_path,
+                    resolved_args,
+                    "VS Code Python launch profile",
+                    supported=False,
+                    unsupported_reason=f"Open {resolved_path} to use this profile.",
+                )
+                continue
+            add(
+                name,
+                resolved_path,
+                resolved_args,
+                "VS Code Python launch profile; Nebula enforces its prepared runtime, read-only workspace, and disabled network.",
+            )
+        return WorkspaceDebugConfigurationList(
+            engagement_id=engagement_id,
+            active_path=active,
+            configurations=configurations,
+            truncated=len(declared) > 100,
+        )
 
     def preview(self, engagement_id: str, path: str) -> WorkspacePreview:
         relative = _relative_parts(path, require_value=True)
@@ -1420,7 +1854,7 @@ def _safe_git_detail(payload: bytes, fallback: str) -> str:
     return detail[:2_000] or fallback
 
 
-_GIT_STATUS_NAMES = {
+_GIT_STATUS_NAMES: dict[str, SourceControlFileStatus] = {
     " ": "unmodified",
     "M": "modified",
     "A": "added",

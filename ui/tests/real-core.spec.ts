@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
@@ -464,14 +464,48 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     await page.getByRole("textbox", { name: "Code editor" }).fill("def scan_target():\n    return True\n");
     await page.getByRole("textbox", { name: "Code editor" }).press("Control+S");
     await expect(page.getByText("Saved /workspace/scanner.py. Use it from Terminal when you're ready.")).toBeVisible();
+    const workspaceRoot = path.join(core.dataDir, "engagement-workspaces", createHash("sha256").update(projectId!).digest("hex"));
+    await mkdir(path.join(workspaceRoot, ".vscode"), { recursive: true });
+    await writeFile(path.join(workspaceRoot, ".vscode", "tasks.json"), `{
+      // Real-Core compatibility fixture.
+      tasks: [
+        { label: 'Inspect Python', type: 'process', command: 'python', args: ['--version'], group: 'test' },
+        { label: 'Extension-owned task', type: 'npm', command: 'test' },
+      ],
+    }`, "utf8");
+    await writeFile(path.join(workspaceRoot, ".vscode", "launch.json"), `{
+      configurations: [
+        { name: 'Debug active scanner', type: 'debugpy', request: 'launch', program: '${"${file}"}', args: ['--fixture', '${"${workspaceFolder}"}/sample.bin'] },
+        { name: 'Attach process', type: 'debugpy', request: 'attach' },
+      ],
+    }`, "utf8");
+    const configuredTasks = await api.get(`engagements/${projectId}/workspace/tasks`);
+    expect(configuredTasks.ok(), await configuredTasks.text()).toBe(true);
+    expect(JSON.stringify(await configuredTasks.json())).toContain("Inspect Python");
+    const configuredLaunch = await api.get(`engagements/${projectId}/workspace/debug-configurations`, { params: { path: "scanner.py" } });
+    expect(configuredLaunch.ok(), await configuredLaunch.text()).toBe(true);
+    expect(JSON.stringify(await configuredLaunch.json())).toContain("Debug active scanner");
     await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toBeVisible();
     await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("button", { name: "Project tasks and tests" })).toBeVisible();
+    const taskRequest = page.waitForResponse((response) => response.url().includes("/workspace/tasks"));
+    await page.getByRole("button", { name: "Project tasks and tests" }).click();
+    const taskResponse = await taskRequest;
+    expect(taskResponse.url()).toContain(encodeURIComponent(projectId!));
+    expect(JSON.stringify(await taskResponse.json())).toContain("Inspect Python");
+    const taskReview = page.getByRole("dialog", { name: "Project tasks and tests" });
+    await expect(taskReview.getByRole("option", { name: /Inspect Python/ })).toBeEnabled();
+    await expect(taskReview.getByRole("option", { name: /Extension-owned task/ })).toBeDisabled();
+    await expect(taskReview).toContainText("requires a VS Code extension");
+    await taskReview.getByRole("button", { name: "Close project tasks" }).click();
     await page.getByRole("button", { name: "Debug saved Python" }).click();
     const debuggerReview = page.getByRole("dialog", { name: "Python debugger" });
     await expect(debuggerReview).toContainText("Isolated launch review");
     await expect(debuggerReview).toContainText("project is read-only, networking is disabled");
     await expect(debuggerReview.getByRole("button", { name: "Start isolated debugger" })).toBeEnabled();
+    await expect(debuggerReview.getByLabel("Launch profile").locator("option:checked")).toHaveText("Debug active scanner");
+    await expect(debuggerReview.getByLabel("Python arguments (JSON array)")).toHaveValue('["--fixture","/workspace/sample.bin"]');
+    await expect(debuggerReview.getByLabel("Unsupported launch profiles")).toContainText("Attach profiles cannot cross Nebula's isolated debug boundary.");
     await debuggerReview.getByRole("button", { name: "Close debugger" }).click();
 
     await page.keyboard.press("Control+P");

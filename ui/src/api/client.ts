@@ -110,6 +110,7 @@ import type {
   WorkspaceResetStatus,
   WorkspaceSearchResult,
   WorkspaceTaskList,
+  WorkspaceDebugConfigurationList,
   WorkspaceUploadResult,
   WritingTransformRequest,
   WritingTransformResponse,
@@ -5794,13 +5795,32 @@ export class ApiClient {
   ): Promise<WorkspaceTaskList> {
     return this.request<{
       engagement_id: string;
-      tasks: Array<{ id: string; label: string; command: string; kind: "test" | "build" | "run" | "lint" | "custom"; source: "package.json" | "Makefile" | "pytest" | "go.mod" | "Cargo.toml"; detail: string; path?: string | null }>;
+      tasks: Array<{ id: string; label: string; command: string; kind: "test" | "build" | "run" | "lint" | "custom"; source: "package.json" | "Makefile" | "pytest" | "go.mod" | "Cargo.toml" | ".vscode/tasks.json"; detail: string; path?: string | null; supported?: boolean; unsupported_reason?: string | null }>;
       scanned_entries: number;
       truncated: boolean;
     }>(`engagements/${encodeURIComponent(engagementId)}/workspace/tasks`, { signal }).then((value) => ({
       engagementId: value.engagement_id,
-      tasks: value.tasks.map((task) => ({ ...task, path: task.path ?? undefined })),
+      tasks: value.tasks.map(({ path, unsupported_reason: unsupportedReason, ...task }) => ({ ...task, path: path ?? undefined, supported: task.supported !== false, unsupportedReason: unsupportedReason ?? undefined })),
       scannedEntries: value.scanned_entries,
+      truncated: value.truncated,
+    }));
+  }
+
+  workspaceDebugConfigurations(
+    engagementId: string,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDebugConfigurationList> {
+    const parameters = new URLSearchParams({ path });
+    return this.request<{
+      engagement_id: string;
+      active_path: string;
+      configurations: Array<{ id: string; name: string; path?: string | null; arguments: string[]; source: ".vscode/launch.json"; detail: string; supported: boolean; unsupported_reason?: string | null }>;
+      truncated: boolean;
+    }>(`engagements/${encodeURIComponent(engagementId)}/workspace/debug-configurations?${parameters}`, { signal }).then((value) => ({
+      engagementId: value.engagement_id,
+      activePath: value.active_path,
+      configurations: value.configurations.map(({ path, unsupported_reason: unsupportedReason, ...configuration }) => ({ ...configuration, path: path ?? undefined, unsupportedReason: unsupportedReason ?? undefined })),
       truncated: value.truncated,
     }));
   }
