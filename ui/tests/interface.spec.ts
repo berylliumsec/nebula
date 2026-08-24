@@ -673,6 +673,55 @@ test("Workbench omits the removed Human controlled badge in every theme", async 
   }
 });
 
+test("Zero keeps one navigable panoramic shell with a clear light-theme status and search cluster", async ({ page }) => {
+  await openWorkspace(page, "/", "Workbench");
+  await setTheme(page, "zero-light");
+
+  const ready = page.getByRole("button", { name: "Nebula Core ready" });
+  const search = page.getByRole("button", { name: "Search commands" });
+  await expect(ready).toBeVisible();
+  await expect(search).toBeVisible();
+
+  const contrast = await page.locator(".zero-status-band").evaluate((band) => {
+    const parse = (value: string) => {
+      const channels = value.match(/[\d.]+/g)?.map(Number);
+      if (!channels || channels.length !== 3) throw new Error(`Expected an opaque RGB color, received ${value}`);
+      return channels;
+    };
+    const luminance = (value: string) => {
+      const channels = parse(value).map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const ratio = (foreground: string, background: string) => {
+      const lighter = Math.max(luminance(foreground), luminance(background));
+      const darker = Math.min(luminance(foreground), luminance(background));
+      return (lighter + 0.05) / (darker + 0.05);
+    };
+    const measure = (selector: string) => {
+      const element = band.querySelector<HTMLElement>(selector)!;
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        foreground: style.color,
+        ratio: ratio(style.color, style.backgroundColor),
+      };
+    };
+    return {
+      ready: measure(".connection-chip"),
+      search: measure(".command-trigger"),
+      shortcut: measure(".command-trigger kbd"),
+    };
+  });
+
+  expect(contrast.ready.ratio, JSON.stringify(contrast.ready)).toBeGreaterThanOrEqual(4.5);
+  expect(contrast.search.ratio, JSON.stringify(contrast.search)).toBeGreaterThanOrEqual(4.5);
+  expect(contrast.shortcut.ratio, JSON.stringify(contrast.shortcut)).toBeGreaterThanOrEqual(4.5);
+  expect(contrast.ready.background).not.toBe(contrast.search.background);
+});
+
 test("primary navigation exposes only the five task destinations", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   if ((page.viewportSize()?.width ?? 1440) <= 760) {

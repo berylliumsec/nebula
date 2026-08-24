@@ -500,6 +500,40 @@
   border-color: rgb(43 72 101 / 16%);
   background: rgb(255 255 255 / 68%);
 }
+:root[data-theme="zero-light"] .zero-status-band .connection-chip {
+  border-color: #a8cdb9;
+  color: #185f40;
+  background: #f0faf5;
+  box-shadow: inset 0 1px #fff, 0 1px 2px rgb(33 72 53 / 10%);
+  transition: box-shadow 180ms ease, transform 110ms ease, filter 150ms ease;
+}
+:root[data-theme="zero-light"] .zero-status-band .connection-chip.degraded {
+  border-color: #d4bd8c;
+  color: #704b16;
+  background: #fff8e9;
+}
+:root[data-theme="zero-light"] .zero-status-band .connection-chip.failed {
+  border-color: #dfb0b5;
+  color: #8a3039;
+  background: #fff3f4;
+}
+:root[data-theme="zero-light"] .zero-status-band .command-trigger {
+  border-color: #aebdcb;
+  color: #34495d;
+  background: #fff;
+  box-shadow: inset 0 1px #fff, 0 1px 3px rgb(42 67 91 / 12%);
+  transition: box-shadow 180ms ease, transform 110ms ease, filter 150ms ease;
+}
+:root[data-theme="zero-light"] .zero-status-band .command-trigger:hover {
+  border-color: #7f94a8;
+  color: #142638;
+  background: #f7fafc;
+}
+:root[data-theme="zero-light"] .zero-status-band .command-trigger kbd {
+  border-color: #b6c8da;
+  color: #155b9f;
+  background: #e9f1f8;
+}
 :root[data-theme="zero-light"] :where(.eyebrow, .section-kicker, .panel-header small) { color: var(--blue); }
 :root[data-theme="zero-light"] .zero-anchor-dock :where(.engagement-switcher, .operator-row) { background: rgb(38 75 111 / 6%); }
 :root[data-theme="zero-light"] .zero-anchor-dock .nav-item:hover { background: rgb(38 75 111 / 7%); }
