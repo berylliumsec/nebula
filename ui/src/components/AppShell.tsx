@@ -148,7 +148,7 @@ export function AppShell() {
       <WorkbenchEditorProvider>
         <WorkbenchDraftProvider>
           <ChromeProvider value={chrome}>
-            {runtime?.mode !== "desktop_remote" && <BrowserAutomationWorker />}
+            <BrowserAutomationWorker />
             <div className={`app-shell${zero ? " zero-layer-shell" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
               <SideNav collapsed={sidebarCollapsed} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />

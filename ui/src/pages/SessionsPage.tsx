@@ -503,7 +503,6 @@ export function SessionsPage() {
     refreshProvider,
     reverifyProvider,
     resolveApproval,
-    runtime,
     setupStatus,
     startMission,
     uploadEvidence,
@@ -2987,10 +2986,7 @@ export function SessionsPage() {
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={(context) => { requestNebulaDraft(context); setView("chat"); }} /></Suspense>
           </div>}
           {api && engagement && <div className="persistent-browser" hidden={view !== "browser"}>
-            {runtime?.mode === "desktop_remote" ? <div className="feature-unavailable browser-remote-core-boundary" role="status">
-              <Globe2 size={24} aria-hidden="true" />
-              <div><strong>Native Browser stays with the local desktop Core</strong><p>This UI shell is connected to a remote Core. Projects, terminals, chats, missions, and events use that remote Core, but this desktop does not claim or execute its Browser/proxy commands. Switch to Local Core in Settings to use the native Browser.</p></div>
-            </div> : <WorkbenchBrowser
+            <WorkbenchBrowser
               active={view === "browser"}
               api={api}
               operatorId={activeOperator?.id}
@@ -3002,7 +2998,7 @@ export function SessionsPage() {
               onOpenFiles={() => setView("workspace")}
               onScopeUpdated={setBrowserScope}
               onUploadEvidence={uploadEvidence}
-            />}
+            />
           </div>}
           {(view === "terminal" || view === "code") && (!api || !engagement) ? (
             <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal and Code become available as soon as Nebula finishes creating or loading a project.</p></div>

@@ -2807,7 +2807,7 @@ test("settings shows the live Kali preparation stage instead of a passive runtim
   await expect(page.getByRole("button", { name: "Preparing Kali…" })).toBeDisabled();
 });
 
-test("remote Core mode controls the UI shell and keeps native Browser local-only", async ({ browser }, testInfo) => {
+test("remote Core mode keeps the native Browser and command worker on this desktop", async ({ browser }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Desktop Core selection is a native-shell capability.");
   const context = await browser.newContext({ viewport: { width: 1024, height: 900 }, colorScheme: "dark" });
   const page = await context.newPage();
@@ -2822,6 +2822,23 @@ test("remote Core mode controls the UI shell and keeps native Browser local-only
           calls.push(command);
           if (command === "resolve_backend_connection") return { endpoint: `${location.origin}/api/v1`, token: "", protocol: "nebula-remote-core-v1", source: "remote" };
           if (command === "desktop_core_connection") return { mode: "remote", endpoint: `${location.origin}/api/v1`, tokenAvailable: true, deviceId: "desktop-remote-test" };
+          if (command === "desktop_device_id") return "desktop-remote-test";
+          if (command === "browser_capabilities") return {
+            engine: "Remote-Core local native mock",
+            projectStorage: "persistent",
+            identityPartitions: true,
+            devtools: true,
+            interceptionProxy: true,
+            http2Capture: true,
+            websocketCapture: true,
+            autonomousCommands: true,
+          };
+          if (command === "browser_proxy_ca_status") return {
+            certificatePath: "/protected/project-ca.pem",
+            fingerprint: "aa:bb:cc:dd",
+            state: "generated",
+            trustInstructions: "Trust this Project CA on the desktop before intercepting HTTPS.",
+          };
           return undefined;
         },
         transformCallback: () => 1,
@@ -2834,6 +2851,7 @@ test("remote Core mode controls the UI shell and keeps native Browser local-only
   await openWorkspace(page, "/settings", "Settings");
   const card = page.locator(".core-connection-settings");
   await expect(card.getByRole("heading", { name: "Remote Core selected" })).toBeVisible();
+  await expect(card.getByText(/Native execution stays on this desktop/)).toBeVisible();
   const geometry = await card.evaluate((element) => {
     const cardRect = element.getBoundingClientRect();
     const controls = [...element.querySelectorAll<HTMLElement>("input, button")].map((control) => control.getBoundingClientRect());
@@ -2854,12 +2872,17 @@ test("remote Core mode controls the UI shell and keeps native Browser local-only
     const current = geometry.controls[index];
     expect(current.top >= previous.bottom - 1 || current.left >= previous.right - 1).toBe(true);
   }
+  await expect.poll(() => page.evaluate(() => (window as Window & { __NEBULA_REMOTE_CORE_CALLS__?: string[] }).__NEBULA_REMOTE_CORE_CALLS__?.includes("desktop_device_id"))).toBe(true);
 
   await page.goto("/");
+  const ownershipRequest = page.waitForRequest((request) => request.method() === "PUT" && request.url().includes("/browser-sessions/browser-session-preview/tabs"));
   await page.getByRole("tab", { name: "Project browser", exact: true }).click();
-  await expect(page.getByText("Native Browser stays with the local desktop Core")).toBeVisible();
-  await expect(page.getByText(/Projects, terminals, chats, missions, and events use that remote Core/)).toBeVisible();
-  expect(await page.evaluate(() => (window as Window & { __NEBULA_REMOTE_CORE_CALLS__?: string[] }).__NEBULA_REMOTE_CORE_CALLS__?.some((command) => command.startsWith("browser_")))).toBe(false);
+  await expect(page.getByRole("tablist", { name: "Browser tabs" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Start browsing" })).toBeEnabled();
+  expect((await ownershipRequest).postDataJSON()).toMatchObject({ device_owner: "desktop-remote-test" });
+  const nativeCalls = await page.evaluate(() => (window as Window & { __NEBULA_REMOTE_CORE_CALLS__?: string[] }).__NEBULA_REMOTE_CORE_CALLS__ ?? []);
+  expect(nativeCalls).toContain("browser_capabilities");
+  expect(nativeCalls).toContain("desktop_device_id");
   await context.close();
 });
 

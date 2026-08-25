@@ -116,15 +116,16 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const dialogOpen = useDialogOpen();
   const { activityOpen, paletteOpen, sidebarCollapsed } = useChrome();
   const desktop = isTauriRuntime();
-  const deviceIdRef = useRef(desktop ? "desktop" : "paired-browser");
-  useEffect(() => { if (desktop) void desktopDeviceId().then((value) => { deviceIdRef.current = value; }).catch((caught) => {
-    void logCaughtDiagnostic("interface.security_browser.device_identity_unavailable", "The desktop browser identity could not be loaded.", caught, "workbench_browser");
-  }); }, [desktop]);
+  const [deviceId, setDeviceId] = useState<string | undefined>(desktop ? undefined : "paired-browser");
   const [tabs, setTabs] = useState<BrowserTab[]>(() => [blankTab()]);
   const [activeId, setActiveId] = useState(() => tabs[0].id);
   const [capabilities, setCapabilities] = useState<BrowserCapabilities>();
   const [notice, setNotice] = useState<BrowserNotice>();
   const [error, setError] = useState<string>();
+  useEffect(() => { if (desktop) void desktopDeviceId().then(setDeviceId).catch((caught) => {
+    void logCaughtDiagnostic("interface.security_browser.device_identity_unavailable", "The desktop browser identity could not be loaded.", caught, "workbench_browser");
+    setError("This desktop's Browser identity is unavailable. Retry after restoring access to the protected app configuration.");
+  }); }, [desktop]);
   const [addingKnowledge, setAddingKnowledge] = useState(false);
   const addingScopeRef = useRef(false);
   const [capturingContext, setCapturingContext] = useState(false);
@@ -333,7 +334,8 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           lastScopeRevision: decision.revision,
         };
       });
-      const persistedSession = await api.syncSecurityBrowserSession(activeSession, durableTabs, id, deviceIdRef.current);
+      if (!deviceId) throw new Error("The stable desktop Browser identity is still loading.");
+      const persistedSession = await api.syncSecurityBrowserSession(activeSession, durableTabs, id, deviceId);
       setWorkspace((current) => current ? {
         ...current,
         sessions: current.sessions.map((session) => session.id === persistedSession.id ? persistedSession : session),
@@ -364,7 +366,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       updateTab(id, { loading: false, error: errorMessage(caught) });
       return false;
     }
-  }, [activeIdentity, activeSession, api, bounds, projectId, scope, updateTab]);
+  }, [activeIdentity, activeSession, api, bounds, deviceId, projectId, scope, updateTab]);
 
   const addTab = useCallback((url?: string) => {
     if (tabsRef.current.length >= MAX_TABS) {
@@ -449,7 +451,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const startAutonomousRun = async (event: FormEvent) => {
     event.preventDefault();
     if (automationBusy || !activeSession || !activeIdentity || !activeTab?.created) return;
-    if (activeSession.deviceOwner !== deviceIdRef.current) {
+    if (!deviceId || activeSession.deviceOwner !== deviceId) {
       setWorkspaceError("This desktop browser is not paired to the selected session yet. Keep the session open, then retry after its device owner is saved.");
       return;
     }
@@ -541,7 +543,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   }, [refreshWorkspace]);
 
   useEffect(() => {
-    if (!desktop || !active || !activeSession) return;
+    if (!desktop || !active || !activeSession || !deviceId) return;
     let disposed = false;
     let handling = false;
     const process = async () => {
@@ -553,7 +555,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         const queued = next.handoffs.find((handoff) => handoff.sessionId === activeSession.id && handoff.status === "queued");
         if (!queued) return;
         setWorkspace(next);
-        const claimed = await api.claimSecurityBrowserHandoff(queued, deviceIdRef.current);
+        const claimed = await api.claimSecurityBrowserHandoff(queued, deviceId);
         try {
           if (claimed.command === "focus_tab") {
             const target = tabsRef.current.find((tab) => tab.id === claimed.tabId);
@@ -569,11 +571,11 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
             setActiveId(target.id);
             if (!await openAddress(target.id, claimed.url)) throw new Error("The desktop browser could not complete the queued navigation.");
           }
-          await api.finishSecurityBrowserHandoff(claimed, "complete", undefined, deviceIdRef.current);
+          await api.finishSecurityBrowserHandoff(claimed, "complete", undefined, deviceId);
           setNotice({ kind: "info", message: "Paired-device browser handoff completed on this desktop." });
         } catch (caught) {
           void logCaughtDiagnostic("interface.security_browser.handoff_execution_failed", "A claimed browser handoff could not be completed.", caught, "workbench_browser");
-          await api.finishSecurityBrowserHandoff(claimed, "failed", errorMessage(caught), deviceIdRef.current).catch((receiptCaught) => {
+          await api.finishSecurityBrowserHandoff(claimed, "failed", errorMessage(caught), deviceId).catch((receiptCaught) => {
             void logCaughtDiagnostic("interface.security_browser.handoff_receipt_failed", "A failed browser handoff could not be recorded.", receiptCaught, "workbench_browser");
           });
           setWorkspaceError(errorMessage(caught));
@@ -588,7 +590,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     void process();
     const timer = window.setInterval(() => void process(), 3000);
     return () => { disposed = true; window.clearInterval(timer); };
-  }, [active, activeSession, api, desktop, openAddress, projectId, refreshWorkspace]);
+  }, [active, activeSession, api, desktop, deviceId, openAddress, projectId, refreshWorkspace]);
 
   useEffect(() => {
     if (!activeSession || hydratedProjectRef.current === `${projectId}:${activeSession.id}`) return;
@@ -844,7 +846,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   }, [activeId, browserVisible, desktop, projectId, tabs]);
 
   useEffect(() => {
-    if (!activeSession || hydratedProjectRef.current !== `${projectId}:${activeSession.id}`) return;
+    if (!activeSession || !deviceId || hydratedProjectRef.current !== `${projectId}:${activeSession.id}`) return;
     const durableTabs = tabs.map((tab, position) => {
       const decision = evaluateBrowserScope(tab.url, scope);
       return {
@@ -860,7 +862,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     const next = JSON.stringify({ tabs: durableTabs, active: activeId });
     if (previous === next) return;
     const timer = window.setTimeout(() => {
-      void api.syncSecurityBrowserSession(activeSession, durableTabs, activeId, desktop ? deviceIdRef.current : "paired-browser")
+      void api.syncSecurityBrowserSession(activeSession, durableTabs, activeId, deviceId)
         .then((updated) => setWorkspace((current) => current ? {
           ...current,
           sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
@@ -871,7 +873,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         });
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [activeId, activeSession, api, desktop, projectId, scope, tabs]);
+  }, [activeId, activeSession, api, deviceId, projectId, scope, tabs]);
 
   useEffect(() => {
     if (!desktop || !browserVisible || !activeTab?.created) return;
@@ -1491,7 +1493,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         <button type="button" aria-label="Dismiss browser notice" onClick={() => setNotice(undefined)}><X size={14} /></button>
       </div>}
       <div className={`browser-surface${activeTab?.created ? " is-live" : ""}`} ref={surfaceRef}>
-        {!activeTab?.created && <div className="browser-start"><Globe2 size={34} /><strong>Browse from the Workbench</strong><p>Pages run in an isolated {capabilities?.engine ?? "system webview"} profile for the selected research identity. Nebula captures live page context only when you ask.</p><span className={`browser-start-scope ${scopeDecision.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeDecision.label} · {scopeDecision.detail}</span><form onSubmit={submit}><Search size={16} /><input aria-label="Start browsing" autoFocus={active} value={activeTab?.address ?? ""} placeholder={!sessionHydrated ? "Loading isolated identity…" : "Search or enter an address"} disabled={!sessionHydrated || !activeIdentity} onChange={(event) => { if (activeTab) { addressDraftRef.current.set(activeTab.id, event.target.value); updateTab(activeTab.id, { address: event.target.value }); } }} /><button className="button primary" type="submit" disabled={!sessionHydrated || !activeIdentity}>Go</button></form>{activeTab?.error && <small role="alert">{activeTab.error}</small>}</div>}
+        {!activeTab?.created && <div className="browser-start"><Globe2 size={34} /><strong>Browse from the Workbench</strong><p>Pages run in an isolated {capabilities?.engine ?? "system webview"} profile for the selected research identity. Nebula captures live page context only when you ask.</p><span className={`browser-start-scope ${scopeDecision.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeDecision.label} · {scopeDecision.detail}</span><form onSubmit={submit}><Search size={16} /><input aria-label="Start browsing" autoFocus={active} value={activeTab?.address ?? ""} placeholder={!sessionHydrated || !deviceId ? "Loading isolated identity…" : "Search or enter an address"} disabled={!sessionHydrated || !activeIdentity || !deviceId} onChange={(event) => { if (activeTab) { addressDraftRef.current.set(activeTab.id, event.target.value); updateTab(activeTab.id, { address: event.target.value }); } }} /><button className="button primary" type="submit" disabled={!sessionHydrated || !activeIdentity || !deviceId}>Go</button></form>{activeTab?.error && <small role="alert">{activeTab.error}</small>}</div>}
       </div>
       {researchPanel}
     </div>
