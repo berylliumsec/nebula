@@ -134,6 +134,26 @@ describe("ContainerTerminalPanel", () => {
     terminalSpies.selection = "";
   });
 
+  it("explains a workspace limit before attempting a terminal start", async () => {
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      containerTerminalCapabilities: vi.fn().mockResolvedValue({
+        ready: false,
+        errorCode: "workspace_limit",
+        detail: "workspace exceeds 50000 entries",
+        workspaceEntries: 50001,
+        workspaceMaxEntries: 50000,
+      }),
+      recoverContainerTerminals: vi.fn(),
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+    expect(await screen.findByText("Choose a smaller Project workspace")).toBeVisible();
+    expect(screen.getByText(/Docker runner and verified Kali image/)).toBeVisible();
+    expect(api.recoverContainerTerminals).not.toHaveBeenCalled();
+  });
+
   it("keeps an accessible progress indicator visible while Kali preparation is indeterminate", async () => {
     const api = {
       baseUrl: "http://127.0.0.1:8765/api/v1",

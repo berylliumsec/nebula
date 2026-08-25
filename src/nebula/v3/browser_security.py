@@ -8,13 +8,19 @@ or browser effects.
 from __future__ import annotations
 
 import hashlib
+import base64
+import binascii
 import json
+import re
 from datetime import timedelta
 from typing import Any, Literal
+from urllib.parse import parse_qsl, urlencode
 
 from pydantic import Field, field_validator
 
+from .artifacts import ArtifactStore
 from .domain import (
+    Artifact,
     BrowserAction,
     BrowserActionKind,
     BrowserActionStatus,
@@ -41,6 +47,7 @@ from .storage import NebulaStore
 MAX_HEADERS = 200
 MAX_HEADER_NAME = 256
 MAX_HEADER_VALUE = 8_192
+MAX_BROWSER_BODY_ARTIFACT_BYTES = 1_048_576
 ACTION_LIFETIME = timedelta(minutes=10)
 HANDOFF_LIFETIME = timedelta(minutes=5)
 SENSITIVE_HEADER_FRAGMENTS = (
@@ -91,9 +98,42 @@ class BrowserCaptureSettingsRequest(NebulaModel):
     expected_revision: int = Field(ge=1)
     capture_mode: BrowserCaptureMode
     proxy_enabled: bool
+    trust_acknowledged: bool = False
     interception_enabled: bool
     upstream_proxy_enabled: bool = False
     upstream_proxy_url: str | None = Field(default=None, max_length=2_048)
+    upstream_proxy_credential_ref: str | None = Field(default=None, max_length=200)
+
+    @field_validator("upstream_proxy_credential_ref")
+    @classmethod
+    def upstream_credential_ref_is_opaque(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value.strip()
+            or any(character.isspace() for character in value)
+        ):
+            raise ValueError("upstream proxy credentials must be referenced by an opaque identifier")
+        return value
+
+
+class BrowserBodyArtifactUploadRequest(NebulaModel):
+    direction: Literal["request", "response"]
+    content_base64: str = Field(
+        min_length=4,
+        max_length=4 * ((MAX_BROWSER_BODY_ARTIFACT_BYTES + 2) // 3),
+    )
+    media_type: str | None = Field(default=None, max_length=200)
+    filename: str = Field(default="browser-body.txt", min_length=1, max_length=255)
+    truncated: bool = False
+
+    @field_validator("filename")
+    @classmethod
+    def body_filename_is_safe(cls, value: str) -> str:
+        normalized = value.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if not normalized or normalized in {".", ".."}:
+            raise ValueError("body artifact filename is invalid")
+        if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+            raise ValueError("body artifact filename cannot contain control characters")
+        return normalized
 
 
 class BrowserTrafficRecordRequest(NebulaModel):
@@ -113,6 +153,7 @@ class BrowserTrafficRecordRequest(NebulaModel):
     duration_ms: int | None = Field(default=None, ge=0)
     replay_of_exchange_id: str | None = Field(default=None, max_length=200)
     error: str | None = Field(default=None, max_length=4_000)
+    blocked: bool = False
     truncated: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -176,6 +217,86 @@ class BrowserHandoffCreateRequest(NebulaModel):
     url: str | None = Field(default=None, max_length=16_384)
 
 
+_SECRET_BODY_KEY = re.compile(
+    r"(?:password|passwd|secret|token|authorization|cookie|set[-_]cookie|"
+    r"api[-_]?key|csrf|xsrf|session)",
+    re.IGNORECASE,
+)
+_BEARER_BODY = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+")
+_ASSIGNMENT_BODY = re.compile(
+    r"(?i)(\b(?:password|passwd|secret|token|authorization|cookie|set[-_]cookie|"
+    r"api[-_]?key|csrf|xsrf|session)\b\s*[:=]\s*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;&}]+)"
+)
+
+
+def _redact_body_json(value: Any, key: str = "") -> Any:
+    if isinstance(value, dict):
+        return {
+            str(item_key): (
+                "<redacted>"
+                if _SECRET_BODY_KEY.search(str(item_key))
+                else _redact_body_json(item, str(item_key))
+            )
+            for item_key, item in list(value.items())[:500]
+        }
+    if isinstance(value, list):
+        return [_redact_body_json(item, key) for item in value[:500]]
+    if isinstance(value, str):
+        return _ASSIGNMENT_BODY.sub(r"\1<redacted>", _BEARER_BODY.sub(r"\1<redacted>", value))
+    return value
+
+
+def redact_browser_body(data: bytes, media_type: str | None) -> bytes:
+    """Return a bounded body with common credential-bearing fields removed.
+
+    Body capture is deliberately text-only. Binary and compressed payloads are
+    not safe to persist without a format-specific decoder and are rejected at
+    the Core boundary rather than being stored as apparently redacted bytes.
+    """
+
+    if not data:
+        raise BrowserWorkflowError("empty browser bodies are not stored as artifacts")
+    if len(data) > MAX_BROWSER_BODY_ARTIFACT_BYTES:
+        raise BrowserWorkflowError("browser body exceeds the 1 MiB artifact limit")
+    normalized = (media_type or "text/plain").partition(";")[0].strip().lower()
+    if normalized in {"application/json", "application/graphql+json"} or normalized.endswith("+json"):
+        try:
+            parsed = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BrowserWorkflowError("JSON body capture must be valid UTF-8 JSON") from exc
+        redacted = json.dumps(
+            _redact_body_json(parsed),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    elif normalized == "application/x-www-form-urlencoded":
+        try:
+            pairs = parse_qsl(data.decode("utf-8"), keep_blank_values=True, max_num_fields=500)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise BrowserWorkflowError("form body capture must be valid UTF-8 form data") from exc
+        redacted = urlencode(
+            [
+                (key, "<redacted>" if _SECRET_BODY_KEY.search(key) else _BEARER_BODY.sub(r"\1<redacted>", value))
+                for key, value in pairs
+            ],
+            doseq=True,
+        ).encode("utf-8")
+    elif normalized.startswith("text/") or normalized in {"application/graphql", "application/xml"}:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise BrowserWorkflowError("text body capture must be valid UTF-8") from exc
+        redacted = _ASSIGNMENT_BODY.sub(r"\1<redacted>", _BEARER_BODY.sub(r"\1<redacted>", text)).encode("utf-8")
+    else:
+        raise BrowserWorkflowError(
+            "body capture supports JSON, form, GraphQL, XML, and text media types only"
+        )
+    if len(redacted) > MAX_BROWSER_BODY_ARTIFACT_BYTES:
+        raise BrowserWorkflowError("redacted browser body exceeds the 1 MiB artifact limit")
+    return redacted
+
+
 class BrowserHandoffClaimRequest(NebulaModel):
     expected_revision: int = Field(ge=1)
     desktop_device_id: str = Field(min_length=1, max_length=200)
@@ -223,8 +344,11 @@ def _action_digest(
 
 
 class BrowserSecurityService:
-    def __init__(self, store: NebulaStore) -> None:
+    def __init__(
+        self, store: NebulaStore, artifact_store: ArtifactStore | None = None
+    ) -> None:
         self.store = store
+        self.artifact_store = artifact_store
         self.policy = PolicyEngine()
 
     def workspace(self, engagement_id: str) -> BrowserWorkspace:
@@ -329,13 +453,30 @@ class BrowserSecurityService:
         self, session_id: str, request: BrowserCaptureSettingsRequest, actor_id: str
     ) -> BrowserSession:
         session = self.store.get(BrowserSession, session_id)
+        if request.proxy_enabled and not request.trust_acknowledged:
+            raise BrowserWorkflowError(
+                "enabling the capture proxy requires explicit Project CA trust acknowledgement"
+            )
+        if request.upstream_proxy_enabled and not request.upstream_proxy_url:
+            raise BrowserWorkflowError(
+                "an enabled upstream proxy requires an explicit URL"
+            )
+        upstream_url = request.upstream_proxy_url if request.upstream_proxy_enabled else None
+        upstream_credential_ref = (
+            request.upstream_proxy_credential_ref
+            if request.upstream_proxy_enabled
+            else None
+        )
+        trust_acknowledged = request.proxy_enabled and request.trust_acknowledged
         candidate = session.model_copy(
             update={
                 "capture_mode": request.capture_mode,
                 "proxy_enabled": request.proxy_enabled,
+                "proxy_trust_acknowledged": trust_acknowledged,
                 "interception_enabled": request.interception_enabled,
                 "upstream_proxy_enabled": request.upstream_proxy_enabled,
-                "upstream_proxy_url": request.upstream_proxy_url,
+                "upstream_proxy_url": upstream_url,
+                "upstream_proxy_credential_ref": upstream_credential_ref,
             }
         )
         BrowserSession.model_validate(candidate.model_dump())
@@ -345,9 +486,11 @@ class BrowserSecurityService:
             {
                 "capture_mode": request.capture_mode,
                 "proxy_enabled": request.proxy_enabled,
+                "proxy_trust_acknowledged": trust_acknowledged,
                 "interception_enabled": request.interception_enabled,
                 "upstream_proxy_enabled": request.upstream_proxy_enabled,
-                "upstream_proxy_url": request.upstream_proxy_url,
+                "upstream_proxy_url": upstream_url,
+                "upstream_proxy_credential_ref": upstream_credential_ref,
             },
             expected_revision=request.expected_revision,
             operation_id=session.id,
@@ -357,12 +500,70 @@ class BrowserSecurityService:
             event_payload={
                 "capture_mode": request.capture_mode.value,
                 "proxy_enabled": request.proxy_enabled,
+                "proxy_trust_acknowledged": trust_acknowledged,
                 "interception_enabled": request.interception_enabled,
                 "upstream_proxy_enabled": request.upstream_proxy_enabled,
+                "upstream_proxy_configured": bool(
+                    request.upstream_proxy_enabled and request.upstream_proxy_url
+                ),
             },
             actor_id=actor_id,
         )
         return updated
+
+    def upload_body_artifact(
+        self,
+        session_id: str,
+        request: BrowserBodyArtifactUploadRequest,
+        actor_id: str,
+    ) -> Artifact:
+        if self.artifact_store is None:
+            raise BrowserWorkflowError("browser body artifacts require an artifact store")
+        session = self.store.get(BrowserSession, session_id)
+        if session.status != BrowserSessionStatus.ACTIVE:
+            raise BrowserWorkflowError("body artifacts require an active browser session")
+        if session.capture_mode != BrowserCaptureMode.BODIES:
+            raise BrowserWorkflowError("body artifacts require explicit body capture mode")
+        try:
+            data = base64.b64decode(request.content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise BrowserWorkflowError("body artifact content must be valid base64") from exc
+        redacted = redact_browser_body(data, request.media_type)
+        stored = self.artifact_store.put_bytes_with_status(
+            redacted,
+            engagement_id=session.engagement_id,
+            filename=request.filename,
+            media_type=(request.media_type or "text/plain").partition(";")[0].strip().lower(),
+            source="security-browser-body",
+            metadata={
+                "browser_session_id": session.id,
+                "capture_direction": request.direction,
+                "capture_version": "browser-body-v1",
+                "redacted": True,
+                "truncated": request.truncated,
+            },
+        )
+        artifact = stored.artifact.model_copy(update={"redacted": True})
+        try:
+            self.store.create_with_operation_event(
+                artifact,
+                operation_id=artifact.id,
+                operation_kind="artifact",
+                engagement_id=session.engagement_id,
+                event_type="browser_body_artifact.created",
+                event_payload={
+                    "session_id": session.id,
+                    "direction": request.direction,
+                    "sha256": artifact.sha256,
+                    "size": artifact.size,
+                },
+                actor_id=actor_id,
+                idempotency_key=f"create:{artifact.id}",
+            )
+        except Exception:
+            self.artifact_store.discard_new_blob(stored)
+            raise
+        return artifact
 
     def record_traffic(
         self, session_id: str, request: BrowserTrafficRecordRequest, actor_id: str
@@ -377,19 +578,45 @@ class BrowserSecurityService:
                 "traffic tab does not belong to the browser session"
             )
         scope = self._scope(session.engagement_id)
-        self._require_in_scope(scope, request.url, "browser.capture", RiskClass.PASSIVE)
+        scope_state = "in_scope"
+        if request.blocked:
+            # A native fail-closed event is still durable evidence of the
+            # attempted target. Preserve it even when the target itself is
+            # outside the policy; ordinary traffic continues to require an
+            # in-scope decision below.
+            try:
+                self._require_in_scope(scope, request.url, "browser.capture", RiskClass.PASSIVE)
+            except BrowserWorkflowError:
+                scope_state = "out_of_scope"
+        else:
+            self._require_in_scope(scope, request.url, "browser.capture", RiskClass.PASSIVE)
         if session.capture_mode != BrowserCaptureMode.BODIES and (
             request.request_body_artifact_id or request.response_body_artifact_id
         ):
             raise BrowserWorkflowError(
                 "body artifacts require explicit body capture mode"
             )
+        for artifact_id in (
+            request.request_body_artifact_id,
+            request.response_body_artifact_id,
+        ):
+            if artifact_id is None:
+                continue
+            artifact = self.store.get(Artifact, artifact_id)
+            if (
+                artifact.engagement_id != session.engagement_id
+                or artifact.metadata.get("browser_session_id") != session.id
+                or artifact.metadata.get("redacted") is not True
+            ):
+                raise BrowserWorkflowError(
+                    "browser traffic may reference only redacted body artifacts from this session"
+                )
         exchange = BrowserTrafficExchange(
             engagement_id=session.engagement_id,
             session_id=session.id,
             tab_id=request.tab_id,
             identity_id=session.identity_id,
-            scope_state="in_scope",
+            scope_state=scope_state,
             scope_policy_id=scope.id,
             scope_policy_revision=scope.revision,
             request_headers=redact_browser_headers(request.request_headers),

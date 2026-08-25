@@ -9,6 +9,7 @@ import { WorkbenchBrowser } from "./WorkbenchBrowser";
 
 const runtimeMocks = vi.hoisted(() => ({
   isTauriRuntime: vi.fn(),
+  desktopDeviceId: vi.fn(),
 }));
 
 const browserMocks = vi.hoisted(() => ({
@@ -32,6 +33,7 @@ const eventMocks = vi.hoisted(() => ({
 
 vi.mock("../api/runtime", () => ({
   isTauriRuntime: runtimeMocks.isTauriRuntime,
+  desktopDeviceId: runtimeMocks.desktopDeviceId,
 }));
 
 vi.mock("../api/workbenchBrowser", async (importOriginal) => {
@@ -91,6 +93,7 @@ function browserApi(): ApiClient {
     status: "active" as const,
     captureMode: "headers" as const,
     proxyEnabled: false,
+    proxyTrustAcknowledged: false,
     tabs: [{ id: "tab-durable", title: "New tab", position: 0, lastScopeState: "unknown" as const }],
     activeTabId: "tab-durable",
     upstreamProxyEnabled: false,
@@ -163,6 +166,8 @@ describe("WorkbenchBrowser", () => {
     eventMocks.handlers.clear();
     runtimeMocks.isTauriRuntime.mockReset();
     runtimeMocks.isTauriRuntime.mockReturnValue(false);
+    runtimeMocks.desktopDeviceId.mockReset();
+    runtimeMocks.desktopDeviceId.mockResolvedValue("desktop-test");
     for (const mock of Object.values(browserMocks)) {
       mock.mockReset();
       mock.mockResolvedValue(undefined);

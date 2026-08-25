@@ -86,6 +86,16 @@ export interface MissionCreateRequest {
   maxArtifactQueries?: number;
   maxConcurrency?: number;
   allowCloudToolResults?: boolean;
+  browserAutonomy?: {
+    sessionId: Identifier;
+    targets: string[];
+    allowedRiskClasses?: string[];
+    credentialRefs?: string[];
+    durationSeconds?: number;
+    maxCommands?: number;
+    maxRequests?: number;
+    maxBodyBytes?: number;
+  };
 }
 
 export interface AutomationRuntimeInfo {
@@ -250,10 +260,12 @@ export interface SecurityBrowserSession {
   status: "active" | "paused" | "closed";
   captureMode: BrowserCaptureMode;
   proxyEnabled: boolean;
+  proxyTrustAcknowledged: boolean;
   tabs: SecurityBrowserTab[];
   activeTabId?: Identifier;
   upstreamProxyEnabled: boolean;
   upstreamProxyUrl?: string;
+  upstreamProxyCredentialRef?: string;
   interceptionEnabled: boolean;
   deviceOwner?: string;
   lastSeenAt: string;
@@ -282,6 +294,7 @@ export interface SecurityBrowserExchange {
   completedAt?: string;
   replayOfExchangeId?: Identifier;
   error?: string;
+  blocked?: boolean;
   truncated: boolean;
 }
 
@@ -320,6 +333,70 @@ export interface SecurityBrowserAction {
   evidenceIds: Identifier[];
   error?: string;
   revision: number;
+}
+
+export interface SecurityBrowserAutomationLease {
+  id: Identifier;
+  revision: number;
+  engagementId: Identifier;
+  runId: Identifier;
+  sessionId: Identifier;
+  identityId: Identifier;
+  scopePolicyId: Identifier;
+  scopePolicyRevision: number;
+  targetUrls: string[];
+  allowedRiskClasses: string[];
+  credentialRefs: string[];
+  maxCommands: number;
+  maxRequests: number;
+  maxBodyBytes: number;
+  commandsUsed: number;
+  requestsUsed: number;
+  status: "active" | "paused" | "revoked" | "expired" | "complete" | "failed";
+  expiresAt: string;
+  lastHeartbeatAt: string;
+  stopReason?: string;
+}
+
+export interface SecurityBrowserCommand {
+  id: Identifier;
+  revision: number;
+  engagementId: Identifier;
+  runId: Identifier;
+  leaseId: Identifier;
+  sessionId: Identifier;
+  tabId: Identifier;
+  kind: string;
+  arguments: Record<string, unknown>;
+  expectedPageUrl?: string;
+  status: "queued" | "claimed" | "complete" | "failed" | "expired" | "cancelled";
+  claimedByDeviceId?: Identifier;
+  claimToken?: string;
+  expiresAt: string;
+  result: Record<string, unknown>;
+  evidenceIds: Identifier[];
+  error?: string;
+}
+
+export interface SecurityBrowserProxyRule {
+  id: Identifier;
+  revision: number;
+  engagementId: Identifier;
+  runId: Identifier;
+  leaseId: Identifier;
+  sessionId: Identifier;
+  match: Record<string, unknown>;
+  action: Record<string, unknown>;
+  priority: number;
+  enabled: boolean;
+  expiresAt: string;
+  disabledReason?: string;
+}
+
+export interface SecurityBrowserAutomationStatus {
+  leases: SecurityBrowserAutomationLease[];
+  commands: SecurityBrowserCommand[];
+  rules: SecurityBrowserProxyRule[];
 }
 
 export interface SecurityBrowserHandoff {
@@ -1779,6 +1856,9 @@ export interface ContainerTerminalCapabilities {
   engagementId: Identifier;
   ready: boolean;
   detail?: string;
+  errorCode?: string;
+  workspaceEntries?: number;
+  workspaceMaxEntries?: number;
   sourceImage: string;
   installedPackages: string[];
   network: ContainerTerminalNetworkSnapshot;

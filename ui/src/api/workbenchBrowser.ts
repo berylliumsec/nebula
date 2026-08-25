@@ -10,6 +10,15 @@ export interface BrowserCapabilities {
   interceptionProxy: boolean;
   http2Capture: boolean;
   websocketCapture: boolean;
+  autonomousCommands?: boolean;
+}
+export interface BrowserCaStatus {
+  certificatePath: string;
+  fingerprint: string;
+  generatedAt?: string;
+  expiresAt?: string;
+  state: "generated" | "revoked" | "unavailable";
+  trustInstructions?: string;
 }
 export interface BrowserPageEvent {
   tabId: string;
@@ -71,10 +80,24 @@ export interface BrowserTrafficEvent {
   statusCode?: number;
   requestHeaders: Record<string, string>;
   responseHeaders: Record<string, string>;
+  requestBody?: {
+    base64: string;
+    mediaType?: string;
+    bytes: number;
+    truncated: boolean;
+  };
+  responseBody?: {
+    base64: string;
+    mediaType?: string;
+    bytes: number;
+    truncated: boolean;
+  };
   requestBytes?: number;
   responseBytes?: number;
   durationMs: number;
   error?: string;
+  requestId?: number;
+  blocked?: boolean;
 }
 export interface BrowserWebSocketFrameEvent {
   sessionId: string;
@@ -294,7 +317,7 @@ export function formatBrowserContextForAssistant(context: BrowserPageContext, sc
 
 export const workbenchBrowser = {
   capabilities: () => invoke<BrowserCapabilities>("browser_capabilities"),
-  create: (tabId: string, projectId: string, identityPartition: string, sessionId: string, proxyEnabled: boolean, url: string, bounds: BrowserBounds) => invoke<void>("browser_create_tab", { tabId, projectId, identityPartition, sessionId, proxyEnabled, url, bounds }),
+  create: (tabId: string, projectId: string, identityPartition: string, sessionId: string, proxyEnabled: boolean, url: string, bounds: BrowserBounds, upstreamProxy?: { enabled: boolean; url?: string; credentialRef?: string }, captureBodies = false) => invoke<void>("browser_create_tab", { tabId, projectId, identityPartition, sessionId, proxyEnabled, url, bounds, upstreamProxyEnabled: upstreamProxy?.enabled ?? false, upstreamProxyUrl: upstreamProxy?.url, upstreamProxyCredentialRef: upstreamProxy?.credentialRef, captureBodies }),
   navigate: (tabId: string, projectId: string, url: string) => invoke<void>("browser_navigate", { tabId, projectId, url }),
   control: (tabId: string, projectId: string, action: "back" | "forward" | "stop" | "reload") => invoke<void>("browser_control", { tabId, projectId, action }),
   bounds: (tabId: string, projectId: string, bounds: BrowserBounds) => invoke<void>("browser_set_bounds", { tabId, projectId, bounds }),
@@ -302,10 +325,32 @@ export const workbenchBrowser = {
   close: (tabId: string, projectId: string) => invoke<void>("browser_close_tab", { tabId, projectId }),
   openDevtools: (tabId: string, projectId: string) => invoke<void>("browser_open_devtools", { tabId, projectId }),
   revealProxyCa: (projectId: string) => invoke<string>("browser_reveal_proxy_ca", { projectId }),
+  proxyCaStatus: (projectId: string) => invoke<BrowserCaStatus>("browser_proxy_ca_status", { projectId }),
+  rotateProxyCa: (projectId: string) => invoke<BrowserCaStatus>("browser_rotate_proxy_ca", { projectId }),
+  revokeProxyCa: (projectId: string) => invoke<void>("browser_revoke_proxy_ca", { projectId }),
+  stopProxy: (projectId: string, sessionId: string) => invoke<void>("browser_stop_session_proxy", { projectId, sessionId }),
+  configureProxy: (projectId: string, sessionId: string, upstreamProxy: { enabled: boolean; url?: string; credentialRef?: string }, captureBodies: boolean) => invoke<void>("browser_configure_session_proxy", { projectId, sessionId, upstreamProxyEnabled: upstreamProxy.enabled, upstreamProxyUrl: upstreamProxy.url, upstreamProxyCredentialRef: upstreamProxy.credentialRef, captureBodies }),
   clearIdentity: (projectId: string, identityPartition: string) => invoke<void>("browser_clear_identity_data", { projectId, identityPartition }),
   clear: (projectId: string) => invoke<void>("browser_clear_project_data", { projectId }),
   importDownload: (downloadId: string, projectId: string, overwrite: boolean) => invoke<BrowserImportResult>("browser_import_download", { downloadId, projectId, overwrite }),
   discardDownload: (downloadId: string, projectId: string) => invoke<void>("browser_discard_download", { downloadId, projectId }),
   captureContext: (tabId: string, projectId: string, requestId: string) => invoke<void>("browser_capture_context", { tabId, projectId, requestId }),
   executeAction: (tabId: string, projectId: string, request: { actionId: string; kind: string; locator: Record<string, string>; arguments: Record<string, unknown>; pageUrl: string }) => invoke<void>("browser_execute_action", { tabId, projectId, request }),
+  executeAutomationCommand: (tabId: string, projectId: string, request: { commandId: string; kind: string; locator?: Record<string, string>; arguments?: Record<string, unknown>; pageUrl?: string }) => invoke<void>("browser_execute_automation_command", { tabId, projectId, commandId: request.commandId, kind: request.kind, locator: request.locator ?? {}, arguments: request.arguments ?? {}, pageUrl: request.pageUrl }),
+  applyProxyRule: (projectId: string, sessionId: string, rule: { id: string; match: Record<string, unknown>; action: Record<string, unknown>; priority: number; expiresAt?: string; enabled: boolean }) => invoke<void>("browser_apply_proxy_rule", { projectId, sessionId, ruleId: rule.id, matchCriteria: rule.match, action: rule.action, priority: rule.priority, expiresAt: rule.expiresAt, enabled: rule.enabled }),
+  applyProxyScope: (projectId: string, sessionId: string, scope: EngagementScopePolicy) => invoke<void>("browser_apply_proxy_scope", {
+    projectId,
+    sessionId,
+    scope: {
+      revision: scope.revision,
+      allowedCidrs: scope.allowedCidrs,
+      allowedDomains: scope.allowedDomains,
+      allowedUrls: scope.allowedUrls,
+      allowedPorts: scope.allowedPorts,
+      allowAllTargets: scope.allowAllTargets,
+      notBefore: scope.notBefore,
+      notAfter: scope.notAfter,
+    },
+  }),
+  clearProxyScope: (projectId: string, sessionId: string) => invoke<void>("browser_clear_proxy_scope", { projectId, sessionId }),
 };

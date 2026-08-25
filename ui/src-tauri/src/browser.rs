@@ -75,12 +75,15 @@ const BROWSER_CONTEXT_SCRIPT: &str = r#"(() => {
 #[derive(Default)]
 pub(crate) struct BrowserState {
     tabs: Mutex<HashMap<String, BrowserTab>>,
+    session_proxies: Mutex<HashMap<String, crate::browser_proxy::BrowserProxyHandle>>,
+    session_projects: Mutex<HashMap<String, String>>,
     downloads: Mutex<HashMap<PathBuf, PendingDownload>>,
     context_targets: Mutex<HashMap<String, PendingBrowserContext>>,
 }
 
 struct BrowserTab {
     project_id: String,
+    session_id: String,
     identity_partition: String,
     label: String,
     proxy: Option<crate::browser_proxy::BrowserProxyHandle>,
@@ -280,6 +283,7 @@ pub(crate) struct BrowserCapabilities {
     interception_proxy: bool,
     http2_capture: bool,
     websocket_capture: bool,
+    autonomous_commands: bool,
 }
 
 #[tauri::command]
@@ -302,6 +306,7 @@ pub(crate) fn browser_capabilities() -> BrowserCapabilities {
         interception_proxy: true,
         http2_capture: true,
         websocket_capture: true,
+        autonomous_commands: true,
     }
 }
 
@@ -322,6 +327,56 @@ fn validated_url(value: &str) -> Result<Url, String> {
         return Err("Addresses containing embedded credentials are not accepted.".to_string());
     }
     Ok(url)
+}
+
+const BROWSER_CREDENTIAL_SERVICE: &str = "io.berylliumsec.nebula.provider-credentials";
+
+pub(crate) fn resolve_browser_credential(reference: &str) -> Result<String, String> {
+    if let Some(name) = reference.strip_prefix("env:") {
+        if name.is_empty()
+            || !name.chars().enumerate().all(|(index, value)| {
+                value == '_'
+                    || value.is_ascii_alphanumeric() && (index > 0 || value.is_ascii_alphabetic())
+            })
+        {
+            return Err("The credential reference is invalid.".to_string());
+        }
+        return std::env::var(name)
+            .map_err(|_| "The referenced environment credential is unavailable.".to_string());
+    }
+    let Some(identifier) = reference.strip_prefix("vault:") else {
+        return Err(
+            "This desktop worker can resolve only vault: or env: credential references."
+                .to_string(),
+        );
+    };
+    if identifier.len() != 32 || !identifier.bytes().all(|value| value.is_ascii_hexdigit()) {
+        return Err("The credential reference is invalid.".to_string());
+    }
+    let entry = keyring::Entry::new(BROWSER_CREDENTIAL_SERVICE, identifier)
+        .map_err(|_| "The operating-system credential vault is unavailable.".to_string())?;
+    entry
+        .get_password()
+        .map_err(|_| "The referenced credential is unavailable.".to_string())
+}
+
+fn native_upstream_proxy_config(
+    enabled: bool,
+    url: Option<String>,
+    credential_ref: Option<String>,
+) -> Result<Option<crate::browser_proxy::NativeUpstreamProxyConfig>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    let url = url.ok_or_else(|| "an enabled upstream proxy requires a URL".to_string())?;
+    let credential = credential_ref
+        .as_deref()
+        .map(resolve_browser_credential)
+        .transpose()?;
+    Ok(Some(crate::browser_proxy::NativeUpstreamProxyConfig {
+        url,
+        credential,
+    }))
 }
 
 fn browser_context_menu_script(token: &str) -> Result<String, String> {
@@ -962,9 +1017,7 @@ fn close_tab_internal(app: &AppHandle, state: &BrowserState, tab_id: &str) -> Re
                 .close()
                 .map_err(|error| format!("cannot close browser tab: {error}"))?;
         }
-        if let Some(proxy) = tab.proxy {
-            proxy.stop();
-        }
+        drop(tab.proxy);
     }
     Ok(())
 }
@@ -983,6 +1036,10 @@ pub(crate) fn browser_create_tab(
     proxy_enabled: bool,
     url: String,
     bounds: BrowserBounds,
+    upstream_proxy_enabled: bool,
+    upstream_proxy_url: Option<String>,
+    upstream_proxy_credential_ref: Option<String>,
+    capture_bodies: bool,
 ) -> Result<(), String> {
     if !valid_identifier(&tab_id)
         || !valid_identifier(&project_id)
@@ -1048,12 +1105,29 @@ pub(crate) fn browser_create_tab(
     let download_project = project_id.clone();
 
     let proxy = if proxy_enabled {
-        Some(crate::browser_proxy::start(
-            &app,
-            &project_key_hex(&project_id),
-            &session_id,
-            &tab_id,
-        )?)
+        let upstream = native_upstream_proxy_config(
+            upstream_proxy_enabled,
+            upstream_proxy_url,
+            upstream_proxy_credential_ref,
+        )?;
+        let mut proxies = state
+            .session_proxies
+            .lock()
+            .map_err(|_| "Browser state is unavailable.".to_string())?;
+        if let Some(existing) = proxies.get(&session_id) {
+            Some(existing.clone())
+        } else {
+            let created = crate::browser_proxy::start(
+                &app,
+                &project_key_hex(&project_id),
+                &session_id,
+                &tab_id,
+                upstream,
+                capture_bodies,
+            )?;
+            proxies.insert(session_id.clone(), created.clone());
+            Some(created)
+        }
     } else {
         None
     };
@@ -1269,12 +1343,62 @@ pub(crate) fn browser_create_tab(
         .insert(
             tab_id,
             BrowserTab {
-                project_id,
+                project_id: project_id.clone(),
+                session_id: session_id.clone(),
                 identity_partition,
                 label,
                 proxy,
             },
         );
+    state
+        .session_projects
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .insert(session_id, project_id);
+    Ok(())
+}
+
+fn close_project_tabs(
+    app: &AppHandle,
+    state: &BrowserState,
+    project_id: &str,
+) -> Result<(), String> {
+    let tab_ids: Vec<String> = state
+        .tabs
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .iter()
+        .filter(|(_, tab)| tab.project_id == project_id)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for tab_id in tab_ids {
+        close_tab_internal(app, state, &tab_id)?;
+    }
+    Ok(())
+}
+
+fn stop_project_proxies(state: &BrowserState, project_id: &str) -> Result<(), String> {
+    let session_ids: Vec<String> = state
+        .session_projects
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .iter()
+        .filter(|(_, value)| value.as_str() == project_id)
+        .map(|(session_id, _)| session_id.clone())
+        .collect();
+    for session_id in session_ids {
+        let proxy = state
+            .session_proxies
+            .lock()
+            .map_err(|_| "Browser state is unavailable.".to_string())?
+            .remove(&session_id);
+        if let Some(proxy) = proxy {
+            proxy.shutdown_now();
+        }
+        if let Ok(mut projects) = state.session_projects.lock() {
+            projects.remove(&session_id);
+        }
+    }
     Ok(())
 }
 
@@ -1288,6 +1412,216 @@ pub(crate) fn browser_reveal_proxy_ca(
     }
     crate::browser_proxy::reveal_ca(&app, &project_key_hex(&project_id))
         .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub(crate) fn browser_proxy_ca_status(
+    app: AppHandle,
+    project_id: String,
+) -> Result<crate::browser_proxy::BrowserCaStatus, String> {
+    if !valid_identifier(&project_id) {
+        return Err("The Project identifier is invalid.".to_string());
+    }
+    crate::browser_proxy::ca_status(&app, &project_key_hex(&project_id))
+}
+
+#[tauri::command]
+pub(crate) fn browser_rotate_proxy_ca(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    project_id: String,
+) -> Result<crate::browser_proxy::BrowserCaStatus, String> {
+    if !valid_identifier(&project_id) {
+        return Err("The Project identifier is invalid.".to_string());
+    }
+    close_project_tabs(&app, &state, &project_id)?;
+    stop_project_proxies(&state, &project_id)?;
+    crate::browser_proxy::rotate_ca(&app, &project_key_hex(&project_id))
+}
+
+#[tauri::command]
+pub(crate) fn browser_revoke_proxy_ca(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    project_id: String,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id) {
+        return Err("The Project identifier is invalid.".to_string());
+    }
+    close_project_tabs(&app, &state, &project_id)?;
+    stop_project_proxies(&state, &project_id)?;
+    crate::browser_proxy::revoke_ca(&app, &project_key_hex(&project_id))
+}
+
+#[tauri::command]
+pub(crate) fn browser_stop_session_proxy(
+    state: State<'_, BrowserState>,
+    project_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id) || !valid_identifier(&session_id) {
+        return Err("The Project or session identifier is invalid.".to_string());
+    }
+    let owns_project = state
+        .session_projects
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .get(&session_id)
+        .is_some_and(|value| value == &project_id);
+    if !owns_project {
+        return Err("The browser session is not owned by this Project on the desktop.".to_string());
+    }
+    let proxy = state
+        .session_proxies
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .remove(&session_id);
+    if let Some(proxy) = proxy {
+        proxy.shutdown_now();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn browser_configure_session_proxy(
+    state: State<'_, BrowserState>,
+    project_id: String,
+    session_id: String,
+    upstream_proxy_enabled: bool,
+    upstream_proxy_url: Option<String>,
+    upstream_proxy_credential_ref: Option<String>,
+    capture_bodies: bool,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id) || !valid_identifier(&session_id) {
+        return Err("The Project or session identifier is invalid.".to_string());
+    }
+    let owns_project = state
+        .session_projects
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .get(&session_id)
+        .is_some_and(|value| value == &project_id);
+    if !owns_project {
+        return Err("The browser session is not owned by this Project on the desktop.".to_string());
+    }
+    let proxy = state
+        .session_proxies
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| {
+            "The session capture proxy is not running yet; open a trusted browser tab first."
+                .to_string()
+        })?;
+    let upstream = native_upstream_proxy_config(
+        upstream_proxy_enabled,
+        upstream_proxy_url,
+        upstream_proxy_credential_ref,
+    )?;
+    proxy.configure_upstream(upstream, capture_bodies)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn browser_apply_proxy_rule(
+    state: State<'_, BrowserState>,
+    project_id: String,
+    session_id: String,
+    rule_id: String,
+    match_criteria: serde_json::Map<String, serde_json::Value>,
+    action: serde_json::Map<String, serde_json::Value>,
+    priority: i32,
+    expires_at: Option<String>,
+    enabled: bool,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id)
+        || !valid_identifier(&session_id)
+        || !valid_identifier(&rule_id)
+    {
+        return Err("The Project, session, or proxy rule identifier is invalid.".to_string());
+    }
+    let owns_project = state
+        .tabs
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .values()
+        .any(|tab| tab.session_id == session_id && tab.project_id == project_id);
+    if !owns_project {
+        return Err("The browser session is not open in this Project.".to_string());
+    }
+    let proxy = state
+        .session_proxies
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| "The session capture proxy is not running. Trust the Project CA and enable capture first.".to_string())?;
+    proxy.configure_rule(
+        rule_id,
+        match_criteria,
+        action,
+        priority,
+        expires_at,
+        enabled,
+    )
+}
+
+#[tauri::command]
+pub(crate) fn browser_apply_proxy_scope(
+    state: State<'_, BrowserState>,
+    project_id: String,
+    session_id: String,
+    scope: crate::browser_proxy::NativeProxyScopeInput,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id) || !valid_identifier(&session_id) {
+        return Err("The Project or session identifier is invalid.".to_string());
+    }
+    let owns_project = state
+        .tabs
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .values()
+        .any(|tab| tab.session_id == session_id && tab.project_id == project_id);
+    if !owns_project {
+        return Err("The browser session is not open in this Project.".to_string());
+    }
+    let proxy = state
+        .session_proxies
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| "The session capture proxy is not running. Enable capture before applying Project scope.".to_string())?;
+    proxy.configure_scope(scope)
+}
+
+#[tauri::command]
+pub(crate) fn browser_clear_proxy_scope(
+    state: State<'_, BrowserState>,
+    project_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id) || !valid_identifier(&session_id) {
+        return Err("The Project or session identifier is invalid.".to_string());
+    }
+    let owns_project = state
+        .tabs
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .values()
+        .any(|tab| tab.session_id == session_id && tab.project_id == project_id);
+    if !owns_project {
+        return Err("The browser session is not open in this Project.".to_string());
+    }
+    let proxy = state
+        .session_proxies
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| "The session capture proxy is not running.".to_string())?;
+    proxy.clear_scope()
 }
 
 #[tauri::command]
@@ -1409,8 +1743,10 @@ pub(crate) fn browser_execute_action(
           xhr.withCredentials = true;
           for (const [name, value] of Object.entries(requestHeaders)) xhr.setRequestHeader(String(name), String(value));
           xhr.send(args.body === undefined || args.body === "" ? null : String(args.body).slice(0, 65536));
-          const responseHeaders = Object.fromEntries(String(xhr.getAllResponseHeaders()).trim().split(/[\r\n]+/).filter(Boolean).map((line) => {{ const index = line.indexOf(":"); return index > 0 ? [line.slice(0, index).trim(), line.slice(index + 1).trim()] : [line, ""]; }}));
-          return {{ ok: true, kind, pageUrl: expectedUrl, requestUrl: target.href.slice(0, 4096), method: String(args.method || "GET").toUpperCase(), status: xhr.status, responseHeaders, responsePreview: String(xhr.responseText || "").slice(0, 16000), responseBytes: String(xhr.responseText || "").length }};
+          const responseSecret = /authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|csrf|xsrf|api[-_]?key|token/i;
+          const responseHeaders = Object.fromEntries(String(xhr.getAllResponseHeaders()).trim().split(/[\r\n]+/).filter(Boolean).map((line) => {{ const index = line.indexOf(":"); if (index <= 0) return [line, ""]; const name = line.slice(0, index).trim(); const value = responseSecret.test(name) ? "<redacted>" : line.slice(index + 1).trim().slice(0, 8192); return [name, value]; }}));
+          const responseText = String(xhr.responseText || "");
+          return {{ ok: true, kind, pageUrl: expectedUrl, requestUrl: target.href.slice(0, 4096), method: String(args.method || "GET").toUpperCase(), status: xhr.status, responseHeaders, responseBytes: responseText.length, untrusted_response_body: true }};
         }}
         let candidates = [];
         if (locator.css) candidates = Array.from(document.querySelectorAll(String(locator.css)));
@@ -1497,6 +1833,88 @@ pub(crate) fn browser_execute_action(
             }
         })
         .map_err(|error| format!("cannot execute the approved browser action: {error}"))
+}
+
+#[tauri::command]
+pub(crate) fn browser_execute_automation_command(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    tab_id: String,
+    project_id: String,
+    command_id: String,
+    kind: String,
+    locator: serde_json::Map<String, serde_json::Value>,
+    mut arguments: serde_json::Map<String, serde_json::Value>,
+    page_url: Option<String>,
+) -> Result<(), String> {
+    if !valid_identifier(&tab_id)
+        || !valid_identifier(&project_id)
+        || command_id.is_empty()
+        || command_id.len() > 200
+    {
+        return Err("The browser automation command identifier is invalid.".to_string());
+    }
+    let expected_page_url = page_url.unwrap_or_default();
+    if !expected_page_url.is_empty() {
+        validated_url(&expected_page_url)?;
+    }
+    if kind == "browser.observe" || kind == "browser.capture_evidence" {
+        return browser_capture_context(app, state, tab_id, project_id, command_id);
+    }
+    if kind == "browser.control" {
+        let action = arguments
+            .get("action")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "browser.control requires an action".to_string())?;
+        if action == "wait" {
+            return Err(
+                "browser.control wait must be implemented by the desktop worker".to_string(),
+            );
+        }
+        return browser_control(app, state, tab_id, project_id, action.to_string());
+    }
+    if kind == "proxy.observe" || kind == "proxy.configure" {
+        return Err("live proxy rule execution is not available in this native build".to_string());
+    }
+    let action_kind = match kind.as_str() {
+        "browser.navigate" => "navigate".to_string(),
+        "browser.interact" => arguments
+            .get("operation")
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| "browser.interact requires an operation".to_string())?,
+        "browser.extract" => "extract".to_string(),
+        "browser.replay" | "proxy.replay" => "replay".to_string(),
+        _ => return Err("unsupported browser automation command".to_string()),
+    };
+    if let Some(reference) = arguments
+        .get("credential_ref")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+    {
+        if action_kind != "fill" {
+            return Err("credential_ref is supported only for bounded fill actions; it is never returned to the agent".to_string());
+        }
+        let secret = resolve_browser_credential(&reference)?;
+        arguments.insert(
+            "non_secret_text".to_string(),
+            serde_json::Value::String(secret),
+        );
+        arguments.remove("credential_ref");
+    }
+    browser_execute_action(
+        app,
+        state,
+        tab_id,
+        project_id,
+        BrowserActionRequest {
+            action_id: format!("automation:{command_id}"),
+            kind: action_kind,
+            locator,
+            arguments,
+            page_url: expected_page_url,
+        },
+    )
 }
 
 #[tauri::command]
@@ -1666,6 +2084,10 @@ pub(crate) fn browser_clear_project_data(
     if !valid_identifier(&project_id) {
         return Err("The Project identifier is invalid.".to_string());
     }
+    // Clearing a Project profile invalidates every session-owned proxy as well;
+    // otherwise a later tab could inherit a runtime whose identity data was
+    // just removed.
+    stop_project_proxies(&state, &project_id)?;
     let tabs: Vec<(String, String)> = state
         .tabs
         .lock()
@@ -2153,6 +2575,7 @@ mod tests {
             endpoint: format!("http://127.0.0.1:{port}/api/v1"),
             token: "private-token".to_string(),
             protocol: "nebula-sidecar-v1",
+            source: "local",
         };
 
         let result = upload_staged(&session, "project-1", "report.txt", false, &path).unwrap();
@@ -2176,6 +2599,7 @@ mod tests {
             endpoint: "http://127.0.0.1:9/api/v1".to_string(),
             token: "private-token".to_string(),
             protocol: "nebula-sidecar-v1",
+            source: "local",
         };
 
         let error = upload_staged(&session, "project-1", "large.bin", false, &path).unwrap_err();

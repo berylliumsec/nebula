@@ -10,6 +10,11 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .agent_tooling import BrokeredToolSpecialist, ToolMissionSupervisor
+from .browser_automation import BrowserAutomationService
+from .browser_tools import (
+    BrowserAutomationBroker,
+    autonomous_browser_specs,
+)
 from .automation_runtime import (
     AutomationPolicyDenied,
     AutomationRuntimeManager,
@@ -491,12 +496,14 @@ class AutomationToolPlatform:
         artifact_store: Any,
         workspace_resolver: Any,
         mcp_platform: Any | None = None,
+        browser_automation: BrowserAutomationService | None = None,
     ) -> None:
         self.manager = manager
         self.store = store
         self.artifact_store = artifact_store
         self.workspace_resolver = workspace_resolver
         self.mcp_platform = mcp_platform
+        self.browser_automation = browser_automation
 
     def chat_components(
         self,
@@ -565,35 +572,100 @@ class AutomationToolPlatform:
             raise MissionConfigurationError(
                 "command mission has no runtime capabilities"
             )
-        extra_components = None
-        if run.runtime_snapshot.get("mcp_snapshot"):
-            if self.mcp_platform is None:
-                raise MissionConfigurationError("mission MCP runtime is unavailable")
-            try:
-                mcp_profiles = tuple(
-                    McpServerProfile.model_validate(item)
-                    for item in run.runtime_snapshot.get("mcp_snapshot", [])
-                )
-                extra_components = self.mcp_platform.chat_components(
-                    engagement_id=run.engagement_id,
-                    turn_id=run.id,
-                    provider=provider,
-                    model=run.supervisor_model or "",
-                    mcp_profiles=mcp_profiles,
-                    include_oci=False,
-                    allow_empty=True,
-                )
-            except Exception as exc:
-                raise MissionConfigurationError(str(exc)) from exc
-        components = self.chat_components(
-            engagement_id=run.engagement_id,
-            extra_components=extra_components,
+        browser_only = bool(
+            self.browser_automation is not None
+            and run.metadata.get("browser_autonomy")
+            and not run.metadata.get("command_tool_names")
+            and not run.runtime_snapshot.get("mcp_snapshot")
         )
+        if browser_only:
+            engagement = self.store.get(Engagement, run.engagement_id)
+            if not engagement.scope_policy_id:
+                raise MissionConfigurationError(
+                    "browser missions require an engagement scope policy"
+                )
+            browser_scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if browser_scope.engagement_id != engagement.id:
+                raise MissionConfigurationError(
+                    "engagement scope policy ownership is inconsistent"
+                )
+            browser_specs = autonomous_browser_specs()
+            components = AutomationToolComponents(
+                broker=BrowserAutomationBroker(self.store, self.browser_automation),
+                scope=browser_scope,
+                workspace=self.workspace_resolver(run.engagement_id),
+                specs=browser_specs,
+                runtime_digest="browser-native-v1",
+            )
+        else:
+            extra_components = None
+            if run.runtime_snapshot.get("mcp_snapshot"):
+                if self.mcp_platform is None:
+                    raise MissionConfigurationError("mission MCP runtime is unavailable")
+                try:
+                    mcp_profiles = tuple(
+                        McpServerProfile.model_validate(item)
+                        for item in run.runtime_snapshot.get("mcp_snapshot", [])
+                    )
+                    extra_components = self.mcp_platform.chat_components(
+                        engagement_id=run.engagement_id,
+                        turn_id=run.id,
+                        provider=provider,
+                        model=run.supervisor_model or "",
+                        mcp_profiles=mcp_profiles,
+                        include_oci=False,
+                        allow_empty=True,
+                    )
+                except Exception as exc:
+                    raise MissionConfigurationError(str(exc)) from exc
+            if self.browser_automation is not None and run.metadata.get("browser_autonomy"):
+                browser_specs = autonomous_browser_specs()
+                browser_broker = BrowserAutomationBroker(self.store, self.browser_automation)
+                browser_scope = self.chat_components(engagement_id=run.engagement_id).scope
+                browser_workspace = self.workspace_resolver(run.engagement_id)
+                browser_components = AutomationToolComponents(
+                    broker=browser_broker,
+                    scope=browser_scope,
+                    workspace=browser_workspace,
+                    specs=browser_specs,
+                    runtime_digest="browser-native-v1",
+                )
+                if extra_components is None:
+                    extra_components = browser_components
+                else:
+                    duplicate_names = set(extra_components.specs).intersection(browser_specs)
+                    if duplicate_names:
+                        raise MissionConfigurationError(
+                            f"duplicate browser capabilities: {sorted(duplicate_names)}"
+                        )
+                    extra_components = AutomationToolComponents(
+                        broker=CompositeBroker(
+                            {
+                                **{name: extra_components.broker for name in extra_components.specs},
+                                **{name: browser_broker for name in browser_specs},
+                            }
+                        ),
+                        scope=extra_components.scope,
+                        workspace=extra_components.workspace,
+                        specs={**extra_components.specs, **browser_specs},
+                        runtime_digest=f"{extra_components.runtime_digest}+browser-native-v1",
+                    )
+            components = self.chat_components(
+                engagement_id=run.engagement_id,
+                extra_components=extra_components,
+            )
+        runtime_digest = "browser-native-v1" if browser_only else self.manager.runtime_digest
         snapshot = {
-            "automation_runtime_digest": self.manager.runtime_digest,
-            "automation_policy_revision": self.manager.project_policy(
-                run.engagement_id
-            ).revision,
+            "automation_runtime_digest": runtime_digest,
+            **(
+                {
+                    "automation_policy_revision": self.manager.project_policy(
+                        run.engagement_id
+                    ).revision,
+                }
+                if not browser_only
+                else {}
+            ),
             "scope_policy_revision": components.scope.revision,
         }
         frozen = {
@@ -632,7 +704,7 @@ class AutomationToolPlatform:
             specialists={SpecialistRole.NETWORK_SERVICE: specialist},
             context={
                 "tool_names": selected,
-                "runtime_digest": self.manager.runtime_digest,
+                "runtime_digest": runtime_digest,
                 "scope_summary": json.dumps(
                     {
                         "allow_all_targets": components.scope.allow_all_targets,

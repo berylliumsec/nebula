@@ -14,6 +14,7 @@ from nebula.v3.domain import (
     ModelCapabilities,
     ProviderProfile,
     RiskClass,
+    RunBudget,
     ScopePolicy,
     utc_now,
 )
@@ -158,3 +159,23 @@ def test_provider_capabilities_are_explicit_not_model_name_inference():
     assert provider.is_local is True
     assert provider.capabilities.streaming is True
     assert provider.capabilities.tool_calling is False
+
+
+def test_run_budget_reads_legacy_nullable_integer_limits():
+    budget = RunBudget(
+        max_concurrency=None,
+        max_delegation_depth=None,
+        max_duration_seconds=None,
+        max_tool_calls=None,
+        max_artifact_queries=None,
+        max_retries=None,
+        per_target_active_operations=None,
+    )
+
+    assert budget.max_concurrency == 1
+    assert budget.max_delegation_depth == 3
+    assert budget.max_duration_seconds == 3600
+    assert budget.max_tool_calls == 100
+    assert budget.max_artifact_queries == 200
+    assert budget.max_retries == 2
+    assert budget.per_target_active_operations == 1

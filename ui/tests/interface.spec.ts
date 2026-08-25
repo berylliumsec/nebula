@@ -1511,6 +1511,34 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
   await allTargets.check();
   await expect(page.getByText("All-targets mode overrides the destination and port allowlists below.")).toBeVisible();
   await expect(domains).toBeDisabled();
+  const policyGeometry = await page.locator("#engagement-policy-settings").evaluate((section) => {
+    const sectionBounds = section.getBoundingClientRect();
+    const panels = [...section.querySelectorAll<HTMLElement>(".policy-form")];
+    const offenders = panels.flatMap((panel, panelIndex) => {
+      const panelBounds = panel.getBoundingClientRect();
+      const visibleSettings = panel.querySelectorAll<HTMLElement>(
+        "input, select, textarea, .provider-consent, .provider-consent span, .inline-validation-notice, .inline-validation-notice span, .resource-form-grid, footer",
+      );
+      return [...visibleSettings].flatMap((setting) => {
+        const bounds = setting.getBoundingClientRect();
+        return bounds.left < panelBounds.left - 1 || bounds.right > panelBounds.right + 1
+          ? [`panel ${panelIndex}: ${setting.tagName.toLowerCase()}.${setting.className}`]
+          : [];
+      });
+    });
+    return {
+      offenders,
+      sectionClientWidth: section.clientWidth,
+      sectionScrollWidth: section.scrollWidth,
+      sectionLeft: sectionBounds.left,
+      sectionRight: sectionBounds.right,
+      viewportWidth: window.innerWidth,
+    };
+  });
+  expect(policyGeometry.offenders).toEqual([]);
+  expect(policyGeometry.sectionScrollWidth).toBeLessThanOrEqual(policyGeometry.sectionClientWidth + 1);
+  expect(policyGeometry.sectionLeft).toBeGreaterThanOrEqual(-1);
+  expect(policyGeometry.sectionRight).toBeLessThanOrEqual(policyGeometry.viewportWidth + 1);
   await page.getByRole("button", { name: "Save scope" }).click();
   const confirmation = page.getByRole("dialog", { name: "Allow every network target and port?" });
   await expect(confirmation).toBeVisible();

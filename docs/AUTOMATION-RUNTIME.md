@@ -46,6 +46,34 @@ Projects choose one execution policy:
 Approval cannot override a disabled runner, missing runtime, expired scope, or a
 filesystem/network sandbox denial.
 
+## Project-scoped autonomous browser control
+
+Web application assessments may opt into the existing Mission/AgentRun lifecycle
+with a `browser_autonomy` request. Core creates a durable lease pinned to one
+BrowserSession, identity, target subset, Project scope revision, allowed risk
+classes, credential references, and command/request/body budgets. Browser and
+proxy capabilities are fixed declarative tools (`browser.observe`, `navigate`,
+`control`, `interact`, `extract`, `replay`, `capture_evidence`, plus bounded
+`proxy.*` operations); arbitrary JavaScript, cookie/storage/password/token
+reads, raw secret arguments, and scope expansion are not tools.
+
+Commands are durable and idempotent. A paired desktop-only worker claims them,
+executes them through the visible native webview and session proxy, and submits a
+bounded redacted receipt. The worker is mounted at the desktop application shell,
+so leaving the Browser page does not stop an active run. Mobile clients can
+observe state and invoke emergency stop but cannot claim native commands. Lease
+expiry, scope revision changes, command expiry, budget exhaustion, run stop, and
+native/upstream failures fail closed and disable run-owned rules. Credential use
+accepts only an authorized `credential_ref`; native code resolves it ephemerally
+for bounded fill actions and never returns the secret.
+
+The browser proxy supports Project CA lifecycle, scope compilation, redacted
+metadata/header capture, explicit 1 MiB text/JSON/form/XML body artifacts,
+HTTP/2, WebSocket frames, declarative bounded mutation, and secure authenticated
+HTTP/HTTPS CONNECT or SOCKS5 chaining. Binary, compressed, malformed, and
+oversized body captures remain metadata-only or fail closed; upstream URLs
+cannot contain userinfo and upstream credentials remain protected references.
+
 ## Project-scoped networking
 
 Sessions start offline. A command can request `project_scope`; it cannot supply a

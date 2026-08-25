@@ -46,6 +46,8 @@ _ROLE_BY_PREFIX: tuple[tuple[str, SpecialistRole], ...] = (
     ("run_command", SpecialistRole.NETWORK_SERVICE),
     ("process_io", SpecialistRole.NETWORK_SERVICE),
     ("mcp.", SpecialistRole.NETWORK_SERVICE),
+    ("browser.", SpecialistRole.NETWORK_SERVICE),
+    ("proxy.", SpecialistRole.NETWORK_SERVICE),
     ("environment.", SpecialistRole.NETWORK_SERVICE),
     ("nmap.", SpecialistRole.NETWORK_SERVICE),
     ("nuclei.", SpecialistRole.WEB_API),

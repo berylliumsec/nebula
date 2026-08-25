@@ -13,6 +13,7 @@ import { TopBar } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
 import { DiagnosticErrorNotice, DiagnosticsAvailabilityBanner, logDiagnostic } from "../diagnostics";
 import { browserAuthorizationRecovery } from "../api/runtime";
+import { BrowserAutomationWorker } from "./BrowserAutomationWorker";
 
 const resourceLabels: Record<string, string> = {
   projects: "Projects", providers: "Model providers", providerCatalog: "Provider setup",
@@ -147,6 +148,7 @@ export function AppShell() {
       <WorkbenchEditorProvider>
         <WorkbenchDraftProvider>
           <ChromeProvider value={chrome}>
+            <BrowserAutomationWorker />
             <div className={`app-shell${zero ? " zero-layer-shell" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
               <SideNav collapsed={sidebarCollapsed} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />

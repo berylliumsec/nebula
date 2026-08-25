@@ -77,6 +77,7 @@ pub(crate) struct BackendSession {
     pub(crate) endpoint: String,
     pub(crate) token: String,
     pub(crate) protocol: &'static str,
+    pub(crate) source: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -1032,6 +1033,7 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
             endpoint: format!("http://127.0.0.1:{}/api/v1", handshake.port),
             token,
             protocol: SIDECAR_PROTOCOL,
+            source: "local",
         },
         startup_log,
         stdout_thread: Some(stdout_thread),

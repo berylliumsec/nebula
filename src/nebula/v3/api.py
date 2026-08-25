@@ -58,11 +58,25 @@ from .automation_runtime import (
     RunCommandRequest,
 )
 from .automation_tools import AutomationToolPlatform, PROCESS_IO_NAME, RUN_COMMAND_NAME
+from .browser_automation import (
+    BrowserAutomationStatus,
+    BrowserAutomationService,
+    BrowserAutonomyRequestModel,
+    BrowserCommandClaimRequest,
+    BrowserCommandResultRequest,
+    BrowserCommandCreateRequest,
+    BrowserProxyRuleRequest,
+)
+from .browser_tools import (
+    AUTONOMOUS_BROWSER_TOOLS,
+    BrowserAutomationToolPlatform,
+)
 from .browser_security import (
     BrowserActionDecisionRequest,
     BrowserActionExecutionRequest,
     BrowserActionProposalRequest,
     BrowserActionResultRequest,
+    BrowserBodyArtifactUploadRequest,
     BrowserCaptureSettingsRequest,
     BrowserHandoffClaimRequest,
     BrowserHandoffCreateRequest,
@@ -163,6 +177,8 @@ from .domain import (
     ApprovalStatus,
     Artifact,
     BrowserAction,
+    BrowserCommand,
+    BrowserProxyRule,
     BrowserHandoff,
     BrowserIdentity,
     BrowserSession,
@@ -719,6 +735,7 @@ class MissionStartRequest(NebulaModel):
     max_artifact_queries: int = Field(default=200, ge=0, le=1000)
     max_concurrency: int = Field(default=1, ge=1, le=2)
     allow_cloud_tool_results: bool = False
+    browser_autonomy: BrowserAutonomyRequestModel | None = None
 
     @model_validator(mode="after")
     def runtime_is_discriminated(self) -> "MissionStartRequest":
@@ -741,6 +758,8 @@ class MissionStartRequest(NebulaModel):
             raise ValueError(
                 "harness missions require harness_profile_id and no provider_id"
             )
+        if self.browser_autonomy is not None and self.backend != RunBackend.NATIVE:
+            raise ValueError("browser autonomy is available only to native missions")
         return self
 
 
@@ -1107,6 +1126,10 @@ def create_app(
     )
 
     credentials = credential_store or CredentialStore()
+    browser_automation = BrowserAutomationService(store)
+    browser_automation_platform = BrowserAutomationToolPlatform(
+        store, browser_automation
+    )
 
     def harness_workspace(engagement_id: str) -> Path:
         if automation_runtime is not None:
@@ -1134,6 +1157,7 @@ def create_app(
             artifact_store=artifact_store,
             workspace_resolver=automation_runtime.workspace_resolver,
             mcp_platform=tool_platform,
+            browser_automation=browser_automation,
         )
         if automation_runtime is not None and artifact_store is not None
         else None
@@ -1185,15 +1209,20 @@ def create_app(
             return provider_factory(profile)
         return chat_runtime.provider_from_profile(profile)
 
+    if automation_tool_platform is not None:
+        mission_components_factory = automation_tool_platform.mission_components
+    else:
+        def mission_components_factory(run: AgentRun, provider: Any):
+            if run.metadata.get("browser_autonomy"):
+                return browser_automation_platform.mission_components(run, provider)
+            raise RuntimeError("automation command runtime is unavailable")
+
     missions = mission_service or MissionService(
         store,
         checkpoint_path=mission_checkpoint_path,
         provider_factory=provider_factory,
-        tool_components_factory=(
-            automation_tool_platform.mission_components
-            if automation_tool_platform is not None
-            else None
-        ),
+        tool_components_factory=mission_components_factory,
+        browser_automation_service=browser_automation,
     )
     if missions.store is not store:
         raise ValueError("mission_service must use the API store")
@@ -5729,7 +5758,11 @@ def create_app(
         result = store.get(ScopeImport, scope_import_id)
         if result.engagement_id != engagement_id:
             raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
-        return require_scope_import_service().apply(scope_import_id, request)
+        result = require_scope_import_service().apply(scope_import_id, request)
+        browser_automation.invalidate_scope_revision(
+            engagement_id, result.scope.revision, active_operator_id()
+        )
+        return result
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope-imports/{{scope_import_id}}/discard",
@@ -5780,12 +5813,16 @@ def create_app(
             current = store.get(ScopePolicy, engagement.scope_policy_id)
             if current.engagement_id != engagement.id:
                 raise ConflictError("engagement scope policy ownership is inconsistent")
-            return store.update(
+            updated = store.update(
                 ScopePolicy,
                 current.id,
                 payload,
                 expected_revision=request.expected_revision or current.revision,
             )
+            browser_automation.invalidate_scope_revision(
+                engagement.id, updated.revision, operator_id
+            )
+            return updated
 
         scope_id = f"scope:{engagement.id}"
         candidate = ScopePolicy(
@@ -5817,6 +5854,9 @@ def create_app(
             engagement.id,
             {"scope_policy_id": scope.id},
             expected_revision=engagement.revision,
+        )
+        browser_automation.invalidate_scope_revision(
+            engagement.id, scope.revision, operator_id
         )
         return scope
 
@@ -6023,6 +6063,13 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def start_mission(request: MissionStartRequest) -> AgentRun:
+        if request.browser_autonomy is not None:
+            try:
+                browser_automation.validate_autonomy(
+                    request.engagement_id, request.browser_autonomy
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         command_tools = (
             [RUN_COMMAND_NAME, PROCESS_IO_NAME]
             if request.backend == RunBackend.NATIVE
@@ -6030,24 +6077,33 @@ def create_app(
             and automation_tool_platform is not None
             else []
         )
+        browser_tools = (
+            list(AUTONOMOUS_BROWSER_TOOLS)
+            if request.browser_autonomy is not None
+            else []
+        )
         if (
             request.backend == RunBackend.NATIVE
             and request.max_tool_calls > 0
             and automation_tool_platform is None
             and not request.mcp_server_ids
+            and not browser_tools
         ):
             raise HTTPException(
                 status_code=409,
                 detail="automation command runtime is unavailable",
             )
         operator_id = active_operator_id()
+        requested_tool_calls = request.max_tool_calls
+        if request.browser_autonomy is not None and requested_tool_calls == 0:
+            requested_tool_calls = min(request.browser_autonomy.max_commands, 100)
         budget = RunBudget(
             max_concurrency=request.max_concurrency,
             max_delegation_depth=(1 if command_tools or request.mcp_server_ids else 0),
             max_duration_seconds=request.max_duration_seconds,
             max_tokens=request.max_tokens,
             max_cost_usd=request.max_cost_usd,
-            max_tool_calls=request.max_tool_calls,
+            max_tool_calls=requested_tool_calls,
             max_artifact_queries=request.max_artifact_queries,
             max_retries=request.max_retries,
             per_target_active_operations=1,
@@ -6080,9 +6136,10 @@ def create_app(
             scheduled_for=request.scheduled_for,
             repeat_interval_seconds=request.repeat_interval_seconds,
             budget=budget,
-            tool_names=command_tools,
+            tool_names=[*command_tools, *browser_tools],
             mcp_server_ids=request.mcp_server_ids,
             allow_cloud_tool_results=request.allow_cloud_tool_results,
+            browser_autonomy=request.browser_autonomy,
             actor_id=operator_id,
         )
 
@@ -6164,6 +6221,13 @@ def create_app(
                 tool_names=list(prior.metadata.get("command_tool_names") or []),
                 mcp_server_ids=list(prior.runtime_snapshot.get("mcp_server_ids") or []),
                 allow_cloud_tool_results=request.allow_cloud_tool_results,
+                browser_autonomy=(
+                    BrowserAutonomyRequestModel.model_validate(
+                        prior.metadata["browser_autonomy"]
+                    )
+                    if isinstance(prior.metadata.get("browser_autonomy"), dict)
+                    else None
+                ),
                 actor_id=operator_id,
             )
         return created
@@ -7887,7 +7951,102 @@ def create_app(
                 },
             )
 
-    browser_security = BrowserSecurityService(store)
+    browser_security = BrowserSecurityService(store, artifact_store)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-automation",
+        response_model=BrowserAutomationStatus,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def browser_automation_status(engagement_id: str) -> BrowserAutomationStatus:
+        return browser_automation.status(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/browser-automation",
+        response_model=BrowserAutomationStatus,
+        tags=["runs", "security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def run_browser_automation_status(run_id: str) -> BrowserAutomationStatus:
+        run = store.get(AgentRun, run_id)
+        return browser_automation.status(run.engagement_id, run_id=run_id)
+
+    @app.post(
+        f"{API_PREFIX}/browser-automation/leases/{{lease_id}}/commands",
+        response_model=BrowserCommand,
+        status_code=202,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def enqueue_browser_command(
+        lease_id: str,
+        request: BrowserCommandCreateRequest,
+        x_nebula_actor: str = Header(default="agent", alias="X-Nebula-Actor"),
+    ) -> BrowserCommand:
+        return browser_automation.enqueue_command(lease_id, request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/browser-automation/commands/{{command_id}}/claim",
+        response_model=BrowserCommand,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def claim_browser_command(
+        command_id: str, request: BrowserCommandClaimRequest
+    ) -> BrowserCommand:
+        return browser_automation.claim_command(command_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-automation/commands/{{command_id}}/result",
+        response_model=BrowserCommand,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def finish_browser_command(
+        command_id: str, request: BrowserCommandResultRequest
+    ) -> BrowserCommand:
+        return browser_automation.finish_command(command_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-automation/leases/{{lease_id}}/rules",
+        response_model=BrowserProxyRule,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def add_browser_proxy_rule(
+        lease_id: str,
+        request: BrowserProxyRuleRequest,
+        x_nebula_actor: str = Header(default="agent", alias="X-Nebula-Actor"),
+    ) -> BrowserProxyRule:
+        return browser_automation.add_rule(lease_id, request, x_nebula_actor)
+
+    @app.delete(
+        f"{API_PREFIX}/browser-automation/rules/{{rule_id}}",
+        response_model=BrowserProxyRule,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def remove_browser_proxy_rule(
+        rule_id: str,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserProxyRule:
+        return browser_automation.remove_rule(rule_id, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/browser-automation/stop",
+        response_model=BrowserAutomationStatus,
+        tags=["runs", "security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stop_run_browser_automation(
+        run_id: str,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserAutomationStatus:
+        run = store.get(AgentRun, run_id)
+        browser_automation.revoke_run(run_id, "Emergency stop requested by operator", x_nebula_actor)
+        return browser_automation.status(run.engagement_id, run_id=run_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-workspace",
@@ -7949,6 +8108,22 @@ def create_app(
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserSession:
         return browser_security.update_capture_settings(
+            session_id, request, x_nebula_actor
+        )
+
+    @app.post(
+        f"{API_PREFIX}/browser-sessions/{{session_id}}/body-artifacts",
+        response_model=Artifact,
+        status_code=201,
+        tags=["security-browser", "artifacts"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def upload_browser_body_artifact(
+        session_id: str,
+        request: BrowserBodyArtifactUploadRequest,
+        x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
+    ) -> Artifact:
+        return browser_security.upload_body_artifact(
             session_id, request, x_nebula_actor
         )
 

@@ -1,5 +1,6 @@
 import { expect, test as base, type Page } from "@playwright/test";
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -26,8 +27,18 @@ const videoDirectory = path.join(repository, "ui", "usage-videos");
 async function startCore(): Promise<UsageCore> {
   const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-usage-videos-"));
   const token = "nebula-playwright-usage-scenarios";
-  const child = spawn(
+  const coreCandidates = [
+    process.env.NEBULA_TEST_CORE_BIN,
+    process.env.NEBULA_CORE_BINARY,
+    path.join(repository, "ui", "src-tauri", "binaries", "nebula-core-x86_64-unknown-linux-gnu"),
     path.join(repository, ".venv", "bin", "nebula-core"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  const coreBinary = coreCandidates.find(existsSync);
+  if (!coreBinary) {
+    throw new Error(`No Nebula Core test binary was found in: ${coreCandidates.join(", ")}`);
+  }
+  const child = spawn(
+    coreBinary,
     [
       "serve",
       "--host", "127.0.0.1",

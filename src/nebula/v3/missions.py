@@ -15,8 +15,10 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
+from .browser_automation import BrowserAutonomyRequestModel
 from .domain import (
     AgentAttempt,
     AgentRun,
@@ -176,6 +178,7 @@ class MissionService:
         provider_factory: ProviderFactory = provider_from_profile,
         runtime_factory: RuntimeFactory = sqlite_mission_runtime,
         tool_components_factory: ToolComponentsFactory | None = None,
+        browser_automation_service: Any | None = None,
         max_active_missions: int = 4,
         cancellation_timeout_seconds: float = 5.0,
     ) -> None:
@@ -192,6 +195,7 @@ class MissionService:
         self.provider_factory = provider_factory
         self.runtime_factory = runtime_factory
         self.tool_components_factory = tool_components_factory
+        self.browser_automation_service = browser_automation_service
         self.max_active_missions = max_active_missions
         self.cancellation_timeout_seconds = cancellation_timeout_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -277,6 +281,7 @@ class MissionService:
         tool_names: list[str] | None = None,
         mcp_server_ids: list[str] | None = None,
         allow_cloud_tool_results: bool = False,
+        browser_autonomy: Any | None = None,
         actor_id: str = "system",
     ) -> AgentRun:
         """Validate, queue, and schedule one explicit analysis-only mission."""
@@ -445,6 +450,17 @@ class MissionService:
                     if selected_action_tools
                     else {}
                 ),
+                **(
+                    {
+                        "browser_autonomy": (
+                            browser_autonomy.model_dump(mode="json")
+                            if hasattr(browser_autonomy, "model_dump")
+                            else dict(browser_autonomy)
+                        )
+                    }
+                    if browser_autonomy is not None
+                    else {}
+                ),
             },
         )
         if selected_action_tools:
@@ -509,6 +525,26 @@ class MissionService:
                 actor_id=actor_id,
                 idempotency_key="run:queued",
             )
+            if browser_autonomy is not None:
+                if self.browser_automation_service is None:
+                    raise MissionServiceUnavailable(
+                        "browser automation runtime is not configured"
+                    )
+                try:
+                    self.browser_automation_service.create_lease(
+                        run.id,
+                        engagement_id,
+                        browser_autonomy,
+                        actor_id,
+                    )
+                except Exception as exc:
+                    self._finalize_failed(
+                        run.id,
+                        f"browser automation lease could not be created: {self._safe_error(exc)}",
+                    )
+                    raise MissionConfigurationError(
+                        f"browser automation lease could not be created: {self._safe_error(exc)}"
+                    ) from exc
             if scheduled_for is not None and scheduled_for > utc_now():
                 task = create_diagnostic_task(
                     self._scheduled_execute(run.id, provider, scheduled_for),
@@ -571,6 +607,7 @@ class MissionService:
             raise MissionStateError(
                 f"run {run.id} is already terminal ({run.status.value})"
             )
+        self._revoke_browser_control(run.id, clean_reason, actor_id)
         async with self._lock:
             task = self._tasks.get(run.id) or self._scheduled_tasks.get(run.id)
         if (task is None or task.done()) and run.metadata.get("origin") != "api":
@@ -844,6 +881,12 @@ class MissionService:
                 self._finalize_failed(queued.id, self._safe_error(exc))
         finally:
             recurrence_source = self.store.get(AgentRun, queued.id)
+            if recurrence_source.status in _TERMINAL_RUN_STATUSES:
+                self._revoke_browser_control(
+                    recurrence_source.id,
+                    f"Mission reached terminal state: {recurrence_source.status.value}",
+                    "system",
+                )
             async with self._lock:
                 current_task = asyncio.current_task()
                 if self._tasks.get(queued.id) is current_task:
@@ -874,6 +917,13 @@ class MissionService:
             mcp_server_ids=list(prior.runtime_snapshot.get("mcp_server_ids") or []),
             allow_cloud_tool_results=prior.runtime_snapshot.get("remote_mcp_confirmed")
             is True,
+            browser_autonomy=(
+                BrowserAutonomyRequestModel.model_validate(
+                    prior.metadata["browser_autonomy"]
+                )
+                if isinstance(prior.metadata.get("browser_autonomy"), dict)
+                else None
+            ),
             actor_id="system",
         )
 
@@ -1005,6 +1055,7 @@ class MissionService:
             return run
         if run.status in {RunStatus.COMPLETE, RunStatus.FAILED}:
             return run
+        self._revoke_browser_control(run.id, reason, actor_id)
         self._cancel_open_work(run, reason)
         run = self.store.get(AgentRun, run_id)
         cancelled, _ = self.store.update_with_event(
@@ -1024,6 +1075,7 @@ class MissionService:
         run = self.store.get(AgentRun, run_id)
         if run.status in _TERMINAL_RUN_STATUSES:
             return run
+        self._revoke_browser_control(run.id, error, "system")
         self._fail_open_work(run, error)
         run = self.store.get(AgentRun, run_id)
         failed, _ = self.store.update_with_event(
@@ -1042,6 +1094,25 @@ class MissionService:
             idempotency_key="run:service_failed",
         )
         return failed
+
+    def _revoke_browser_control(self, run_id: str, reason: str, actor_id: str) -> None:
+        """Fail closed when a run leaves the state in which native control is valid."""
+
+        if self.browser_automation_service is None:
+            return
+        try:
+            self.browser_automation_service.revoke_run(run_id, reason, actor_id)
+        except Exception as exc:
+            # The run transition remains authoritative, but retain a diagnostic so
+            # an operator can investigate a native worker that did not acknowledge
+            # the durable revocation.
+            record_caught_exception(
+                "missions",
+                "missions.browser_automation.revoke_failed",
+                "A browser automation lease could not be revoked during mission cleanup.",
+                exc,
+                stage="browser-automation-revoke",
+            )
 
     def _reconcile_interrupted_run(self, run_id: str) -> AgentRun:
         error = (
