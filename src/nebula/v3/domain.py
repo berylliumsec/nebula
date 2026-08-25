@@ -1433,28 +1433,6 @@ class RunBudget(NebulaModel):
     max_retries: int = Field(default=2, ge=0, le=100)
     per_target_active_operations: int = Field(default=1, ge=1, le=64)
 
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_nullable_limits(cls, value: Any) -> Any:
-        """Migrate explicit pre-alpha nulls without changing omitted limits."""
-
-        if not isinstance(value, dict):
-            return value
-        normalized = dict(value)
-        defaults = {
-            "max_concurrency": 1,
-            "max_delegation_depth": 3,
-            "max_duration_seconds": 3600,
-            "max_tool_calls": 100,
-            "max_artifact_queries": 200,
-            "max_retries": 2,
-            "per_target_active_operations": 1,
-        }
-        for field, default in defaults.items():
-            if field in normalized and normalized[field] is None:
-                normalized[field] = default
-        return normalized
-
 
 class AgentRun(Entity):
     entity_kind: ClassVar[str] = "runs"
