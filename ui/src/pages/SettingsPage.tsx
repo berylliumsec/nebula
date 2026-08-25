@@ -131,7 +131,10 @@ export function SettingsPage() {
     if (!isTauriRuntime()) return;
     void invoke<{ mode: string; endpoint?: string; tokenAvailable: boolean }>("desktop_core_connection")
       .then((value) => { setCoreConnection(value); setRemoteEndpoint(value.endpoint ?? ""); })
-      .catch((error) => setCoreConnectionError(error instanceof Error ? error.message : String(error)));
+      .catch((error) => {
+        void logCaughtDiagnostic("interface.settings_page.core_connection_load_failed", "The UI shell Core connection preference could not be loaded.", error, "settings_page");
+        setCoreConnectionError(error instanceof Error ? error.message : String(error));
+      });
   }, []);
 
   const configureRemoteCore = async (event: FormEvent) => {
@@ -145,7 +148,10 @@ export function SettingsPage() {
       const saved = await invoke<{ mode: string; endpoint?: string; tokenAvailable: boolean }>("configure_remote_backend", { endpoint: remoteEndpoint, token: remoteToken, acknowledgeInsecureTransport: insecureTransport });
       setCoreConnection(saved); setRemoteToken("");
       window.location.reload();
-    } catch (error) { setCoreConnectionError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) {
+      void logCaughtDiagnostic("interface.settings_page.remote_core_connection_failed", "The UI shell could not connect to the selected remote Core.", error, "settings_page");
+      setCoreConnectionError(error instanceof Error ? error.message : String(error));
+    }
     finally { setCoreConnectionBusy(false); }
   };
   const [operatorDialog, setOperatorDialog] = useState(false);
@@ -606,7 +612,7 @@ export function SettingsPage() {
             <label><span>Remote Core origin</span><input value={remoteEndpoint} onChange={(event) => setRemoteEndpoint(event.target.value)} placeholder="https://nebula.example" autoComplete="url" /></label>
             <label><span>Bearer token</span><input value={remoteToken} onChange={(event) => setRemoteToken(event.target.value)} type="password" placeholder={coreConnection?.tokenAvailable ? "Saved token; enter a replacement" : "Remote Core token"} autoComplete="off" required /></label>
             <label className="core-connection-insecure"><input type="checkbox" checked={insecureTransport} onChange={(event) => setInsecureTransport(event.target.checked)} /><span><strong>Allow HTTP for this connection</strong><small>Bearer tokens can be intercepted on an insecure network.</small></span></label>
-            <div className="core-connection-actions"><button className="button primary" type="submit" disabled={coreConnectionBusy}>{coreConnectionBusy ? "Testing…" : "Connect UI shell to remote Core"}</button>{coreConnection?.mode === "remote" && <button className="button secondary" type="button" disabled={coreConnectionBusy} onClick={() => void invoke("use_local_backend").then(() => window.location.reload()).catch((error) => setCoreConnectionError(error instanceof Error ? error.message : String(error)))}>Use local Core</button>}</div>
+            <div className="core-connection-actions"><button className="button primary" type="submit" disabled={coreConnectionBusy}>{coreConnectionBusy ? "Testing…" : "Connect UI shell to remote Core"}</button>{coreConnection?.mode === "remote" && <button className="button secondary" type="button" disabled={coreConnectionBusy} onClick={() => void invoke("use_local_backend").then(() => window.location.reload()).catch((error) => { void logCaughtDiagnostic("interface.settings_page.local_core_switch_failed", "The UI shell could not switch back to its local Core.", error, "settings_page"); setCoreConnectionError(error instanceof Error ? error.message : String(error)); })}>Use local Core</button>}</div>
           </form>
           <p className="core-connection-boundary"><strong>Local-only capability:</strong> Native Browser/proxy automation is disabled while this shell uses a remote Core.</p>
           {coreConnectionError && <DiagnosticErrorNotice error={coreConnectionError} fallback="The Core connection could not be updated." compact />}

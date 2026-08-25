@@ -57,6 +57,7 @@ function signature(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
+    // diagnostic-expected: signatures fail closed to a stable sentinel and are retried from durable Core state.
     return "unserializable";
   }
 }
@@ -209,6 +210,12 @@ export function BrowserAutomationWorker() {
         });
         queueReceipt({ entry, state: "complete", result, evidenceIds: [evidence.id] });
       } catch (caught) {
+        void logCaughtDiagnostic(
+          "interface.security_browser.evidence_capture_failed",
+          "An autonomous browser capture could not be saved as Evidence.",
+          caught,
+          "browser-automation-worker",
+        );
         fail(entry, `The browser capture could not be saved as Evidence: ${errorMessage(caught)}`);
       }
     };
@@ -248,12 +255,18 @@ export function BrowserAutomationWorker() {
       if (!session.proxyEnabled) {
         appliedScopes.current.delete(session.id);
         appliedProxyConfigs.current.delete(session.id);
-        await workbenchBrowser.stopProxy(projectId, session.id).catch(() => undefined);
+        await workbenchBrowser.stopProxy(projectId, session.id).catch(() => {
+          // diagnostic-expected: stopping an already-absent native proxy is idempotent cleanup.
+          return undefined;
+        });
         for (const [ruleId, ruleSignature] of appliedRules.current) {
           if (!ruleSignature.startsWith(`${session.id}:`)) continue;
           const rule = status.rules.find((item) => item.id === ruleId);
           if (rule) {
-            await workbenchBrowser.applyProxyRule(projectId, session.id, { ...rule, enabled: false }).catch(() => undefined);
+            await workbenchBrowser.applyProxyRule(projectId, session.id, { ...rule, enabled: false }).catch(() => {
+              // diagnostic-expected: a missing native proxy handle is reconciled on the next durable-state poll.
+              return undefined;
+            });
           }
           appliedRules.current.delete(ruleId);
         }
@@ -274,13 +287,17 @@ export function BrowserAutomationWorker() {
           }, session.captureMode === "bodies");
           appliedProxyConfigs.current.set(session.id, proxySignature);
         } catch {
+          // diagnostic-expected: a missing native proxy handle is configured when its visible tab is created.
           // A session without an open native proxy handle is configured when
           // the visible tab is created; the next poll retries this update.
         }
       }
       if (!scope) {
         appliedScopes.current.delete(session.id);
-        await workbenchBrowser.clearProxyScope(projectId, session.id).catch(() => undefined);
+        await workbenchBrowser.clearProxyScope(projectId, session.id).catch(() => {
+          // diagnostic-expected: clearing an already-absent native proxy scope is idempotent cleanup.
+          return undefined;
+        });
         return;
       }
       const scopeSignature = signature(scope);
@@ -289,6 +306,7 @@ export function BrowserAutomationWorker() {
           await workbenchBrowser.applyProxyScope(projectId, session.id, scope);
           appliedScopes.current.set(session.id, scopeSignature);
         } catch {
+          // diagnostic-expected: a missing native proxy handle is reconciled on the next durable-state poll.
           // A session without an open native tab has no proxy handle yet. The
           // next poll retries after the Browser surface creates one.
         }
@@ -301,6 +319,7 @@ export function BrowserAutomationWorker() {
           await workbenchBrowser.applyProxyRule(projectId, session.id, rule);
           appliedRules.current.set(rule.id, ruleSignature);
         } catch {
+          // diagnostic-expected: durable rules remain authoritative and are retried after a native tab exists.
           // See the scope retry note above; durable rules remain visible in Core.
         }
       }
@@ -318,7 +337,10 @@ export function BrowserAutomationWorker() {
           const [status, workspace, scope] = await Promise.all([
             currentApi.getSecurityBrowserAutomation(engagement.id),
             currentApi.getSecurityBrowserWorkspace(engagement.id),
-            currentApi.getEngagementScope(engagement.id).catch(() => undefined),
+            currentApi.getEngagementScope(engagement.id).catch(() => {
+              // diagnostic-expected: absent scope fails closed in syncNativeSession and is retried on the next poll.
+              return undefined;
+            }),
           ]);
           const sessions = workspace.sessions;
           for (const session of sessions) {
@@ -328,7 +350,10 @@ export function BrowserAutomationWorker() {
             const previous = observedLeaseStates.current.get(lease.id);
             observedLeaseStates.current.set(lease.id, lease.status);
             if (previous === "active" && lease.status !== "active") {
-              await workbenchBrowser.stopProxy(engagement.id, lease.sessionId).catch(() => undefined);
+              await workbenchBrowser.stopProxy(engagement.id, lease.sessionId).catch(() => {
+                // diagnostic-expected: lease revocation cleanup is idempotent when no native proxy handle remains.
+                return undefined;
+              });
               appliedScopes.current.delete(lease.sessionId);
             }
           }

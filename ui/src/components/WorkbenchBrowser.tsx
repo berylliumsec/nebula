@@ -117,7 +117,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const { activityOpen, paletteOpen, sidebarCollapsed } = useChrome();
   const desktop = isTauriRuntime();
   const deviceIdRef = useRef(desktop ? "desktop" : "paired-browser");
-  useEffect(() => { if (desktop) void desktopDeviceId().then((value) => { deviceIdRef.current = value; }).catch(() => undefined); }, [desktop]);
+  useEffect(() => { if (desktop) void desktopDeviceId().then((value) => { deviceIdRef.current = value; }).catch((caught) => {
+    void logCaughtDiagnostic("interface.security_browser.device_identity_unavailable", "The desktop browser identity could not be loaded.", caught, "workbench_browser");
+  }); }, [desktop]);
   const [tabs, setTabs] = useState<BrowserTab[]>(() => [blankTab()]);
   const [activeId, setActiveId] = useState(() => tabs[0].id);
   const [capabilities, setCapabilities] = useState<BrowserCapabilities>();
@@ -820,7 +822,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     if (typeof api.getSecurityBrowserAutomation !== "function") return;
     let disposed = false;
     const refresh = () => {
-      void refreshAutomationStatus().catch(() => undefined);
+      void refreshAutomationStatus().catch((caught) => {
+        void logCaughtDiagnostic("interface.security_browser.automation_refresh_failed", "Autonomous browser status could not be refreshed.", caught, "workbench_browser");
+      });
     };
     refresh();
     const timer = window.setInterval(() => {
