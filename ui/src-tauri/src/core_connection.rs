@@ -1,6 +1,6 @@
 //! Desktop-local Core selection. Remote credentials never enter the config file.
 
-use std::{fs, io::Write, path::PathBuf};
+use std::{fs, io::Write, path::PathBuf, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
@@ -134,6 +134,44 @@ fn normalize_endpoint(value: &str, insecure_acknowledged: bool) -> Result<String
     Ok(format!("{endpoint}/api/v1"))
 }
 
+async fn validate_remote_core(endpoint: &str, token: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("cannot initialize the secure remote Core connection: {error}"))?;
+    let response = client
+        .get(format!("{endpoint}/health"))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                "the remote Core health check timed out; verify the LAN address and port"
+                    .to_string()
+            } else if endpoint.starts_with("https://") {
+                "the remote Core could not be reached or its TLS certificate could not be validated"
+                    .to_string()
+            } else {
+                "the remote Core could not be reached; verify the LAN address, port, and local firewall"
+                    .to_string()
+            }
+        })?;
+    remote_health_status_error(response.status().as_u16()).map_or(Ok(()), Err)
+}
+
+fn remote_health_status_error(status: u16) -> Option<String> {
+    match status {
+        200..=299 => None,
+        401 | 403 => Some("the remote Core rejected the bearer token".to_string()),
+        _ => Some(format!(
+            "the remote Core health check returned HTTP {status}"
+        )),
+    }
+}
+
 #[tauri::command]
 pub(crate) fn desktop_core_connection(app: AppHandle) -> Result<CoreConnectionStatus, String> {
     let stored = load(&app)?;
@@ -155,7 +193,7 @@ pub(crate) fn desktop_core_connection(app: AppHandle) -> Result<CoreConnectionSt
 }
 
 #[tauri::command]
-pub(crate) fn configure_remote_backend(
+pub(crate) async fn configure_remote_backend(
     app: AppHandle,
     endpoint: String,
     token: String,
@@ -165,6 +203,7 @@ pub(crate) fn configure_remote_backend(
     if token.trim().len() < 24 {
         return Err("Enter the remote Core bearer token.".to_string());
     }
+    validate_remote_core(&endpoint, token.trim()).await?;
     token_entry()?.set_password(token.trim()).map_err(|_| {
         "cannot save the remote Core token in the operating-system credential vault".to_string()
     })?;
@@ -227,7 +266,7 @@ pub(crate) fn resolve_backend_connection(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_endpoint;
+    use super::{normalize_endpoint, remote_health_status_error};
 
     #[test]
     fn normalizes_remote_api_origin_without_userinfo() {
@@ -245,6 +284,19 @@ mod tests {
         assert_eq!(
             normalize_endpoint("http://192.0.2.10:8000", true).unwrap(),
             "http://192.0.2.10:8000/api/v1"
+        );
+    }
+
+    #[test]
+    fn remote_health_errors_do_not_hide_token_rejection() {
+        assert_eq!(remote_health_status_error(204), None);
+        assert_eq!(
+            remote_health_status_error(401).as_deref(),
+            Some("the remote Core rejected the bearer token")
+        );
+        assert_eq!(
+            remote_health_status_error(503).as_deref(),
+            Some("the remote Core health check returned HTTP 503")
         );
     }
 }
