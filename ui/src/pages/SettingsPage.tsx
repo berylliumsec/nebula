@@ -141,10 +141,8 @@ export function SettingsPage() {
     event.preventDefault();
     setCoreConnectionBusy(true); setCoreConnectionError(undefined);
     try {
-      // Validate the bearer token against the candidate before persisting it.
-      const normalized = remoteEndpoint.trim().replace(/\/$/, "").replace(/\/api\/v1$/, "");
-      const response = await fetch(`${normalized}/api/v1/health`, { headers: { Accept: "application/json", Authorization: `Bearer ${remoteToken.trim()}` } });
-      if (!response.ok) throw new Error("Remote Core rejected the endpoint or bearer token.");
+      // Native code validates the candidate before persisting it. This avoids a
+      // WebView-only HTTP policy obscuring a LAN Core or keychain failure.
       const saved = await invoke<{ mode: string; endpoint?: string; tokenAvailable: boolean }>("configure_remote_backend", { endpoint: remoteEndpoint, token: remoteToken, acknowledgeInsecureTransport: insecureTransport });
       setCoreConnection(saved); setRemoteToken("");
       window.location.reload();
