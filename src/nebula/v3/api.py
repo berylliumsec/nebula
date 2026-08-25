@@ -5751,8 +5751,8 @@ def create_app(
         scope_import_id: str,
         request: ScopeImportApplyRequest,
     ) -> ScopeImportApplyResult:
-        result = store.get(ScopeImport, scope_import_id)
-        if result.engagement_id != engagement_id:
+        scope_import = store.get(ScopeImport, scope_import_id)
+        if scope_import.engagement_id != engagement_id:
             raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
         result = require_scope_import_service().apply(scope_import_id, request)
         browser_automation.invalidate_scope_revision(

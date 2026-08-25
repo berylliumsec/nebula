@@ -38,10 +38,12 @@ from .runtime_platform import RuntimeToolComponents
 from .storage import NebulaStore
 from .tools import (
     AmbiguousToolState,
+    IdempotencyBehavior,
     InvalidToolArguments,
     StoreToolLedger,
     ToolExecutionResult,
     ToolInvocation,
+    ToolBroker,
     ToolSpec,
 )
 
@@ -54,7 +56,7 @@ AUTONOMOUS_BROWSER_TOOLS = tuple(COMMAND_RISK)
 def autonomous_browser_specs() -> dict[str, ToolSpec]:
     """Describe the bounded commands available inside an active lease."""
 
-    common = {
+    common: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
@@ -87,16 +89,16 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
             else [],
             filesystem_access="none",
             timeout_seconds=60,
-            idempotency="safe",
+            idempotency=IdempotencyBehavior.SAFE,
         )
 
-    observe = dict(common)
+    observe: dict[str, Any] = dict(common)
     observe["properties"] = {
         **common["properties"],
         "page_url": common["properties"]["page_url"],
     }
     observe["required"] = ["tab_id"]
-    navigate = {
+    navigate: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
@@ -106,7 +108,7 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
         },
         "required": ["tab_id", "url"],
     }
-    interact = {
+    interact: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
@@ -128,7 +130,7 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
         },
         "required": ["tab_id", "page_url", "operation", "locator"],
     }
-    replay = {
+    replay: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
@@ -141,7 +143,7 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
         },
         "required": ["tab_id", "url", "method"],
     }
-    rule = {
+    rule: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
@@ -299,7 +301,7 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
     }
 
 
-class BrowserAutomationBroker:
+class BrowserAutomationBroker(ToolBroker):
     """Queue native work only after the durable tool ledger accepts the call."""
 
     def __init__(
@@ -341,6 +343,7 @@ class BrowserAutomationBroker:
                 "browser automation has an unfinished durable tool state"
             )
         running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
+        evidence_ids: list[str] = []
         try:
             lease = self.automation.active_lease_for_run(invocation.run_id)
             lease_id = lease.id
@@ -486,6 +489,7 @@ class BrowserAutomationBroker:
                     "evidence_ids": command.evidence_ids,
                     "error": command.error,
                 }
+                evidence_ids = command.evidence_ids
                 if command.status in {
                     BrowserCommandStatus.FAILED,
                     BrowserCommandStatus.EXPIRED,
@@ -497,9 +501,7 @@ class BrowserAutomationBroker:
             await self.ledger.transition(
                 running, ToolCallStatus.COMPLETE, result=output
             )
-            return ToolExecutionResult(
-                output=output, evidence_ids=output.get("evidence_ids", [])
-            )
+            return ToolExecutionResult(output=output, evidence_ids=evidence_ids)
         except Exception as exc:
             await self.ledger.transition(running, ToolCallStatus.FAILED, error=str(exc))
             raise

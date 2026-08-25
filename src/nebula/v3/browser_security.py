@@ -617,7 +617,9 @@ class BrowserSecurityService:
                 "traffic tab does not belong to the browser session"
             )
         scope = self._scope(session.engagement_id)
-        scope_state = "in_scope"
+        scope_state: Literal["in_scope", "out_of_scope", "inactive", "unconfigured"] = (
+            "in_scope"
+        )
         if request.blocked:
             # A native fail-closed event is still durable evidence of the
             # attempted target. Preserve it even when the target itself is

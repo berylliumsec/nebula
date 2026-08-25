@@ -579,6 +579,7 @@ class AutomationToolPlatform:
             and not run.runtime_snapshot.get("mcp_snapshot")
         )
         if browser_only:
+            assert self.browser_automation is not None
             engagement = self.store.get(Engagement, run.engagement_id)
             if not engagement.scope_policy_id:
                 raise MissionConfigurationError(
