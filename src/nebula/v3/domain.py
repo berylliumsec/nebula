@@ -1419,11 +1419,11 @@ class Correlation(Entity):
 class RunBudget(NebulaModel):
     max_concurrency: int = Field(default=1, ge=1, le=256)
     max_delegation_depth: int = Field(default=3, ge=0, le=32)
-    max_duration_seconds: int = Field(default=3600, ge=1)
+    max_duration_seconds: int | None = Field(default=None, ge=1)
     max_tokens: int | None = Field(default=None, ge=1)
     max_cost_usd: float | None = Field(default=None, ge=0)
-    max_tool_calls: int = Field(default=100, ge=0)
-    max_artifact_queries: int = Field(default=200, ge=0)
+    max_tool_calls: int | None = Field(default=None, ge=0)
+    max_artifact_queries: int | None = Field(default=None, ge=0)
     max_retries: int = Field(default=2, ge=0, le=100)
     per_target_active_operations: int = Field(default=1, ge=1, le=64)
 

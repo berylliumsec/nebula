@@ -19,6 +19,7 @@ import {
   GitFork,
   ImagePlus,
   LoaderCircle,
+  ListTodo,
   Maximize2,
   MessageSquare,
   MessageSquareQuote,
@@ -103,6 +104,15 @@ import {
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { readConversationPanelOpen, writeConversationPanelOpen } from "./workbenchPreferences";
 import { chatDraftStorageKey, clearChatDraft, readChatDraft, writeChatDraft } from "./chatDraftStorage";
+import {
+  chatFollowUpStorageKey,
+  clearChatFollowUps,
+  maxChatFollowUps,
+  readChatFollowUps,
+  validateChatFollowUpText,
+  writeChatFollowUps,
+  type ChatFollowUp,
+} from "./chatFollowUpStorage";
 import { chatTranscriptFilename, formatChatTranscript } from "./chatTranscriptExport";
 
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
@@ -557,6 +567,7 @@ export function SessionsPage() {
   const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [queuedFollowUps, setQueuedFollowUps] = useState<ChatFollowUp[]>([]);
   const [expandedContextIndex, setExpandedContextIndex] = useState<number>();
   const [contextStatus, setContextStatus] = useState<ContextStatus>();
   const [contextStatusError, setContextStatusError] = useState<string>();
@@ -591,6 +602,10 @@ export function SessionsPage() {
   const streamDeltaRef = useRef(new Map<string, string>());
   const streamFrameRef = useRef<number | undefined>(undefined);
   const draftStorageKeyRef = useRef("");
+  const followUpStorageKeyRef = useRef("");
+  const followUpAutoDrainRef = useRef(false);
+  const followUpDrainIdRef = useRef<string | undefined>(undefined);
+  const submitMessageRef = useRef<((queuedFollowUp?: ChatFollowUp) => Promise<void>) | undefined>(undefined);
   const chatRuntimeStore = useMemo(() => ({
     messages,
     convertMessage: convertConversationMessage,
@@ -629,6 +644,9 @@ export function SessionsPage() {
   const activeDraftStorageKey = engagement
     ? chatDraftStorageKey(engagement.id, sessionId || undefined)
     : "";
+  const activeFollowUpStorageKey = engagement
+    ? chatFollowUpStorageKey(engagement.id, sessionId || undefined)
+    : "";
   useEffect(() => {
     if (!activeDraftStorageKey || draftStorageKeyRef.current !== activeDraftStorageKey) return;
     writeChatDraft(sessionStorage, activeDraftStorageKey, draft);
@@ -645,6 +663,39 @@ export function SessionsPage() {
   // The outgoing draft is intentionally captured at the identity boundary.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDraftStorageKey]);
+  useEffect(() => {
+    if (!activeFollowUpStorageKey || followUpStorageKeyRef.current !== activeFollowUpStorageKey) return;
+    writeChatFollowUps(sessionStorage, activeFollowUpStorageKey, queuedFollowUps);
+  }, [activeFollowUpStorageKey, queuedFollowUps]);
+  useEffect(() => {
+    const previousKey = followUpStorageKeyRef.current;
+    let recovered = activeFollowUpStorageKey ? readChatFollowUps(sessionStorage, activeFollowUpStorageKey) : [];
+    const movingFromUnattachedConversation = Boolean(
+      previousKey
+      && activeFollowUpStorageKey
+      && previousKey.endsWith(":new")
+      && !activeFollowUpStorageKey.endsWith(":new"),
+    );
+    if (movingFromUnattachedConversation) {
+      const unattached = readChatFollowUps(sessionStorage, previousKey);
+      if (unattached.length) {
+        recovered = [...recovered, ...unattached]
+          .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+          .slice(0, maxChatFollowUps());
+        writeChatFollowUps(sessionStorage, activeFollowUpStorageKey, recovered);
+        clearChatFollowUps(sessionStorage, previousKey);
+      }
+    }
+    followUpStorageKeyRef.current = activeFollowUpStorageKey;
+    setQueuedFollowUps(recovered);
+    if (activeFollowUpStorageKey !== previousKey && !movingFromUnattachedConversation) {
+      // Queued items recovered after navigation or reload require an explicit
+      // operator action. Only items accepted during this mounted active turn
+      // are drained automatically.
+      followUpAutoDrainRef.current = false;
+      followUpDrainIdRef.current = undefined;
+    }
+  }, [activeFollowUpStorageKey]);
   const visibleSessions = useMemo(() => {
     const query = sessionQuery.trim().toLocaleLowerCase();
     if (!query) return sessions;
@@ -661,6 +712,7 @@ export function SessionsPage() {
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const selectedProvider = enabledProviders.find((provider) => provider.id === providerId);
   const selectedHarness = harnesses.find((harness) => harness.id === harnessId);
+  const runtimeReady = runtimeKind === "provider" ? Boolean(selectedProvider) : Boolean(selectedHarness);
   const selectedHarnessSkill = harnessSkills.find((skill) => skill.path === harnessSkillPath);
   const matchingHarnessSkills = useMemo(() => {
     const query = skillToken?.query.toLocaleLowerCase() ?? "";
@@ -1139,6 +1191,8 @@ export function SessionsPage() {
 
   const resetConversation = (open: boolean) => {
     sessionSelectionGenerationRef.current += 1;
+    followUpAutoDrainRef.current = false;
+    followUpDrainIdRef.current = undefined;
     if (!detachActiveHarnessStream()) abortRef.current?.abort();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
@@ -1185,7 +1239,10 @@ export function SessionsPage() {
     setChatError(undefined);
     try {
       await api.deleteChatSession(session.id);
-      if (engagement) clearChatDraft(sessionStorage, chatDraftStorageKey(engagement.id, session.id));
+      if (engagement) {
+        clearChatDraft(sessionStorage, chatDraftStorageKey(engagement.id, session.id));
+        clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, session.id));
+      }
       setSessions((current) => current.filter((item) => item.id !== session.id));
       if (sessionId === session.id) {
         resetConversation(false);
@@ -1216,6 +1273,7 @@ export function SessionsPage() {
     if (engagement) {
       for (const deletedId of deletedIds) {
         clearChatDraft(sessionStorage, chatDraftStorageKey(engagement.id, deletedId));
+        clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, deletedId));
       }
     }
     const failures = results.filter((result) => result.status === "rejected");
@@ -1395,6 +1453,8 @@ export function SessionsPage() {
     const selectionGeneration = sessionSelectionGenerationRef.current + 1;
     sessionSelectionGenerationRef.current = selectionGeneration;
     const selectionIsCurrent = () => sessionSelectionGenerationRef.current === selectionGeneration;
+    followUpAutoDrainRef.current = false;
+    followUpDrainIdRef.current = undefined;
     detachActiveHarnessStream();
     setSending(false);
     setConversationOpen(true);
@@ -1889,6 +1949,10 @@ export function SessionsPage() {
 
   const attachImageFiles = async (files: File[]) => {
     if (!files.length || !api || !engagement || uploadingImage) return;
+    if (sending || pendingResponse) {
+      setChatError("Image attachments are available after the active response finishes; follow-ups are text-only.");
+      return;
+    }
     if (!imageInputEnabled) {
       setChatError("The selected runtime has not advertised image input support.");
       return;
@@ -2006,18 +2070,68 @@ export function SessionsPage() {
     }
   };
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (sending) {
-      if (runtimeKind === "harness" && selectedHarness?.capabilities?.steering && draft.trim()) {
-        await steerCurrentHarness(draft);
+  const queueFollowUp = (text: string): boolean => {
+    const validationError = validateChatFollowUpText(text);
+    if (validationError) {
+      setChatError(validationError);
+      return false;
+    }
+    if (pendingImages.length || assistantDrafts.length) {
+      setChatError("Only plain text can be queued while a response is active. Wait for the response before adding attachments or selected context.");
+      return false;
+    }
+    if (queuedFollowUps.length >= maxChatFollowUps()) {
+      setChatError(`The follow-up queue is full (${maxChatFollowUps()} messages). Remove one before adding another.`);
+      return false;
+    }
+    const item: ChatFollowUp = {
+      id: makeId("follow-up"),
+      text: text.trim(),
+      createdAt: new Date().toISOString(),
+      status: "queued",
+    };
+    setQueuedFollowUps((current) => [...current, item]);
+    followUpAutoDrainRef.current = true;
+    setDraft("");
+    if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
+    setSkillToken(undefined);
+    setHarnessSkillPath("");
+    setChatError(undefined);
+    setMessageActionStatus("Follow-up queued; it will send after the active response finishes.");
+    return true;
+  };
+
+  const submit = async (event?: FormEvent, queuedFollowUp?: ChatFollowUp) => {
+    event?.preventDefault();
+    const activeTurn = sending || Boolean(pendingResponse);
+    if (activeTurn && !queuedFollowUp) {
+      const text = draft.trim();
+      const canSteer = sending
+        && runtimeKind === "harness"
+        && Boolean(selectedHarness?.capabilities?.steering)
+        && Boolean(harnessProgress?.turnId || harnessActivity?.turnId)
+        && !harnessControlBusy
+        && !pendingImages.length
+        && !assistantDrafts.length;
+      if (canSteer && text) {
+        await steerCurrentHarness(text);
+      } else if (text || pendingImages.length || assistantDrafts.length) {
+        queueFollowUp(text);
       }
       return;
     }
-    const content = draft.trim() || (pendingImages.length ? "Attached image" : "");
+    const content = (queuedFollowUp?.text ?? draft.trim()) || (pendingImages.length ? "Attached image" : "");
     const providerRuntime = runtimeKind === "provider" ? selectedProvider : undefined;
     const harnessRuntime = runtimeKind === "harness" ? selectedHarness : undefined;
-    if (!content || sending || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
+    if (!content || sending || pendingResponse || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
+
+    const failQueuedFollowUp = (detail: string) => {
+      if (!queuedFollowUp) return;
+      followUpAutoDrainRef.current = false;
+      setQueuedFollowUps((current) => current.map((item) => item.id === queuedFollowUp.id
+        ? { ...item, status: "failed", detail }
+        : item));
+    };
 
     const wantsKnowledge = includeKnowledge && knowledgeItemCount > 0;
     let allowCloudKnowledge = false;
@@ -2025,7 +2139,9 @@ export function SessionsPage() {
     const knowledgeRuntimePermitsSensitive = runtimeKind === "harness" ? harnessRuntime?.permitsSensitiveData : providerRuntime?.permitsSensitiveData;
     if (wantsKnowledge && !knowledgeRuntimeIsLocal) {
       if (!knowledgeRuntimePermitsSensitive) {
-        setChatError("This runtime profile is text-only. Enable project/document data in Settings or turn off knowledge retrieval.");
+        const detail = "This runtime profile is text-only. Enable project/document data in Settings or turn off knowledge retrieval.";
+        setChatError(detail);
+        failQueuedFollowUp(detail);
         return;
       }
       allowCloudKnowledge = true;
@@ -2042,7 +2158,9 @@ export function SessionsPage() {
     const toolRuntimePermitsSensitive = runtimeKind === "harness" ? harnessRuntime?.permitsSensitiveData : providerRuntime?.permitsSensitiveData;
     if (wantsTools && !toolRuntimeIsLocal && toolRuntimeName) {
       if (!toolRuntimePermitsSensitive) {
-        setChatError("This runtime profile does not permit tool results to leave the device.");
+        const detail = "This runtime profile does not permit tool results to leave the device.";
+        setChatError(detail);
+        failQueuedFollowUp(detail);
         return;
       }
       allowCloudToolResults = await confirm({
@@ -2050,24 +2168,41 @@ export function SessionsPage() {
         message: `Allow this turn to send bounded tool inputs and results to ${toolRuntimeName}? Canonical output remains local and risky calls still require approval.`,
         confirmLabel: "Allow this turn",
       });
-      if (!allowCloudToolResults) return;
+      if (!allowCloudToolResults) {
+        failQueuedFollowUp("Tool-result sharing was cancelled. Review the queued message before retrying.");
+        return;
+      }
     }
 
     let contextAttachments: ChatCompletionRequest["contextAttachments"];
     try {
-      contextAttachments = assistantDrafts.length
+      contextAttachments = !queuedFollowUp && assistantDrafts.length
         ? await Promise.all(assistantDrafts.map(createHashedSelectionAttachment))
         : undefined;
     } catch (attachmentError) {
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_12", "A handled interface operation failed.", attachmentError, "sessions_page");
-      setChatError(attachmentError instanceof Error ? attachmentError.message : "Could not attach the selected text.");
+      const detail = attachmentError instanceof Error ? attachmentError.message : "Could not attach the selected text.";
+      setChatError(detail);
+      failQueuedFollowUp(detail);
       return;
+    }
+
+    if (queuedFollowUp) {
+      setQueuedFollowUps((current) => current.map((item) => item.id === queuedFollowUp.id
+        ? { ...item, status: "sending", detail: undefined }
+        : item));
     }
 
     const now = new Date().toISOString();
     const userId = makeId("user");
     const assistantId = makeId("assistant");
     const durableHistory = messages.filter((message) => message.durable && message.state === "complete");
+    const outgoingContentBlocks = queuedFollowUp
+      ? [{ type: "text" as const, text: content }]
+      : [
+        ...(draft.trim() ? [{ type: "text" as const, text: draft.trim() }] : []),
+        ...pendingImages.map((image) => image.block),
+      ];
     const userMessage: ConversationMessage = {
       id: userId,
       role: "user",
@@ -2076,10 +2211,7 @@ export function SessionsPage() {
       citations: [],
       state: "complete",
       durable: false,
-      contentBlocks: [
-        ...(draft.trim() ? [{ type: "text" as const, text: draft.trim() }] : []),
-        ...pendingImages.map((image) => image.block),
-      ],
+      contentBlocks: outgoingContentBlocks,
     };
     const assistantMessage: ConversationMessage = {
       id: assistantId,
@@ -2091,11 +2223,13 @@ export function SessionsPage() {
       durable: false,
     };
     setMessages((current) => [...current, userMessage, assistantMessage]);
-    if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
-    setDraft("");
-    pendingImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
-    setPendingImages([]);
-    clearAssistantDrafts();
+    if (!queuedFollowUp) {
+      if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
+      setDraft("");
+      pendingImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      setPendingImages([]);
+      clearAssistantDrafts();
+    }
     setChatError(undefined);
     setSending(true);
     if (runtimeKind === "harness") {
@@ -2153,6 +2287,7 @@ export function SessionsPage() {
       setSkillToken(undefined);
     }
 
+    let requestCompleted = false;
     try {
       const response = await api.streamChat(chatRequest, (streamEvent) => {
         if (controller.signal.aborted) return;
@@ -2162,16 +2297,30 @@ export function SessionsPage() {
         if (streamEvent.type === "done") returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
         applyChatEvent(streamEvent, assistantId, userId, chatRequest);
       }, controller.signal);
+      requestCompleted = true;
       returnedSessionId = response?.sessionId ?? returnedSessionId;
       if (response && returnedSessionId) {
         await refreshSessions(returnedSessionId);
       }
     } catch (error) {
       const detached = detachedHarnessStreamsRef.current.has(controller);
-      if (detached) return;
+      if (detached) {
+        failQueuedFollowUp("The response was detached before this follow-up completed. Review it before retrying.");
+        return;
+      }
+      if (requestCompleted) {
+        setChatError(error instanceof Error ? error.message : "The response completed, but the conversation could not be refreshed.");
+        return;
+      }
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_13", "A handled interface operation failed.", error, "sessions_page");
+      followUpAutoDrainRef.current = false;
       const cancelled = controller.signal.aborted;
       const detail = cancelled ? "Response stopped by the operator." : error instanceof Error ? error.message : "Chat completion failed.";
+      if (queuedFollowUp) {
+        setQueuedFollowUps((current) => current.map((item) => item.id === queuedFollowUp.id
+          ? { ...item, status: "failed", detail }
+          : item));
+      }
       setMessages((current) => current.map((message) => message.id === assistantId
         ? { ...message, state: cancelled ? "cancelled" : "error", detail }
         : message));
@@ -2190,6 +2339,12 @@ export function SessionsPage() {
         setSessionId("");
       }
     } finally {
+      if (queuedFollowUp && followUpDrainIdRef.current === queuedFollowUp.id) {
+        followUpDrainIdRef.current = undefined;
+      }
+      if (queuedFollowUp && requestCompleted) {
+        setQueuedFollowUps((current) => current.filter((item) => item.id !== queuedFollowUp.id));
+      }
       if (abortRef.current === controller) {
         abortRef.current = undefined;
         streamBackendRef.current = undefined;
@@ -2197,6 +2352,25 @@ export function SessionsPage() {
       }
     }
   };
+
+  submitMessageRef.current = (queuedFollowUp) => submit(undefined, queuedFollowUp);
+  useEffect(() => {
+    const next = queuedFollowUps[0];
+    if (!followUpAutoDrainRef.current
+      || !next
+      || next.status !== "queued"
+      || followUpDrainIdRef.current
+      || sending
+      || pendingResponse
+      || loadingHistory
+      || coreState !== "online"
+      || !api
+      || !engagement
+      || !runtimeReady
+      || !model.trim()) return;
+    followUpDrainIdRef.current = next.id;
+    void submitMessageRef.current?.(next);
+  }, [api, coreState, engagement, loadingHistory, model, pendingResponse, queuedFollowUps, runtimeReady, sending]);
 
   const decideInlineApproval = async (decision: "approve" | "edit" | "reject" | "stop") => {
     if (!pendingResponse || !api) return;
@@ -2231,6 +2405,7 @@ export function SessionsPage() {
       });
       if (pendingResponse.request.backend === "harness") {
         if (decision === "stop") {
+          followUpAutoDrainRef.current = false;
           setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
             ? { ...message, state: "cancelled", detail: "Response stopped by the operator." }
             : message));
@@ -2243,6 +2418,7 @@ export function SessionsPage() {
         return;
       }
       if (decision === "stop") {
+        followUpAutoDrainRef.current = false;
         setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
         ? { ...message, state: "cancelled", detail: "Response stopped by the operator." }
           : message));
@@ -2411,6 +2587,7 @@ export function SessionsPage() {
   };
 
   const stopCurrentResponse = async () => {
+    followUpAutoDrainRef.current = false;
     if (runtimeKind === "harness" && api) {
       const turnId = harnessProgress?.turnId ?? harnessActivity?.turnId
         ?? [...messages].reverse().find((message) => message.state === "streaming")?.harnessTurnId;
@@ -2554,9 +2731,6 @@ export function SessionsPage() {
         harnessProfileId: chat.harnessProfileId,
         harnessSessionId: chat.harnessSessionId,
         model: chat.model,
-        maxDurationSeconds: 900,
-        maxTokens: 32_000,
-        maxToolCalls: 100,
         allowCloudToolResults,
       });
       setView("missions");
@@ -2566,7 +2740,6 @@ export function SessionsPage() {
     }
   };
 
-  const runtimeReady = runtimeKind === "provider" ? Boolean(selectedProvider) : Boolean(selectedHarness);
   useEffect(() => {
     if (!sessionActionsId) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
@@ -2635,13 +2808,29 @@ export function SessionsPage() {
       document.removeEventListener("keydown", closeActions);
     };
   }, [workbenchActionsOpen]);
-  const canSend = Boolean(api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !sending && !uploadingImage);
+  const composerBusy = sending || Boolean(pendingResponse);
+  const canSend = Boolean(api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
   const canSteerCurrentHarness = Boolean(
     sending
     && runtimeKind === "harness"
     && selectedHarness?.capabilities?.steering
-    && (harnessProgress?.turnId || harnessActivity?.turnId),
+    && (harnessProgress?.turnId || harnessActivity?.turnId)
+    && !harnessControlBusy,
   );
+  const queueMode = composerBusy && !canSteerCurrentHarness;
+  const removeQueuedFollowUp = (id: string) => {
+    setQueuedFollowUps((current) => current.filter((item) => item.id !== id));
+    if (followUpDrainIdRef.current === id) followUpDrainIdRef.current = undefined;
+    setMessageActionStatus("Queued follow-up removed.");
+  };
+  const retryQueuedFollowUp = (id: string) => {
+    if (queuedFollowUps[0]?.id !== id) return;
+    followUpAutoDrainRef.current = true;
+    setQueuedFollowUps((current) => current.map((item) => item.id === id
+      ? { ...item, status: "queued", detail: undefined }
+      : item));
+    setChatError(undefined);
+  };
   const visibleHarnessProgress: HarnessProgress | undefined = runtimeKind !== "harness" || !harnessSessionId
     ? harnessProgress
     : harnessProgress ?? (harnessActivityError
@@ -2963,6 +3152,14 @@ export function SessionsPage() {
               {chatError && <DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
               {showHarnessStatusRail && harnessActivity && <section className="harness-status-rail" aria-label="Harness status"><span className={`status-dot ${harnessActivity.live ? harnessActivity.busy ? "pending" : "available" : "unavailable"}`} /><strong>{!harnessActivity.live ? "Connection unavailable" : pendingHarnessRequests ? "Action required" : "Working"}</strong>{harnessActivity.goal && <span title={harnessActivity.goal.objective}>Goal: {harnessActivity.goal.status}{typeof harnessActivity.goal.progress === "number" ? ` · ${Math.round(harnessActivity.goal.progress * 100)}%` : ""}</span>}{harnessActivity.plan?.length ? <span>{harnessActivity.plan.filter((entry) => entry.status === "completed").length}/{harnessActivity.plan.length} plan steps</span> : null}{pendingHarnessRequests > 0 && <span>{pendingHarnessRequests} request{pendingHarnessRequests === 1 ? "" : "s"}</span>}</section>}
+              {queuedFollowUps.length > 0 && <section className="chat-follow-up-queue" aria-label="Queued follow-up messages" aria-live="polite">
+                <header><div><ListTodo size={14} aria-hidden="true" /><span><strong>Follow-up queue</strong><small>{queuedFollowUps.length} message{queuedFollowUps.length === 1 ? "" : "s"} · text only · current browser tab</small></span></div><button className="button quiet" type="button" disabled={queuedFollowUps.some((item) => item.status === "sending")} onClick={() => { followUpAutoDrainRef.current = false; followUpDrainIdRef.current = undefined; setQueuedFollowUps([]); setMessageActionStatus("Follow-up queue cleared."); }}>Clear</button></header>
+                <ol>{queuedFollowUps.map((item, index) => <li key={item.id} className={`chat-follow-up-${item.status}`}>
+                  <div><span className="chat-follow-up-index">{index + 1}</span><p>{item.text}</p></div>
+                  <div className="chat-follow-up-meta"><span>{item.status === "sending" ? "Sending next" : item.status === "failed" ? "Needs review" : index === 0 && (sending || pendingResponse) ? "After current response" : "Waiting"}</span>{item.detail && <small>{item.detail}</small>}<div>{item.status === "failed" && index === 0 && <button className="button quiet" type="button" onClick={() => retryQueuedFollowUp(item.id)}>Retry</button>}<button className="icon-button subtle" type="button" aria-label={`Remove queued message ${index + 1}`} disabled={item.status === "sending"} onClick={() => removeQueuedFollowUp(item.id)}><X size={14} aria-hidden="true" /></button></div></div>
+                </li>)}</ol>
+                {!sending && !pendingResponse && queuedFollowUps[0]?.status === "queued" && !followUpAutoDrainRef.current && <footer><span>Recovered follow-ups are paused for review.</span><button className="button secondary" type="button" onClick={() => retryQueuedFollowUp(queuedFollowUps[0].id)}>Send next</button></footer>}
+              </section>}
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
                 {assistantDrafts.length > 0 && <section className="chat-context-pack" aria-label="Selected context pack">
                   <header><div><strong>Context pack</strong><small>{assistantDrafts.length} selection{assistantDrafts.length === 1 ? "" : "s"} · {assistantDrafts.reduce((total, item) => total + item.text.length, 0).toLocaleString()} characters</small></div><button className="button quiet" type="button" onClick={clearAssistantDrafts}>Clear all</button></header>
@@ -2979,10 +3176,10 @@ export function SessionsPage() {
                 {pendingImages.length > 0 && <div className="chat-image-attachments" role="list" aria-label="Image attachments">{pendingImages.map((image, index) => <div role="listitem" key={`${image.block.artifactId}-${index}`}><img src={image.previewUrl} alt={image.filename} /><button className="icon-button subtle" type="button" aria-label={`Remove ${image.filename}`} onClick={() => removePendingImage(index)}><X size={14} /></button></div>)}</div>}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <div className="chat-composer-input" role="combobox" aria-label="Skill suggestions" aria-autocomplete="list" aria-expanded={Boolean(skillToken)} aria-controls={skillToken ? "harness-skill-menu" : undefined} aria-activedescendant={skillToken && matchingHarnessSkills.length ? `harness-skill-option-${skillMenuIndex}` : undefined}>
-                  <textarea ref={composerRef} id="analyst-message" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />
+                  <textarea ref={composerRef} id="analyst-message" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : queueMode ? "Queue the next message while this response finishes…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
-                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? "—" : contextPercent}</span><small>context</small></button>}<input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} /><button className="button quiet square chat-composer-attachment" type="button" aria-label="Attach images" disabled={!imageInputEnabled || uploadingImage || pendingImages.length >= 4} title={imageInputEnabled ? "Choose, paste, or drop PNG, JPEG, or WebP images" : "The selected runtime does not advertise image input"} onClick={() => imageInputRef.current?.click()}>{uploadingImage ? <LoaderCircle className="spin" size={15} /> : <ImagePlus size={15} />}</button>{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Send guidance now" title="Steer the active harness turn"><Send size={16} /></button>}{sending ? <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button> : <button className="button primary square chat-composer-submit" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? "—" : contextPercent}</span><small>context</small></button>}<input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} /><button className="button quiet square chat-composer-attachment" type="button" aria-label="Attach images" disabled={composerBusy || !imageInputEnabled || uploadingImage || pendingImages.length >= 4} title={composerBusy ? "Attachments are available after the active response finishes" : imageInputEnabled ? "Choose, paste, or drop PNG, JPEG, or WebP images" : "The selected runtime does not advertise image input"} onClick={() => imageInputRef.current?.click()}>{uploadingImage ? <LoaderCircle className="spin" size={15} /> : <ImagePlus size={15} />}</button>{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Send guidance now" title="Steer the active harness turn"><Send size={16} /></button>}{queueMode && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" aria-label="Queue follow-up message" title="Queue this text after the active response"><ListTodo size={16} /></button>}{sending && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? " · independent parallel session" : ""}</code>}</div>{sending && selectedHarness?.capabilities?.steering && <button className="button quiet harness-steer-button" type="button" disabled={harnessControlBusy} onClick={() => composerRef.current?.focus()}><Plus size={13} aria-hidden="true" /> Add guidance</button>}</div>}
             </div>

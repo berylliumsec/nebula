@@ -55,7 +55,6 @@ from .privacy import ProviderPrivacyViolation, validate_engagement_provider_priv
 from .mcp import McpProbeError, mcp_tool_runtime_name, resolve_mcp_profiles
 from .storage import ConflictError, NebulaStore
 
-MAX_API_MISSION_DURATION_SECONDS = 3_600
 MAX_API_MISSION_TOKENS = 200_000
 MAX_API_MISSION_COST_USD = 100.0
 MAX_API_MISSION_RETRIES = 2
@@ -1294,27 +1293,25 @@ class MissionService:
                 raise MissionConfigurationError(
                     "executable mission tools are unavailable in this Core"
                 )
-            if budget.max_tool_calls < 1:
+            if budget.max_tool_calls is not None and budget.max_tool_calls < 1:
                 raise MissionConfigurationError(
                     "executable missions require a positive tool-call budget"
                 )
-            if budget.max_tool_calls > 100:
+            if budget.max_tool_calls is not None and budget.max_tool_calls > 100:
                 raise MissionConfigurationError("mission tool-call budget exceeds 100")
             if budget.max_concurrency > 2 or budget.max_delegation_depth != 1:
                 raise MissionConfigurationError(
                     "executable missions allow concurrency up to 2 and delegation depth 1"
                 )
         elif (
-            budget.max_tool_calls != 0
+            budget.max_tool_calls not in {0, None}
             or budget.max_concurrency != 1
             or budget.max_delegation_depth != 0
         ):
             raise MissionConfigurationError(
                 "analysis-only missions require zero tools and one non-delegating task"
             )
-        if budget.max_duration_seconds > MAX_API_MISSION_DURATION_SECONDS:
-            raise MissionConfigurationError("mission duration exceeds the API limit")
-        if budget.max_tokens is None or budget.max_tokens > MAX_API_MISSION_TOKENS:
+        if budget.max_tokens is not None and budget.max_tokens > MAX_API_MISSION_TOKENS:
             raise MissionConfigurationError(
                 "mission token budget exceeds the API limit"
             )
@@ -1336,7 +1333,6 @@ class MissionService:
 
 __all__ = [
     "MAX_API_MISSION_COST_USD",
-    "MAX_API_MISSION_DURATION_SECONDS",
     "MAX_API_MISSION_RETRIES",
     "MAX_API_MISSION_TOKENS",
     "MissionCapacityError",

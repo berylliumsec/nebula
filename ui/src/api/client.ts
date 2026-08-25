@@ -3913,8 +3913,8 @@ export class ApiClient {
         max_tokens: body.maxTokens,
         max_cost_usd: body.maxCostUsd,
         max_retries: body.maxRetries,
-        max_tool_calls: body.maxToolCalls ?? 0,
-        max_artifact_queries: body.maxArtifactQueries ?? 200,
+        max_tool_calls: body.maxToolCalls,
+        max_artifact_queries: body.maxArtifactQueries,
         max_concurrency: body.maxConcurrency ?? 1,
         allow_cloud_tool_results: body.allowCloudToolResults === true,
         ...(body.browserAutonomy
@@ -3962,10 +3962,10 @@ export class ApiClient {
     sessionId: string,
     body: {
       objective?: string;
-      maxDurationSeconds?: number;
-      maxTokens?: number;
-      maxCostUsd?: number;
-      maxToolCalls?: number;
+      maxDurationSeconds?: number | null;
+      maxTokens?: number | null;
+      maxCostUsd?: number | null;
+      maxToolCalls?: number | null;
       allowCloudToolResults?: boolean;
     } = {},
   ): Promise<AgentRunSummary> {

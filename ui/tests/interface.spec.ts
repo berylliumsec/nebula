@@ -1002,10 +1002,11 @@ test("mission workflow freezes harness options, stages, and URL identity", async
         harness_profile_id: "harness-mission",
         harness_session_id: "mission-session",
         budget: {
-          max_duration_seconds: 3600,
-          max_tokens: 20000,
-          max_cost_usd: 10,
-          max_tool_calls: 50,
+          max_duration_seconds: null,
+          max_tokens: null,
+          max_cost_usd: null,
+          max_tool_calls: null,
+          max_artifact_queries: null,
           max_concurrency: 1,
           max_delegation_depth: 0,
           max_retries_per_task: 0,
@@ -1034,6 +1035,10 @@ test("mission workflow freezes harness options, stages, and URL identity", async
   await expect(dialog.getByRole("combobox", { name: "Mission runtime" })).toHaveValue("harness");
   await expect(dialog.getByRole("combobox", { name: "Mission harness effort" })).toHaveValue("high");
   await expect(dialog.getByRole("combobox", { name: "Mission harness speed" })).toHaveValue("priority");
+  await expect(dialog.getByLabel("Duration (minutes)")).toHaveValue("");
+  await expect(dialog.getByLabel("Token limit")).toHaveValue("");
+  await expect(dialog.getByLabel("Cost limit (USD)")).toHaveValue("");
+  await expect(dialog.getByLabel("Maximum execution calls")).toHaveValue("");
   await dialog.getByRole("button", { name: "Add stage" }).click();
   await dialog.getByRole("group", { name: "Stage 1" }).getByLabel("Name").fill("Verify");
   await dialog.getByRole("group", { name: "Stage 1" }).getByLabel("Objective").fill("Verify the strongest observation");
@@ -1047,6 +1052,10 @@ test("mission workflow freezes harness options, stages, and URL identity", async
     harness_service_tier: "priority",
     stages: [{ title: "Verify", objective: "Verify the strongest observation" }],
   });
+  expect(submitted).not.toHaveProperty("max_duration_seconds");
+  expect(submitted).not.toHaveProperty("max_tokens");
+  expect(submitted).not.toHaveProperty("max_cost_usd");
+  expect(submitted).not.toHaveProperty("max_tool_calls");
   await expect.poll(() => new URL(page.url()).searchParams.get("mission")).toBe("mission-url-authority");
   await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Staged security review")).toBeVisible();
   const accessibility = await new AxeBuilder({ page }).include(".agents-page").analyze();
@@ -1666,6 +1675,123 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   const readerPosition = await chatScroll.evaluate((element) => element.scrollTop);
   await page.waitForTimeout(300);
   expect(await chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(readerPosition + 2);
+});
+
+test("assistant follow-up queue sends ordered provider messages after the active turn", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "narrow", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile assistant queue projects.");
+  const provider = {
+    ...entity,
+    id: "provider-follow-up-queue",
+    name: "Queue test provider",
+    provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true,
+    is_local: true,
+    secret_ref: null,
+    model_allowlist: ["queue-test-model"],
+    capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true },
+    metadata: { default_model: "queue-test-model" },
+  };
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([provider]) });
+      return;
+    }
+    if (path.endsWith(`/providers/${provider.id}/health`) && request.method() === "POST") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ provider_id: provider.id, healthy: true, models: ["queue-test-model"] }) });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.includes("/chat/sessions/") && (path.endsWith("/messages") || path.endsWith("/pending-turn"))) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: path.endsWith("/pending-turn") ? "null" : "[]" });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    let requestNumber = 0;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const request = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+      requestNumber += 1;
+      const current = requestNumber;
+      const requests = (globalThis as typeof globalThis & { __queueChatRequests?: unknown[] }).__queueChatRequests ??= [];
+      requests.push(request);
+      const encoder = new TextEncoder();
+      const answer = current === 1 ? "The first response is still running." : "The queued follow-up completed.";
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enqueue = (frame: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+          enqueue({ type: "started", provider_id: "provider-follow-up-queue", model: "queue-test-model", session_id: "queue-session", turn_id: `queue-turn-${current}` });
+          enqueue({ type: "delta", provider_id: "provider-follow-up-queue", model: "queue-test-model", delta: answer });
+          const finish = () => {
+            enqueue({
+              type: "done",
+              provider_id: "provider-follow-up-queue",
+              model: "queue-test-model",
+              session_id: "queue-session",
+              turn_id: `queue-turn-${current}`,
+              message: { id: `queue-assistant-${current}`, role: "assistant", content: answer },
+              usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 },
+              finish_reason: "stop",
+              citations: [],
+            });
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          };
+          if (current === 1) globalThis.setTimeout(finish, 6_000);
+          else finish();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await expect(composer).toBeEnabled();
+  await composer.fill("Start the first response.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible();
+
+  const queueComposer = page.getByPlaceholder("Queue the next message while this response finishes…");
+  await expect(queueComposer).toBeVisible();
+  await queueComposer.fill("First queued follow-up.");
+  await queueComposer.press("Enter");
+  await queueComposer.fill("Second queued follow-up.");
+  await queueComposer.press("Enter");
+  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toContainText("2 messages");
+  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toContainText("First queued follow-up.");
+  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toContainText("Second queued follow-up.");
+  const queue = page.getByRole("region", { name: "Queued follow-up messages" });
+  const queueGeometry = await queue.evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+    viewportWidth: window.innerWidth,
+  }));
+  expect(queueGeometry.scrollWidth).toBeLessThanOrEqual(queueGeometry.clientWidth + 1);
+  expect(queueGeometry.clientWidth).toBeLessThanOrEqual(queueGeometry.viewportWidth + 1);
+  const queueAccessibility = await new AxeBuilder({ page }).include(".chat-follow-up-queue").analyze();
+  expect(queueAccessibility.violations).toEqual([]);
+
+  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __queueChatRequests?: Array<{ messages?: Array<{ content?: string }> }> }).__queueChatRequests?.length ?? 0), { timeout: 15_000 }).toBe(3);
+  const requests = await page.evaluate(() => (globalThis as typeof globalThis & { __queueChatRequests?: Array<{ messages?: Array<{ content?: string }> }> }).__queueChatRequests ?? []);
+  expect(requests.map((request) => request.messages?.at(-1)?.content)).toEqual([
+    "Start the first response.",
+    "First queued follow-up.",
+    "Second queued follow-up.",
+  ]);
+  await expect(page.getByText("The queued follow-up completed.").first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toHaveCount(0);
 });
 
 test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, testInfo) => {
