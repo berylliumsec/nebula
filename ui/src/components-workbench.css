@@ -1396,7 +1396,6 @@ kbd { font-size: 11px; }
 .core-connection-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .core-connection-actions .button { min-height: 44px; }
 .core-connection-boundary { padding-top: 12px; border-top: 1px solid var(--border-soft); }
-.browser-remote-core-boundary { margin: 20px; }
 
 .diagnostics-unavailable {
   display: flex;

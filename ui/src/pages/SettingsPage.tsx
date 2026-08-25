@@ -614,7 +614,7 @@ export function SettingsPage() {
             <label className="core-connection-insecure"><input type="checkbox" checked={insecureTransport} onChange={(event) => setInsecureTransport(event.target.checked)} /><span><strong>Allow HTTP for this connection</strong><small>Bearer tokens can be intercepted on an insecure network.</small></span></label>
             <div className="core-connection-actions"><button className="button primary" type="submit" disabled={coreConnectionBusy}>{coreConnectionBusy ? "Testing…" : "Connect UI shell to remote Core"}</button>{coreConnection?.mode === "remote" && <button className="button secondary" type="button" disabled={coreConnectionBusy} onClick={() => void invoke("use_local_backend").then(() => window.location.reload()).catch((error) => { void logCaughtDiagnostic("interface.settings_page.local_core_switch_failed", "The UI shell could not switch back to its local Core.", error, "settings_page"); setCoreConnectionError(error instanceof Error ? error.message : String(error)); })}>Use local Core</button>}</div>
           </form>
-          <p className="core-connection-boundary"><strong>Local-only capability:</strong> Native Browser/proxy automation is disabled while this shell uses a remote Core.</p>
+          <p className="core-connection-boundary"><strong>Native execution stays on this desktop:</strong> Browser tabs, identity storage, proxy traffic, and keyring credentials run locally. Their sessions, commands, rules, receipts, and evidence synchronize with the selected Core.</p>
           {coreConnectionError && <DiagnosticErrorNotice error={coreConnectionError} fallback="The Core connection could not be updated." compact />}
         </section>}
         <div className="setup-card-grid">
