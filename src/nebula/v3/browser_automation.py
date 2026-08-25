@@ -530,7 +530,7 @@ class BrowserAutomationService:
                 "browser_command.claimed",
                 request.device_id,
             )
-        except ConflictError:
+        except ConflictError:  # diagnostic-expected: reload the winning durable claim
             # Another paired worker won the optimistic claim race. Returning
             # its durable state makes retries idempotent without issuing a
             # second native action.
@@ -651,7 +651,9 @@ class BrowserAutomationService:
                 event_payload={"reason": reason},
                 actor_id=actor_id,
             )
-        except ConflictError:
+        except (
+            ConflictError
+        ):  # diagnostic-expected: retry once against authoritative state
             # A concurrent tab sync or operator change wins the revision race;
             # reload and fail closed if the proxy is still durable-enabled.
             current = self.store.get(BrowserSession, session.id)
@@ -701,7 +703,9 @@ class BrowserAutomationService:
                     lease, "Project scope policy revision changed"
                 )
                 count += 1
-            except ConflictError:
+            except (
+                ConflictError
+            ):  # diagnostic-expected: a concurrent revocation already won
                 # A concurrent status poll already revoked this lease. The
                 # durable state remains fail-closed, so continue the sweep.
                 continue
@@ -856,7 +860,9 @@ class BrowserAutomationService:
         try:
             address = ipaddress.ip_address(host)
             return address in ipaddress.ip_network(allowed, strict=False)
-        except ValueError:
+        except (
+            ValueError
+        ):  # diagnostic-expected: non-IP grant targets continue as hostnames
             pass
         candidate = allowed.strip().rstrip(".").lower()
         if candidate.startswith("*."):
@@ -877,7 +883,7 @@ class BrowserAutomationService:
             return False
         try:
             target_port = parsed.port
-        except ValueError:
+        except ValueError:  # diagnostic-expected: malformed target ports fail closed
             return False
         origin = (
             parsed.scheme.lower(),
@@ -897,7 +903,9 @@ class BrowserAutomationService:
                 continue
             try:
                 candidate_port = candidate.port
-            except ValueError:
+            except (
+                ValueError
+            ):  # diagnostic-expected: malformed allowed ports are skipped
                 continue
             candidate_origin = (
                 candidate.scheme.lower(),
@@ -971,11 +979,15 @@ class BrowserAutomationService:
                     )
                     self._disable_lease_dependents(lease, "lease expired")
                     return updated
-                except ConflictError:
+                except (
+                    ConflictError
+                ):  # diagnostic-expected: reload the winning expiry update
                     return self.store.get(BrowserAutomationLease, lease.id)
             try:
                 current_scope = self._scope(lease.engagement_id)
-            except BrowserAutomationRequestError:
+            except (
+                BrowserAutomationRequestError
+            ):  # diagnostic-expected: absent scope revokes the lease below
                 current_scope = None
             if (
                 current_scope is None
@@ -996,7 +1008,9 @@ class BrowserAutomationService:
                         lease, "Project scope policy revision changed"
                     )
                     return updated
-                except ConflictError:
+                except (
+                    ConflictError
+                ):  # diagnostic-expected: reload the winning revocation update
                     return self.store.get(BrowserAutomationLease, lease.id)
         return lease
 
@@ -1053,7 +1067,9 @@ class BrowserAutomationService:
             return rule
         try:
             return self._disable_rule(rule, "proxy rule expired", "system")
-        except ConflictError:
+        except (
+            ConflictError
+        ):  # diagnostic-expected: reload the winning rule-expiry update
             return self.store.get(BrowserProxyRule, rule.id)
 
     def _disable_rule(

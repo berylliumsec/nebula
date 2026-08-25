@@ -7,6 +7,10 @@ mod diagnostics;
 mod release;
 mod sidecar;
 
+use core_connection::{
+    clear_remote_backend, configure_remote_backend, desktop_core_connection, desktop_device_id,
+    resolve_backend_connection, use_local_backend,
+};
 use diagnostics::{
     DiagnosticLevel, DiagnosticsState, diagnostics_files, diagnostics_get_settings,
     diagnostics_log_frontend, diagnostics_recent_errors, diagnostics_reveal_logs,
@@ -15,7 +19,6 @@ use diagnostics::{
 };
 use release::{check_for_update, install_available_update, release_info, restart_application};
 use sidecar::{BackendState, backend_status, start_local_backend, stop_local_backend};
-use core_connection::{clear_remote_backend, configure_remote_backend, desktop_core_connection, desktop_device_id, resolve_backend_connection, use_local_backend};
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager, Wry};
 

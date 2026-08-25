@@ -627,7 +627,9 @@ class BrowserSecurityService:
                 self._require_in_scope(
                     scope, request.url, "browser.capture", RiskClass.PASSIVE
                 )
-            except BrowserWorkflowError:
+            except (
+                BrowserWorkflowError
+            ):  # diagnostic-expected: durable block evidence records out-of-scope state
                 scope_state = "out_of_scope"
         else:
             self._require_in_scope(

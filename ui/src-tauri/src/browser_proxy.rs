@@ -1014,7 +1014,7 @@ fn snapshot_scope(scope: &Arc<Mutex<Option<NativeProxyScope>>>) -> Option<Native
 fn scope_uri_for_request(request: &Request<Body>) -> Option<hudsucker::hyper::Uri> {
     if request.method() == hudsucker::hyper::Method::CONNECT && request.uri().scheme().is_none() {
         let authority = request.uri().authority()?.as_str();
-        return format!("https://{authority}/").parse().ok();
+        return format!("https://{authority}/").parse().ok(); // diagnostic-expected: malformed CONNECT authorities fail closed
     }
     Some(request.uri().clone())
 }
@@ -1375,7 +1375,7 @@ impl HttpHandler for CaptureHandler {
         let (mut request, matched_rules) = match mutate_request(request, &rules).await {
             Ok(value) => value,
             Err(response) => {
-                let _ = self.app.emit(
+                if let Err(error) = self.app.emit(
                     "nebula-browser-traffic",
                     TrafficEvent {
                         session_id: self.session_id.clone(),
@@ -1395,7 +1395,9 @@ impl HttpHandler for CaptureHandler {
                         request_body: None,
                         response_body: None,
                     },
-                );
+                ) {
+                    eprintln!("Nebula could not emit a blocked browser traffic event: {error}");
+                }
                 return response.into();
             }
         };
@@ -1411,7 +1413,7 @@ impl HttpHandler for CaptureHandler {
                         hudsucker::hyper::StatusCode::PAYLOAD_TOO_LARGE,
                         "Nebula refused an oversized or unreadable request body capture.",
                     );
-                    let _ = self.app.emit(
+                    if let Err(error) = self.app.emit(
                         "nebula-browser-traffic",
                         TrafficEvent {
                             session_id: self.session_id.clone(),
@@ -1433,7 +1435,9 @@ impl HttpHandler for CaptureHandler {
                             request_body: None,
                             response_body: None,
                         },
-                    );
+                    ) {
+                        eprintln!("Nebula could not emit a rejected body-capture event: {error}");
+                    }
                     return response.into();
                 }
             }
@@ -1579,7 +1583,7 @@ impl HttpHandler for CaptureHandler {
             "Nebula could not reach the in-scope upstream browser target.",
         );
         if let Some(request) = pending {
-            let _ = self.app.emit(
+            if let Err(error) = self.app.emit(
                 "nebula-browser-traffic",
                 TrafficEvent {
                     session_id: self.session_id.clone(),
@@ -1603,7 +1607,9 @@ impl HttpHandler for CaptureHandler {
                     request_body: request.request_body,
                     response_body: None,
                 },
-            );
+            ) {
+                eprintln!("Nebula could not emit an upstream browser failure event: {error}");
+            }
         }
         response
     }
@@ -1629,7 +1635,7 @@ impl WebSocketHandler for CaptureHandler {
                 hudsucker::hyper::StatusCode::FORBIDDEN,
                 "Nebula blocked this WebSocket because it is outside the active Project scope.",
             );
-            let _ = self.app.emit(
+            if let Err(error) = self.app.emit(
                 "nebula-browser-traffic",
                 TrafficEvent {
                     session_id: self.session_id.clone(),
@@ -1649,7 +1655,9 @@ impl WebSocketHandler for CaptureHandler {
                     request_body: None,
                     response_body: None,
                 },
-            );
+            ) {
+                eprintln!("Nebula could not emit a blocked WebSocket event: {error}");
+            }
             return None;
         }
         let (opcode, bytes): (&'static str, &[u8]) = match &message {
@@ -1798,7 +1806,7 @@ fn atomic_write(path: &Path, value: &str, private: bool) -> Result<(), String> {
         .write_all(value.as_bytes())
         .and_then(|_| file.sync_all())
     {
-        let _ = fs::remove_file(&temporary);
+        let _ = fs::remove_file(&temporary); // diagnostic-expected: the primary write error is returned below
         return Err(format!("cannot write browser CA file: {error}"));
     }
     if private {
@@ -1898,7 +1906,7 @@ fn with_ca_lock<T>(
                     {
                         // A crashed creator must not permanently prevent a later
                         // desktop startup from recovering the Project CA.
-                        let _ = fs::remove_file(&lock_path);
+                        let _ = fs::remove_file(&lock_path); // diagnostic-expected: a raced stale lock is retried
                     }
                     thread::sleep(Duration::from_millis(10));
                 }
@@ -1910,7 +1918,7 @@ fn with_ca_lock<T>(
         }
         let result = operation();
         drop(lock);
-        let _ = fs::remove_file(lock_path);
+        let _ = fs::remove_file(lock_path); // diagnostic-expected: dropping the lock is authoritative
         result
     }
 }
@@ -1970,8 +1978,8 @@ fn ensure_ca(app: &AppHandle, project_key: &str) -> Result<(String, String, Path
         let certificate_path = directory.join(CA_CERTIFICATE);
         let key_path = directory.join(CA_PRIVATE_KEY);
         let metadata_path = directory.join(CA_METADATA);
-        let existing = fs::read_to_string(&certificate_path).ok();
-        let existing_key = fs::read_to_string(&key_path).ok();
+        let existing = fs::read_to_string(&certificate_path).ok(); // diagnostic-expected: absence triggers atomic CA creation
+        let existing_key = fs::read_to_string(&key_path).ok(); // diagnostic-expected: absence triggers atomic CA creation
         if !matches!((&existing, &existing_key), (Some(certificate), Some(key)) if valid_ca_pair(certificate, key) && valid_ca_metadata(&metadata_path, certificate) && private_key_is_protected(&key_path))
         {
             let mut parameters = CertificateParams::new(Vec::<String>::new())
@@ -2196,7 +2204,7 @@ mod tests {
         let address = listener.local_addr().expect("target address");
         let task = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("target connection");
-            let _ = read_headers(&mut stream).await;
+            let _ = read_headers(&mut stream).await; // diagnostic-expected: the test server only drains the bounded request preface
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .await
